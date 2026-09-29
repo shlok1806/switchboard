@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence } from "motion/react";
 import { MessageSquarePlus, X } from "lucide-react";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
@@ -13,6 +13,8 @@ import { go } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
 const SHOW = 250;
+// How close to the bottom (px) still counts as "following" the live feed.
+const FOLLOW_SLACK = 80;
 
 export function FeedView({ selected }: { selected?: string }) {
   const { events, verdictsByEvent, agents, tasks, snapshot, fresh } = useChannel();
@@ -29,8 +31,23 @@ export function FeedView({ selected }: { selected?: string }) {
       const e = events[i];
       if (matches(e, verdictsByEvent.get(e.id) ?? [], filters)) out.push(e);
     }
-    return out;
+    // Chat order: oldest at the top, newest at the bottom.
+    return out.reverse();
   }, [events, verdictsByEvent, filters]);
+
+  // Follow new Events like a chat, unless the Person has scrolled up to read.
+  const scroller = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  const newestId = shown.at(-1)?.id;
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && following.current) el.scrollTop = el.scrollHeight;
+  }, [newestId]);
+  useLayoutEffect(() => {
+    following.current = true;
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [filters, mobile]);
 
   const selectedEvent = selected ? events.find((e) => e.id === selected) : undefined;
   const set = (k: keyof FeedFilters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
@@ -91,7 +108,16 @@ export function FeedView({ selected }: { selected?: string }) {
   );
 
   const list = (
-    <div className={cn("min-h-0 flex-1 overflow-y-auto", mobile && "pb-24")} aria-live="polite" aria-relevant="additions">
+    <div
+      ref={scroller}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        following.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK;
+      }}
+      className={cn("min-h-0 flex-1 overflow-y-auto", mobile && "pb-24")}
+      aria-live="polite"
+      aria-relevant="additions"
+    >
       {shown.length === 0 ? (
         <div className="flex h-40 flex-col items-center justify-center gap-1 text-center">
           <p className="text-[13px] font-medium text-ink">No Events match these filters</p>
