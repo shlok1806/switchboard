@@ -23,13 +23,16 @@ const DEFAULT_RELAY = { interruptThreshold: 0.6, model: "typesafe/jev" };
 
 /**
  * What the Worker on main can do today: join, Events, Updates, the stream (#5),
- * Tasks (#8) and Agents with Presence (#6). The rest arrives with later issues.
+ * Tasks (#8), Agents with Presence (#6), Hook Captures (#7) and Claims held on
+ * Tasks (#9). Claiming from the Dashboard is a follow-up. The rest arrives with
+ * later issues. `captures` stays off until Proxy Capture (#15) makes a
+ * side-by-side comparison possible.
  */
 const LIVE_CAPABILITIES: Capabilities = {
   agents: true,
   verdicts: false,
   captures: false,
-  claims: false,
+  claims: true,
   takeover: false,
   directives: false,
   proxyMode: false,
