@@ -14,8 +14,12 @@
     "bindings": [{ "name": "CHANNEL", "class_name": "Channel" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Channel"] }],
-  // The GitHub repo whose Issues are this Channel's Tasks (ADR 0001).
-  "vars": { "GITHUB_REPO": "shlok1806/switchboard" },
+  "vars": {
+    // The GitHub repo whose Issues are this Channel's Tasks (ADR 0001).
+    "GITHUB_REPO": "shlok1806/switchboard",
+    // An Agent goes Gone after this many seconds without a heartbeat.
+    "PRESENCE_GONE_AFTER_SECONDS": "600"
+  },
   // Set with `wrangler secret put`. JOIN_SECRET is the shared join secret
   // (interim identity, issue #1). JEV_API_KEY is for the Relay, unused so far.
   // GITHUB_TOKEN reads and creates Issues in GITHUB_REPO. GITHUB_WEBHOOK_SECRET

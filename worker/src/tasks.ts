@@ -40,6 +40,10 @@ export interface TaskHost {
   storage: DurableObjectStorage;
   /** The GitHub to sync with, or null when sync is not configured. */
   gitHub(): GitHub | null;
+  /** When the reconcile next runs, or null when it is not scheduled. */
+  nextReconcile(): number | null;
+  /** Schedules the next reconcile on the Channel's shared alarm. */
+  scheduleReconcile(at: number): Promise<void>;
   append<K extends EventType>(event: NewEvent<K>): ChannelEvent;
   broadcast(message: StreamMessage): void;
 }
@@ -165,7 +169,7 @@ export class Tasks {
     } catch (error) {
       console.error("Task reconcile failed", error);
     } finally {
-      await this.host.storage.setAlarm(Date.now() + RECONCILE_INTERVAL_MS);
+      await this.host.scheduleReconcile(Date.now() + RECONCILE_INTERVAL_MS);
     }
   }
 
@@ -201,8 +205,8 @@ export class Tasks {
   }
 
   private async schedule(): Promise<void> {
-    if ((await this.host.storage.getAlarm()) === null) {
-      await this.host.storage.setAlarm(Date.now() + RECONCILE_INTERVAL_MS);
+    if (this.host.nextReconcile() === null) {
+      await this.host.scheduleReconcile(Date.now() + RECONCILE_INTERVAL_MS);
     }
   }
 

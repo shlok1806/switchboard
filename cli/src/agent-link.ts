@@ -1,0 +1,94 @@
+// Keeps one Agent registered on the Channel for as long as its session runs:
+// registers it, heartbeats its Presence, re-registers if the Channel forgets it,
+// and ends the session on exit. Failures never stop the agent CLI; they are
+// logged and retried on the next heartbeat.
+
+import type { Agent, AgentId, Cli, ReportedPresence } from "../../shared/src/index";
+import { type ChannelClient, ChannelError } from "./channel-client";
+
+export interface AgentSession {
+  cli: Cli;
+  sessionId: string;
+  resumed: boolean;
+  cwd: string;
+  nickname?: string;
+}
+
+export class AgentLink {
+  private agent: Agent | null = null;
+  private presence: ReportedPresence = "live";
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private inFlight: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly client: ChannelClient,
+    private readonly session: AgentSession,
+    private readonly heartbeatMs: number,
+    private readonly log: (line: string) => void,
+  ) {}
+
+  get id(): AgentId | null {
+    return this.agent?.id ?? null;
+  }
+
+  /** Registers the Agent. Throws on refusals and network failures; the caller decides. */
+  async register(): Promise<Agent> {
+    const { agent } = await this.client.register({
+      cli: this.session.cli,
+      sessionId: this.session.sessionId,
+      resumed: this.session.resumed,
+      cwd: this.session.cwd,
+      ...(this.session.nickname === undefined ? {} : { nickname: this.session.nickname }),
+    });
+    this.agent = agent;
+    this.log(`registered ${agent.id}`);
+    return agent;
+  }
+
+  /** Starts heartbeating. Registers first on the next beat if registration has not succeeded yet. */
+  start(): void {
+    this.timer = setInterval(() => this.beat(), this.heartbeatMs);
+  }
+
+  /** Reports a Presence change right away. */
+  report(presence: ReportedPresence): void {
+    this.presence = presence;
+    this.beat();
+  }
+
+  /** The session ended. Waits at most `timeoutMs` for the Channel to hear it. */
+  async end(timeoutMs: number): Promise<void> {
+    clearInterval(this.timer);
+    await this.inFlight;
+    if (!this.agent) return;
+    try {
+      await this.client.end(this.agent.id, timeoutMs);
+      this.log(`ended ${this.agent.id}`);
+    } catch (error) {
+      this.log(`could not end ${this.agent.id}: ${(error as Error).message}`);
+    }
+  }
+
+  private beat(): void {
+    this.inFlight = this.inFlight.then(() => this.send());
+  }
+
+  private async send(): Promise<void> {
+    try {
+      if (!this.agent) {
+        await this.register();
+        // A fresh registration is Live; say so if we are not.
+        if (this.presence === "live") return;
+      }
+      const id = this.agent?.id;
+      if (!id) return;
+      await this.client.heartbeat(id, this.presence);
+    } catch (error) {
+      if (error instanceof ChannelError && error.status === 404) {
+        // The Channel does not know this Agent (its state was reset): register again next beat.
+        this.agent = null;
+      }
+      this.log(`heartbeat failed: ${(error as Error).message}`);
+    }
+  }
+}

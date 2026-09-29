@@ -3,7 +3,6 @@
 // shared/src/channel.ts. The page at `/` is a static asset in public/.
 
 import type {
-  ErrorResponse,
   HistoryResponse,
   JoinRequest,
   JoinResponse,
@@ -11,30 +10,15 @@ import type {
   PostUpdateResponse,
 } from "../../shared/src/index";
 import { MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
+import { handleAgentRoute, matchAgentRoute } from "./agents-api";
 import { authenticate } from "./auth";
+import { fail, json, readJson } from "./http";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
 
 export { Channel } from "./channel";
 
 /** Interim setup (issue #1): one Channel per deployment. */
 const CHANNEL_NAME = "main";
-
-function json<T>(body: T, status = 200): Response {
-  return Response.json(body, { status });
-}
-
-function fail(status: number, reason: string): Response {
-  return json<ErrorResponse>({ ok: false, reason }, status);
-}
-
-async function readJson(request: Request): Promise<Record<string, unknown>> {
-  try {
-    const body: unknown = await request.json();
-    return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
 
 /** Parses a non-negative integer query parameter, or returns null if it is malformed. */
 function intParam(url: URL, name: string, fallback: number): number | null {
@@ -98,11 +82,13 @@ export default {
     const route = `${request.method} ${url.pathname}`;
     if (route === WEBHOOK_ROUTE) return handleWebhook(request, env);
     const taskRoute = isTaskRoute(request.method, url.pathname);
-    if (!ROUTES.has(route) && !taskRoute) return fail(404, "Not found.");
+    const agentRoute = matchAgentRoute(request.method, url.pathname);
+    if (!ROUTES.has(route) && !taskRoute && agentRoute === null) return fail(404, "Not found.");
 
     const auth = await authenticate(request, url, env.JOIN_SECRET);
     if (!auth.ok) return fail(auth.status, auth.reason);
     if (taskRoute) return handleTaskRoute(request, url, env, auth.person);
+    if (agentRoute !== null) return handleAgentRoute(agentRoute, request, channel(env), auth.person);
 
     switch (route) {
       case "POST /api/join":
