@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Switchboard</title>
+<!-- A stopgap view of the Channel until the Dashboard (#17) replaces it. One file, no framework. -->
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f5f5f4;
+    --border: #e4e4e2;
+    --text: #1c1c1a;
+    --muted: #6b6b66;
+    --accent: #2f5bd3;
+    --accent-text: #ffffff;
+    --danger: #c0392b;
+    --ok: #1f9d55;
+    --l: 34%;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514;
+      --surface: #1f1f1d;
+      --border: #2e2e2b;
+      --text: #ececea;
+      --muted: #9a9a94;
+      --accent: #7b9cff;
+      --accent-text: #0d0d0c;
+      --danger: #ff7b6b;
+      --ok: #4cc38a;
+      --l: 72%;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  .status { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--ok); }
+  .spacer { flex: 1; }
+  .me { color: var(--muted); font-size: 13px; }
+  button.link {
+    background: none; border: 0; padding: 0; color: var(--accent);
+    font: inherit; font-size: 13px; cursor: pointer;
+  }
+  main:not([hidden]) { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 16px; }
+  main > .wrap { margin-top: auto; width: 100%; }
+  #events { list-style: none; margin: 0; padding: 12px 0; }
+  #events li { padding: 6px 0; overflow-wrap: anywhere; }
+  .meta { display: flex; align-items: baseline; gap: 8px; }
+  .who { font-weight: 600; }
+  .time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .text { white-space: pre-wrap; }
+  li.quiet { color: var(--muted); font-size: 13px; }
+  li.quiet .who { font-weight: 500; }
+  .empty { color: var(--muted); text-align: center; padding: 48px 0; }
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 12px 0;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  form.post { display: flex; gap: 8px; }
+  input, button.primary {
+    font: inherit;
+    font-size: 16px;
+    border-radius: 8px;
+    min-height: 44px;
+  }
+  input {
+    flex: 1;
+    min-width: 0;
+    padding: 0 12px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button.primary {
+    padding: 0 16px;
+    border: 0;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.5; cursor: default; }
+  .error { color: var(--danger); font-size: 13px; margin: 8px 0 0; min-height: 1em; }
+  #join-view:not([hidden]) { flex: 1; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  form.join { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 12px; }
+  form.join h2 { margin: 0 0 4px; font-size: 20px; }
+  form.join p { margin: 0 0 8px; color: var(--muted); }
+  label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Switchboard</h1>
+  <span class="status" id="status" hidden><span class="dot" id="dot"></span><span id="status-text"></span></span>
+  <span class="spacer"></span>
+  <span class="me" id="me" hidden></span>
+  <button class="link" id="leave" type="button" hidden>Leave</button>
+</header>
+
+<div id="join-view">
+  <form class="join" id="join-form">
+    <h2>Join the Channel</h2>
+    <p>Everyone on the Channel sees every Event.</p>
+    <label>Join secret
+      <input id="secret" type="password" autocomplete="current-password" required>
+    </label>
+    <label>Your name
+      <input id="name" autocomplete="nickname" autocapitalize="none" spellcheck="false" maxlength="32" required>
+    </label>
+    <button class="primary" type="submit">Join</button>
+    <p class="error" id="join-error" role="alert"></p>
+  </form>
+</div>
+
+<main id="channel-view" hidden>
+  <div class="wrap">
+    <ol id="events" aria-live="polite"></ol>
+    <p class="empty" id="empty" hidden>No Events yet. Post the first Update.</p>
+  </div>
+</main>
+<footer id="composer" hidden>
+  <div class="wrap">
+    <form class="post" id="post-form">
+      <input id="update" placeholder="Post an Update" autocomplete="off" maxlength="4000" aria-label="Update">
+      <button class="primary" id="post" type="submit">Post</button>
+    </form>
+    <p class="error" id="post-error" role="alert"></p>
+  </div>
+</footer>
+
+<script>
+"use strict";
+const STORE_KEY = "switchboard.credentials";
+const $ = (id) => document.getElementById(id);
+let creds = null;
+let lastSeq = 0;
+let socket = null;
+let retry = 0;
+let session = 0;
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)); } catch { return null; }
+}
+function save(value) {
+  try {
+    if (value) localStorage.setItem(STORE_KEY, JSON.stringify(value));
+    else localStorage.removeItem(STORE_KEY);
+  } catch { /* Private mode or blocked storage: stay signed in for this tab only. */ }
+}
+
+async function api(path, init = {}) {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${creds.secret}`,
+      "X-Switchboard-Person": creds.person,
+    },
+  });
+  const body = await res.json().catch(() => ({ ok: false, reason: res.statusText }));
+  if (!res.ok) throw Object.assign(new Error(body.reason || `HTTP ${res.status}`), { status: res.status });
+  return body;
+}
+
+function hue(name) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % 360;
+}
+function actorName(actor) {
+  return actor.kind === "person" ? actor.person : actor.kind === "agent" ? actor.agentId : "github";
+}
+
+function render(event) {
+  if (event.seq <= lastSeq) return;
+  lastSeq = event.seq;
+  const main = $("channel-view");
+  const pinned = main.scrollHeight - main.scrollTop - main.clientHeight < 80;
+
+  const li = document.createElement("li");
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const who = document.createElement("span");
+  who.className = "who";
+  const name = actorName(event.actor);
+  who.textContent = name;
+  who.style.color = `hsl(${hue(name)} 55% var(--l))`;
+  const time = document.createElement("time");
+  time.className = "time";
+  time.dateTime = event.at;
+  const at = new Date(event.at);
+  time.textContent = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  time.title = at.toLocaleString();
+  meta.append(who, time);
+
+  if (event.type === "update") {
+    const text = document.createElement("div");
+    text.className = "text";
+    text.textContent = event.payload.text;
+    li.append(meta, text);
+  } else {
+    li.className = "quiet";
+    const what = document.createElement("span");
+    what.textContent = event.type === "person.join" ? "joined the Channel" : event.type;
+    meta.insertBefore(what, time);
+    li.append(meta);
+  }
+  $("events").append(li);
+  $("empty").hidden = true;
+  if (pinned) main.scrollTop = main.scrollHeight;
+}
+
+function setStatus(live, text) {
+  $("dot").classList.toggle("live", live);
+  $("status-text").textContent = text;
+}
+
+function connect(mine) {
+  if (mine !== session) return;
+  const url = new URL("/api/stream", location.href);
+  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("after", String(lastSeq));
+  url.searchParams.set("person", creds.person);
+  url.searchParams.set("secret", creds.secret);
+  const ws = new WebSocket(url);
+  socket = ws;
+  let keepalive;
+  ws.onopen = () => {
+    retry = 0;
+    setStatus(true, "Live");
+    keepalive = setInterval(() => ws.send("ping"), 30000);
+  };
+  ws.onmessage = (e) => {
+    if (e.data === "pong") return;
+    const message = JSON.parse(e.data);
+    if (message.type === "event") render(message.event);
+  };
+  ws.onclose = () => {
+    clearInterval(keepalive);
+    if (mine !== session) return;
+    retry += 1;
+    setStatus(false, "Reconnecting");
+    setTimeout(() => connect(mine), Math.min(10000, 500 * 2 ** retry));
+  };
+}
+
+function show(joined) {
+  $("join-view").hidden = joined;
+  $("channel-view").hidden = !joined;
+  $("composer").hidden = !joined;
+  $("status").hidden = !joined;
+  $("me").hidden = !joined;
+  $("leave").hidden = !joined;
+}
+
+async function enter(candidate) {
+  creds = candidate;
+  $("join-error").textContent = "";
+  try {
+    const { person } = await api("/api/join", {
+      method: "POST",
+      body: JSON.stringify({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+    });
+    creds = { secret: candidate.secret, person: person.name };
+    save(creds);
+  } catch (err) {
+    creds = null;
+    if (err.status === 401 || err.status === 400) save(null);
+    $("join-error").textContent = err.message;
+    show(false);
+    return;
+  }
+  session += 1;
+  const mine = session;
+  lastSeq = 0;
+  $("events").textContent = "";
+  $("me").textContent = creds.person;
+  setStatus(false, "Connecting");
+  show(true);
+
+  try {
+    for (;;) {
+      const page = await api(`/api/events?after=${lastSeq}`);
+      if (mine !== session) return;
+      if (page.events.length === 0) break;
+      page.events.forEach(render);
+    }
+  } catch (err) {
+    $("post-error").textContent = `Could not load history: ${err.message}`;
+  }
+  $("empty").hidden = lastSeq > 0;
+  const main = $("channel-view");
+  main.scrollTop = main.scrollHeight;
+  connect(mine);
+  $("update").focus();
+}
+
+$("join-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  enter({ secret: $("secret").value, person: $("name").value });
+});
+
+$("post-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = $("update");
+  const text = input.value.trim();
+  if (!text) return;
+  $("post").disabled = true;
+  $("post-error").textContent = "";
+  try {
+    await api("/api/updates", { method: "POST", body: JSON.stringify({ text }) });
+    input.value = "";
+  } catch (err) {
+    $("post-error").textContent = `Could not post: ${err.message}`;
+  } finally {
+    $("post").disabled = false;
+    input.focus();
+  }
+});
+
+$("leave").addEventListener("click", () => {
+  session += 1;
+  socket?.close();
+  save(null);
+  creds = null;
+  $("secret").value = "";
+  show(false);
+});
+
+const saved = load();
+if (saved && typeof saved.secret === "string" && typeof saved.person === "string") {
+  $("name").value = saved.person;
+  enter(saved);
+}
+</script>
+</body>
+</html>

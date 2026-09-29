@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "switchboard",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "account_id": "39dcea2708185ee6ae46f7ac3e289ca5",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  // The stopgap Channel page at `/`, until the Dashboard (#17) replaces it.
+  // Asset paths are served first; everything else reaches the Worker.
+  "assets": { "directory": "./public" },
+  "durable_objects": {
+    "bindings": [{ "name": "CHANNEL", "class_name": "Channel" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Channel"] }],
+  // Set with `wrangler secret put`. JOIN_SECRET is the shared join secret
+  // (interim identity, issue #1). JEV_API_KEY is for the Relay, unused so far.
+  "secrets": { "required": ["JOIN_SECRET", "JEV_API_KEY"] }
+}
