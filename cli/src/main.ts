@@ -2,7 +2,7 @@
 // The Switchboard laptop CLI.
 //
 //   switchboard login --url <channel url> --secret <join secret> --name <your name>
-//   switchboard run claude [--nickname <name>] [...args for Claude Code]
+//   switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
 //   switchboard whoami
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
@@ -15,11 +15,14 @@ import { runClaude } from "./run";
 
 const USAGE = `Usage:
   switchboard login --url <channel url> --secret <join secret> --name <your name>
-  switchboard run claude [--nickname <name>] [...arguments for Claude Code]
+  switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
   switchboard whoami
 
 \`run claude\` starts Claude Code as usual and joins the session to the Channel as an Agent.
-Every argument except --nickname goes to Claude Code, including --resume and --continue.`;
+Its model traffic goes through a local proxy (the Proxy Capture): --proxy sets the
+starting Proxy mode (digest by default; off runs without the proxy), and --no-mask
+turns off secret masking. Every other argument goes to Claude Code, including
+--resume and --continue.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({

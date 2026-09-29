@@ -3,7 +3,7 @@
 // and ends the session on exit. Failures never stop the agent CLI; they are
 // logged and retried on the next heartbeat.
 
-import type { Agent, AgentId, Cli, ReportedPresence } from "../../shared/src/index";
+import type { Agent, AgentId, Cli, ProxyMode, ReportedPresence } from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
 
 export interface AgentSession {
@@ -12,6 +12,10 @@ export interface AgentSession {
   resumed: boolean;
   cwd: string;
   nickname?: string;
+  /** The starting Proxy mode (`--proxy`), when the Person gave one. */
+  proxyMode?: ProxyMode;
+  /** False when the Person turned secret masking off (`--no-mask`). */
+  secretMasking?: boolean;
 }
 
 export class AgentLink {
@@ -41,6 +45,8 @@ export class AgentLink {
       resumed: this.session.resumed,
       cwd: this.session.cwd,
       ...(this.session.nickname === undefined ? {} : { nickname: this.session.nickname }),
+      ...(this.session.proxyMode === undefined ? {} : { proxyMode: this.session.proxyMode }),
+      ...(this.session.secretMasking === undefined ? {} : { secretMasking: this.session.secretMasking }),
     });
     this.agent = agent;
     this.log(`registered ${agent.id}`);

@@ -18,11 +18,12 @@ import type {
   EventType,
   PersonName,
   Presence,
+  ProxyMode,
   RegisterAgentRequest,
   ReportedPresence,
   StreamMessage,
 } from "../../shared/src/index";
-import { agentIdFor } from "../../shared/src/index";
+import { agentIdFor, DEFAULT_PROXY_MODE } from "../../shared/src/index";
 
 type AgentRow = {
   id: string;
@@ -121,11 +122,16 @@ export class AgentRoster {
       };
     }
 
+    const secretMasking = request.secretMasking === false ? 0 : 1;
     if (existing) {
       const nickname = request.nickname === undefined ? existing.nickname : request.nickname;
+      const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
-        "UPDATE agents SET nickname = ?, presence = 'live', last_seen_at = ? WHERE id = ?",
+        `UPDATE agents SET nickname = ?, proxy_mode = ?, secret_masking = ?, presence = 'live', last_seen_at = ?
+         WHERE id = ?`,
         nickname,
+        proxyMode,
+        secretMasking,
         now,
         id,
       );
@@ -133,12 +139,14 @@ export class AgentRoster {
       this.host.sql.exec(
         `INSERT INTO agents (id, person, cli, session_id, nickname, presence, proxy_mode, secret_masking,
                              can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, 'live', 'digest', 1, 1, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'live', ?, ?, 1, ?, ?)`,
         id,
         person,
         request.cli,
         request.sessionId,
         request.nickname ?? null,
+        request.proxyMode ?? DEFAULT_PROXY_MODE,
+        secretMasking,
         now,
         new Date(now).toISOString(),
       );
@@ -207,16 +215,30 @@ export class AgentRoster {
    * Checks that `person` may act for Agent `id`, and counts it as heard from: an Agent
    * whose hooks report work is not silent. It does not change Presence.
    */
-  touch(person: PersonName, id: AgentId): { ok: true } | Refusal {
+  touch(person: PersonName, id: AgentId): { ok: true; agent: Agent } | Refusal {
     const found = this.owned(person, id);
     if (!found.ok) return found;
     this.host.sql.exec("UPDATE agents SET last_seen_at = MAX(last_seen_at, ?) WHERE id = ?", Date.now(), id);
-    return { ok: true };
+    return { ok: true, agent: rowToAgent(found.row) };
   }
 
   /** Whether the Channel knows Agent `id`. */
   has(id: AgentId): boolean {
     return this.row(id) !== undefined;
+  }
+
+  /**
+   * Sets an Agent's Proxy mode. Only the Agent's own Person may. The Agent's wrapper
+   * hears of it on its WebSocket, like everyone else, and switches mid-session.
+   */
+  setProxyMode(person: PersonName, id: AgentId, mode: ProxyMode): RosterResult {
+    const found = this.owned(person, id);
+    if (!found.ok) return found;
+    if (found.row.proxy_mode === mode) return { ok: true, agent: rowToAgent(found.row) };
+    this.host.sql.exec("UPDATE agents SET proxy_mode = ? WHERE id = ?", mode, id);
+    const agent = this.agent(id);
+    this.host.broadcast({ type: "agent", agent });
+    return { ok: true, agent };
   }
 
   /** Schedules the silence check for when the quietest Agent that is not Gone would go Gone. */

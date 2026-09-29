@@ -3,3 +3,4 @@ export * from "./channel";
 export * from "./agents";
 export * from "./hooks";
 export * from "./claims";
+export * from "./proxy";

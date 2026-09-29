@@ -16,6 +16,8 @@ import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
 import { prepareSessionTools } from "./mcp-config";
 import { IdleWatch } from "./presence";
+import { ProxyCapture } from "./proxy/capture";
+import { DEFAULT_PROXY_SETTING, originalBaseUrl, type ProxyFlags, takeProxyFlags } from "./proxy/options";
 import { applySessionSettings } from "./session-settings";
 
 /** How long the wrapper waits for the Channel to hear that the session ended. */
@@ -72,7 +74,15 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     }
   };
 
-  const { nickname, rest } = takeNickname(rawArgs);
+  const { nickname, rest: afterNickname } = takeNickname(rawArgs);
+  let proxyFlags: ProxyFlags;
+  try {
+    proxyFlags = takeProxyFlags(afterNickname);
+  } catch (error) {
+    console.error(`switchboard: ${(error as Error).message}`);
+    return 2;
+  }
+  const rest = proxyFlags.rest;
   const cwd = process.cwd();
   const claudeDir = claudeConfigDir(env);
   let plan: Awaited<ReturnType<typeof planSession>>;
@@ -92,18 +102,25 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     resumed,
     cwd,
     ...(nickname === undefined ? {} : { nickname }),
+    ...(proxyFlags.proxy === undefined || proxyFlags.proxy === "off" ? {} : { proxyMode: proxyFlags.proxy }),
+    ...(proxyFlags.mask ? {} : { secretMasking: false }),
   });
 
   // The Channel stream stays open for the whole session. It carries the Hook
-  // Capture's Events; Interrupts and the next-turn cache will read it too.
+  // and Proxy Captures' Events and the Agent's Proxy mode changes; Interrupts
+  // and the next-turn cache will read it too.
   let hooks: HookCapture | null = null;
+  let proxy: ProxyCapture | null = null;
   const stream = client.follow(
     (message) => {
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
+      if (message.type === "proxy.ack" || message.type === "proxy.refused") proxy?.reply(message);
+      if (message.type === "agent") proxy?.agentChanged(message.agent);
     },
     (connected) => {
       log(connected ? "stream connected" : "stream disconnected");
       if (connected) hooks?.connected();
+      if (connected) proxy?.connected();
     },
   );
 
@@ -113,14 +130,45 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   const stopHooks = async () => {
     stream.close();
     await hooks?.close();
+    await proxy?.close();
     if (hookDir) await rm(hookDir, { recursive: true, force: true });
   };
+  const childEnv: Record<string, string> = { ...(env as Record<string, string>) };
+  if (plan.kind !== "none") {
+    const setting = proxyFlags.proxy ?? DEFAULT_PROXY_SETTING;
+    if (setting !== "off") {
+      // The Proxy Capture: model traffic goes through a local proxy. If it cannot
+      // start, Claude Code runs as it would without Switchboard.
+      try {
+        const upstream = await originalBaseUrl(env, claudeDir);
+        proxy = await ProxyCapture.start({
+          ...(upstream === undefined ? {} : { upstream }),
+          mode: setting,
+          mask: proxyFlags.mask,
+          root: cwd,
+          send: (frame) => stream.send(frame),
+          log,
+        });
+        childEnv.ANTHROPIC_BASE_URL = proxy.url;
+        log(`proxy on ${proxy.url} to ${upstream ?? "the Anthropic API"}`);
+      } catch (error) {
+        proxy = null;
+        log(`proxy failed to start: ${(error as Error).message}`);
+        console.error(
+          dim(`switchboard: the Proxy Capture could not start (${(error as Error).message}). Running without it.`),
+        );
+      }
+    }
+  }
   if (plan.kind !== "none") {
     try {
       // Private to the Person: it holds the socket and the settings file.
       hookDir = await mkdtemp(join(tmpdir(), "switchboard-"));
       hooks = await HookCapture.start({ dir: hookDir, root: cwd, send: (frame) => stream.send(frame), log });
-      args = await applySessionSettings(plan.args, hookDir, cwd, [hooks.settings()]);
+      // Claude Code settings can set ANTHROPIC_BASE_URL too, and they win over the
+      // environment, so the session's own settings point it at the proxy as well.
+      const proxySettings = proxy ? [{ env: { ANTHROPIC_BASE_URL: proxy.url } }] : [];
+      args = await applySessionSettings(plan.args, hookDir, cwd, [hooks.settings(), ...proxySettings]);
     } catch (error) {
       console.error(`switchboard: could not install the session's hooks: ${(error as Error).message}`);
       await stopHooks();
@@ -136,10 +184,10 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   const onRegistered = (agent: Agent) => {
     hooks?.setAgent(agent.id);
     tools?.setAgent(agent.id);
+    proxy?.setAgent(agent);
   };
 
   let link: AgentLink | null = null;
-  const childEnv: Record<string, string> = { ...(env as Record<string, string>) };
   if (plan.kind === "known") {
     link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered);
     const expected = agentIdFor(config.person, "claude-code", plan.sessionId);
@@ -215,7 +263,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   if (stdin.isTTY) stdin.setRawMode(false);
   stdin.pause();
   // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
-  await hooks?.drain(END_TIMEOUT_MS);
+  await Promise.all([hooks?.drain(END_TIMEOUT_MS), proxy?.drain(END_TIMEOUT_MS)]);
   await link?.end(END_TIMEOUT_MS);
   await stopHooks();
   tools?.dispose();

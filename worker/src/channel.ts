@@ -14,6 +14,8 @@ import type {
   HookCaptureReply,
   Person,
   PersonName,
+  ProxyCaptureReply,
+  ProxyMode,
   RegisterAgentRequest,
   ReportedPresence,
   StreamMessage,
@@ -27,6 +29,7 @@ import { Alarms } from "./alarms";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
 import { gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
+import { ProxyCapture } from "./proxy-capture";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
 
 type EventRow = {
@@ -89,6 +92,8 @@ export class Channel extends DurableObject<Env> {
   private readonly agents: AgentRoster;
   /** Hook Events the wrappers send, and each Agent's touched files. */
   private readonly hooks: HookCapture;
+  /** The Proxy Events wrappers send, one per model turn. */
+  private readonly proxy: ProxyCapture;
   /** Claims on Tasks, and their Steps. */
   private readonly claims: Claims;
 
@@ -136,6 +141,10 @@ export class Channel extends DurableObject<Env> {
     });
     this.hooks = new HookCapture({
       sql: ctx.storage.sql,
+      touchAgent: (person, id) => this.agents.touch(person, id),
+      appendOnce: (id, event) => this.insert(id, event),
+    });
+    this.proxy = new ProxyCapture({
       touchAgent: (person, id) => this.agents.touch(person, id),
       appendOnce: (id, event) => this.insert(id, event),
     });
@@ -234,6 +243,11 @@ export class Channel extends DurableObject<Env> {
     return this.agents.endSession(person, id);
   }
 
+  /** Sets an Agent's Proxy mode; only its own Person may. Its wrapper hears on the stream. */
+  setProxyMode(person: PersonName, id: AgentId, mode: ProxyMode): RosterResult {
+    return this.agents.setProxyMode(person, id, mode);
+  }
+
   /**
    * Joins a Person to the Channel. The first time a name is seen it records a
    * `person.join` Event; later calls return the existing Person, updating the
@@ -325,8 +339,8 @@ export class Channel extends DurableObject<Env> {
   }
 
   /**
-   * The stream is receive-only except for the Hook Capture: a wrapper sends its
-   * Agent's Hook Events here and gets the reply on the same socket. Clients do
+   * The stream is receive-only except for the Hook and Proxy Captures: a wrapper sends its
+   * Agent's Hook and Proxy Events here and gets the reply on the same socket. Clients do
    * everything else over HTTP.
    */
   override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
@@ -337,10 +351,13 @@ export class Channel extends DurableObject<Env> {
     } catch {
       return;
     }
-    if (typeof frame !== "object" || frame === null || (frame as { type?: unknown }).type !== "hook") return;
+    if (typeof frame !== "object" || frame === null) return;
+    const type = (frame as { type?: unknown }).type;
+    if (type !== "hook" && type !== "proxy") return;
     const person = this.ctx.getTags(ws)[0];
     if (person === undefined) return;
-    send(ws, this.hooks.receive(person, frame as Record<string, unknown>));
+    const body = frame as Record<string, unknown>;
+    send(ws, type === "hook" ? this.hooks.receive(person, body) : this.proxy.receive(person, body));
   }
 
   /** The files Agent `id` has edited, most recently first, or null when the Channel has no such Agent. */
@@ -389,7 +406,7 @@ export class Channel extends DurableObject<Env> {
   }
 }
 
-function send(ws: WebSocket, message: StreamMessage | HookCaptureReply): void {
+function send(ws: WebSocket, message: StreamMessage | HookCaptureReply | ProxyCaptureReply): void {
   try {
     ws.send(JSON.stringify(message));
   } catch {

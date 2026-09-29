@@ -62,6 +62,25 @@ function lineCount(text: unknown): number {
   return lines.at(-1) === "" ? lines.length - 1 : lines.length;
 }
 
+/**
+ * A short summary of a tool call's input, such as a path or a command. Never the
+ * content a tool writes. `path` shortens file paths. The Proxy Capture uses it too.
+ */
+export function toolArg(tool: string, toolInput: Record<string, unknown>, path: (path: string) => string): string {
+  const field = ARG_FIELDS[tool];
+  const value = field ? str(toolInput[field]) : undefined;
+  if (value !== undefined) {
+    const text = field?.endsWith("path") ? path(value) : value;
+    return truncate(text.replace(/\s+/g, " ").trim(), MAX_HOOK_ARG_LENGTH);
+  }
+  // Other tools (MCP tools and the like): their short fields, each cut short.
+  const brief = Object.entries(toolInput)
+    .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+    .map(([k, v]) => `${k}=${truncate(String(v).replace(/\s+/g, " "), 60)}`)
+    .join(" ");
+  return truncate(brief, MAX_HOOK_ARG_LENGTH);
+}
+
 /** Keeps a command readable and small: one line per heredoc, with its body dropped. */
 export function shortCommand(command: string): string {
   const lines = command.split("\n");
@@ -131,18 +150,7 @@ export class HookSummarizer {
 
   /** A short summary of a tool call's input. Never the content a tool writes. */
   private arg(tool: string, toolInput: Record<string, unknown>): string {
-    const field = ARG_FIELDS[tool];
-    const value = field ? str(toolInput[field]) : undefined;
-    if (value !== undefined) {
-      const text = field?.endsWith("path") ? this.path(value) : value;
-      return truncate(text.replace(/\s+/g, " ").trim(), MAX_HOOK_ARG_LENGTH);
-    }
-    // Other tools (MCP tools and the like): their short fields, each cut short.
-    const brief = Object.entries(toolInput)
-      .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
-      .map(([k, v]) => `${k}=${truncate(String(v).replace(/\s+/g, " "), 60)}`)
-      .join(" ");
-    return truncate(brief, MAX_HOOK_ARG_LENGTH);
+    return toolArg(tool, toolInput, (path) => this.path(path));
   }
 
   /** A path relative to the repo when it is inside it, else as given. */
