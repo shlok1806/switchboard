@@ -12,6 +12,7 @@ import type {
 } from "../../shared/src/index";
 import { MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
 import { authenticate } from "./auth";
+import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
 
 export { Channel } from "./channel";
 
@@ -95,10 +96,13 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;
-    if (!ROUTES.has(route)) return fail(404, "Not found.");
+    if (route === WEBHOOK_ROUTE) return handleWebhook(request, env);
+    const taskRoute = isTaskRoute(request.method, url.pathname);
+    if (!ROUTES.has(route) && !taskRoute) return fail(404, "Not found.");
 
     const auth = await authenticate(request, url, env.JOIN_SECRET);
     if (!auth.ok) return fail(auth.status, auth.reason);
+    if (taskRoute) return handleTaskRoute(request, url, env, auth.person);
 
     switch (route) {
       case "POST /api/join":

@@ -122,3 +122,32 @@ export type ErrorResponse = Extract<ActionResult, { ok: false }>;
 /** Clients may send this text frame to keep the WebSocket open. The Worker answers `LIVE_PONG`. */
 export const LIVE_PING = "ping";
 export const LIVE_PONG = "pong";
+
+/* ── Tasks (GitHub sync, ADR 0001) ────────────────────────── */
+
+/** `GET /api/tasks`: every Task, lowest Issue number first. */
+export interface TaskListResponse {
+  tasks: Task[];
+}
+
+/** `GET /api/tasks/:number` */
+export interface TaskResponse {
+  task: Task;
+}
+
+/** `POST /api/tasks`: creates the GitHub Issue, then the Task. */
+export interface CreateTaskRequest {
+  title: string;
+  description?: string;
+  labels?: string[];
+}
+
+/** `POST /api/tasks` answers 201 with the new Task. */
+export interface CreateTaskResponse {
+  ok: true;
+  task: Task;
+}
+
+/** GitHub's own limits on an Issue title and body, in characters. */
+export const MAX_TASK_TITLE_LENGTH = 256;
+export const MAX_TASK_DESCRIPTION_LENGTH = 65536;

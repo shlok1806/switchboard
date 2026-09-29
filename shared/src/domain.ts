@@ -83,11 +83,20 @@ export interface Task {
   title: string;
   description: string;
   labels: string[];
+  /** Open Issues this Task is blocked by (GitHub issue dependencies). */
   blockedBy: TaskNumber[];
   /** Parent Task when this is a Subtask (a GitHub sub-issue). */
   parent?: TaskNumber;
+  /** Every Subtask, open or done. */
   subtasks: TaskNumber[];
+  /** How many of `subtasks` are done. */
+  subtasksDone: number;
+  /** Checklist items (`- [ ]` / `- [x]`) in the Issue body, in order. */
   steps: Step[];
+  /** How many of `steps` are done. */
+  stepsDone: number;
+  /** The Issue on GitHub. */
+  url: string;
   status: TaskStatus;
   claim?: Claim;
   /** `task/<issue#>-<slug>`, created on Claim (ADR 0006). */
@@ -185,7 +194,24 @@ export interface EventPayloads {
   "push": { branch: string; commit: string; message: string; files: FileChange[] };
   "merge": { into: "main"; pr: number; branch: string; files: string[] };
   "task.done": { pr?: number; closedOnGitHub: boolean };
+  /** A new Task: created through the Channel API (actor is the Person) or found on GitHub. */
+  "task.create": { title: string; url: string; via: TaskSyncVia };
+  /** GitHub-owned fields of a Task changed on GitHub (ADR 0001). */
+  "task.change": { fields: TaskField[]; via: TaskSyncVia };
+  /** An Issue closed on GitHub was reopened there. */
+  "task.reopen": { via: TaskSyncVia };
+  /** The Issue was deleted or moved to another repo, so the Task is gone. */
+  "task.remove": { via: TaskSyncVia };
 }
+
+/**
+ * How a Task change reached the Channel: a call to the Channel API, a GitHub
+ * webhook, or the periodic reconcile that repairs missed webhooks.
+ */
+export type TaskSyncVia = "channel" | "webhook" | "reconcile";
+
+/** The Task fields GitHub owns, as named in `task.change` Events. */
+export type TaskField = "title" | "description" | "labels" | "blockedBy" | "parent" | "subtasks" | "steps";
 
 export type EventType = keyof EventPayloads;
 
