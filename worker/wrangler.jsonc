@@ -14,7 +14,11 @@
     "bindings": [{ "name": "CHANNEL", "class_name": "Channel" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Channel"] }],
+  // The GitHub repo whose Issues are this Channel's Tasks (ADR 0001).
+  "vars": { "GITHUB_REPO": "shlok1806/switchboard" },
   // Set with `wrangler secret put`. JOIN_SECRET is the shared join secret
   // (interim identity, issue #1). JEV_API_KEY is for the Relay, unused so far.
-  "secrets": { "required": ["JOIN_SECRET", "JEV_API_KEY"] }
+  // GITHUB_TOKEN reads and creates Issues in GITHUB_REPO. GITHUB_WEBHOOK_SECRET
+  // verifies deliveries to /api/github/webhook.
+  "secrets": { "required": ["JOIN_SECRET", "JEV_API_KEY", "GITHUB_TOKEN", "GITHUB_WEBHOOK_SECRET"] }
 }

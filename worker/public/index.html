@@ -67,8 +67,8 @@
   #events { list-style: none; margin: 0; padding: 12px 0; }
   #events li { padding: 6px 0; overflow-wrap: anywhere; }
   .meta { display: flex; align-items: baseline; gap: 8px; }
-  .who { font-weight: 600; }
-  .time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .who { font-weight: 600; flex-shrink: 0; }
+  .time { flex-shrink: 0; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .text { white-space: pre-wrap; }
   li.quiet { color: var(--muted); font-size: 13px; }
   li.quiet .who { font-weight: 500; }
@@ -109,6 +109,20 @@
   form.join h2 { margin: 0 0 4px; font-size: 20px; }
   form.join p { margin: 0 0 8px; color: var(--muted); }
   label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+  #tasks-bar { border-bottom: 1px solid var(--border); }
+  details.tasks { width: 100%; padding-top: 8px; padding-bottom: 8px; }
+  details.tasks summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 4px 0; }
+  details.tasks summary .count { color: var(--muted); font-weight: 400; }
+  #tasks { list-style: none; margin: 0; padding: 0; max-height: 40dvh; overflow-y: auto; }
+  #tasks li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 0; font-size: 14px; }
+  #tasks li.sub { padding-left: 20px; }
+  #tasks .num { color: var(--muted); font-variant-numeric: tabular-nums; text-decoration: none; }
+  #tasks .title { flex: 1 1 12em; min-width: 0; overflow-wrap: anywhere; }
+  #tasks li.done .title { color: var(--muted); text-decoration: line-through; }
+  #tasks .facts { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); font-size: 12px; }
+  #tasks .blocked { color: var(--danger); }
+  .bar { display: inline-block; width: 40px; height: 4px; border-radius: 2px; background: var(--border); vertical-align: middle; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--ok); }
   [hidden] { display: none; }
 </style>
 </head>
@@ -136,6 +150,13 @@
   </form>
 </div>
 
+<div id="tasks-bar" hidden>
+  <details class="wrap tasks" open>
+    <summary>Tasks <span class="count" id="tasks-count"></span></summary>
+    <ul id="tasks"></ul>
+  </details>
+</div>
+
 <main id="channel-view" hidden>
   <div class="wrap">
     <ol id="events" aria-live="polite"></ol>
@@ -161,6 +182,7 @@ let lastSeq = 0;
 let socket = null;
 let retry = 0;
 let session = 0;
+const tasks = new Map();
 
 function load() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)); } catch { return null; }
@@ -225,13 +247,84 @@ function render(event) {
   } else {
     li.className = "quiet";
     const what = document.createElement("span");
-    what.textContent = event.type === "person.join" ? "joined the Channel" : event.type;
+    what.textContent = describe(event);
     meta.insertBefore(what, time);
     li.append(meta);
   }
   $("events").append(li);
   $("empty").hidden = true;
   if (pinned) main.scrollTop = main.scrollHeight;
+}
+
+function describe(event) {
+  const n = `Task #${event.task}`;
+  switch (event.type) {
+    case "person.join": return "joined the Channel";
+    case "task.create": return `created ${n}: ${event.payload.title}`;
+    case "task.change": return `changed ${event.payload.fields.join(", ")} on ${n}`;
+    case "task.done": return `closed ${n}`;
+    case "task.reopen": return `reopened ${n}`;
+    case "task.remove": return `removed ${n}`;
+    default: return event.type;
+  }
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function progress(done, total, noun) {
+  const span = el("span");
+  const bar = el("span", "bar");
+  const fill = el("span");
+  fill.style.width = `${total ? (100 * done) / total : 0}%`;
+  bar.append(fill);
+  span.append(bar, ` ${done}/${total} ${noun}`);
+  return span;
+}
+
+function taskRow(task, isSub) {
+  const li = el("li", [isSub ? "sub" : "", task.status === "done" ? "done" : ""].join(" ").trim());
+  const num = el("a", "num", `#${task.number}`);
+  num.href = task.url;
+  num.target = "_blank";
+  num.rel = "noopener";
+  const facts = el("span", "facts");
+  if (task.steps.length) facts.append(progress(task.stepsDone, task.steps.length, "steps"));
+  if (task.subtasks.length) facts.append(progress(task.subtasksDone, task.subtasks.length, "subtasks"));
+  if (task.blockedBy.length) facts.append(el("span", "blocked", `blocked by ${task.blockedBy.map((b) => `#${b}`).join(", ")}`));
+  if (task.status !== "open") facts.append(el("span", "", task.status));
+  li.append(num, el("span", "title", task.title), facts);
+  return li;
+}
+
+function renderTasks() {
+  const list = $("tasks");
+  list.textContent = "";
+  const all = [...tasks.values()].sort((a, b) => a.number - b.number);
+  const children = (parent) => all.filter((t) => t.parent === parent.number);
+  for (const task of all) {
+    if (task.parent !== undefined && tasks.has(task.parent)) continue;
+    list.append(taskRow(task, false));
+    for (const sub of children(task)) list.append(taskRow(sub, true));
+  }
+  const open = all.filter((t) => t.status !== "done").length;
+  $("tasks-count").textContent = `${open} open`;
+  $("tasks-bar").hidden = !creds || all.length === 0;
+}
+
+async function loadTasks(mine) {
+  try {
+    const page = await api("/api/tasks");
+    if (mine !== session) return;
+    for (const task of page.tasks) tasks.set(task.number, task);
+  } catch {
+    // Task sync not configured, or GitHub unreachable: the Channel still works without it.
+  }
+  renderTasks();
 }
 
 function setStatus(live, text) {
@@ -257,7 +350,13 @@ function connect(mine) {
   ws.onmessage = (e) => {
     if (e.data === "pong") return;
     const message = JSON.parse(e.data);
-    if (message.type === "event") render(message.event);
+    if (message.type === "event") {
+      render(message.event);
+      if (message.event.type === "task.remove" && tasks.delete(message.event.task)) renderTasks();
+    } else if (message.type === "task") {
+      tasks.set(message.task.number, message.task);
+      renderTasks();
+    }
   };
   ws.onclose = () => {
     clearInterval(keepalive);
@@ -269,6 +368,7 @@ function connect(mine) {
 }
 
 function show(joined) {
+  if (!joined) $("tasks-bar").hidden = true;
   $("join-view").hidden = joined;
   $("channel-view").hidden = !joined;
   $("composer").hidden = !joined;
@@ -298,6 +398,8 @@ async function enter(candidate) {
   const mine = session;
   lastSeq = 0;
   $("events").textContent = "";
+  tasks.clear();
+  renderTasks();
   $("me").textContent = creds.person;
   setStatus(false, "Connecting");
   show(true);
@@ -313,6 +415,8 @@ async function enter(candidate) {
     $("post-error").textContent = `Could not load history: ${err.message}`;
   }
   $("empty").hidden = lastSeq > 0;
+  await loadTasks(mine);
+  if (mine !== session) return;
   const main = $("channel-view");
   main.scrollTop = main.scrollHeight;
   connect(mine);

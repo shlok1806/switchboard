@@ -12,9 +12,12 @@ import type {
   Person,
   PersonName,
   StreamMessage,
+  Task,
   TaskNumber,
 } from "../../shared/src/index";
 import { LIVE_PING, LIVE_PONG } from "../../shared/src/index";
+import { gitHubFor, type WebhookChange } from "./github/index";
+import { type NewTask, type TaskResult, Tasks } from "./tasks";
 
 type EventRow = {
   seq: number;
@@ -31,7 +34,7 @@ type EventRow = {
 type PersonRow = { name: string; time_zone: string; joined_at: string };
 
 /** The parts of an Event its author supplies. The Channel adds `id`, `seq` and `at`. */
-interface NewEvent<K extends EventType> {
+export interface NewEvent<K extends EventType> {
   type: K;
   actor: Actor;
   capture: Capture | null;
@@ -68,6 +71,9 @@ function isTimeZone(zone: string): boolean {
 }
 
 export class Channel extends DurableObject<Env> {
+  /** Tasks mirrored from GitHub Issues (ADR 0001). */
+  private readonly tasks: Tasks;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Events are append-only: this object only ever INSERTs into `events`.
@@ -91,6 +97,36 @@ export class Channel extends DurableObject<Env> {
     `);
     // Answer keepalive pings without waking the object from hibernation.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(LIVE_PING, LIVE_PONG));
+    this.tasks = new Tasks({
+      storage: ctx.storage,
+      gitHub: () => gitHubFor(env),
+      append: (event) => this.append(event),
+      broadcast: (message) => this.broadcast(message),
+    });
+  }
+
+  listTasks(): Promise<TaskResult<Task[]>> {
+    return this.tasks.list();
+  }
+
+  getTask(number: TaskNumber): Promise<TaskResult<Task>> {
+    return this.tasks.get(number);
+  }
+
+  /** A Person creating a Task, which creates its GitHub Issue first. */
+  createTask(name: PersonName, task: NewTask): Promise<TaskResult<Task>> {
+    this.join(name);
+    return this.tasks.create(name, task);
+  }
+
+  /** A verified GitHub webhook delivery, reduced to the Issues it touched. */
+  gitHubWebhook(change: WebhookChange): Promise<TaskResult<null>> {
+    return this.tasks.webhook(change);
+  }
+
+  /** The periodic Task reconcile, which repairs missed GitHub webhooks. */
+  override async alarm(): Promise<void> {
+    await this.tasks.alarm();
   }
 
   /**
