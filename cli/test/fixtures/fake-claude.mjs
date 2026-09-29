@@ -10,9 +10,13 @@
 //   call <tool> <json>
 //         -> calls a Switchboard MCP tool from the `--mcp-config` servers, starting
 //            the server the way Claude Code does (stdio), then its PostToolUse hook
+//   model <prompt>
+//         -> one call to the Messages API through ANTHROPIC_BASE_URL, streaming; prints
+//            the status and a hash of the bytes it got back
 //   quit  -> exits 0, after the SessionEnd hook
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -108,6 +112,35 @@ async function callTool(name, input) {
   console.log(`FAKE-CLAUDE done ${name}`);
 }
 
+/**
+ * One model turn, the way Claude Code calls the Messages API: to ANTHROPIC_BASE_URL
+ * (its settings' `env` wins over the environment), with its API key, streaming.
+ */
+async function modelTurn(prompt) {
+  const base = settings.env?.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
+  try {
+    const response = await fetch(`${base}/v1/messages?beta=true`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-opus-5-5",
+        stream: true,
+        max_tokens: 1024,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    const body = Buffer.from(await response.arrayBuffer());
+    const sha = createHash("sha256").update(body).digest("hex");
+    console.log(`FAKE-CLAUDE model base=${base} status=${response.status} sha=${sha}`);
+  } catch (error) {
+    console.log(`FAKE-CLAUDE model base=${base} FAILED: ${error.message}`);
+  }
+}
+
 console.log(`FAKE-CLAUDE args=${JSON.stringify(args)}`);
 console.log(`FAKE-CLAUDE mcp=${mcpConfig ?? ""}`);
 console.log(`FAKE-CLAUDE agent=${process.env.SWITCHBOARD_AGENT_ID ?? ""}`);
@@ -132,6 +165,8 @@ async function answer(command) {
     process.exit(0);
   }
   if (command === "work") console.log("FAKE-CLAUDE working on it");
+  const model = /^model (.*)$/.exec(command);
+  if (model) await modelTurn(model[1]);
   if (command === "turn") {
     const longCommand = `echo ${"a".repeat(2000)}`;
     toolUse(

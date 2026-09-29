@@ -8,6 +8,7 @@ import type {
   ErrorResponse,
   HookCaptureReply,
   JoinResponse,
+  ProxyCaptureReply,
   RegisterAgentRequest,
   ReportedPresence,
   StreamMessage,
@@ -72,7 +73,7 @@ export class ChannelClient {
    * every message to `onMessage`, including replies to what the wrapper sends on it.
    */
   follow(
-    onMessage: (message: StreamMessage | HookCaptureReply) => void,
+    onMessage: (message: StreamMessage | HookCaptureReply | ProxyCaptureReply) => void,
     onStatus: (connected: boolean) => void,
   ): ChannelStream {
     let closed = false;
@@ -93,7 +94,7 @@ export class ChannelClient {
       ws.addEventListener("message", (event) => {
         if (event.data === LIVE_PONG) return;
         try {
-          onMessage(JSON.parse(String(event.data)) as StreamMessage | HookCaptureReply);
+          onMessage(JSON.parse(String(event.data)) as StreamMessage | HookCaptureReply | ProxyCaptureReply);
         } catch {
           // Ignore frames we cannot read.
         }

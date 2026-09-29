@@ -146,6 +146,24 @@ export interface ToolCall {
   arg: string;
 }
 
+/** What a Proxy Event says about one model turn, in both Proxy modes. */
+export interface ProxyTurn {
+  model: string;
+  /** Input tokens that were neither read from nor written to the prompt cache. */
+  inputTokens: number;
+  outputTokens: number;
+  /** Input tokens read from the prompt cache. */
+  cacheReadTokens: number;
+  /** Input tokens written to the prompt cache. */
+  cacheCreationTokens: number;
+  /** The reply's text, masked and cut short. */
+  reply: string;
+  /** Every tool the reply calls, with a short summary of its input. */
+  toolCalls: ToolCall[];
+  /** How many detected secrets were masked before the Event left the laptop. */
+  maskedSecrets: number;
+}
+
 /** Payloads, keyed by Event type. */
 export interface EventPayloads {
   /** A Person joined the Channel for the first time. */
@@ -167,24 +185,24 @@ export interface EventPayloads {
   "command": { command: string; exitCode?: number };
   /** The Agent finished a turn. `turn` counts turns in this run of the wrapper, from 1. */
   "turn.end": { turn: number };
-  /** Proxy Digest: model, token counts, reply text and tool calls, secrets masked. */
-  "proxy.digest": {
-    model: string;
-    inputTokens: number;
-    outputTokens: number;
-    reply: string;
-    toolCalls: ToolCall[];
-    maskedSecrets: number;
-  };
-  /** Raw Proxy Event: a full model turn including its context. Shown on the Dashboard only. */
-  "proxy.raw": {
-    model: string;
-    inputTokens: number;
-    outputTokens: number;
+  /**
+   * Proxy Digest: one model turn in short. Model, token counts, the reply text and
+   * the tool calls it made, with detected secrets masked on the laptop.
+   */
+  "proxy.digest": ProxyTurn;
+  /**
+   * Raw Proxy Event: a full model turn. `context` is the request body (everything in
+   * the model's context) and `response` the response body as it arrived (an SSE
+   * stream when streaming), each cut to `capBytes`. Shown on the Dashboard only,
+   * never relayed into any Agent (ADR 0005).
+   */
+  "proxy.raw": ProxyTurn & {
     context: string;
-    reply: string;
-    toolCalls: ToolCall[];
-    maskedSecrets: number;
+    response: string;
+    /** The most bytes of each body kept. */
+    capBytes: number;
+    /** Which bodies were longer than `capBytes` and cut. */
+    truncated: { context: boolean; response: boolean };
   };
   "claim": { holder: Holder };
   "claim.refused": { heldBy: Holder };

@@ -2,7 +2,7 @@
  * The Agent part of the Channel API: how the laptop wrapper registers an Agent,
  * reports its Presence with heartbeats and ends its session. Terms follow CONTEXT.md.
  */
-import type { Agent, AgentId, Cli, PersonName } from "./domain";
+import type { Agent, AgentId, Cli, PersonName, ProxyMode } from "./domain";
 
 /** The short CLI name used in an Agent ID, such as `claude` in `shlok/claude/7f3a`. */
 export const CLI_SHORT_NAMES: Record<Cli, string> = {
@@ -53,6 +53,10 @@ export interface RegisterAgentRequest {
   cwd: string;
   /** Sets the Nickname. Omit to keep the current one; null clears it. */
   nickname?: string | null;
+  /** Sets the Proxy mode (the wrapper's `--proxy`). Omit to keep the current one; new Agents start in digest. */
+  proxyMode?: ProxyMode;
+  /** Whether the wrapper masks secrets in Proxy Events (`--no-mask` turns it off). Omitted means on. */
+  secretMasking?: boolean;
 }
 
 /** `POST /api/agents` and `POST /api/agents/:id/heartbeat` answer with the Agent. */

@@ -4,8 +4,10 @@
 // terminal, and through the Channel API the Dashboard reads.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer as createHttpServer, type Server } from "node:http";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,8 +107,8 @@ class Terminal {
   readonly exited: Promise<number>;
   private readonly term: pty.IPty;
 
-  constructor(args: string[]) {
-    this.term = pty.spawn(process.execPath, [CLI, ...args], { cols: 100, rows: 30, cwd, env });
+  constructor(args: string[], extraEnv: Record<string, string> = {}) {
+    this.term = pty.spawn(process.execPath, [CLI, ...args], { cols: 100, rows: 30, cwd, env: { ...env, ...extraEnv } });
     terminals.push(this.term);
     this.term.onData((data) => {
       this.output += data;
@@ -502,5 +504,135 @@ describe("Switchboard's tools (the Tool Capture)", () => {
 
     // The session's MCP config is removed when it ends.
     await expect(stat(mcpPath)).rejects.toThrow();
+  });
+});
+
+describe("the Proxy Capture", () => {
+  const API_KEY = "sk-ant-api03-E2EkeyThatMustNeverLeave0123456789";
+  const TURN = [
+    {
+      type: "message_start",
+      message: {
+        model: "claude-opus-5-5",
+        usage: { input_tokens: 9, cache_read_input_tokens: 2048, output_tokens: 1 },
+      },
+    },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Tests pass. " } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "DB_PASSWORD=hunter2hunter2" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t", name: "Bash", input: {} } },
+    {
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "input_json_delta", partial_json: '{"command":"npm test"}' },
+    },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 31 } },
+    { type: "message_stop" },
+  ]
+    .map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`)
+    .join("");
+  const TURN_SHA = createHash("sha256").update(TURN).digest("hex");
+
+  /** The model API the agent CLI would call without Switchboard. */
+  const seenKeys: (string | undefined)[] = [];
+  let upstream: Server | null = null;
+  let upstreamUrl = "";
+
+  beforeAll(async () => {
+    upstream = createHttpServer((req, res) => {
+      seenKeys.push(req.headers["x-api-key"] as string | undefined);
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(TURN);
+      });
+    });
+    await new Promise<void>((resolve) => upstream?.listen(0, "127.0.0.1", resolve));
+    upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  });
+
+  afterAll(() => {
+    upstream?.closeAllConnections();
+    upstream?.close();
+  });
+
+  const proxyEvents = async (id: string) => (await agentEvents(id)).filter((e) => e.capture === "proxy");
+
+  it("routes the model traffic through a local proxy unchanged, and each turn arrives as a Proxy Event", async () => {
+    const term = new Terminal(["run", "claude"], { ANTHROPIC_BASE_URL: upstreamUrl, ANTHROPIC_API_KEY: API_KEY });
+    const { agentEnv: id } = await term.started();
+    await waitFor("the Agent", async () => (await agents()).find((a) => a.id === id));
+
+    term.type("model run the tests\r");
+    const first = await term.waitForOutput(/FAKE-CLAUDE model base=(\S+) status=(\d+) sha=(\w+)/);
+    // The CLI talked to the local proxy, and got exactly what the API sent.
+    expect(first[1]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(first[1]).not.toBe(upstreamUrl);
+    expect(first[2]).toBe("200");
+    expect(first[3]).toBe(TURN_SHA);
+    // The API got the CLI's own key.
+    expect(seenKeys).toEqual([API_KEY]);
+
+    const [digest] = await waitFor("a Proxy Digest", async () => {
+      const events = await proxyEvents(id);
+      return events.length > 0 ? events : undefined;
+    });
+    expect(digest).toMatchObject({
+      type: "proxy.digest",
+      capture: "proxy",
+      actor: { kind: "agent", agentId: id },
+      payload: {
+        model: "claude-opus-5-5",
+        inputTokens: 9,
+        outputTokens: 31,
+        cacheReadTokens: 2048,
+        cacheCreationTokens: 0,
+        reply: "Tests pass. DB_PASSWORD=****",
+        toolCalls: [{ name: "Bash", arg: "npm test" }],
+        maskedSecrets: 1,
+      },
+    });
+
+    // The Person switches the Agent to raw mid-session; the next turn is a Raw Proxy Event.
+    const switched = await fetch(`${base}${agentPath(id as AgentId)}/proxy-mode`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "e2e", "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "raw" }),
+    });
+    expect(switched.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const seen = term.output.length;
+    term.type("model again\r");
+    await waitFor("the second turn", () =>
+      /FAKE-CLAUDE model .*sha=/.test(term.output.slice(seen)) ? true : undefined,
+    );
+    const raw = await waitFor("a Raw Proxy Event", async () =>
+      (await proxyEvents(id)).find((e) => e.type === "proxy.raw"),
+    );
+    if (raw.type !== "proxy.raw") throw new Error("expected a Raw Proxy Event");
+    expect(raw.payload.context).toContain('"content":"again"');
+    expect(raw.payload.response).toContain("DB_PASSWORD=****");
+
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+    // Auth never left the laptop.
+    expect(JSON.stringify(await agentEvents(id))).not.toContain("E2EkeyThatMustNeverLeave");
+  });
+
+  it("leaves the model traffic alone with --proxy off", async () => {
+    const term = new Terminal(["run", "claude", "--proxy", "off"], {
+      ANTHROPIC_BASE_URL: upstreamUrl,
+      ANTHROPIC_API_KEY: API_KEY,
+    });
+    const { agentEnv: id } = await term.started();
+    term.type("model hello\r");
+    const answer = await term.waitForOutput(/FAKE-CLAUDE model base=(\S+) status=(\d+) sha=(\w+)/);
+    expect(answer[1]).toBe(upstreamUrl);
+    expect(answer[3]).toBe(TURN_SHA);
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+    expect(await proxyEvents(id)).toEqual([]);
   });
 });
