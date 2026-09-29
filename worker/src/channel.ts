@@ -1,0 +1,214 @@
+// One Durable Object per Channel (ADR 0004). It owns the Channel's Persons, its
+// append-only Event stream in SQLite, and every live WebSocket, using WebSocket
+// hibernation so idle subscribers cost nothing.
+
+import { DurableObject } from "cloudflare:workers";
+import type {
+  Actor,
+  Capture,
+  ChannelEvent,
+  EventPayloads,
+  EventType,
+  Person,
+  PersonName,
+  StreamMessage,
+  TaskNumber,
+} from "../../shared/src/index";
+import { LIVE_PING, LIVE_PONG } from "../../shared/src/index";
+
+type EventRow = {
+  seq: number;
+  id: string;
+  at: string;
+  type: string;
+  actor: string;
+  capture: string | null;
+  task: number | null;
+  turn: string | null;
+  payload: string;
+};
+
+type PersonRow = { name: string; time_zone: string; joined_at: string };
+
+/** The parts of an Event its author supplies. The Channel adds `id`, `seq` and `at`. */
+interface NewEvent<K extends EventType> {
+  type: K;
+  actor: Actor;
+  capture: Capture | null;
+  payload: EventPayloads[K];
+  task?: TaskNumber;
+  turn?: string;
+}
+
+function rowToEvent(row: EventRow): ChannelEvent {
+  return {
+    id: row.id,
+    seq: row.seq,
+    at: row.at,
+    type: row.type,
+    actor: JSON.parse(row.actor),
+    capture: row.capture,
+    ...(row.task === null ? {} : { task: row.task }),
+    ...(row.turn === null ? {} : { turn: row.turn }),
+    payload: JSON.parse(row.payload),
+  } as ChannelEvent;
+}
+
+function rowToPerson(row: PersonRow): Person {
+  return { name: row.name, timeZone: row.time_zone, joinedAt: row.joined_at };
+}
+
+function isTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export class Channel extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // Events are append-only: this object only ever INSERTs into `events`.
+    ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        at TEXT NOT NULL,
+        type TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        capture TEXT,
+        task INTEGER,
+        turn TEXT,
+        payload TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS persons (
+        name TEXT PRIMARY KEY,
+        time_zone TEXT NOT NULL,
+        joined_at TEXT NOT NULL
+      );
+    `);
+    // Answer keepalive pings without waking the object from hibernation.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(LIVE_PING, LIVE_PONG));
+  }
+
+  /**
+   * Joins a Person to the Channel. The first time a name is seen it records a
+   * `person.join` Event; later calls return the existing Person, updating the
+   * time zone when a valid one is given.
+   */
+  join(name: PersonName, timeZone?: string): Person {
+    const zone = timeZone !== undefined && isTimeZone(timeZone) ? timeZone : undefined;
+    const existing = this.ctx.storage.sql.exec<PersonRow>("SELECT * FROM persons WHERE name = ?", name).toArray()[0];
+    if (existing) {
+      if (zone === undefined || zone === existing.time_zone) return rowToPerson(existing);
+      this.ctx.storage.sql.exec("UPDATE persons SET time_zone = ? WHERE name = ?", zone, name);
+      const person = rowToPerson({ ...existing, time_zone: zone });
+      this.broadcast({ type: "person", person });
+      return person;
+    }
+    const person: Person = { name, timeZone: zone ?? "UTC", joinedAt: new Date().toISOString() };
+    this.ctx.storage.sql.exec(
+      "INSERT INTO persons (name, time_zone, joined_at) VALUES (?, ?, ?)",
+      person.name,
+      person.timeZone,
+      person.joinedAt,
+    );
+    this.broadcast({ type: "person", person });
+    this.append({
+      type: "person.join",
+      actor: { kind: "person", person: name },
+      capture: null,
+      payload: { timeZone: person.timeZone },
+    });
+    return person;
+  }
+
+  /** Records an Update a Person wrote directly, for example from the CLI or the Dashboard. */
+  postUpdate(name: PersonName, text: string, task?: TaskNumber): ChannelEvent {
+    this.join(name);
+    return this.append({
+      type: "update",
+      actor: { kind: "person", person: name },
+      capture: null,
+      payload: { text },
+      ...(task === undefined ? {} : { task }),
+    });
+  }
+
+  /** Events with `seq` greater than `after`, oldest first. */
+  history(after: number, limit: number): ChannelEvent[] {
+    return this.ctx.storage.sql
+      .exec<EventRow>("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?", after, limit)
+      .toArray()
+      .map(rowToEvent);
+  }
+
+  /**
+   * Upgrades an already-authenticated request to a live stream. The Worker
+   * passes the verified Person as `?person=` and the resume cursor as `?after=`.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const name = url.searchParams.get("person");
+    const after = url.searchParams.get("after");
+    if (name === null) return new Response("Missing person", { status: 400 });
+
+    const { 0: client, 1: server } = new WebSocketPair();
+    this.ctx.acceptWebSocket(server, [name]);
+    // Everything below is synchronous, so no other Event can be appended
+    // between the backlog and the live stream: none is missed or sent twice.
+    if (after !== null) {
+      for (const event of this.history(Number(after), Number.MAX_SAFE_INTEGER)) {
+        send(server, { type: "event", event });
+      }
+    }
+    this.join(name);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  override webSocketMessage(): void {
+    // The stream is receive-only; clients act over HTTP.
+  }
+
+  override webSocketClose(ws: WebSocket, code: number, reason: string): void {
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Already closed.
+    }
+  }
+
+  private append<K extends EventType>(event: NewEvent<K>): ChannelEvent {
+    const row = this.ctx.storage.sql
+      .exec<EventRow>(
+        `INSERT INTO events (id, at, type, actor, capture, task, turn, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        crypto.randomUUID(),
+        new Date().toISOString(),
+        event.type,
+        JSON.stringify(event.actor),
+        event.capture,
+        event.task ?? null,
+        event.turn ?? null,
+        JSON.stringify(event.payload),
+      )
+      .one();
+    const stored = rowToEvent(row);
+    this.broadcast({ type: "event", event: stored });
+    return stored;
+  }
+
+  private broadcast(message: StreamMessage): void {
+    for (const ws of this.ctx.getWebSockets()) send(ws, message);
+  }
+}
+
+function send(ws: WebSocket, message: StreamMessage): void {
+  try {
+    ws.send(JSON.stringify(message));
+  } catch {
+    // The socket is closing; its close handler cleans up.
+  }
+}
