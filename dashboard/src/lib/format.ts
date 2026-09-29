@@ -116,9 +116,15 @@ export function summarize(e: ChannelEvent): string {
     case "takeover":
       return `Took over from ${holderName(e.payload.from)} for ${holderName(e.payload.to)}`;
     case "push":
-      return `Pushed ${e.payload.commit} to ${e.payload.branch}: ${e.payload.message}`;
+      return e.payload.commits.length > 1
+        ? `Pushed ${e.payload.commits.length} commits to ${e.payload.branch}: ${e.payload.message}`
+        : `Pushed ${e.payload.commit.slice(0, 7)} to ${e.payload.branch}: ${e.payload.message}`;
     case "merge":
       return `Merged #${e.payload.pr} (${e.payload.branch}) into ${e.payload.into}`;
+    case "task.branch":
+      return `Working on branch ${e.payload.branch}`;
+    case "task.review":
+      return `Finished, pull request #${e.payload.pr} is open for review`;
     case "task.done":
       return e.payload.closedOnGitHub ? "Issue closed on GitHub, Task done" : "Task done";
     case "person.join":
@@ -171,6 +177,8 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   takeover: "Takeover",
   push: "Push",
   merge: "Merge",
+  "task.branch": "Branch",
+  "task.review": "In review",
   "task.done": "Done",
   "person.join": "Joined",
   "task.create": "New Task",

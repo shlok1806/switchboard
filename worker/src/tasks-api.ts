@@ -10,7 +10,8 @@ import type {
   TaskResponse,
 } from "../../shared/src/index";
 import { MAX_TASK_DESCRIPTION_LENGTH, MAX_TASK_TITLE_LENGTH } from "../../shared/src/index";
-import { readWebhook, repoOf, verifySignature, WEBHOOK_EVENTS } from "./github/index";
+import { handleCodeWebhook } from "./branches-api";
+import { CODE_WEBHOOK_EVENTS, readWebhook, repoOf, verifySignature, WEBHOOK_EVENTS } from "./github/index";
 import type { TaskResult } from "./tasks";
 
 /** Interim setup (issue #1): one Channel per deployment. Matches index.ts. */
@@ -77,7 +78,8 @@ async function handleCreate(request: Request, env: Env, person: PersonName): Pro
 }
 
 /**
- * `POST /api/github/webhook`: `issues`, `sub_issues` and `issue_dependencies` deliveries,
+ * `POST /api/github/webhook`: `issues`, `sub_issues` and `issue_dependencies` deliveries
+ * for Tasks, and `push` and `pull_request` deliveries for pushes and merges (ADR 0006),
  * signed with GITHUB_WEBHOOK_SECRET. Other events (such as `ping`) are acknowledged.
  */
 export async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -87,13 +89,14 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
     return fail(401, "Bad webhook signature.");
   }
   const event = request.headers.get("X-GitHub-Event") ?? "";
-  if (!WEBHOOK_EVENTS.has(event)) return new Response(null, { status: 204 });
+  if (!WEBHOOK_EVENTS.has(event) && !CODE_WEBHOOK_EVENTS.has(event)) return new Response(null, { status: 204 });
   let payload: unknown;
   try {
     payload = JSON.parse(body);
   } catch {
     return fail(400, "The webhook body is not JSON.");
   }
+  if (CODE_WEBHOOK_EVENTS.has(event)) return handleCodeWebhook(request, env, channel(env), event, payload);
   const change = readWebhook(event, payload, repoOf(env));
   if (change === null || change.issues.length === 0) return new Response(null, { status: 204 });
   const result = await channel(env).gitHubWebhook(change);

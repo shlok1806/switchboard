@@ -177,7 +177,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   }
   // Switchboard's MCP tools for this session only (the Tool Capture), passed with
   // --mcp-config. Claude Code settings cannot hold MCP servers, so they are not in --settings.
-  const tools = plan.kind === "none" ? null : prepareSessionTools(env);
+  const tools = plan.kind === "none" ? null : prepareSessionTools(cwd, env);
   process.once("exit", () => tools?.dispose());
   if (tools) args = tools.args(args);
 

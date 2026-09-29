@@ -46,5 +46,5 @@ export function toRows(file: FileChange): DiffRow[] {
 
 /** Committed diff hunks for one file, in Beautiful UI's CodeBlock diff view. */
 export function FileDiff({ file }: { file: FileChange }) {
-  return <CodeBlock variant="Diff" filename={file.path} diff={toRows(file)} className="w-full" />;
+  return <CodeBlock variant="Diff" filename={file.truncated ? `${file.path} (truncated)` : file.path} diff={toRows(file)} className="w-full" />;
 }

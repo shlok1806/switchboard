@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentId } from "../../shared/src/index";
 import { configDir } from "./config";
-import { AGENT_FILE_ENV, MCP_SERVER_NAME } from "./mcp-server";
+import { AGENT_FILE_ENV, MCP_SERVER_NAME, REPO_DIR_ENV } from "./mcp-server";
 
 export interface SessionTools {
   /** Arguments for Claude Code, with `--mcp-config` added. */
@@ -35,7 +35,7 @@ export function withMcpConfig(args: string[], path: string): string[] {
  * run as `switchboard mcp`, with the same config directory, so it reads the stored
  * Channel URL and join secret itself; the config file holds no secret.
  */
-export function prepareSessionTools(env: NodeJS.ProcessEnv = process.env): SessionTools {
+export function prepareSessionTools(cwd: string, env: NodeJS.ProcessEnv = process.env): SessionTools {
   const dir = mkdtempSync(join(tmpdir(), "switchboard-session-"));
   const agentFile = join(dir, "agent");
   const configFile = join(dir, "mcp.json");
@@ -47,7 +47,7 @@ export function prepareSessionTools(env: NodeJS.ProcessEnv = process.env): Sessi
         type: "stdio",
         command: process.execPath,
         args: [script, "mcp"],
-        env: { [AGENT_FILE_ENV]: agentFile, SWITCHBOARD_CONFIG_DIR: configDir(env) },
+        env: { [AGENT_FILE_ENV]: agentFile, [REPO_DIR_ENV]: cwd, SWITCHBOARD_CONFIG_DIR: configDir(env) },
       },
     },
   };

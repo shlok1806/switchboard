@@ -4,9 +4,22 @@
 import { RestGitHub } from "./rest";
 import type { GitHub } from "./types";
 
+export type { CodeChange } from "./code-webhook";
+export { CODE_WEBHOOK_EVENTS, readCodeWebhook } from "./code-webhook";
+export { capFileChanges, parsePatch } from "./diff";
 export { GitHubApiError, RestGitHub } from "./rest";
 export { parseSteps, tickStep } from "./steps";
-export type { GitHub, GitHubIssue, IssueRef, IssueState, NewIssue } from "./types";
+export type {
+  ComparedFile,
+  Comparison,
+  GitHub,
+  GitHubIssue,
+  IssueRef,
+  IssueState,
+  NewIssue,
+  NewPullRequest,
+  PullRequestRef,
+} from "./types";
 export type { WebhookChange } from "./webhook";
 export { readWebhook, sign, verifySignature, WEBHOOK_EVENTS } from "./webhook";
 

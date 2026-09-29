@@ -15,9 +15,8 @@ export const RELAY: RelayConfig = { interruptThreshold: 0.6, model: "typesafe/je
 function eventFiles(event: ChannelEvent): string[] {
   switch (event.type) {
     case "push":
-      return event.payload.files.map((f) => f.path);
     case "merge":
-      return event.payload.files;
+      return event.payload.files.map((f) => f.path);
     case "file.edit":
       return [event.payload.path];
     default:

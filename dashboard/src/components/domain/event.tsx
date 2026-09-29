@@ -16,6 +16,7 @@ const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   takeover: "text-red",
   push: "text-green",
   merge: "text-green",
+  "task.review": "text-green",
   "claim.refused": "text-orange",
   "task.create": "text-green",
   "task.reopen": "text-orange",
@@ -136,15 +137,27 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export function EventBody({ event }: { event: ChannelEvent }) {
   switch (event.type) {
     case "push":
+    case "merge":
       return (
         <div className="flex flex-col gap-3">
           <dl className="grid grid-cols-2 gap-3">
             <Field label="Branch"><span className="font-mono text-[12px]">{event.payload.branch}</span></Field>
-            <Field label="Commit"><span className="font-mono text-[12px]">{event.payload.commit}</span></Field>
+            <Field label="Commit"><span className="font-mono text-[12px]">{event.payload.commit.slice(0, 7)}</span></Field>
           </dl>
+          {event.type === "push" && event.payload.commits.length > 1 && (
+            <ul className="flex flex-col gap-1">
+              {event.payload.commits.map((c) => (
+                <li key={c.sha} className="flex min-w-0 gap-2 text-[12.5px] text-ink-2">
+                  <span className="shrink-0 font-mono text-[12px] text-ink-3">{c.sha.slice(0, 7)}</span>
+                  <span className="truncate">{c.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           {event.payload.files.map((f) => (
             <FileDiff key={f.path} file={f} />
           ))}
+          {event.payload.truncationNote && <p className="text-[12px] text-ink-3">{event.payload.truncationNote}</p>}
         </div>
       );
     case "proxy.digest":

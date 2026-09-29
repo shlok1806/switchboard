@@ -3,7 +3,9 @@
 // makes, keeps Issues in memory, and records every write so the test can check what
 // GitHub would show.
 
+import { execFile } from "node:child_process";
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import { promisify } from "node:util";
 
 export interface ApiIssue {
   number: number;
@@ -15,8 +17,26 @@ export interface ApiIssue {
   state: "open" | "closed";
 }
 
+export interface ApiPullRequest {
+  number: number;
+  title: string;
+  body: string;
+  head: string;
+  base: string;
+  state: "open";
+  /** The head branch's commit on origin when the pull request was opened. */
+  headSha: string;
+}
+
+async function gitIn(dir: string, args: string[]): Promise<string> {
+  return (await promisify(execFile)("git", args, { cwd: dir })).stdout.trim();
+}
+
 export class GitHubApi {
   readonly issues = new Map<number, ApiIssue>();
+  readonly pullRequests = new Map<number, ApiPullRequest>();
+  /** The bare repo standing in for origin, when a test has one. */
+  origin: string | null = null;
   /** Every write, as `METHOD path`, oldest first. */
   readonly writes: string[] = [];
   readonly login = "switchboard-bot";
@@ -26,7 +46,7 @@ export class GitHubApi {
   constructor(readonly repo: string) {}
 
   open(title: string, body = ""): number {
-    const number = this.issues.size + 1;
+    const number = this.issues.size + this.pullRequests.size + 1;
     this.issues.set(number, { number, title, body, labels: [], assignees: [], comments: [], state: "open" });
     return number;
   }
@@ -69,6 +89,56 @@ export class GitHubApi {
     };
   }
 
+  /**
+   * Opening a pull request, as GitHub does it: the head branch must be on origin (the
+   * bare repo standing in for it) with commits main does not have, and an open pull
+   * request from the same branch is refused with 422.
+   */
+  private async pulls(
+    method: string,
+    url: URL,
+    input: Record<string, unknown>,
+  ): Promise<{ status: number; body?: unknown }> {
+    if (method === "GET") {
+      const head = url.searchParams.get("head")?.split(":")[1];
+      const open = [...this.pullRequests.values()].filter((pr) => pr.state === "open" && pr.head === head);
+      return { status: 200, body: open.map((pr) => this.pullToRest(pr)) };
+    }
+    if (method !== "POST") return { status: 404, body: { message: "Not Found" } };
+    this.writes.push(`POST ${url.pathname}`);
+    const head = String(input.head);
+    const base = String(input.base);
+    if ([...this.pullRequests.values()].some((pr) => pr.state === "open" && pr.head === head)) {
+      return {
+        status: 422,
+        body: { message: "Validation Failed", errors: [{ message: "A pull request already exists" }] },
+      };
+    }
+    if (this.origin !== null) {
+      const ahead = await gitIn(this.origin, ["rev-list", "--count", `refs/heads/${base}..refs/heads/${head}`]).catch(
+        () => null,
+      );
+      if (ahead === null) return { status: 422, body: { message: `No branch ${head} on origin` } };
+      if (ahead === "0") return { status: 422, body: { message: `No commits between ${base} and ${head}` } };
+    }
+    const number = this.issues.size + this.pullRequests.size + 1;
+    const pr: ApiPullRequest = {
+      number,
+      title: String(input.title),
+      body: String(input.body),
+      head,
+      base,
+      state: "open",
+      headSha: this.origin === null ? "" : await gitIn(this.origin, ["rev-parse", `refs/heads/${head}`]),
+    };
+    this.pullRequests.set(number, pr);
+    return { status: 201, body: this.pullToRest(pr) };
+  }
+
+  private pullToRest(pr: ApiPullRequest) {
+    return { number: pr.number, html_url: `https://github.com/${this.repo}/pull/${pr.number}`, state: pr.state };
+  }
+
   private async handle(request: IncomingMessage): Promise<{ status: number; body?: unknown }> {
     const url = new URL(request.url ?? "/", this.url);
     const method = request.method ?? "GET";
@@ -77,6 +147,10 @@ export class GitHubApi {
     const input = text ? (JSON.parse(text) as Record<string, unknown>) : {};
 
     if (method === "GET" && url.pathname === "/user") return { status: 200, body: { login: this.login } };
+    if (method === "GET" && url.pathname === `/repos/${this.repo}`) {
+      return { status: 200, body: { full_name: this.repo, default_branch: "main" } };
+    }
+    if (url.pathname === `/repos/${this.repo}/pulls`) return this.pulls(method, url, input);
     const prefix = `/repos/${this.repo}/issues`;
     if (!url.pathname.startsWith(prefix)) return { status: 404, body: { message: "Not Found" } };
     if (method === "GET" && url.pathname === prefix) {

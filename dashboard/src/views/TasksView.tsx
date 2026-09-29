@@ -7,11 +7,12 @@ import TaskRows from "@/components/primitives/TaskRows";
 import { COLUMN_LABEL, columnOf, taskRow, type Column } from "@/components/domain/task";
 import { cn } from "@/lib/utils";
 
-const COLUMNS: Column[] = ["stale", "claimed", "open", "done"];
+const COLUMNS: Column[] = ["stale", "claimed", "review", "open", "done"];
 
 const HINT: Record<Column, string> = {
   stale: "Holder is Gone. Held until a Person takes it over.",
   claimed: "Held by a Live or Idle Agent, or a Person.",
+  review: "Finished. Its pull request is open.",
   open: "No Claim yet.",
   done: "Closed on GitHub.",
 };
@@ -53,7 +54,7 @@ export function TasksView() {
         </p>
         <NewTaskButton />
       </div>
-      <div className="grid gap-5 p-3 sm:p-4 lg:grid-cols-2 lg:gap-4 2xl:grid-cols-4">
+      <div className="grid gap-5 p-3 sm:p-4 lg:grid-cols-2 lg:gap-4 2xl:grid-cols-5">
         {COLUMNS.filter((c) => can.claims || (c !== "stale" && c !== "claimed")).map((c) => {
           const list = byColumn.get(c)!;
           return (
@@ -64,7 +65,7 @@ export function TasksView() {
                     aria-hidden
                     className={cn(
                       "size-2 rounded-full",
-                      c === "stale" ? "bg-red" : c === "claimed" ? "bg-accent" : c === "done" ? "bg-green" : "bg-ink-3",
+                      c === "stale" ? "bg-red" : c === "claimed" ? "bg-accent" : c === "review" ? "bg-orange" : c === "done" ? "bg-green" : "bg-ink-3",
                     )}
                   />
                   {COLUMN_LABEL[c]}

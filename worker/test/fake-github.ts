@@ -3,7 +3,16 @@
 // test decides whether to deliver it or let it go missing.
 
 import type { TaskNumber } from "../../shared/src/index";
-import type { GitHub, GitHubIssue, IssueRef, NewIssue } from "../src/github/index";
+import type {
+  ComparedFile,
+  Comparison,
+  GitHub,
+  GitHubIssue,
+  IssueRef,
+  NewIssue,
+  NewPullRequest,
+  PullRequestRef,
+} from "../src/github/index";
 
 interface FakeIssue {
   number: TaskNumber;
@@ -26,9 +35,30 @@ export type MirrorCall =
   | ["addLabels", TaskNumber, string[]]
   | ["removeLabel", TaskNumber, string]
   | ["addComment", TaskNumber, string]
-  | ["setBody", TaskNumber, string];
+  | ["setBody", TaskNumber, string]
+  | ["createPullRequest", string, string];
 
 type MirrorMethod = MirrorCall[0];
+
+export interface FakePullRequest {
+  number: number;
+  title: string;
+  body: string;
+  head: string;
+  base: string;
+  state: "open" | "merged";
+}
+
+/** The SHA git uses for "no commit". */
+export const NO_COMMIT = "0".repeat(40);
+
+let shas = 0;
+
+/** A new, unique commit SHA. */
+export function sha(): string {
+  shas += 1;
+  return shas.toString(16).padStart(40, "a");
+}
 
 export interface WebhookDelivery {
   /** The `X-GitHub-Event` header. */
@@ -47,6 +77,11 @@ export class FakeGitHub implements GitHub {
   /** Writes that fail, as when GitHub is down or the token lacks a permission. */
   readonly failing = new Set<MirrorMethod>();
   private readonly issues = new Map<TaskNumber, FakeIssue>();
+  private readonly pulls = new Map<number, FakePullRequest>();
+  /** The newest commit of each branch. */
+  private readonly heads = new Map<string, string>([["main", sha()]]);
+  /** What the compare API answers, by `base...head`. */
+  private readonly comparisons = new Map<string, Comparison>();
   private nextNumber = 1;
 
   /* ── Things people do on GitHub ─────────────────────────── */
@@ -121,6 +156,112 @@ export class FakeGitHub implements GitHub {
       repository: { full_name: this.repo },
       sender: { login: by },
     });
+  }
+
+  /**
+   * Someone pushes commits to a branch. The compare API then answers for the push
+   * with these commits and files. A new branch is compared with main.
+   */
+  push(
+    branch: string,
+    input: { commits?: string[]; files?: ComparedFile[]; by?: string; repo?: string } = {},
+  ): WebhookDelivery & { after: string } {
+    const before = this.heads.get(branch) ?? NO_COMMIT;
+    const commits = (input.commits ?? []).map((message) => ({ sha: sha(), message }));
+    const after = commits.at(-1)?.sha ?? this.heads.get("main") ?? sha();
+    this.heads.set(branch, after);
+    const base = before === NO_COMMIT ? "main" : before;
+    this.comparisons.set(`${base}...${after}`, { commits, files: input.files ?? [] });
+    const delivery = this.record("push", {
+      ref: `refs/heads/${branch}`,
+      before,
+      after,
+      created: before === NO_COMMIT,
+      deleted: false,
+      forced: false,
+      commits: commits.map((c) => ({ id: c.sha, message: c.message })),
+      head_commit: commits.length === 0 ? null : { id: after, message: commits.at(-1)?.message },
+      repository: { full_name: input.repo ?? this.repo, default_branch: "main" },
+      pusher: { name: input.by ?? "shlok1806" },
+      sender: { login: input.by ?? "shlok1806" },
+    });
+    return { ...delivery, after };
+  }
+
+  /** Someone deletes a branch. */
+  deleteBranch(branch: string): WebhookDelivery {
+    const before = this.heads.get(branch) ?? NO_COMMIT;
+    this.heads.delete(branch);
+    return this.record("push", {
+      ref: `refs/heads/${branch}`,
+      before,
+      after: NO_COMMIT,
+      created: false,
+      deleted: true,
+      commits: [],
+      repository: { full_name: this.repo, default_branch: "main" },
+      sender: { login: "shlok1806" },
+    });
+  }
+
+  /**
+   * Someone merges a pull request on GitHub. The compare API answers for it with
+   * `files`, and every Issue its body closes ("Closes #n") is closed. Returns the
+   * `pull_request` delivery, then the `issues` deliveries for the closed Issues.
+   */
+  merge(number: number, files: ComparedFile[] = [], by = "shlok1806"): WebhookDelivery[] {
+    const pr = this.pulls.get(number);
+    if (pr === undefined) throw new Error(`The fake GitHub has no pull request #${number}.`);
+    pr.state = "merged";
+    const baseSha = this.heads.get(pr.base) ?? sha();
+    const headSha = this.heads.get(pr.head) ?? sha();
+    this.comparisons.set(`${baseSha}...${headSha}`, { commits: [], files });
+    const mergeSha = sha();
+    this.heads.set(pr.base, mergeSha);
+    const merged = this.record("pull_request", {
+      action: "closed",
+      number,
+      pull_request: {
+        number,
+        state: "closed",
+        merged: true,
+        merge_commit_sha: mergeSha,
+        title: pr.title,
+        body: pr.body,
+        head: { ref: pr.head, sha: headSha },
+        base: { ref: pr.base, sha: baseSha },
+      },
+      repository: { full_name: this.repo, default_branch: "main" },
+      sender: { login: by },
+    });
+    const closes = [
+      ...pr.body.matchAll(/\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #(\d+)/gi),
+    ];
+    return [merged, ...closes.map((m) => this.close(Number(m[1]), by))];
+  }
+
+  /** A pull request closed without merging. */
+  closeUnmerged(number: number): WebhookDelivery {
+    const pr = this.pulls.get(number);
+    if (pr === undefined) throw new Error(`The fake GitHub has no pull request #${number}.`);
+    return this.record("pull_request", {
+      action: "closed",
+      number,
+      pull_request: {
+        number,
+        merged: false,
+        head: { ref: pr.head, sha: this.heads.get(pr.head) ?? sha() },
+        base: { ref: pr.base, sha: this.heads.get(pr.base) ?? sha() },
+      },
+      repository: { full_name: this.repo, default_branch: "main" },
+      sender: { login: "shlok1806" },
+    });
+  }
+
+  /** A pull request, as a test sees it on github.com. */
+  pullRequest(number: number): FakePullRequest | undefined {
+    const pr = this.pulls.get(number);
+    return pr === undefined ? undefined : { ...pr };
   }
 
   /** What GitHub holds for an Issue, as a test sees it on github.com. */
@@ -199,10 +340,29 @@ export class FakeGitHub implements GitHub {
     this.write(["setBody", number, body]).body = body;
   }
 
+  async defaultBranch(): Promise<string> {
+    return "main";
+  }
+
+  async createPullRequest(input: NewPullRequest): Promise<PullRequestRef> {
+    if (this.failing.has("createPullRequest")) throw new Error("GitHub answered 500 to createPullRequest");
+    this.calls.push(["createPullRequest", input.head, input.base]);
+    const open = [...this.pulls.values()].find((pr) => pr.state === "open" && pr.head === input.head);
+    const pr: FakePullRequest = open ?? { number: this.nextNumber++, ...input, state: "open" };
+    this.pulls.set(pr.number, pr);
+    return { number: pr.number, url: `https://github.com/${this.repo}/pull/${pr.number}` };
+  }
+
+  async compare(base: string, head: string): Promise<Comparison> {
+    const comparison = this.comparisons.get(`${base}...${head}`);
+    if (comparison === undefined) throw new Error(`GitHub answered 404 to compare ${base}...${head}`);
+    return comparison;
+  }
+
   /* ── Internals ──────────────────────────────────────────── */
 
   /** Records a write, or fails it when the test says GitHub refuses that call. */
-  private write(call: MirrorCall): FakeIssue {
+  private write(call: Exclude<MirrorCall, ["createPullRequest", string, string]>): FakeIssue {
     if (this.failing.has(call[0])) throw new Error(`GitHub answered 500 to ${call[0]}`);
     this.calls.push(call);
     return this.must(call[1]);

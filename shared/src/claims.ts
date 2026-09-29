@@ -72,6 +72,7 @@ export const SWITCHBOARD_TOOLS = [
   "complete_step",
   "post_update",
   "read_channel",
+  "finish_task",
 ] as const;
 
 export type SwitchboardTool = (typeof SWITCHBOARD_TOOLS)[number];

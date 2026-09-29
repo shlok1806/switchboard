@@ -65,8 +65,11 @@ export interface Step {
   done: boolean;
 }
 
-/** Mirrored to GitHub as a `status:*` label. */
-export type TaskStatus = "open" | "claimed" | "done";
+/**
+ * Mirrored to GitHub as a `status:*` label. `review`: its holder finished it and
+ * its pull request is open (ADR 0006); the Claim stands until the PR merges.
+ */
+export type TaskStatus = "open" | "claimed" | "review" | "done";
 
 /** The exclusive hold one Person or Agent has on a Task. */
 export interface Claim {
@@ -120,12 +123,21 @@ export type Actor =
   | { kind: "person"; person: PersonName }
   | { kind: "github" };
 
-/** One changed file in a push, with its committed diff hunks. */
+/** One changed file in a push or merge, with its committed diff hunks. */
 export interface FileChange {
   path: string;
   additions: number;
   deletions: number;
   hunks: DiffHunk[];
+  /** True when some of its hunks were cut to fit the size caps, or GitHub sent none (binary or too large). */
+  truncated?: boolean;
+}
+
+/** One commit in a push. */
+export interface PushCommit {
+  sha: string;
+  /** The first line of its message. */
+  message: string;
 }
 
 export interface DiffHunk {
@@ -212,7 +224,7 @@ export interface EventPayloads {
    * Mirroring a Claim change to GitHub failed (ADR 0001). The Claim change itself
    * stands; GitHub is behind until the next change or a Person fixes it.
    */
-  "mirror.failed": { change: "claim" | "release" | "step.complete"; call: string; reason: string };
+  "mirror.failed": { change: "claim" | "release" | "step.complete" | "finish"; call: string; reason: string };
   /** An Event written on purpose, in readable language. */
   "update": { text: string };
   /** A message from a Person to an Agent. The only message with instruction weight. */
@@ -224,8 +236,32 @@ export interface EventPayloads {
     stepsCompleted: string[];
     lastUpdate?: string;
   };
-  "push": { branch: string; commit: string; message: string; files: FileChange[] };
-  "merge": { into: "main"; pr: number; branch: string; files: string[] };
+  /**
+   * Commits pushed to a Task branch (`task/<issue#>-<slug>`), from the GitHub webhook.
+   * `commit` and `message` are the newest commit's. Hunks are capped (see
+   * `DIFF_LINES_PER_FILE`); `truncationNote` says so and how to get the rest.
+   */
+  "push": {
+    branch: string;
+    commit: string;
+    message: string;
+    commits: PushCommit[];
+    files: FileChange[];
+    truncationNote?: string;
+  };
+  /** A pull request merged into the main branch, from the GitHub webhook. Hunks capped as for `push`. */
+  "merge": {
+    into: string;
+    pr: number;
+    branch: string;
+    commit: string;
+    files: FileChange[];
+    truncationNote?: string;
+  };
+  /** The Task's branch was created (or picked up again) by its holder's wrapper (ADR 0006). */
+  "task.branch": { branch: string };
+  /** The holder finished the Task: its branch was pushed and a pull request opened that closes the Issue. */
+  "task.review": { pr: number; url: string; branch: string };
   "task.done": { pr?: number; closedOnGitHub: boolean };
   /** A new Task: created through the Channel API (actor is the Person) or found on GitHub. */
   "task.create": { title: string; url: string; via: TaskSyncVia };

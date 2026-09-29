@@ -34,6 +34,8 @@ const WORK: EventType[] = [
   "directive",
   "push",
   "merge",
+  "task.branch",
+  "task.review",
   "step.complete",
   "task.done",
   "task.create",
@@ -50,6 +52,7 @@ const DOT: Partial<Record<EventType, string>> = {
   takeover: "bg-red",
   push: "bg-green",
   merge: "bg-green",
+  "task.review": "bg-green",
   update: "bg-ink",
   "step.complete": "bg-accent",
   "claim.refused": "bg-orange",
@@ -293,12 +296,12 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
             {ago(e.at)}
           </time>
         </div>
-        {e.type === "push" || e.type === "takeover" ? (
+        {e.type === "push" || e.type === "merge" || e.type === "takeover" ? (
           <>
             <p className="text-[13px] text-ink-2">{summarize(e)}</p>
             <Reasoning>
               <ReasoningTrigger className="text-[12px] font-medium text-ink-2">
-                {e.type === "push" ? `Diff (${e.payload.files.length} ${e.payload.files.length === 1 ? "file" : "files"})` : "Hand-off"}
+                {e.type === "push" || e.type === "merge" ? `Diff (${e.payload.files.length} ${e.payload.files.length === 1 ? "file" : "files"})` : "Hand-off"}
               </ReasoningTrigger>
               <ReasoningContent contentClassName="mt-2 max-w-none">
                 <EventBody event={e} />

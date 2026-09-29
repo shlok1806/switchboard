@@ -8,11 +8,12 @@ import { href } from "@/lib/router";
 import { StalePill } from "./pills";
 import { TakeoverAction } from "./takeover";
 
-export type Column = "stale" | "claimed" | "open" | "done";
+export type Column = "stale" | "claimed" | "review" | "open" | "done";
 
 export const COLUMN_LABEL: Record<Column, string> = {
   stale: "Stale Claim",
   claimed: "Claimed",
+  review: "In review",
   open: "Open",
   done: "Done",
 };
@@ -20,6 +21,7 @@ export const COLUMN_LABEL: Record<Column, string> = {
 export function columnOf(t: Task): Column {
   if (t.status === "done") return "done";
   if (t.claim?.stale) return "stale";
+  if (t.status === "review") return "review";
   if (t.claim) return "claimed";
   return "open";
 }
@@ -132,5 +134,5 @@ export function taskRow(task: Task, agentById: Map<AgentId, Agent>, taskByNumber
 }
 
 function columnLabelShort(c: Column) {
-  return c === "stale" ? "stale" : c;
+  return c === "stale" ? "stale" : c === "review" ? "in review" : c;
 }

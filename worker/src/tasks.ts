@@ -321,7 +321,7 @@ export class Tasks {
         actor: { kind: "person", person: personFromLogin(login) },
         capture: null,
         task: after.number,
-        payload: { closedOnGitHub: true },
+        payload: { ...(after.pr === undefined ? {} : { pr: after.pr }), closedOnGitHub: true },
       });
     }
     if (reopened) {

@@ -38,6 +38,36 @@ export interface NewIssue {
   labels: string[];
 }
 
+/** A pull request to open, from a branch into another in the same repo. */
+export interface NewPullRequest {
+  title: string;
+  body: string;
+  /** The branch with the work. */
+  head: string;
+  /** The branch it merges into. */
+  base: string;
+}
+
+export interface PullRequestRef {
+  number: number;
+  url: string;
+}
+
+/** One file in a comparison. `patch` is GitHub's unified diff, absent for binary or very large files. */
+export interface ComparedFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  patch?: string;
+}
+
+/** What changed between two commits: GitHub's compare API, `base...head`. */
+export interface Comparison {
+  /** Oldest first. */
+  commits: { sha: string; message: string }[];
+  files: ComparedFile[];
+}
+
 export interface GitHub {
   /** `owner/name`. */
   readonly repo: string;
@@ -66,4 +96,16 @@ export interface GitHub {
   removeLabel(number: TaskNumber, label: string): Promise<void>;
   addComment(number: TaskNumber, body: string): Promise<void>;
   setBody(number: TaskNumber, body: string): Promise<void>;
+
+  /* Branches and pull requests (ADR 0006). */
+
+  /** The repo's default branch, into which Task pull requests merge. */
+  defaultBranch(): Promise<string>;
+  /**
+   * Opens a pull request. When an open one from `head` into `base` already exists,
+   * returns that one instead.
+   */
+  createPullRequest(pr: NewPullRequest): Promise<PullRequestRef>;
+  /** The commits and changed files between `base` and `head` (the compare API, three-dot). */
+  compare(base: string, head: string): Promise<Comparison>;
 }

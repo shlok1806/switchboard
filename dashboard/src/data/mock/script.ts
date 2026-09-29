@@ -48,7 +48,7 @@ export const HISTORY: Beat[] = [
   beat(-230, "step.complete", SO, "tool", { step: 1, text: "Add ApiError class" }, { task: 13 }),
   beat(-200, "update", SO, "tool", { text: "ApiError is in web/src/api/errors.ts. Throwing it from the client next." }, { task: 13 }),
   beat(-185, "task.done", person("maya"), null, { closedOnGitHub: true }, { task: 9 }),
-  beat(-181, "merge", { kind: "github" }, null, { into: "main", pr: 21, branch: "task/10-ci", files: [".github/workflows/web.yml"] }, { task: 10 }),
+  beat(-181, "merge", { kind: "github" }, null, { into: "main", pr: 21, branch: "task/10-ci", commit: "e81b0c4", files: [{ path: ".github/workflows/web.yml", additions: 12, deletions: 0, hunks: [] }] }, { task: 10 }),
   beat(-120, "session.end", SO, "hook", { reason: "timeout" }),
   beat(-92, "claim", MG, "tool", { holder: { kind: "agent", agentId: A.mayaGemini } }, { task: 17 }),
   beat(-72, "takeover", person("dev"), null, {
@@ -85,7 +85,7 @@ export const HISTORY: Beat[] = [
   beat(-14, "file.edit", M, "hook", { path: "web/src/components/Pager.tsx", additions: 9, deletions: 0 }, { task: 14, turn: "maya-t41" }),
   beat(-13, "step.complete", M, "tool", { step: 2, text: "Build the Pager component" }, { task: 14, turn: "maya-t41" }),
   beat(-13, "update", M, "tool", { text: "Pager component is in. users.tsx now pages 50 at a time." }, { task: 14, turn: "maya-t41" }),
-  beat(-12, "push", M, null, { branch: "task/14-paginate-users", commit: "a41c9e2", message: "Add Pager and page params", files: PAGER_PUSH_FILES }, { task: 14 }),
+  beat(-12, "push", M, null, { branch: "task/14-paginate-users", commit: "a41c9e2", message: "Add Pager and page params", commits: [{ sha: "a41c9e2", message: "Add Pager and page params" }], files: PAGER_PUSH_FILES }, { task: 14 }),
   beat(-10, "task.change", { kind: "github" }, null, { fields: ["labels", "steps"], via: "webhook" }, { task: 17 }),
   beat(-9, "step.complete", D, "tool", { step: 1, text: "Write retry helper in web/src/api/retry.ts" }, { task: 16 }),
   beat(-6, "tool.call", D, "hook", { tool: "Bash", arg: "npm test -- retry", ok: true, durationMs: 3_410, output: "4 passed" }, { task: 16 }),
@@ -136,6 +136,7 @@ export const LIVE: Beat[] = [
     branch: "task/12-rename-getjson",
     commit: "7c2d0f1",
     message: "Rename getJson to request",
+    commits: [{ sha: "7c2d0f1", message: "Rename getJson to request" }],
     files: RENAME_PUSH_FILES,
   }, {
     task: 12,
