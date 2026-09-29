@@ -80,7 +80,7 @@ export function AppSidebar({ route, ...props }: React.ComponentProps<typeof Side
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={items} />
-        <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+        {agents.length > 0 && <SidebarGroup className="group-data-[collapsible=icon]:hidden">
           <SidebarGroupLabel>Agents</SidebarGroupLabel>
           <SidebarMenu>
             {byPresence.map((a) => (
@@ -108,7 +108,7 @@ export function AppSidebar({ route, ...props }: React.ComponentProps<typeof Side
               </SidebarMenuItem>
             ))}
           </SidebarMenu>
-        </SidebarGroup>
+        </SidebarGroup>}
       </SidebarContent>
       <SidebarFooter>
         <NavUser />

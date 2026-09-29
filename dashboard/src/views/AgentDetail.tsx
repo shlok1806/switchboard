@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import NumberFlow from "@number-flow/react";
 import type { AgentId, ProxyMode } from "@shared/index";
-import { useChannel, useIndex, useMe, useStore } from "@/data/store";
+import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
+import { IssueLink } from "@/components/domain/pending";
 import { SegmentedControl } from "@/components/atoms/SegmentedControl";
 import { RelativeTime, RelativeTimeZone, RelativeTimeZoneDate, RelativeTimeZoneDisplay, RelativeTimeZoneLabel } from "@/components/kibo-ui/relative-time";
 import { EventRow } from "@/components/domain/event";
@@ -21,6 +22,7 @@ export function AgentDetail({ id }: { id: string }) {
   const { events, verdictsByEvent, snapshot, fresh } = useChannel();
   const { agentById, taskByNumber } = useIndex();
   const claimsOf = useClaimsOf();
+  const can = useCapabilities();
   const agent = agentById.get(id as AgentId);
   const [capture, setCapture] = useState<(typeof CAPTURES)[number]>("All");
 
@@ -87,8 +89,8 @@ export function AgentDetail({ id }: { id: string }) {
           <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-card bg-line shadow-card sm:grid-cols-4">
             {[
               { k: "Events", v: <NumberFlow value={events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === agent.id).length} /> },
-              { k: "Interrupts heard", v: <NumberFlow value={heard.i} /> },
-              { k: "Queued to it", v: <NumberFlow value={heard.q} /> },
+              { k: "Interrupts heard", v: can.verdicts ? <NumberFlow value={heard.i} /> : <span className="text-[13px] text-ink-3">Relay pending</span> },
+              { k: "Queued to it", v: can.verdicts ? <NumberFlow value={heard.q} /> : <span className="text-[13px] text-ink-3">Relay pending</span> },
               { k: "Session started", v: <span className="text-[13px]">{ago(agent.startedAt)}</span> },
             ].map((s) => (
               <div key={s.k} className="flex flex-col gap-0.5 bg-surface px-3 py-2.5">
@@ -137,7 +139,9 @@ export function AgentDetail({ id }: { id: string }) {
                 ))}
               </ul>
             ) : (
-              <p className="text-[12.5px] text-ink-3">No Claim</p>
+              <p className="text-[12.5px] text-ink-3">
+                {can.claims ? "No Claim" : <>Claims arrive with <IssueLink capability="claims" />.</>}
+              </p>
             )}
           </section>
 
@@ -147,12 +151,16 @@ export function AgentDetail({ id }: { id: string }) {
               options={MODES}
               value={agent.proxyMode === "raw" ? "Raw" : "Digest"}
               onChange={(m) => void setMode(m)}
-              className={mine ? "" : "pointer-events-none opacity-60"}
+              className={mine && can.proxyMode ? "" : "pointer-events-none opacity-60"}
             />
             <p className="text-[12px] text-ink-3">
-              {mine
-                ? "Raw shares full model turns, context included. Secrets are masked either way."
-                : `Only ${agent.person} can change this.`}
+              {!can.proxyMode ? (
+                <>Proxy Capture arrives with <IssueLink capability="proxyMode" />.</>
+              ) : mine ? (
+                "Raw shares full model turns, context included. Secrets are masked either way."
+              ) : (
+                `Only ${agent.person} can change this.`
+              )}
               {agent.secretMasking ? "" : " Secret masking is off."}
             </p>
           </section>
@@ -172,14 +180,18 @@ export function AgentDetail({ id }: { id: string }) {
             </section>
           )}
 
-          {agent.presence !== "gone" ? (
+          {!can.directives ? (
+            <p className="rounded-card bg-inset p-3 text-[12.5px] text-ink-3">
+              Directives to this Agent arrive with <IssueLink capability="directives" />.
+            </p>
+          ) : agent.presence !== "gone" ? (
             <Composer defaultAgent={agent.id} />
           ) : (
             <p className="rounded-card bg-inset p-3 text-[12.5px] text-ink-3">
               This Agent is Gone, so a Directive would wait until it resumes.
             </p>
           )}
-          {!agent.canReceiveInterrupts && (
+          {can.verdicts && !agent.canReceiveInterrupts && (
             <p className="text-[12px] text-ink-3">
               {CLI_LABEL[agent.cli]} cannot receive Interrupts. They arrive as Queue, labelled as downgraded.
             </p>

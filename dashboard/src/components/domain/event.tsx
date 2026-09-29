@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { AgentLink, CaptureChip, RawBadge, TaskLink, VerdictTally } from "./pills";
 import { FileDiff } from "./diff";
 import { VerdictTable } from "./verdict";
+import { IssueLink } from "./pending";
 
 const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   update: "text-ink",
@@ -20,7 +21,6 @@ const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   "task.reopen": "text-orange",
   "task.remove": "text-red",
   "mirror.failed": "text-orange",
-  "person.join": "text-accent-ink",
 };
 
 function Actor({ event, agentById, compact }: { event: ChannelEvent; agentById: Map<AgentId, Agent>; compact?: boolean }) {
@@ -253,12 +253,14 @@ export function EventDetail({
   agentById,
   taskByNumber,
   threshold,
+  verdictsLive = true,
 }: {
   event: ChannelEvent;
   verdicts: Verdict[];
   agentById: Map<AgentId, Agent>;
   taskByNumber: Map<number, Task>;
   threshold: number;
+  verdictsLive?: boolean;
 }) {
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
   return (
@@ -281,7 +283,13 @@ export function EventDetail({
           Verdicts
           <span className="font-mono text-[11px] font-normal text-ink-3">Interrupt threshold {threshold.toFixed(2)}</span>
         </h3>
-        <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
+        {verdictsLive ? (
+          <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
+        ) : (
+          <p className="rounded-card bg-inset px-3 py-2.5 text-[12.5px] text-ink-3">
+            Each Agent's Verdict on this Event, with Jev's probabilities, appears once the Relay (<IssueLink capability="verdicts" />) lands.
+          </p>
+        )}
       </section>
     </article>
   );

@@ -1,12 +1,13 @@
 /* Switchboard: adapted from the shadcn/ui sidebar-07 block's NavUser (MIT).
  * The account menu becomes the Person menu: who you are and the theme. */
 
-import { ChevronsUpDown, Monitor, Moon, Sun } from "lucide-react"
+import { ChevronsUpDown, LogOut, Monitor, Moon, Sun } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -19,7 +20,8 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { useChannel, useMe } from "@/data/store"
+import { useChannel, useMe, useStore } from "@/data/store"
+import { leaveChannel } from "@/lib/session"
 import { useTheme, type ThemeChoice } from "@/lib/theme"
 
 export function NavUser() {
@@ -27,6 +29,7 @@ export function NavUser() {
   const me = useMe()
   const { agents } = useChannel()
   const { choice, set } = useTheme()
+  const isMock = useStore().source.isMock
   const mine = agents.filter((a) => a.person === me && a.presence !== "gone").length
 
   const who = (
@@ -39,6 +42,7 @@ export function NavUser() {
       <div className="grid flex-1 text-left leading-tight">
         <span className="truncate text-[13px] font-medium text-ink">{me}</span>
         <span className="truncate text-[11.5px] text-ink-3">
+          {isMock ? "Demo data · " : ""}
           {mine} {mine === 1 ? "Agent" : "Agents"} running
         </span>
       </div>
@@ -80,6 +84,14 @@ export function NavUser() {
                 <Moon /> Dark
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
+            {!isMock && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={leaveChannel}>
+                  <LogOut /> Leave the Channel
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

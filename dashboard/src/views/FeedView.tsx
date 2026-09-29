@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AnimatePresence } from "motion/react";
 import { MessageSquarePlus, X } from "lucide-react";
-import { useChannel, useIndex } from "@/data/store";
+import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { EventDetail, EventRow } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
 import { Composer } from "@/components/domain/composer";
@@ -18,6 +18,7 @@ export function FeedView({ selected }: { selected?: string }) {
   const { events, verdictsByEvent, agents, tasks, snapshot, fresh } = useChannel();
   const { agentById, taskByNumber } = useIndex();
   const mobile = useIsMobile();
+  const can = useCapabilities();
   const [filters, setFilters] = useState<FeedFilters>(EMPTY_FILTERS);
   const [composeOpen, setComposeOpen] = useState(false);
   const threshold = snapshot?.relay.interruptThreshold ?? 0.6;
@@ -70,13 +71,13 @@ export function FeedView({ selected }: { selected?: string }) {
           { value: "none", label: "None (Dashboard, GitHub)" },
         ]}
       />
-      <FilterSelect
+      {can.verdicts && <FilterSelect
         label="Verdict"
         value={filters.verdict}
         onChange={set("verdict")}
         allLabel="Any Verdict"
         options={[...VERDICT_OPTIONS].reverse().map((o) => ({ value: o, label: `Any ${VERDICT_LABEL[o]}` }))}
-      />
+      />}
       {n > 0 && (
         <button
           type="button"
@@ -126,12 +127,15 @@ export function FeedView({ selected }: { selected?: string }) {
       agentById={agentById}
       taskByNumber={taskByNumber}
       threshold={threshold}
+      verdictsLive={can.verdicts}
     />
   ) : (
     <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
       <p className="text-[13px] font-medium text-ink">Pick an Event</p>
       <p className="max-w-xs text-[12.5px] text-ink-3">
-        Its payload and the Relay's Verdict for every Agent show here, with Jev's probabilities.
+        {can.verdicts
+          ? "Its payload and the Relay's Verdict for every Agent show here, with Jev's probabilities."
+          : "Its payload shows here. Verdicts join it once the Relay lands."}
       </p>
     </div>
   );

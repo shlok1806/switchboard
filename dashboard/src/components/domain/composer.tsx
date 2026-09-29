@@ -2,10 +2,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { AgentId } from "@shared/index";
 import ChatComposer from "@/components/primitives/ChatComposer";
-import { useChannel, useStore } from "@/data/store";
+import { useCapabilities, useChannel, useStore } from "@/data/store";
 
 const MODES = ["Update", "Directive"] as const;
 type Mode = (typeof MODES)[number];
+const UPDATE_ONLY = ["Update"] as const;
 
 /**
  * Post an Update to everyone, or send a Directive to one Agent.
@@ -14,7 +15,8 @@ type Mode = (typeof MODES)[number];
 export function Composer({ defaultAgent, task, className }: { defaultAgent?: AgentId; task?: number; className?: string }) {
   const store = useStore();
   const { agents } = useChannel();
-  const [mode, setMode] = useState<Mode>(defaultAgent ? "Directive" : "Update");
+  const can = useCapabilities();
+  const [mode, setMode] = useState<Mode>(defaultAgent && can.directives ? "Directive" : "Update");
   const reachable = agents.filter((a) => a.presence !== "gone");
   const [to, setTo] = useState<AgentId | "">(defaultAgent ?? reachable[0]?.id ?? "");
 
@@ -36,7 +38,7 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
   return (
     <ChatComposer
       className={className}
-      tabs={MODES}
+      tabs={can.directives ? MODES : UPDATE_ONLY}
       tab={mode}
       onTabChange={setMode}
       onSend={send}

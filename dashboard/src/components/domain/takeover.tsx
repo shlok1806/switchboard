@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import type { Holder, Task } from "@shared/index";
 import ApprovalCard from "@/components/primitives/ApprovalCard";
 import { Button } from "@/components/atoms/Button";
-import { useChannel, useMe, useStore } from "@/data/store";
+import { useCapabilities, useChannel, useMe, useStore } from "@/data/store";
 import { holderName } from "@/lib/format";
 
 /**
@@ -15,7 +15,8 @@ export function TakeoverAction({ task, compact = false }: { task: Task; compact?
   const me = useMe();
   const { agents } = useChannel();
   const [open, setOpen] = useState(false);
-  if (!task.claim?.stale) return null;
+  const can = useCapabilities();
+  if (!task.claim?.stale || !can.takeover) return null;
 
   const options: Holder[] = [
     { kind: "person", person: me },

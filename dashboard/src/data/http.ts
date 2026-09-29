@@ -1,5 +1,9 @@
 import type {
   ActionResult,
+  AgentsResponse,
+  CreateTaskRequest,
+  CreateTaskResponse,
+  Task,
   ChannelEvent,
   ChannelSnapshot,
   ErrorResponse,
@@ -12,10 +16,25 @@ import type {
   TaskListResponse,
 } from "@shared/index";
 import { LIVE_PING, MAX_HISTORY_LIMIT } from "@shared/index";
-import type { ChannelSource, ConnectionState } from "./source";
+import type { Capabilities, ChannelSource, ConnectionState } from "./source";
 
 /** Relay settings to show until the Worker exposes them. */
 const DEFAULT_RELAY = { interruptThreshold: 0.6, model: "typesafe/jev" };
+
+/**
+ * What the Worker on main can do today: join, Events, Updates, the stream (#5),
+ * Tasks (#8) and Agents with Presence (#6). The rest arrives with later issues.
+ */
+const LIVE_CAPABILITIES: Capabilities = {
+  agents: true,
+  verdicts: false,
+  captures: false,
+  claims: false,
+  takeover: false,
+  directives: false,
+  proxyMode: false,
+  createTask: true,
+};
 
 /** What each Person action needs from the Worker, so a missing route explains itself. */
 const ACTION_NAME: Record<PersonAction["type"], string> = {
@@ -30,13 +49,15 @@ const ACTION_NAME: Record<PersonAction["type"], string> = {
  * The real Channel client, matching worker/src:
  * - every HTTP call sends `Authorization: Bearer <secret>` and `X-Switchboard-Person`;
  * - the WebSocket at `/api/stream` sends `?secret=`, `?person=` and `?after=`;
- * - the history is `GET /api/events`, Tasks are `GET /api/tasks`.
+ * - the history is `GET /api/events`, Tasks `GET /api/tasks`, Agents `GET /api/agents`.
  * Routes the Worker does not have yet (`/api/snapshot`, Directives, Takeover,
  * Proxy mode, Nicknames) degrade: the snapshot is assembled from the routes that
  * exist, and the actions answer with a readable refusal.
  */
 export class HttpChannelSource implements ChannelSource {
   readonly me: string;
+  readonly capabilities = LIVE_CAPABILITIES;
+  readonly isMock = false;
   private readonly base: string;
   private readonly credentials: JoinCredentials;
 
@@ -74,33 +95,44 @@ export class HttpChannelSource implements ChannelSource {
     return body as T;
   }
 
-  async snapshot(): Promise<ChannelSnapshot> {
-    // A future Worker may serve the whole snapshot in one call.
-    const direct = await this.call<ChannelSnapshot>("/api/snapshot");
-    if (direct.status === 200 && direct.body && "events" in direct.body) return direct.body;
-    if (direct.status === 401 || direct.status === 400) {
-      throw new Error((direct.body as ErrorResponse | null)?.reason ?? "Could not sign in to the Channel.");
+  /** `POST /api/join`: checks the credentials and joins (or rejoins) the Channel. */
+  async join(): Promise<{ ok: true; person: Person } | { ok: false; reason: string }> {
+    try {
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const { status, body } = await this.call<JoinResponse>("/api/join", {
+        method: "POST",
+        body: JSON.stringify({ timeZone }),
+      });
+      if (status < 400 && body && "person" in body) return { ok: true, person: body.person };
+      const reason = body && typeof body === "object" && "reason" in body ? String(body.reason) : `HTTP ${status}`;
+      return { ok: false, reason };
+    } catch {
+      return { ok: false, reason: "The Channel could not be reached." };
     }
+  }
 
-    // Otherwise assemble it from the routes that exist today.
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const { status, body } = await this.call<JoinResponse>("/api/join", {
-      method: "POST",
-      body: JSON.stringify({ timeZone }),
-    });
-    if (status >= 400) throw new Error((body as ErrorResponse | null)?.reason ?? `Join failed: HTTP ${status}`);
-    const me = (body as JoinResponse).person;
+  async snapshot(): Promise<ChannelSnapshot> {
+    // The Worker has no /api/snapshot yet, so assemble it from the routes it has.
+    const joined = await this.join();
+    if (!joined.ok) throw new Error(joined.reason);
+    const me = joined.person;
 
     const events = await this.allEvents();
-    const tasks = await this.get<TaskListResponse>("/api/tasks")
-      .then((r) => r.tasks)
-      .catch(() => []);
+    // Tasks need GitHub; if it is unreachable the board is empty, not broken.
+    const [tasks, agents] = await Promise.all([
+      this.get<TaskListResponse>("/api/tasks")
+        .then((r) => r.tasks)
+        .catch((): Task[] => []),
+      this.get<AgentsResponse>("/api/agents")
+        .then((r) => r.agents)
+        .catch(() => []),
+    ]);
 
     return {
       channel: { id: "main", repo: repoFromTasks(tasks) ?? "Channel", mainBranch: "main" },
       persons: personsFrom(events, me),
-      // No Agents or Verdicts API yet: the views show their empty states.
-      agents: [],
+      agents,
+      // No Relay yet (#12): the views explain where Verdicts will appear.
       verdicts: [],
       tasks,
       events,
@@ -171,6 +203,20 @@ export class HttpChannelSource implements ChannelSource {
       clearInterval(ping);
       socket?.close();
     };
+  }
+
+  async createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }> {
+    try {
+      const { status, body } = await this.call<CreateTaskResponse>("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      if (status < 400 && body && "task" in body) return { ok: true, task: body.task };
+      const reason = body && typeof body === "object" && "reason" in body ? String(body.reason) : `HTTP ${status}`;
+      return { ok: false, reason };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
   }
 
   async act(action: PersonAction): Promise<ActionResult> {

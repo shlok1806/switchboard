@@ -51,7 +51,9 @@ export function captureOrOrigin(e: ChannelEvent): string {
   // Task sync Events say how they arrived: the Channel API, a webhook or a reconcile.
   if ("via" in e.payload) return SYNC_VIA_LABEL[e.payload.via];
   if (e.actor.kind === "person") return "Dashboard";
-  return "GitHub";
+  if (e.actor.kind === "github" || e.type === "push" || e.type === "merge") return "GitHub";
+  // Recorded by the Channel itself, such as an Agent going Gone after silence.
+  return "Channel";
 }
 
 const rtf = new Intl.RelativeTimeFormat("en", { numeric: "always", style: "narrow" });
