@@ -24,6 +24,7 @@ import type {
 import { DEFAULT_GONE_AFTER_SECONDS, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
 import { AGENTS_SCHEMA, AgentRoster, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
+import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
 import { gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
@@ -88,6 +89,8 @@ export class Channel extends DurableObject<Env> {
   private readonly agents: AgentRoster;
   /** Hook Events the wrappers send, and each Agent's touched files. */
   private readonly hooks: HookCapture;
+  /** Claims on Tasks, and their Steps. */
+  private readonly claims: Claims;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -136,6 +139,12 @@ export class Channel extends DurableObject<Env> {
       touchAgent: (person, id) => this.agents.touch(person, id),
       appendOnce: (id, event) => this.insert(id, event),
     });
+    this.claims = new Claims({
+      tasks: this.tasks,
+      agents: this.agents,
+      gitHub: () => gitHubFor(env),
+      append: (event) => this.append(event),
+    });
   }
 
   /**
@@ -164,6 +173,41 @@ export class Channel extends DurableObject<Env> {
   createTask(name: PersonName, task: NewTask): Promise<TaskResult<Task>> {
     this.join(name);
     return this.tasks.create(name, task);
+  }
+
+  /** Claims a Task for the caller, or, for a Person, for one of their own Agents. */
+  claimTask(caller: Caller, number: TaskNumber, forAgent?: AgentId): Promise<ClaimResult> {
+    this.join(caller.person);
+    return this.claims.claim(caller, number, forAgent);
+  }
+
+  releaseTask(caller: Caller, number: TaskNumber): Promise<ClaimResult> {
+    return this.claims.release(caller, number);
+  }
+
+  completeStep(caller: Caller, number: TaskNumber, index: number): Promise<ClaimResult> {
+    return this.claims.completeStep(caller, number, index);
+  }
+
+  /** An Agent reporting one call to a Switchboard tool, recorded with the Tool Capture. */
+  recordToolCall(
+    caller: Caller,
+    call: EventPayloads["tool.call"],
+    task?: TaskNumber,
+  ): { ok: true; event: ChannelEvent } | ClaimRefusal {
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    if (who.acting.actor.kind !== "agent") {
+      return { ok: false, status: 400, reason: "Only an Agent reports tool calls." };
+    }
+    const event = this.append({
+      type: "tool.call",
+      actor: who.acting.actor,
+      capture: "tool",
+      payload: call,
+      ...(task === undefined ? {} : { task }),
+    });
+    return { ok: true, event };
   }
 
   /** A verified GitHub webhook delivery, reduced to the Issues it touched. */
@@ -222,22 +266,36 @@ export class Channel extends DurableObject<Env> {
     return person;
   }
 
-  /** Records an Update a Person wrote directly, for example from the CLI or the Dashboard. */
-  postUpdate(name: PersonName, text: string, task?: TaskNumber): ChannelEvent {
-    this.join(name);
-    return this.append({
+  /**
+   * Records an Update: one a Person wrote directly (from the CLI or the Dashboard),
+   * or one an Agent posted through Switchboard's tools (the Tool Capture).
+   */
+  postUpdate(caller: Caller, text: string, task?: TaskNumber): { ok: true; event: ChannelEvent } | ClaimRefusal {
+    this.join(caller.person);
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    const event = this.append({
       type: "update",
-      actor: { kind: "person", person: name },
-      capture: null,
+      actor: who.acting.actor,
+      capture: who.acting.capture,
       payload: { text },
       ...(task === undefined ? {} : { task }),
     });
+    return { ok: true, event };
   }
 
   /** Events with `seq` greater than `after`, oldest first. */
   history(after: number, limit: number): ChannelEvent[] {
     return this.ctx.storage.sql
       .exec<EventRow>("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?", after, limit)
+      .toArray()
+      .map(rowToEvent);
+  }
+
+  /** The latest `count` Events, oldest first. */
+  latestEvents(count: number): ChannelEvent[] {
+    return this.ctx.storage.sql
+      .exec<EventRow>("SELECT * FROM (SELECT * FROM events ORDER BY seq DESC LIMIT ?) ORDER BY seq", count)
       .toArray()
       .map(rowToEvent);
   }

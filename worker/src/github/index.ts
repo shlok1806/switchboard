@@ -5,7 +5,7 @@ import { RestGitHub } from "./rest";
 import type { GitHub } from "./types";
 
 export { GitHubApiError, RestGitHub } from "./rest";
-export { parseSteps } from "./steps";
+export { parseSteps, tickStep } from "./steps";
 export type { GitHub, GitHubIssue, IssueRef, IssueState, NewIssue } from "./types";
 export type { WebhookChange } from "./webhook";
 export { readWebhook, sign, verifySignature, WEBHOOK_EVENTS } from "./webhook";
@@ -27,7 +27,17 @@ export function repoOf(env: Env): string {
   return env.GITHUB_REPO || DEFAULT_REPO;
 }
 
+declare global {
+  interface Env {
+    /**
+     * Where the GitHub REST API lives. Unset in production (api.github.com); the
+     * CLI end-to-end test points it at a local stand-in.
+     */
+    GITHUB_API_URL?: string;
+  }
+}
+
 export function gitHubFor(env: Env): GitHub | null {
   if (installed !== null) return installed;
-  return env.GITHUB_TOKEN ? new RestGitHub(env.GITHUB_TOKEN, repoOf(env)) : null;
+  return env.GITHUB_TOKEN ? new RestGitHub(env.GITHUB_TOKEN, repoOf(env), env.GITHUB_API_URL || undefined) : null;
 }

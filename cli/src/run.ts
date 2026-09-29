@@ -14,6 +14,7 @@ import { ChannelClient, ChannelError } from "./channel-client";
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "./claude-session";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
+import { prepareSessionTools } from "./mcp-config";
 import { IdleWatch } from "./presence";
 import { applySessionSettings } from "./session-settings";
 
@@ -126,7 +127,16 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
       return 1;
     }
   }
-  const onRegistered = (agent: Agent) => hooks?.setAgent(agent.id);
+  // Switchboard's MCP tools for this session only (the Tool Capture), passed with
+  // --mcp-config. Claude Code settings cannot hold MCP servers, so they are not in --settings.
+  const tools = plan.kind === "none" ? null : prepareSessionTools(env);
+  process.once("exit", () => tools?.dispose());
+  if (tools) args = tools.args(args);
+
+  const onRegistered = (agent: Agent) => {
+    hooks?.setAgent(agent.id);
+    tools?.setAgent(agent.id);
+  };
 
   let link: AgentLink | null = null;
   const childEnv: Record<string, string> = { ...(env as Record<string, string>) };
@@ -208,6 +218,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   await hooks?.drain(END_TIMEOUT_MS);
   await link?.end(END_TIMEOUT_MS);
   await stopHooks();
+  tools?.dispose();
   log(`exited ${exitCode}`);
   return exitCode;
 }

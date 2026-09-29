@@ -4,11 +4,13 @@
 //   switchboard login --url <channel url> --secret <join secret> --name <your name>
 //   switchboard run claude [--nickname <name>] [...args for Claude Code]
 //   switchboard whoami
+//   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
 import { normalizePersonName } from "../../shared/src/index";
 import { ChannelClient } from "./channel-client";
 import { configPath, readConfig, writeConfig } from "./config";
+import { runMcpServer } from "./mcp-server";
 import { runClaude } from "./run";
 
 const USAGE = `Usage:
@@ -65,6 +67,8 @@ async function main(argv: string[]): Promise<number> {
       return login(rest);
     case "whoami":
       return whoami();
+    case "mcp":
+      return runMcpServer();
     case "run": {
       const [cli, ...args] = rest;
       if (cli !== "claude") {

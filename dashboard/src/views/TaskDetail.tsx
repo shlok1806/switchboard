@@ -38,6 +38,7 @@ const WORK: EventType[] = [
   "task.change",
   "task.reopen",
   "task.remove",
+  "mirror.failed",
 ];
 
 const SCOPES = ["Work", "All Events"] as const;

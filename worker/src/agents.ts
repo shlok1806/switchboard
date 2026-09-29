@@ -99,6 +99,12 @@ export class AgentRoster {
       .map(rowToAgent);
   }
 
+  /** One Agent, or null when the Channel has never seen it. */
+  find(id: AgentId): Agent | null {
+    const row = this.row(id);
+    return row === undefined ? null : rowToAgent(row);
+  }
+
   /**
    * Registers the Agent for a session, or brings it back when the session resumes.
    * It is Live afterwards. Records `session.start`, and `presence` when it changed.

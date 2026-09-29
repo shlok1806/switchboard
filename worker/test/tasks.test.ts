@@ -322,6 +322,8 @@ describe("creating a Task", () => {
       labels: ["agent"],
       state: "open",
       author: github.tokenLogin,
+      assignees: [],
+      comments: [],
     });
     expect(created).toMatchObject({ title: "Presence", status: "open", stepsDone: 0, labels: ["agent"] });
     expect(created.steps.map((s) => s.text)).toEqual(["heartbeat", "gone"]);

@@ -173,7 +173,8 @@ export class Tasks {
     }
   }
 
-  private async ensureSynced(): Promise<TaskResult<null>> {
+  /** Makes sure the first reconcile has run, so every open Issue is a Task. */
+  async ensureSynced(): Promise<TaskResult<null>> {
     if (this.syncedAt() !== null) {
       await this.schedule();
       return { ok: true, value: null };
@@ -198,7 +199,8 @@ export class Tasks {
     }
   }
 
-  private exclusive<T>(work: () => Promise<T>): Promise<T> {
+  /** Runs `work` after every earlier sync and GitHub write, so writes to one Issue never interleave. */
+  exclusive<T>(work: () => Promise<T>): Promise<T> {
     const run = this.tail.then(work, work);
     this.tail = run.catch(() => undefined);
     return run;
@@ -338,12 +340,14 @@ export class Tasks {
     this.host.append({ type: "task.remove", actor: { kind: "github" }, capture: null, task: number, payload: { via } });
   }
 
-  private read(number: TaskNumber): Task | null {
+  /** The stored Task, or null. Synchronous, so a caller can check and write it atomically. */
+  read(number: TaskNumber): Task | null {
     const row = this.host.storage.sql.exec<TaskRow>("SELECT * FROM tasks WHERE number = ?", number).toArray()[0];
     return row === undefined ? null : (JSON.parse(row.data) as Task);
   }
 
-  private write(task: Task): void {
+  /** Stores a Task and tells every client. Callers own only the Switchboard fields (ADR 0001). */
+  write(task: Task): void {
     this.host.storage.sql.exec(
       "INSERT OR REPLACE INTO tasks (number, data) VALUES (?, ?)",
       task.number,

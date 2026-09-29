@@ -52,4 +52,18 @@ export interface GitHub {
   listBlockedBy(number: TaskNumber): Promise<IssueRef[]>;
   /** Issues in this repo that it blocks. */
   listBlocking(number: TaskNumber): Promise<IssueRef[]>;
+
+  /* Mirroring what Switchboard owns (ADR 0001): the Claim, status labels, Step checkmarks. */
+
+  /** The login of the user the token acts as. Every Agent acts through that one token. */
+  login(): Promise<string>;
+  addAssignees(number: TaskNumber, logins: string[]): Promise<void>;
+  /** Removing someone who is not assigned is not an error. */
+  removeAssignees(number: TaskNumber, logins: string[]): Promise<void>;
+  /** Adds labels, creating any the repo does not have yet. */
+  addLabels(number: TaskNumber, labels: string[]): Promise<void>;
+  /** Removing a label the Issue does not carry is not an error. */
+  removeLabel(number: TaskNumber, label: string): Promise<void>;
+  addComment(number: TaskNumber, body: string): Promise<void>;
+  setBody(number: TaskNumber, body: string): Promise<void>;
 }
