@@ -5,17 +5,23 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
   Actor,
+  Agent,
+  AgentId,
   Capture,
   ChannelEvent,
   EventPayloads,
   EventType,
   Person,
   PersonName,
+  RegisterAgentRequest,
+  ReportedPresence,
   StreamMessage,
   Task,
   TaskNumber,
 } from "../../shared/src/index";
-import { LIVE_PING, LIVE_PONG } from "../../shared/src/index";
+import { DEFAULT_GONE_AFTER_SECONDS, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
+import { AGENTS_SCHEMA, AgentRoster, type RosterResult } from "./agents";
+import { Alarms } from "./alarms";
 import { gitHubFor, type WebhookChange } from "./github/index";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
 
@@ -71,8 +77,12 @@ function isTimeZone(zone: string): boolean {
 }
 
 export class Channel extends DurableObject<Env> {
+  /** The one Durable Object alarm, shared by every job that wakes on a timer. */
+  private readonly alarms: Alarms;
   /** Tasks mirrored from GitHub Issues (ADR 0001). */
   private readonly tasks: Tasks;
+  /** Agents and their Presence. */
+  private readonly agents: AgentRoster;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -95,14 +105,40 @@ export class Channel extends DurableObject<Env> {
         joined_at TEXT NOT NULL
       );
     `);
+    ctx.storage.sql.exec(AGENTS_SCHEMA);
     // Answer keepalive pings without waking the object from hibernation.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(LIVE_PING, LIVE_PONG));
+    this.alarms = new Alarms(ctx.storage);
     this.tasks = new Tasks({
       storage: ctx.storage,
       gitHub: () => gitHubFor(env),
+      nextReconcile: () => this.alarms.deadline("tasks"),
+      scheduleReconcile: (at) => this.alarms.set("tasks", at),
       append: (event) => this.append(event),
       broadcast: (message) => this.broadcast(message),
     });
+    const goneAfterSeconds = Number(env.PRESENCE_GONE_AFTER_SECONDS);
+    this.agents = new AgentRoster({
+      sql: ctx.storage.sql,
+      schedulePresenceCheck: (at) => this.alarms.set("presence", at),
+      goneAfterMs: (goneAfterSeconds > 0 ? goneAfterSeconds : DEFAULT_GONE_AFTER_SECONDS) * 1000,
+      append: (event) => this.append(event),
+      broadcast: (message) => this.broadcast(message),
+    });
+  }
+
+  /**
+   * The shared alarm: runs each job whose deadline has come (the Task reconcile,
+   * the Presence silence check). Each job schedules its own next run.
+   */
+  override async alarm(): Promise<void> {
+    const due = this.alarms.takeDue();
+    try {
+      if (due.has("tasks")) await this.tasks.alarm();
+      if (due.has("presence")) await this.agents.expireSilent();
+    } finally {
+      await this.alarms.arm();
+    }
   }
 
   listTasks(): Promise<TaskResult<Task[]>> {
@@ -124,9 +160,23 @@ export class Channel extends DurableObject<Env> {
     return this.tasks.webhook(change);
   }
 
-  /** The periodic Task reconcile, which repairs missed GitHub webhooks. */
-  override async alarm(): Promise<void> {
-    await this.tasks.alarm();
+  /** Every Agent the Channel has seen, most recently seen first. */
+  listAgents(): Agent[] {
+    return this.agents.list();
+  }
+
+  /** Registers an Agent for a CLI session, or brings it back on resume. Joins its Person too. */
+  registerAgent(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
+    this.join(person);
+    return this.agents.register(person, request);
+  }
+
+  heartbeat(person: PersonName, id: AgentId, presence: ReportedPresence): Promise<RosterResult> {
+    return this.agents.heartbeat(person, id, presence);
+  }
+
+  endSession(person: PersonName, id: AgentId): Promise<RosterResult> {
+    return this.agents.endSession(person, id);
   }
 
   /**
@@ -200,6 +250,7 @@ export class Channel extends DurableObject<Env> {
         send(server, { type: "event", event });
       }
     }
+    for (const agent of this.agents.list()) send(server, { type: "agent", agent });
     this.join(name);
     return new Response(null, { status: 101, webSocket: client });
   }

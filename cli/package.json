@@ -1,0 +1,33 @@
+{
+  "name": "@switchboard/cli",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The laptop-side Switchboard wrapper: `switchboard run claude` joins a Claude Code session to the Channel as an Agent.",
+  "bin": {
+    "switchboard": "dist/switchboard.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/switchboard.js",
+    "prepare": "npm run build",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "biome check .",
+    "test": "npm run build && vitest run"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  },
+  "dependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.15"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@types/node": "^26.6.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

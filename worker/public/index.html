@@ -17,6 +17,7 @@
     --accent-text: #ffffff;
     --danger: #c0392b;
     --ok: #1f9d55;
+    --idle: #b7791f;
     --l: 34%;
   }
   @media (prefers-color-scheme: dark) {
@@ -30,6 +31,7 @@
       --accent-text: #0d0d0c;
       --danger: #ff7b6b;
       --ok: #4cc38a;
+      --idle: #e0a84a;
       --l: 72%;
     }
   }
@@ -123,6 +125,14 @@
   #tasks .blocked { color: var(--danger); }
   .bar { display: inline-block; width: 40px; height: 4px; border-radius: 2px; background: var(--border); vertical-align: middle; overflow: hidden; }
   .bar > span { display: block; height: 100%; background: var(--ok); }
+  #agents-bar { border-bottom: 1px solid var(--border); padding: 8px 0; }
+  #agents { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  #agents li { display: flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+  #agents .dot.idle { background: var(--idle); }
+  #agents li.gone { color: var(--muted); }
+  #agents .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+  #agents .nick { color: var(--muted); }
+  #agents .presence { color: var(--muted); font-size: 12px; }
   [hidden] { display: none; }
 </style>
 </head>
@@ -149,6 +159,10 @@
     <p class="error" id="join-error" role="alert"></p>
   </form>
 </div>
+
+<section id="agents-bar" aria-label="Agents" hidden>
+  <div class="wrap"><ul id="agents"></ul></div>
+</section>
 
 <div id="tasks-bar" hidden>
   <details class="wrap tasks" open>
@@ -217,6 +231,45 @@ function actorName(actor) {
   return actor.kind === "person" ? actor.person : actor.kind === "agent" ? actor.agentId : "github";
 }
 
+const PRESENCE = { live: "Live", idle: "Idle", gone: "Gone" };
+const agents = new Map();
+
+function showAgent(agent) {
+  agents.set(agent.id, agent);
+  renderAgents();
+}
+
+/** The Agents on the Channel with their Presence: Live first, then Idle, then Gone. */
+function renderAgents() {
+  const order = { live: 0, idle: 1, gone: 2 };
+  const list = [...agents.values()].sort((a, b) =>
+    order[a.presence] - order[b.presence] || a.id.localeCompare(b.id));
+  const items = list.map((agent) => {
+    const li = document.createElement("li");
+    li.className = agent.presence;
+    li.title = `${agent.person}'s ${agent.cli} session, last seen ${new Date(agent.lastSeenAt).toLocaleString()}`;
+    const dot = document.createElement("span");
+    dot.className = `dot ${agent.presence}`;
+    const id = document.createElement("span");
+    id.className = "id";
+    id.textContent = agent.id;
+    const presence = document.createElement("span");
+    presence.className = "presence";
+    presence.textContent = PRESENCE[agent.presence] || agent.presence;
+    li.append(dot, id);
+    if (agent.nickname) {
+      const nick = document.createElement("span");
+      nick.className = "nick";
+      nick.textContent = agent.nickname;
+      li.append(nick);
+    }
+    li.append(presence);
+    return li;
+  });
+  $("agents").replaceChildren(...items);
+  $("agents-bar").hidden = !creds || list.length === 0;
+}
+
 function render(event) {
   if (event.seq <= lastSeq) return;
   lastSeq = event.seq;
@@ -265,6 +318,9 @@ function describe(event) {
     case "task.done": return `closed ${n}`;
     case "task.reopen": return `reopened ${n}`;
     case "task.remove": return `removed ${n}`;
+    case "session.start": return event.payload.resumed ? "resumed its session" : "started a session";
+    case "session.end": return "ended its session";
+    case "presence": return `is ${PRESENCE[event.payload.presence] || event.payload.presence}`;
     default: return event.type;
   }
 }
@@ -356,6 +412,8 @@ function connect(mine) {
     } else if (message.type === "task") {
       tasks.set(message.task.number, message.task);
       renderTasks();
+    } else if (message.type === "agent") {
+      showAgent(message.agent);
     }
   };
   ws.onclose = () => {
@@ -375,6 +433,7 @@ function show(joined) {
   $("status").hidden = !joined;
   $("me").hidden = !joined;
   $("leave").hidden = !joined;
+  $("agents-bar").hidden = !joined || agents.size === 0;
 }
 
 async function enter(candidate) {
@@ -400,6 +459,11 @@ async function enter(candidate) {
   $("events").textContent = "";
   tasks.clear();
   renderTasks();
+  agents.clear();
+  renderAgents();
+  api("/api/agents").then((body) => {
+    if (mine === session) body.agents.forEach(showAgent);
+  }, () => { /* The stream sends the roster too. */ });
   $("me").textContent = creds.person;
   setStatus(false, "Connecting");
   show(true);
