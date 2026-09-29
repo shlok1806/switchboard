@@ -1,0 +1,11 @@
+[
+  {
+    "date": "2026-09-29",
+    "macrostructure": "Workbench (app shell)",
+    "theme": "Cobalt",
+    "enrichment": "none",
+    "nav": "shadcn sidebar-07 rail + Cmd-K palette",
+    "footer": "none (app)",
+    "brief": "Switchboard Dashboard v0 - live Channel feed, Tasks, Agents, Capture compare, Verdicts"
+  }
+]
