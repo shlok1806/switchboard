@@ -4,6 +4,7 @@
 //   POST /api/agents                 register an Agent for a session (or resume it)
 //   POST /api/agents/:id/heartbeat   the Agent is still running, Live or Idle
 //   POST /api/agents/:id/end         the session ended; the Agent goes Gone
+//   GET  /api/agents/:id/touched-files  the files the Agent has edited (Hook Capture)
 //
 // `:id` is the URL-encoded Agent ID, since Agent IDs contain "/".
 
@@ -14,6 +15,7 @@ import type {
   Cli,
   PersonName,
   RegisterAgentRequest,
+  TouchedFilesResponse,
 } from "../../shared/src/index";
 import { CLIS, MAX_NICKNAME_LENGTH, SESSION_ID_PATTERN } from "../../shared/src/index";
 import type { RosterResult } from "./agents";
@@ -24,9 +26,11 @@ export type AgentRoute =
   | { kind: "list" }
   | { kind: "register" }
   | { kind: "heartbeat"; id: AgentId }
-  | { kind: "end"; id: AgentId };
+  | { kind: "end"; id: AgentId }
+  | { kind: "touched-files"; id: AgentId };
 
-const AGENT_ACTION = /^\/api\/agents\/([^/]+)\/(heartbeat|end)$/;
+const AGENT_ACTION = /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files)$/;
+const METHODS = { heartbeat: "POST", end: "POST", "touched-files": "GET" } as const;
 
 /** Returns the Agent route a request is for, or null when it is not one. */
 export function matchAgentRoute(method: string, pathname: string): AgentRoute | null {
@@ -35,8 +39,9 @@ export function matchAgentRoute(method: string, pathname: string): AgentRoute | 
     if (method === "POST") return { kind: "register" };
     return null;
   }
-  const match = method === "POST" ? AGENT_ACTION.exec(pathname) : null;
-  if (!match?.[1] || !match[2]) return null;
+  const match = AGENT_ACTION.exec(pathname);
+  const kind = match?.[2] as keyof typeof METHODS | undefined;
+  if (!match?.[1] || !kind || METHODS[kind] !== method) return null;
   let id: string;
   try {
     id = decodeURIComponent(match[1]);
@@ -44,7 +49,7 @@ export function matchAgentRoute(method: string, pathname: string): AgentRoute | 
     return null;
   }
   if (id.split("/").length !== 3) return null;
-  return { kind: match[2] === "heartbeat" ? "heartbeat" : "end", id: id as AgentId };
+  return { kind, id: id as AgentId };
 }
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -108,5 +113,10 @@ export async function handleAgentRoute(
     }
     case "end":
       return answer(await channel.endSession(person, route.id));
+    case "touched-files": {
+      const files = await channel.touchedFiles(route.id);
+      if (files === null) return fail(404, `No Agent ${route.id} on this Channel.`);
+      return json<TouchedFilesResponse>({ agent: route.id, files });
+    }
   }
 }

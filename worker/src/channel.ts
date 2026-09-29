@@ -11,6 +11,7 @@ import type {
   ChannelEvent,
   EventPayloads,
   EventType,
+  HookCaptureReply,
   Person,
   PersonName,
   RegisterAgentRequest,
@@ -18,11 +19,13 @@ import type {
   StreamMessage,
   Task,
   TaskNumber,
+  TouchedFile,
 } from "../../shared/src/index";
 import { DEFAULT_GONE_AFTER_SECONDS, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
 import { AGENTS_SCHEMA, AgentRoster, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
 import { gitHubFor, type WebhookChange } from "./github/index";
+import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
 
 type EventRow = {
@@ -83,6 +86,8 @@ export class Channel extends DurableObject<Env> {
   private readonly tasks: Tasks;
   /** Agents and their Presence. */
   private readonly agents: AgentRoster;
+  /** Hook Events the wrappers send, and each Agent's touched files. */
+  private readonly hooks: HookCapture;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -106,6 +111,7 @@ export class Channel extends DurableObject<Env> {
       );
     `);
     ctx.storage.sql.exec(AGENTS_SCHEMA);
+    ctx.storage.sql.exec(HOOK_CAPTURE_SCHEMA);
     // Answer keepalive pings without waking the object from hibernation.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(LIVE_PING, LIVE_PONG));
     this.alarms = new Alarms(ctx.storage);
@@ -124,6 +130,11 @@ export class Channel extends DurableObject<Env> {
       goneAfterMs: (goneAfterSeconds > 0 ? goneAfterSeconds : DEFAULT_GONE_AFTER_SECONDS) * 1000,
       append: (event) => this.append(event),
       broadcast: (message) => this.broadcast(message),
+    });
+    this.hooks = new HookCapture({
+      sql: ctx.storage.sql,
+      touchAgent: (person, id) => this.agents.touch(person, id),
+      appendOnce: (id, event) => this.insert(id, event),
     });
   }
 
@@ -255,8 +266,28 @@ export class Channel extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  override webSocketMessage(): void {
-    // The stream is receive-only; clients act over HTTP.
+  /**
+   * The stream is receive-only except for the Hook Capture: a wrapper sends its
+   * Agent's Hook Events here and gets the reply on the same socket. Clients do
+   * everything else over HTTP.
+   */
+  override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    if (typeof message !== "string") return;
+    let frame: unknown;
+    try {
+      frame = JSON.parse(message);
+    } catch {
+      return;
+    }
+    if (typeof frame !== "object" || frame === null || (frame as { type?: unknown }).type !== "hook") return;
+    const person = this.ctx.getTags(ws)[0];
+    if (person === undefined) return;
+    send(ws, this.hooks.receive(person, frame as Record<string, unknown>));
+  }
+
+  /** The files Agent `id` has edited, most recently first, or null when the Channel has no such Agent. */
+  touchedFiles(id: AgentId): TouchedFile[] | null {
+    return this.agents.has(id) ? this.hooks.touchedFiles(id) : null;
   }
 
   override webSocketClose(ws: WebSocket, code: number, reason: string): void {
@@ -268,11 +299,18 @@ export class Channel extends DurableObject<Env> {
   }
 
   private append<K extends EventType>(event: NewEvent<K>): ChannelEvent {
+    const stored = this.insert(crypto.randomUUID(), event);
+    if (!stored) throw new Error("Event ID collision");
+    return stored;
+  }
+
+  /** Records an Event under `id` and broadcasts it, or returns null when the Channel already has that ID. */
+  private insert<K extends EventType>(id: string, event: NewEvent<K>): ChannelEvent | null {
     const row = this.ctx.storage.sql
       .exec<EventRow>(
         `INSERT INTO events (id, at, type, actor, capture, task, turn, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-        crypto.randomUUID(),
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING RETURNING *`,
+        id,
         new Date().toISOString(),
         event.type,
         JSON.stringify(event.actor),
@@ -281,7 +319,8 @@ export class Channel extends DurableObject<Env> {
         event.turn ?? null,
         JSON.stringify(event.payload),
       )
-      .one();
+      .toArray()[0];
+    if (!row) return null;
     const stored = rowToEvent(row);
     this.broadcast({ type: "event", event: stored });
     return stored;
@@ -292,7 +331,7 @@ export class Channel extends DurableObject<Env> {
   }
 }
 
-function send(ws: WebSocket, message: StreamMessage): void {
+function send(ws: WebSocket, message: StreamMessage | HookCaptureReply): void {
   try {
     ws.send(JSON.stringify(message));
   } catch {

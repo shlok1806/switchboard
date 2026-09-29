@@ -164,7 +164,7 @@ describe("registering an Agent", () => {
       ["presence", "shlok/claude/7f3a", "live"],
     ]);
     const [start] = await shlok.agentEvents();
-    expect(start).toMatchObject({ capture: "hook", payload: { cwd: "/repo" } });
+    expect(start).toMatchObject({ capture: null, payload: { cwd: "/repo" } });
   });
 
   it("joins the Person to the Channel on first registration", async () => {

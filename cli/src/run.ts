@@ -1,15 +1,21 @@
 // `switchboard run claude [...args]`: runs Claude Code in a pty so the terminal
 // stays fully interactive, and joins the session to the Channel as an Agent.
+// Its hooks (the Hook Capture) report what the Agent does to the Channel.
 
 import { appendFileSync, mkdirSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as pty from "@lydell/node-pty";
+import type { Agent } from "../../shared/src/index";
 import { agentIdFor, DEFAULT_IDLE_AFTER_MS, HEARTBEAT_INTERVAL_MS } from "../../shared/src/index";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { ChannelClient, ChannelError } from "./channel-client";
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "./claude-session";
 import { configDir, readConfig } from "./config";
+import { HookCapture } from "./hooks/capture";
 import { IdleWatch } from "./presence";
+import { applySessionSettings } from "./session-settings";
 
 /** How long the wrapper waits for the Channel to hear that the session ended. */
 const END_TIMEOUT_MS = 3000;
@@ -87,10 +93,45 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     ...(nickname === undefined ? {} : { nickname }),
   });
 
+  // The Channel stream stays open for the whole session. It carries the Hook
+  // Capture's Events; Interrupts and the next-turn cache will read it too.
+  let hooks: HookCapture | null = null;
+  const stream = client.follow(
+    (message) => {
+      if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
+    },
+    (connected) => {
+      log(connected ? "stream connected" : "stream disconnected");
+      if (connected) hooks?.connected();
+    },
+  );
+
+  // Hooks for this session only: a settings file of its own, passed with --settings.
+  let args = plan.args;
+  let hookDir: string | null = null;
+  const stopHooks = async () => {
+    stream.close();
+    await hooks?.close();
+    if (hookDir) await rm(hookDir, { recursive: true, force: true });
+  };
+  if (plan.kind !== "none") {
+    try {
+      // Private to the Person: it holds the socket and the settings file.
+      hookDir = await mkdtemp(join(tmpdir(), "switchboard-"));
+      hooks = await HookCapture.start({ dir: hookDir, root: cwd, send: (frame) => stream.send(frame), log });
+      args = await applySessionSettings(plan.args, hookDir, cwd, [hooks.settings()]);
+    } catch (error) {
+      console.error(`switchboard: could not install the session's hooks: ${(error as Error).message}`);
+      await stopHooks();
+      return 1;
+    }
+  }
+  const onRegistered = (agent: Agent) => hooks?.setAgent(agent.id);
+
   let link: AgentLink | null = null;
   const childEnv: Record<string, string> = { ...(env as Record<string, string>) };
   if (plan.kind === "known") {
-    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log);
+    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered);
     const expected = agentIdFor(config.person, "claude-code", plan.sessionId);
     childEnv.SWITCHBOARD_AGENT_ID = expected;
     try {
@@ -99,6 +140,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     } catch (error) {
       if (error instanceof ChannelError && error.status !== 0) {
         console.error(`switchboard: the Channel refused ${expected}: ${error.message}`);
+        await stopHooks();
         return 1;
       }
       console.error(dim(`switchboard: ${(error as Error).message}. Starting anyway; will keep trying.`));
@@ -108,14 +150,14 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   const bin = env.SWITCHBOARD_CLAUDE_BIN || "claude";
   const stdin = process.stdin;
   const stdout = process.stdout;
-  const child = pty.spawn(bin, plan.args, {
+  const child = pty.spawn(bin, args, {
     name: env.TERM || "xterm-256color",
     cols: stdout.columns || 80,
     rows: stdout.rows || 24,
     cwd,
     env: childEnv,
   });
-  log(`started ${bin} ${plan.args.join(" ")}`);
+  log(`started ${bin} ${args.join(" ")}`);
 
   const idle = new IdleWatch(idleAfterMs, (presence) => link?.report(presence));
   child.onData((data) => {
@@ -130,19 +172,12 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   const onResize = () => child.resize(stdout.columns || 80, stdout.rows || 24);
   stdout.on("resize", onResize);
 
-  // The Channel stream stays open for the whole session. Interrupts and the
-  // next-turn cache will read it; for now it only shows whether we are connected.
-  const unfollow = client.follow(
-    () => {},
-    (connected) => log(connected ? "stream connected" : "stream disconnected"),
-  );
-
   const picking = new AbortController();
   if (plan.kind === "picker") {
     const launchedAt = Date.now();
     void waitForPickedSession(projectDir(claudeDir, cwd), launchedAt, picking.signal).then((sessionId) => {
       if (!sessionId) return;
-      link = new AgentLink(client, session(sessionId, true), heartbeatMs, log);
+      link = new AgentLink(client, session(sessionId, true), heartbeatMs, log, onRegistered);
       link.report(idle.current);
       link.start();
     });
@@ -169,8 +204,10 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   stdout.off("resize", onResize);
   if (stdin.isTTY) stdin.setRawMode(false);
   stdin.pause();
+  // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
+  await hooks?.drain(END_TIMEOUT_MS);
   await link?.end(END_TIMEOUT_MS);
-  unfollow();
+  await stopHooks();
   log(`exited ${exitCode}`);
   return exitCode;
 }
