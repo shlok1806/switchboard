@@ -19,6 +19,7 @@ const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   "task.create": "text-green",
   "task.reopen": "text-orange",
   "task.remove": "text-red",
+  "mirror.failed": "text-orange",
   "person.join": "text-accent-ink",
 };
 

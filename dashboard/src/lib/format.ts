@@ -129,6 +129,8 @@ export function summarize(e: ChannelEvent): string {
       return "Issue reopened on GitHub";
     case "task.remove":
       return "Issue deleted or moved on GitHub, Task removed";
+    case "mirror.failed":
+      return `Could not mirror the ${e.payload.change} to GitHub (${e.payload.call}): ${e.payload.reason}`;
   }
 }
 
@@ -173,4 +175,5 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "task.change": "Task changed",
   "task.reopen": "Reopened",
   "task.remove": "Task removed",
+  "mirror.failed": "GitHub mirror failed",
 };

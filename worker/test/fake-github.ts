@@ -15,7 +15,20 @@ interface FakeIssue {
   closedBy?: string;
   parent?: TaskNumber;
   blockedBy: Set<TaskNumber>;
+  assignees: string[];
+  comments: string[];
 }
+
+/** One write the Channel made to GitHub, in the order it made them. */
+export type MirrorCall =
+  | ["addAssignees", TaskNumber, string[]]
+  | ["removeAssignees", TaskNumber, string[]]
+  | ["addLabels", TaskNumber, string[]]
+  | ["removeLabel", TaskNumber, string]
+  | ["addComment", TaskNumber, string]
+  | ["setBody", TaskNumber, string];
+
+type MirrorMethod = MirrorCall[0];
 
 export interface WebhookDelivery {
   /** The `X-GitHub-Event` header. */
@@ -29,6 +42,10 @@ export class FakeGitHub implements GitHub {
   readonly tokenLogin = "switchboard-bot";
   /** Every delivery GitHub would have sent, oldest first. */
   readonly outbox: WebhookDelivery[] = [];
+  /** Every write the Channel made, oldest first. */
+  readonly calls: MirrorCall[] = [];
+  /** Writes that fail, as when GitHub is down or the token lacks a permission. */
+  readonly failing = new Set<MirrorMethod>();
   private readonly issues = new Map<TaskNumber, FakeIssue>();
   private nextNumber = 1;
 
@@ -45,6 +62,8 @@ export class FakeGitHub implements GitHub {
       state: "open",
       author: input.by ?? "shlok1806",
       blockedBy: new Set(),
+      assignees: [],
+      comments: [],
     };
     this.issues.set(issue.number, issue);
     return { number: issue.number, ...this.issueEvent("opened", issue, issue.author) };
@@ -105,9 +124,17 @@ export class FakeGitHub implements GitHub {
   }
 
   /** What GitHub holds for an Issue, as a test sees it on github.com. */
-  issue(number: TaskNumber): { title: string; body: string; labels: string[]; state: string; author: string } {
-    const { title, body, labels, state, author } = this.must(number);
-    return { title, body, labels, state, author };
+  issue(number: TaskNumber): {
+    title: string;
+    body: string;
+    labels: string[];
+    state: string;
+    author: string;
+    assignees: string[];
+    comments: string[];
+  } {
+    const { title, body, labels, state, author, assignees, comments } = this.must(number);
+    return { title, body, labels: [...labels], state, author, assignees: [...assignees], comments: [...comments] };
   }
 
   /* ── The GitHub interface the Channel calls ─────────────── */
@@ -140,7 +167,46 @@ export class FakeGitHub implements GitHub {
       .map((issue) => ({ number: issue.number, state: issue.state }));
   }
 
+  async login(): Promise<string> {
+    return this.tokenLogin;
+  }
+
+  async addAssignees(number: TaskNumber, logins: string[]): Promise<void> {
+    const issue = this.write(["addAssignees", number, logins]);
+    for (const login of logins) if (!issue.assignees.includes(login)) issue.assignees.push(login);
+  }
+
+  async removeAssignees(number: TaskNumber, logins: string[]): Promise<void> {
+    const issue = this.write(["removeAssignees", number, logins]);
+    issue.assignees = issue.assignees.filter((login) => !logins.includes(login));
+  }
+
+  async addLabels(number: TaskNumber, labels: string[]): Promise<void> {
+    const issue = this.write(["addLabels", number, labels]);
+    for (const label of labels) if (!issue.labels.includes(label)) issue.labels.push(label);
+  }
+
+  async removeLabel(number: TaskNumber, label: string): Promise<void> {
+    const issue = this.write(["removeLabel", number, label]);
+    issue.labels = issue.labels.filter((l) => l !== label);
+  }
+
+  async addComment(number: TaskNumber, body: string): Promise<void> {
+    this.write(["addComment", number, body]).comments.push(body);
+  }
+
+  async setBody(number: TaskNumber, body: string): Promise<void> {
+    this.write(["setBody", number, body]).body = body;
+  }
+
   /* ── Internals ──────────────────────────────────────────── */
+
+  /** Records a write, or fails it when the test says GitHub refuses that call. */
+  private write(call: MirrorCall): FakeIssue {
+    if (this.failing.has(call[0])) throw new Error(`GitHub answered 500 to ${call[0]}`);
+    this.calls.push(call);
+    return this.must(call[1]);
+  }
 
   private subIssues(parent: TaskNumber): FakeIssue[] {
     return [...this.issues.values()].filter((issue) => issue.parent === parent);

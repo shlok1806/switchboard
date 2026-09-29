@@ -3,7 +3,7 @@
 import type { TaskNumber } from "../../../shared/src/index";
 import type { GitHub, GitHubIssue, IssueRef, IssueState, NewIssue } from "./types";
 
-const API = "https://api.github.com";
+const GITHUB_API = "https://api.github.com";
 
 /** The fields of a REST Issue object this module reads. */
 interface RestIssue {
@@ -36,9 +36,13 @@ function state(value: string): IssueState {
 }
 
 export class RestGitHub implements GitHub {
+  /** The token's user, read once. */
+  private viewer: Promise<string> | null = null;
+
   constructor(
     private readonly token: string,
     readonly repo: string,
+    private readonly api = GITHUB_API,
   ) {}
 
   async listOpenIssues(): Promise<GitHubIssue[]> {
@@ -75,6 +79,48 @@ export class RestGitHub implements GitHub {
     return this.refs(`/repos/${this.repo}/issues/${number}/dependencies/blocking`);
   }
 
+  async login(): Promise<string> {
+    this.viewer ??= this.read<{ login: string }>(await this.request("/user")).then((user) => user.login);
+    try {
+      return await this.viewer;
+    } catch (error) {
+      this.viewer = null;
+      throw error;
+    }
+  }
+
+  async addAssignees(number: TaskNumber, logins: string[]): Promise<void> {
+    await this.write("POST", `/repos/${this.repo}/issues/${number}/assignees`, { assignees: logins });
+  }
+
+  async removeAssignees(number: TaskNumber, logins: string[]): Promise<void> {
+    await this.write("DELETE", `/repos/${this.repo}/issues/${number}/assignees`, { assignees: logins });
+  }
+
+  async addLabels(number: TaskNumber, labels: string[]): Promise<void> {
+    await this.write("POST", `/repos/${this.repo}/issues/${number}/labels`, { labels });
+  }
+
+  async removeLabel(number: TaskNumber, label: string): Promise<void> {
+    const response = await this.request(`/repos/${this.repo}/issues/${number}/labels/${encodeURIComponent(label)}`, {
+      method: "DELETE",
+    });
+    // 404: the Issue does not carry the label, which is what we wanted.
+    if (response.status !== 404) await this.check(response);
+  }
+
+  async addComment(number: TaskNumber, body: string): Promise<void> {
+    await this.write("POST", `/repos/${this.repo}/issues/${number}/comments`, { body });
+  }
+
+  async setBody(number: TaskNumber, body: string): Promise<void> {
+    await this.write("PATCH", `/repos/${this.repo}/issues/${number}`, { body });
+  }
+
+  private async write(method: string, path: string, body: unknown): Promise<void> {
+    await this.check(await this.request(path, { method, body: JSON.stringify(body) }));
+  }
+
   private async refs(path: string): Promise<IssueRef[]> {
     const issues = await this.paginate<RestIssue>(path);
     return issues
@@ -84,13 +130,13 @@ export class RestGitHub implements GitHub {
 
   private isHome(issue: RestIssue): boolean {
     if (issue.repository_url !== undefined) {
-      return issue.repository_url.toLowerCase() === `${API}/repos/${this.repo}`.toLowerCase();
+      return issue.repository_url.toLowerCase() === `${this.api}/repos/${this.repo}`.toLowerCase();
     }
     return issue.html_url.toLowerCase().startsWith(`https://github.com/${this.repo.toLowerCase()}/`);
   }
 
   private toIssue(issue: RestIssue): GitHubIssue {
-    const parentUrl = `${API}/repos/${this.repo}/issues/`.toLowerCase();
+    const parentUrl = `${this.api}/repos/${this.repo}/issues/`.toLowerCase();
     const parent = issue.parent_issue_url?.toLowerCase().startsWith(parentUrl)
       ? Number(issue.parent_issue_url.slice(parentUrl.length))
       : Number.NaN;
@@ -112,7 +158,7 @@ export class RestGitHub implements GitHub {
 
   private async paginate<T>(path: string): Promise<T[]> {
     const items: T[] = [];
-    let next: string | null = `${API}${path}${path.includes("?") ? "&" : "?"}per_page=100`;
+    let next: string | null = `${this.api}${path}${path.includes("?") ? "&" : "?"}per_page=100`;
     while (next !== null) {
       const response = await this.request(next);
       items.push(...(await this.read<T[]>(response)));
@@ -122,7 +168,7 @@ export class RestGitHub implements GitHub {
   }
 
   private request(pathOrUrl: string, init: RequestInit = {}): Promise<Response> {
-    const url = pathOrUrl.startsWith("https://") ? pathOrUrl : `${API}${pathOrUrl}`;
+    const url = /^https?:\/\//.test(pathOrUrl) ? pathOrUrl : `${this.api}${pathOrUrl}`;
     return fetch(url, {
       ...init,
       redirect: "manual",
@@ -137,10 +183,16 @@ export class RestGitHub implements GitHub {
   }
 
   private async read<T>(response: Response): Promise<T> {
+    await this.check(response, false);
+    return response.json<T>();
+  }
+
+  /** Throws when GitHub refused. With `drain`, a successful body is discarded. */
+  private async check(response: Response, drain = true): Promise<void> {
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
       throw new GitHubApiError(response.status, `GitHub answered ${response.status}: ${detail.slice(0, 200)}`);
     }
-    return response.json<T>();
+    if (drain) await response.body?.cancel();
   }
 }

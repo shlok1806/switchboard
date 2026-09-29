@@ -7,6 +7,9 @@
 //   work  -> prints some output
 //   turn  -> one model turn: runs a command, writes, edits and reads files,
 //            calls an MCP tool, then ends the turn (PostToolUse and Stop hooks)
+//   call <tool> <json>
+//         -> calls a Switchboard MCP tool from the `--mcp-config` servers, starting
+//            the server the way Claude Code does (stdio), then its PostToolUse hook
 //   quit  -> exits 0, after the SessionEnd hook
 
 import { spawnSync } from "node:child_process";
@@ -14,12 +17,21 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const args = process.argv.slice(2);
+let args = process.argv.slice(2);
 const flagValue = (flag) => {
   const i = args.indexOf(flag);
   return i === -1 ? undefined : args[i + 1];
 };
+
+// Like Claude Code, take the MCP config out; the rest is reported as the arguments.
+const mcpConfig = flagValue("--mcp-config");
+if (mcpConfig !== undefined) {
+  const i = args.indexOf("--mcp-config");
+  args = [...args.slice(0, i), ...args.slice(i + 2)];
+}
 const sessionId = flagValue("--session-id") ?? flagValue("--resume");
 if (!sessionId) {
   console.log("FAKE-CLAUDE no session id");
@@ -66,16 +78,55 @@ function toolUse(tool_name, tool_input, tool_response = {}) {
   runHooks("PostToolUse", { permission_mode: "default", tool_name, tool_input, tool_response }, tool_name);
 }
 
+/** One MCP client per server in the config, started on first use. */
+const clients = new Map();
+
+async function mcpClient(server) {
+  if (clients.has(server)) return clients.get(server);
+  if (mcpConfig === undefined) throw new Error("no --mcp-config");
+  const spec = JSON.parse(readFileSync(mcpConfig, "utf8")).mcpServers[server];
+  if (!spec) throw new Error(`no MCP server ${server}`);
+  const client = new Client({ name: "fake-claude", version: "0.0.0" });
+  await client.connect(
+    new StdioClientTransport({ command: spec.command, args: spec.args, env: { ...process.env, ...spec.env } }),
+  );
+  const { tools } = await client.listTools();
+  console.log(`FAKE-CLAUDE tools=${JSON.stringify(tools.map((t) => t.name))}`);
+  clients.set(server, client);
+  return client;
+}
+
+async function callTool(name, input) {
+  try {
+    const result = await (await mcpClient("switchboard")).callTool({ name, arguments: input });
+    const text = result.content.map((c) => c.text).join("\n");
+    console.log(`FAKE-CLAUDE ${name}${result.isError ? " ERROR" : ""}: ${text}`);
+    toolUse(`mcp__switchboard__${name}`, input, result.content);
+  } catch (error) {
+    console.log(`FAKE-CLAUDE ${name} FAILED: ${error.message}`);
+  }
+  console.log(`FAKE-CLAUDE done ${name}`);
+}
+
 console.log(`FAKE-CLAUDE args=${JSON.stringify(args)}`);
+console.log(`FAKE-CLAUDE mcp=${mcpConfig ?? ""}`);
 console.log(`FAKE-CLAUDE agent=${process.env.SWITCHBOARD_AGENT_ID ?? ""}`);
 console.log(`FAKE-CLAUDE session=${sessionId}`);
 runHooks("SessionStart", { source: flagValue("--resume") ? "resume" : "startup" });
 
 const cwd = process.cwd();
 const lines = createInterface({ input: process.stdin });
+// Lines run one at a time, in order, like turns.
+let queue = Promise.resolve();
 lines.on("line", (line) => {
-  const command = line.trim();
+  queue = queue.then(() => answer(line.trim()));
+});
+
+async function answer(command) {
+  const call = /^call (\w+) (.*)$/.exec(command);
+  if (call) await callTool(call[1], JSON.parse(call[2]));
   if (command === "quit") {
+    for (const client of clients.values()) await client.close();
     runHooks("SessionEnd", { reason: "prompt_input_exit" });
     console.log("FAKE-CLAUDE bye");
     process.exit(0);
@@ -111,4 +162,4 @@ lines.on("line", (line) => {
     runHooks("Stop", { stop_hook_active: false });
     console.log("FAKE-CLAUDE turn done");
   }
-});
+}

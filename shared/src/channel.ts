@@ -97,7 +97,10 @@ export interface JoinResponse {
   person: Person;
 }
 
-/** `GET /api/events?after=<seq>&limit=<n>`: Events with `seq` above `after`, oldest first. */
+/**
+ * `GET /api/events?after=<seq>&limit=<n>`: Events with `seq` above `after`, oldest first.
+ * `GET /api/events?tail=<n>`: the latest `n` Events, oldest first.
+ */
 export interface HistoryResponse {
   events: ChannelEvent[];
   /** The `seq` of the last Event returned, or `after` when there are none. */

@@ -190,6 +190,11 @@ export interface EventPayloads {
   "claim.refused": { heldBy: Holder };
   "claim.release": { holder: Holder };
   "step.complete": { step: number; text: string };
+  /**
+   * Mirroring a Claim change to GitHub failed (ADR 0001). The Claim change itself
+   * stands; GitHub is behind until the next change or a Person fixes it.
+   */
+  "mirror.failed": { change: "claim" | "release" | "step.complete"; call: string; reason: string };
   /** An Event written on purpose, in readable language. */
   "update": { text: string };
   /** A message from a Person to an Agent. The only message with instruction weight. */

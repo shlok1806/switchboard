@@ -12,6 +12,7 @@ import type {
 import { MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
 import { handleAgentRoute, matchAgentRoute } from "./agents-api";
 import { authenticate } from "./auth";
+import { callerOf, handleClaimRoute, matchClaimRoute } from "./claims-api";
 import { fail, json, readJson } from "./http";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
 
@@ -38,6 +39,14 @@ async function handleJoin(request: Request, env: Env, person: PersonName): Promi
 }
 
 async function handleHistory(url: URL, env: Env): Promise<Response> {
+  if (url.searchParams.has("tail")) {
+    const tail = intParam(url, "tail", 0);
+    if (tail === null || tail < 1 || tail > MAX_HISTORY_LIMIT) {
+      return fail(400, `"tail" must be between 1 and ${MAX_HISTORY_LIMIT}.`);
+    }
+    const events = await channel(env).latestEvents(tail);
+    return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? 0 });
+  }
   const after = intParam(url, "after", 0);
   const limit = intParam(url, "limit", MAX_HISTORY_LIMIT);
   if (after === null || limit === null || limit < 1 || limit > MAX_HISTORY_LIMIT) {
@@ -57,8 +66,12 @@ async function handlePostUpdate(request: Request, env: Env, person: PersonName):
   if (task !== undefined && !(typeof task === "number" && Number.isInteger(task) && task > 0)) {
     return fail(400, '"task" must be a GitHub Issue number.');
   }
-  const event = await channel(env).postUpdate(person, text, task);
-  return json<PostUpdateResponse>({ ok: true, event }, 201);
+  // An Agent posting through Switchboard's tools sends X-Switchboard-Agent.
+  const caller = callerOf(request, person);
+  if ("error" in caller) return fail(400, caller.error);
+  const result = await channel(env).postUpdate(caller, text, task);
+  if (!result.ok) return fail(result.status, result.reason);
+  return json<PostUpdateResponse>({ ok: true, event: result.event }, 201);
 }
 
 async function handleStream(request: Request, url: URL, env: Env, person: PersonName): Promise<Response> {
@@ -83,12 +96,16 @@ export default {
     if (route === WEBHOOK_ROUTE) return handleWebhook(request, env);
     const taskRoute = isTaskRoute(request.method, url.pathname);
     const agentRoute = matchAgentRoute(request.method, url.pathname);
-    if (!ROUTES.has(route) && !taskRoute && agentRoute === null) return fail(404, "Not found.");
+    const claimRoute = matchClaimRoute(request.method, url.pathname);
+    if (!ROUTES.has(route) && !taskRoute && agentRoute === null && claimRoute === null) {
+      return fail(404, "Not found.");
+    }
 
     const auth = await authenticate(request, url, env.JOIN_SECRET);
     if (!auth.ok) return fail(auth.status, auth.reason);
     if (taskRoute) return handleTaskRoute(request, url, env, auth.person);
     if (agentRoute !== null) return handleAgentRoute(agentRoute, request, channel(env), auth.person);
+    if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel(env), auth.person);
 
     switch (route) {
       case "POST /api/join":

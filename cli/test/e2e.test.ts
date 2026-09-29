@@ -21,6 +21,7 @@ import type {
   TouchedFilesResponse,
 } from "../../shared/src/index";
 import { agentPath } from "../../shared/src/index";
+import { GitHubApi } from "./fixtures/github-api";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CLI = join(here, "..", "dist", "switchboard.js");
@@ -35,6 +36,7 @@ let scratch = "";
 let env: Record<string, string> = {};
 let cwd = "";
 const terminals: pty.IPty[] = [];
+const github = new GitHubApi("e2e/repo");
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -138,6 +140,7 @@ class Terminal {
 beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "switchboard-e2e-"));
   cwd = await realpath(await mkdtemp(join(tmpdir(), "switchboard-repo-")));
+  const githubUrl = await github.start(await freePort());
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   wrangler = spawn(
@@ -153,6 +156,10 @@ beforeAll(async () => {
       join(scratch, "state"),
       "--var",
       `PRESENCE_GONE_AFTER_SECONDS:${GONE_AFTER_SECONDS}`,
+      "--var",
+      `GITHUB_REPO:${github.repo}`,
+      "--var",
+      `GITHUB_API_URL:${githubUrl}`,
       "--show-interactive-dev-session=false",
     ],
     {
@@ -161,8 +168,8 @@ beforeAll(async () => {
         ...process.env,
         JOIN_SECRET: SECRET,
         JEV_API_KEY: "unused",
-        // No GitHub in this test: an empty token leaves Task sync off.
-        GITHUB_TOKEN: "",
+        // Task sync talks to the local GitHub stand-in.
+        GITHUB_TOKEN: "e2e-github-token",
         GITHUB_WEBHOOK_SECRET: "unused",
         WRANGLER_SEND_METRICS: "false",
       },
@@ -203,6 +210,7 @@ afterAll(async () => {
     }
   }
   wrangler?.kill();
+  github.stop();
   if (scratch) await rm(scratch, { recursive: true, force: true });
   if (cwd) await rm(cwd, { recursive: true, force: true });
 });
@@ -400,5 +408,99 @@ describe("the Hook Capture", () => {
 
     // The session's settings and socket are cleaned up when it ends.
     await expect(stat(settingsPath)).rejects.toThrow();
+  });
+});
+
+describe("Switchboard's tools (the Tool Capture)", () => {
+  it("gives the session the MCP tools, and every call shows on the Channel and on GitHub", async () => {
+    const claims = github.open("Claims via Switchboard tools", "## Build\n- [ ] claim\n- [ ] release");
+    const held = github.open("Dashboard");
+    // A Person already holds the second Task, from the Dashboard.
+    const byPerson = await fetch(`${base}/api/tasks/${held}/claim`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "dev" },
+    });
+    expect(byPerson.status).toBe(200);
+
+    const term = new Terminal(["run", "claude"]);
+    const { agentEnv: id } = await term.started();
+    const mcpPath = (await term.waitForOutput(/FAKE-CLAUDE mcp=(\S+)/))[1] ?? "";
+    // The tools are for this session only: a config of its own, nothing in the Person's settings.
+    const mcp = JSON.parse(await readFile(mcpPath, "utf8")) as { mcpServers: Record<string, { args: string[] }> };
+    expect(Object.keys(mcp.mcpServers)).toEqual(["switchboard"]);
+    expect(mcp.mcpServers.switchboard?.args).toEqual([CLI, "mcp"]);
+    await expect(stat(join(scratch, "claude", "settings.json"))).rejects.toThrow();
+    await expect(stat(join(cwd, ".mcp.json"))).rejects.toThrow();
+
+    const call = async (tool: string, input: unknown): Promise<string> => {
+      const seen = term.output.length;
+      term.type(`call ${tool} ${JSON.stringify(input)}\r`);
+      const done = new RegExp(`FAKE-CLAUDE done ${tool}`);
+      await waitFor(`${tool} to answer`, () => (done.test(term.output.slice(seen)) ? true : undefined));
+      const output = term.output.slice(seen);
+      // The tool's answer, up to the next line the fake prints (its PostToolUse hook, then "done").
+      const answer = new RegExp(`FAKE-CLAUDE (${tool}(?: ERROR)?: [\\s\\S]*?)\\nFAKE-CLAUDE `).exec(output)?.[1];
+      return (answer ?? output).replace(/\r/g, "").trim();
+    };
+
+    expect(await call("list_tasks", {})).toContain(`#${held} Dashboard [claimed] held by dev`);
+    expect(term.output).toContain(
+      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel"]',
+    );
+    expect(await call("claim_task", { task: held })).toBe(`claim_task ERROR: Task #${held} is held by dev.`);
+    expect(await call("claim_task", { task: claims })).toContain(`claim_task: You hold Task #${claims} now`);
+    expect(await call("complete_step", { task: claims, step: 0 })).toBe(
+      `complete_step: Step 0 of #${claims} is done (1/2).`,
+    );
+    expect(await call("post_update", { text: "Claims work, on to release", task: claims })).toMatch(
+      /^post_update: Posted Update/,
+    );
+    const read = await call("read_channel", { limit: 5 });
+    expect(read).toContain(`${id} update #${claims} (tool): Claims work, on to release`);
+    expect(await call("release_task", { task: claims })).toBe(`release_task: Released Task #${claims}.`);
+
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+
+    // Every call is an Event labelled with the Tool Capture, and so is what it did.
+    const tool = (await agentEvents(id)).filter((e) => e.capture === "tool");
+    expect(tool.map((e) => [e.type, e.task, e.type === "tool.call" ? [e.payload.tool, e.payload.ok] : null])).toEqual([
+      ["tool.call", undefined, ["list_tasks", true]],
+      ["claim.refused", held, null],
+      ["tool.call", held, ["claim_task", false]],
+      ["claim", claims, null],
+      ["tool.call", claims, ["claim_task", true]],
+      ["step.complete", claims, null],
+      ["tool.call", claims, ["complete_step", true]],
+      ["update", claims, null],
+      ["tool.call", claims, ["post_update", true]],
+      ["tool.call", undefined, ["read_channel", true]],
+      ["claim.release", claims, null],
+      ["tool.call", claims, ["release_task", true]],
+    ]);
+
+    // GitHub shows the Claim while it was held, then its release.
+    const issue = github.issues.get(claims);
+    expect(issue?.body).toBe("## Build\n- [x] claim\n- [ ] release");
+    expect(issue?.assignees).toEqual([]);
+    expect(issue?.labels).toEqual([]);
+    expect(issue?.comments).toEqual([
+      `Claimed by Agent \`${id}\` (Person e2e) via Switchboard.`,
+      `Released by Agent \`${id}\` (Person e2e) via Switchboard.`,
+    ]);
+    const path = `/repos/${github.repo}/issues/${claims}`;
+    expect(github.writes.filter((w) => w.includes(`${path}/`) || w.endsWith(path))).toEqual([
+      `POST ${path}/assignees`,
+      `POST ${path}/labels`,
+      `POST ${path}/comments`,
+      `PATCH ${path}`,
+      `DELETE ${path}/assignees`,
+      `DELETE ${path}/labels/status%3Aclaimed`,
+      `POST ${path}/comments`,
+    ]);
+    expect(github.issues.get(held)?.assignees).toEqual([github.login]);
+
+    // The session's MCP config is removed when it ends.
+    await expect(stat(mcpPath)).rejects.toThrow();
   });
 });
