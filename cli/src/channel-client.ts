@@ -1,10 +1,12 @@
 // The wrapper's side of the Channel API: join, register the Agent, heartbeat its
-// Presence, end its session, and keep a WebSocket to the Channel open.
+// Presence, end its session, and keep a WebSocket to the Channel open. The
+// WebSocket also carries the Hook Capture's Events to the Channel.
 
 import type {
   AgentId,
   AgentResponse,
   ErrorResponse,
+  HookCaptureReply,
   JoinResponse,
   RegisterAgentRequest,
   ReportedPresence,
@@ -67,9 +69,12 @@ export class ChannelClient {
 
   /**
    * Keeps a WebSocket to the Channel open, reconnecting with backoff, and hands
-   * every message to `onMessage`. Returns a function that closes it for good.
+   * every message to `onMessage`, including replies to what the wrapper sends on it.
    */
-  follow(onMessage: (message: StreamMessage) => void, onStatus: (connected: boolean) => void): () => void {
+  follow(
+    onMessage: (message: StreamMessage | HookCaptureReply) => void,
+    onStatus: (connected: boolean) => void,
+  ): ChannelStream {
     let closed = false;
     let socket: WebSocket | null = null;
     let keepalive: ReturnType<typeof setInterval> | undefined;
@@ -88,7 +93,7 @@ export class ChannelClient {
       ws.addEventListener("message", (event) => {
         if (event.data === LIVE_PONG) return;
         try {
-          onMessage(JSON.parse(String(event.data)) as StreamMessage);
+          onMessage(JSON.parse(String(event.data)) as StreamMessage | HookCaptureReply);
         } catch {
           // Ignore frames we cannot read.
         }
@@ -106,10 +111,25 @@ export class ChannelClient {
     };
 
     connect();
-    return () => {
-      closed = true;
-      clearInterval(keepalive);
-      socket?.close();
+    return {
+      send: (frame) => {
+        if (socket?.readyState !== WebSocket.OPEN) return false;
+        socket.send(frame);
+        return true;
+      },
+      close: () => {
+        closed = true;
+        clearInterval(keepalive);
+        socket?.close();
+      },
     };
   }
+}
+
+/** The wrapper's open WebSocket to the Channel. */
+export interface ChannelStream {
+  /** Sends a text frame now; false when the socket is not open (it reconnects on its own). */
+  send(frame: string): boolean;
+  /** Closes it for good. */
+  close(): void;
 }

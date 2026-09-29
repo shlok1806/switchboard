@@ -4,7 +4,7 @@
 // terminal, and through the Channel API the Dashboard reads.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -12,7 +12,15 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import * as pty from "@lydell/node-pty";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Agent, AgentsResponse, ChannelEvent, HistoryResponse } from "../../shared/src/index";
+import type {
+  Agent,
+  AgentId,
+  AgentsResponse,
+  ChannelEvent,
+  HistoryResponse,
+  TouchedFilesResponse,
+} from "../../shared/src/index";
+import { agentPath } from "../../shared/src/index";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CLI = join(here, "..", "dist", "switchboard.js");
@@ -69,6 +77,16 @@ async function agents(): Promise<Agent[]> {
 async function agentEvents(id: string): Promise<ChannelEvent[]> {
   const { events } = await api<HistoryResponse>("/api/events");
   return events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === id);
+}
+
+/** An Agent's Events from the wrapper and the Channel, leaving out the Hook Capture's. */
+async function wrapperEvents(id: string): Promise<ChannelEvent[]> {
+  return (await agentEvents(id)).filter((e) => e.capture !== "hook");
+}
+
+/** An Agent's Hook Capture Events. */
+async function hookEvents(id: string): Promise<ChannelEvent[]> {
+  return (await agentEvents(id)).filter((e) => e.capture === "hook");
 }
 
 function presenceOf(id: string): Promise<Agent["presence"] | undefined> {
@@ -219,8 +237,10 @@ describe("switchboard run claude", () => {
     firstSession = sessionId;
     firstId = `e2e/claude/${sessionId.slice(0, 4)}`;
 
-    // The wrapper picked the session ID, and kept its own flag from the agent CLI.
-    expect(args).toEqual(["--session-id", sessionId, "--model", "opus"]);
+    // The wrapper picked the session ID, added the session's own settings (its
+    // hooks), and kept its own flag from the agent CLI.
+    expect(args[0]).toBe("--settings");
+    expect(args.slice(2)).toEqual(["--session-id", sessionId, "--model", "opus"]);
     expect(agentEnv).toBe(firstId);
     expect(term.output).toContain(`${firstId} is on the Channel`);
 
@@ -238,7 +258,7 @@ describe("switchboard run claude", () => {
     expect(await term.exited).toBe(0);
     await waitForPresence(firstId, "gone");
 
-    expect((await agentEvents(firstId)).map((e) => [e.type, e.payload])).toEqual([
+    expect((await wrapperEvents(firstId)).map((e) => [e.type, e.payload])).toEqual([
       ["session.start", { cwd, resumed: false }],
       ["presence", { presence: "live" }],
       ["presence", { presence: "idle" }],
@@ -254,7 +274,7 @@ describe("switchboard run claude", () => {
   it("keeps the Agent ID when the session resumes, and brings it back Live", async () => {
     const term = new Terminal(["run", "claude", "--resume", firstSession]);
     const { args, sessionId } = await term.started();
-    expect(args).toEqual(["--resume", firstSession]);
+    expect(args.slice(2)).toEqual(["--resume", firstSession]);
     expect(sessionId).toBe(firstSession);
     await waitForPresence(firstId, "live");
     expect((await agents()).filter((a) => a.person === "e2e")).toHaveLength(1);
@@ -264,7 +284,7 @@ describe("switchboard run claude", () => {
     expect(await term.exited).toBe(0);
     await waitForPresence(firstId, "gone");
 
-    const starts = (await agentEvents(firstId)).filter((e) => e.type === "session.start");
+    const starts = (await wrapperEvents(firstId)).filter((e) => e.type === "session.start");
     expect(starts.map((e) => e.payload)).toEqual([
       { cwd, resumed: false },
       { cwd, resumed: true },
@@ -274,7 +294,7 @@ describe("switchboard run claude", () => {
   it("resumes the latest session in this directory with --continue", async () => {
     const term = new Terminal(["run", "claude", "--continue"]);
     const { args } = await term.started();
-    expect(args).toEqual(["--resume", firstSession]);
+    expect(args.slice(2)).toEqual(["--resume", firstSession]);
     await waitForPresence(firstId, "live");
     term.type("quit\r");
     expect(await term.exited).toBe(0);
@@ -299,5 +319,86 @@ describe("switchboard run claude", () => {
     two.type("quit\r");
     expect(await two.exited).toBe(0);
     await waitForPresence(b.agentEnv, "gone");
+  });
+});
+
+describe("the Hook Capture", () => {
+  it("installs hooks for the wrapped session only, and sends each hook type to the Channel labelled Hook", async () => {
+    const term = new Terminal(["run", "claude"]);
+    const { args, agentEnv: id } = await term.started();
+    const settingsPath = args[1] ?? "";
+
+    // The hooks live in a settings file of the session's own, not in the Person's settings.
+    const settings = JSON.parse(await readFile(settingsPath, "utf8")) as { hooks: Record<string, unknown> };
+    expect(Object.keys(settings.hooks).sort()).toEqual(["PostToolUse", "SessionEnd", "SessionStart", "Stop"]);
+    await expect(stat(join(scratch, "claude", "settings.json"))).rejects.toThrow();
+
+    await term.waitForOutput(/hook SessionStart exit=0/);
+    term.type("turn\r");
+    await term.waitForOutput(/FAKE-CLAUDE turn done/);
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+
+    // Hooks hand their input to the wrapper and return at once, printing nothing.
+    const runs = [...term.output.matchAll(/FAKE-CLAUDE hook (\S+) exit=(\d+) ms=(\d+)( out=.*)?/g)];
+    expect(runs.map((m) => m[1])).toEqual([
+      "SessionStart",
+      "PostToolUse:Bash",
+      "PostToolUse:Bash",
+      "PostToolUse:Write",
+      "PostToolUse:Edit",
+      "PostToolUse:MultiEdit",
+      "PostToolUse:Read",
+      "PostToolUse:mcp__switchboard__claim",
+      "Stop",
+      "SessionEnd",
+    ]);
+    for (const run of runs) {
+      expect(run[2]).toBe("0");
+      expect(Number(run[3])).toBeLessThan(1000);
+      expect(run[4]).toBeUndefined();
+    }
+
+    // Every hook type reached the Channel, labelled with the Hook Capture, in order.
+    const events = await waitFor("the SessionEnd hook on the Channel", async () => {
+      const all = await hookEvents(id);
+      return all.at(-1)?.type === "session.end" ? all : undefined;
+    });
+    for (const event of events) expect(event.capture).toBe("hook");
+    const longCommand = `echo ${"a".repeat(2000)}`;
+    expect(events.map((e) => [e.type, e.payload])).toEqual([
+      ["session.start", { cwd, resumed: false, source: "startup" }],
+      ["tool.call", { tool: "Bash", arg: "npm test", ok: true }],
+      ["command", { command: "npm test" }],
+      ["tool.call", { tool: "Bash", arg: `${longCommand.slice(0, 199)}…`, ok: true }],
+      ["command", { command: `${longCommand.slice(0, 499)}…` }],
+      ["tool.call", { tool: "Write", arg: "src/new.ts", ok: true }],
+      ["file.edit", { path: "src/new.ts", additions: 2, deletions: 0 }],
+      ["tool.call", { tool: "Edit", arg: "src/app.ts", ok: true }],
+      ["file.edit", { path: "src/app.ts", additions: 2, deletions: 1 }],
+      ["tool.call", { tool: "MultiEdit", arg: "src/app.ts", ok: true }],
+      ["file.edit", { path: "src/app.ts", additions: 1, deletions: 1 }],
+      ["tool.call", { tool: "Read", arg: "README.md", ok: true }],
+      ["tool.call", { tool: "mcp__switchboard__claim", arg: "task=7 note=taking it", ok: true }],
+      ["turn.end", { turn: 1 }],
+      ["session.end", { reason: "exit", detail: "prompt_input_exit" }],
+    ]);
+    // File contents never leave the laptop.
+    expect(JSON.stringify(events)).not.toContain("SECRET_CONTENT");
+
+    // The hook Events reached the Channel before the wrapper ended the session.
+    const all = await agentEvents(id);
+    const ended = all.findIndex((e) => e.type === "session.end" && e.capture === null);
+    expect(all.findIndex((e) => e.capture === "hook" && e.type === "session.end")).toBeLessThan(ended);
+
+    // The Agent's touched files, from its file edits, most recently edited first.
+    const touched = await api<TouchedFilesResponse>(`${agentPath(id as AgentId)}/touched-files`);
+    expect(touched.files.map((f) => [f.path, f.edits])).toEqual([
+      ["src/app.ts", 2],
+      ["src/new.ts", 1],
+    ]);
+
+    // The session's settings and socket are cleaned up when it ends.
+    await expect(stat(settingsPath)).rejects.toThrow();
   });
 });

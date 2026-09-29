@@ -318,9 +318,17 @@ function describe(event) {
     case "task.done": return `closed ${n}`;
     case "task.reopen": return `reopened ${n}`;
     case "task.remove": return `removed ${n}`;
-    case "session.start": return event.payload.resumed ? "resumed its session" : "started a session";
-    case "session.end": return "ended its session";
+    case "session.start":
+      if (event.capture === "hook") return `reported session start (${event.payload.source || "startup"})`;
+      return event.payload.resumed ? "resumed its session" : "started a session";
+    case "session.end":
+      if (event.capture === "hook") return `reported session end${event.payload.detail ? ` (${event.payload.detail})` : ""}`;
+      return "ended its session";
     case "presence": return `is ${PRESENCE[event.payload.presence] || event.payload.presence}`;
+    case "tool.call": return `used ${event.payload.tool}${event.payload.arg ? `: ${event.payload.arg}` : ""}`;
+    case "file.edit": return `edited ${event.payload.path} (+${event.payload.additions} -${event.payload.deletions})`;
+    case "command": return `ran ${event.payload.command}`;
+    case "turn.end": return `finished turn ${event.payload.turn}`;
     default: return event.type;
   }
 }

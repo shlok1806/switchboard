@@ -25,6 +25,8 @@ export class AgentLink {
     private readonly session: AgentSession,
     private readonly heartbeatMs: number,
     private readonly log: (line: string) => void,
+    /** Called each time the Channel registers the Agent. */
+    private readonly onRegistered: (agent: Agent) => void = () => {},
   ) {}
 
   get id(): AgentId | null {
@@ -42,6 +44,7 @@ export class AgentLink {
     });
     this.agent = agent;
     this.log(`registered ${agent.id}`);
+    this.onRegistered(agent);
     return agent;
   }
 

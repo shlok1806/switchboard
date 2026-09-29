@@ -139,11 +139,11 @@ export class AgentRoster {
     }
 
     const agent = this.agent(id);
-    this.record(id, "session.start", "hook", {
+    this.record(id, "session.start", {
       cwd: request.cwd,
       resumed: request.resumed || existing !== undefined,
     });
-    if (existing?.presence !== "live") this.record(id, "presence", "hook", { presence: "live" });
+    if (existing?.presence !== "live") this.record(id, "presence", { presence: "live" });
     this.host.broadcast({ type: "agent", agent });
     await this.watch();
     return { ok: true, agent };
@@ -157,7 +157,7 @@ export class AgentRoster {
     this.host.sql.exec("UPDATE agents SET presence = ?, last_seen_at = ? WHERE id = ?", presence, now, id);
     const agent = this.agent(id);
     if (found.row.presence !== presence) {
-      this.record(id, "presence", "hook", { presence });
+      this.record(id, "presence", { presence });
       this.host.broadcast({ type: "agent", agent });
     }
     await this.watch();
@@ -171,8 +171,8 @@ export class AgentRoster {
     if (found.row.presence === "gone") return { ok: true, agent: rowToAgent(found.row) };
     this.host.sql.exec("UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?", Date.now(), id);
     const agent = this.agent(id);
-    this.record(id, "session.end", "hook", { reason: "exit" });
-    this.record(id, "presence", "hook", { presence: "gone" });
+    this.record(id, "session.end", { reason: "exit" });
+    this.record(id, "presence", { presence: "gone" });
     this.host.broadcast({ type: "agent", agent });
     await this.watch();
     return { ok: true, agent };
@@ -191,10 +191,26 @@ export class AgentRoster {
       )
       .toArray();
     for (const row of silent) {
-      this.record(row.id as AgentId, "presence", null, { presence: "gone" });
+      this.record(row.id as AgentId, "presence", { presence: "gone" });
       this.host.broadcast({ type: "agent", agent: rowToAgent(row) });
     }
     await this.watch();
+  }
+
+  /**
+   * Checks that `person` may act for Agent `id`, and counts it as heard from: an Agent
+   * whose hooks report work is not silent. It does not change Presence.
+   */
+  touch(person: PersonName, id: AgentId): { ok: true } | Refusal {
+    const found = this.owned(person, id);
+    if (!found.ok) return found;
+    this.host.sql.exec("UPDATE agents SET last_seen_at = MAX(last_seen_at, ?) WHERE id = ?", Date.now(), id);
+    return { ok: true };
+  }
+
+  /** Whether the Channel knows Agent `id`. */
+  has(id: AgentId): boolean {
+    return this.row(id) !== undefined;
   }
 
   /** Schedules the silence check for when the quietest Agent that is not Gone would go Gone. */
@@ -225,7 +241,12 @@ export class AgentRoster {
     return { ok: true, row };
   }
 
-  private record<K extends EventType>(id: AgentId, type: K, capture: Capture | null, payload: EventPayloads[K]): void {
-    this.host.append({ type, actor: { kind: "agent", agentId: id }, capture, payload });
+  /**
+   * Records a roster Event. The wrapper's registration, heartbeats and session end
+   * and the Channel's own silence check are not a Capture, so these carry none.
+   * What the agent CLI itself reports arrives through the Hook Capture instead.
+   */
+  private record<K extends EventType>(id: AgentId, type: K, payload: EventPayloads[K]): void {
+    this.host.append({ type, actor: { kind: "agent", agentId: id }, capture: null, payload });
   }
 }

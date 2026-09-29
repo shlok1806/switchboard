@@ -150,12 +150,22 @@ export interface ToolCall {
 export interface EventPayloads {
   /** A Person joined the Channel for the first time. */
   "person.join": { timeZone: string };
-  "session.start": { cwd: string; resumed: boolean };
-  "session.end": { reason: "exit" | "timeout" };
+  /**
+   * A session started. The wrapper records one when it registers the Agent (no Capture).
+   * The Hook Capture records one when the agent CLI reports it, with the CLI's `source`
+   * (Claude Code: "startup", "resume", "clear" or "compact").
+   */
+  "session.start": { cwd: string; resumed: boolean; source?: string };
+  /** A session ended. `detail` is the agent CLI's own reason, when a Hook reported it. */
+  "session.end": { reason: "exit" | "timeout"; detail?: string };
   "presence": { presence: Presence };
-  "tool.call": { tool: string; arg: string; ok: boolean; durationMs: number; output?: string };
+  /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
+  "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
+  /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */
   "file.edit": { path: string; additions: number; deletions: number };
-  "command": { command: string; exitCode: number };
+  /** A shell command the Agent ran, truncated. `exitCode` when the CLI reports one. */
+  "command": { command: string; exitCode?: number };
+  /** The Agent finished a turn. `turn` counts turns in this run of the wrapper, from 1. */
   "turn.end": { turn: number };
   /** Proxy Digest: model, token counts, reply text and tool calls, secrets masked. */
   "proxy.digest": {
