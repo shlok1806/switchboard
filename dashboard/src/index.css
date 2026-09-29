@@ -1,0 +1,95 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource-variable/jetbrains-mono";
+@import "./app/beautifui/foundation.css";
+@import "./styles/tokens.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── base ─────────────────────────────────────────────────── */
+
+html,
+body {
+  overflow-x: clip;
+}
+
+body {
+  background: var(--page);
+  background-image: none;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  letter-spacing: -0.006em;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Mono labels: machine-readout voice for ids, meta and kbd hints. */
+.label-mono {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The feed filter row scrolls sideways on a phone; the fade says there is more. */
+@media (max-width: 639px) {
+  .feed-filters {
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+  }
+}
+
+/* Scroll areas that should not show a bar on touch. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* prompt-kit TextShimmer keyframes */
+@keyframes shimmer {
+  from {
+    background-position: 100% center;
+  }
+  to {
+    background-position: 0% center;
+  }
+}
+
+@keyframes collapsible-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+  }
+}
+@keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+@theme inline {
+  --animate-collapsible-down: collapsible-down 200ms var(--ease-out);
+  --animate-collapsible-up: collapsible-up 160ms var(--ease-out);
+}
