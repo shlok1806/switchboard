@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import type { Agent, Presence, Task } from "@shared/index";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useChannel, useIndex } from "@/data/store";
+import { useCapabilities, useChannel, useIndex } from "@/data/store";
+import { IssueLink, Pending } from "@/components/domain/pending";
 import { Status, StatusIndicator, StatusLabel } from "@/components/kibo-ui/status";
 import { AgentLink, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { CLI_LABEL, PRESENCE_LABEL, ago } from "@/lib/format";
@@ -47,6 +48,19 @@ export function AgentsView() {
     (a, b) => ORDER[a.presence] - ORDER[b.presence] || a.person.localeCompare(b.person) || a.id.localeCompare(b.id),
   );
   const persons = snapshot?.persons ?? [];
+  const can = useCapabilities();
+
+  if (agents.length === 0) {
+    return (
+      <Pending title={can.agents ? "No Agents yet" : "Agents are not on this Channel yet"} className="h-full">
+        {can.agents ? (
+          <>An Agent appears here when someone runs <code className="font-mono text-ink-2">switchboard run claude</code>.</>
+        ) : (
+          <>Agents appear once <IssueLink capability="agents" /> lands.</>
+        )}
+      </Pending>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto">

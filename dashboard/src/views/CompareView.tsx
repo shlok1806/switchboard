@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { Capture, ChannelEvent } from "@shared/index";
-import { useChannel, useIndex } from "@/data/store";
+import { useCapabilities, useChannel, useIndex } from "@/data/store";
+import { IssueLink, Pending } from "@/components/domain/pending";
 import ToolChips, { type ToolStep } from "@/components/primitives/ToolChips";
 import { TextShimmer } from "@/components/ui/text-shimmer";
 import { AgentLink, RawBadge, TaskLink } from "@/components/domain/pills";
@@ -45,7 +46,17 @@ function useMoments(): Moment[] {
 export function CompareView({ turn }: { turn?: string }) {
   const moments = useMoments();
   const { agentById } = useIndex();
+  const can = useCapabilities();
   const moment = moments.find((m) => m.turn === turn) ?? moments[0];
+
+  if (!can.captures && moments.length === 0) {
+    return (
+      <Pending title="Nothing to compare yet" className="h-full">
+        Proxy, Hook and Tool Captures of the same model turn show side by side here once Hook Capture (
+        <IssueLink capability="captures" />) and Proxy Capture (<IssueLink capability="proxyMode" />) land.
+      </Pending>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">

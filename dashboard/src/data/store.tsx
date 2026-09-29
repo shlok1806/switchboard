@@ -150,6 +150,11 @@ export function useMe(): string {
   return useStore().source.me;
 }
 
+/** What the Channel behind this Dashboard can do today. */
+export function useCapabilities() {
+  return useStore().source.capabilities;
+}
+
 /** Lookups that views use everywhere. */
 export function useIndex() {
   const { agents, tasks } = useChannel();

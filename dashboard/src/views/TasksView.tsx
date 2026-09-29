@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import NumberFlow from "@number-flow/react";
-import { useChannel, useIndex } from "@/data/store";
+import { useCapabilities, useChannel, useIndex } from "@/data/store";
+import { NewTaskButton } from "@/components/domain/new-task";
+import { IssueLink, Pending } from "@/components/domain/pending";
 import TaskRows from "@/components/primitives/TaskRows";
 import { COLUMN_LABEL, columnOf, taskRow, type Column } from "@/components/domain/task";
 import { cn } from "@/lib/utils";
@@ -17,6 +19,7 @@ const HINT: Record<Column, string> = {
 export function TasksView() {
   const { tasks } = useChannel();
   const { agentById, taskByNumber } = useIndex();
+  const can = useCapabilities();
 
   const byColumn = useMemo(() => {
     const m = new Map<Column, typeof tasks>(COLUMNS.map((c) => [c, []]));
@@ -25,10 +28,33 @@ export function TasksView() {
     return m;
   }, [tasks]);
 
+  if (tasks.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3">
+        <Pending title="No Tasks yet">
+          Every open GitHub Issue in the repo shows up here as a Task. If there should be some, the Channel may not reach
+          GitHub right now.
+        </Pending>
+        <NewTaskButton />
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-3 sm:px-4 sm:pt-4">
+        <p className="text-[12.5px] text-ink-3">
+          {tasks.length} {tasks.length === 1 ? "Task" : "Tasks"}, mirrored from GitHub Issues.
+          {!can.claims && (
+            <>
+              {" "}Claims arrive with <IssueLink capability="claims" />.
+            </>
+          )}
+        </p>
+        <NewTaskButton />
+      </div>
       <div className="grid gap-5 p-3 sm:p-4 lg:grid-cols-2 lg:gap-4 2xl:grid-cols-4">
-        {COLUMNS.map((c) => {
+        {COLUMNS.filter((c) => can.claims || (c !== "stale" && c !== "claimed")).map((c) => {
           const list = byColumn.get(c)!;
           return (
             <section key={c} aria-labelledby={`col-${c}`} className="flex min-w-0 flex-col gap-2">

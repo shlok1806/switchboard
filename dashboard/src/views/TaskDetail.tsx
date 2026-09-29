@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { CircleCheck, Circle, GitBranch, GitPullRequest } from "lucide-react";
 import type { ChannelEvent, EventType } from "@shared/index";
-import { useChannel, useIndex } from "@/data/store";
+import { useCapabilities, useChannel, useIndex } from "@/data/store";
+import { IssueLink } from "@/components/domain/pending";
+import { IssueBody } from "@/components/domain/issue-body";
 import { SegmentedControl } from "@/components/atoms/SegmentedControl";
 import { Steps, StepsContent, StepsItem, StepsTrigger } from "@/components/ui/steps";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
@@ -55,6 +57,7 @@ const DOT: Partial<Record<EventType, string>> = {
 
 export function TaskDetail({ number }: { number: number }) {
   const { events, snapshot } = useChannel();
+  const can = useCapabilities();
   const { agentById, taskByNumber } = useIndex();
   const [scope, setScope] = useState<(typeof SCOPES)[number]>("Work");
   const task = taskByNumber.get(number);
@@ -108,7 +111,7 @@ export function TaskDetail({ number }: { number: number }) {
             <h1 className="font-display text-[22px] font-semibold leading-tight text-ink [overflow-wrap:anywhere] sm:text-[26px]">
               {task.title}
             </h1>
-            <p className="max-w-2xl text-[13.5px] leading-relaxed text-ink-2">{task.description}</p>
+            <IssueBody text={task.description} />
             <div className="flex flex-wrap gap-1.5">
               {task.labels.map((l) => (
                 <span key={l} className="rounded-[4px] bg-inset px-1.5 py-0.5 font-mono text-[11px] text-ink-2 shadow-hairline">
@@ -186,7 +189,13 @@ export function TaskDetail({ number }: { number: number }) {
           </section>
         </div>
 
-        <aside className="order-first flex min-w-0 flex-col gap-4 lg:sticky lg:top-0 lg:order-none lg:self-start">
+        {/* On a phone the Claim card leads only when a Stale Claim needs a Takeover. */}
+        <aside
+          className={cn(
+            "flex min-w-0 flex-col gap-4 lg:sticky lg:top-0 lg:order-none lg:self-start",
+            task.claim?.stale && "order-first",
+          )}
+        >
           <section className="flex flex-col gap-2 rounded-card bg-surface p-3 shadow-card">
             <h2 className="label-mono">Claim</h2>
             {task.claim ? (
@@ -208,7 +217,13 @@ export function TaskDetail({ number }: { number: number }) {
               </>
             ) : (
               <p className="text-[12.5px] text-ink-3">
-                {task.status === "done" ? "Done. No Claim." : "Nobody holds this Task."}
+                {task.status === "done" ? (
+                  "Done. No Claim."
+                ) : can.claims ? (
+                  "Nobody holds this Task."
+                ) : (
+                  <>Nobody holds this Task. Claims arrive with <IssueLink capability="claims" />.</>
+                )}
               </p>
             )}
           </section>

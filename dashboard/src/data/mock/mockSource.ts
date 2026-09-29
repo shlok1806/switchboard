@@ -1,4 +1,5 @@
 import type {
+  CreateTaskRequest,
   ActionResult,
   Agent,
   ChannelEvent,
@@ -9,8 +10,8 @@ import type {
   Verdict,
   VerdictProbabilities,
 } from "@shared/index";
-import type { ChannelSource, ConnectionState } from "../source";
-import { ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0 } from "./fixtures";
+import { ALL_CAPABILITIES, type ChannelSource, type ConnectionState } from "../source";
+import { ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
 import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
 
@@ -22,6 +23,8 @@ const clone = <T,>(v: T): T => structuredClone(v);
  */
 export class MockChannelSource implements ChannelSource {
   readonly me = ME;
+  readonly capabilities = ALL_CAPABILITIES;
+  readonly isMock = true;
   private agents: Agent[] = clone(seedAgents);
   private tasks: Task[] = clone(seedTasks);
   private events: ChannelEvent[] = [];
@@ -195,5 +198,35 @@ export class MockChannelSource implements ChannelSource {
         return { ok: true };
       }
     }
+  }
+
+  async createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }> {
+    await new Promise((r) => setTimeout(r, 300));
+    const title = request.title.trim();
+    if (!title) return { ok: false, reason: "A Task needs a title." };
+    const number = Math.max(...this.tasks.map((t) => t.number)) + 1;
+    const at = new Date().toISOString();
+    const task = withCounts(
+      {
+        number,
+        title,
+        description: request.description ?? "",
+        labels: request.labels ?? [],
+        blockedBy: [],
+        subtasks: [],
+        steps: [],
+        status: "open",
+        updatedAt: at,
+      },
+      this.tasks,
+    );
+    this.tasks.push(task);
+    this.emit({ type: "task", task });
+    this.record(
+      makeEvent("task.create", person(this.me), null, { title, url: task.url, via: "channel" }, { at, task: number }),
+      undefined,
+      true,
+    );
+    return { ok: true, task };
   }
 }

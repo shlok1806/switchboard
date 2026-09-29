@@ -30,6 +30,7 @@ function ViewFallback() {
   );
 }
 import { prob } from "@/lib/format";
+import { leaveChannel } from "@/lib/session";
 
 function title(route: Route, taskTitle?: string): { title: string; crumb?: string } {
   switch (route.view) {
@@ -123,9 +124,17 @@ export default function App() {
   if (state.status === "error")
     return (
       <div className="flex h-dvh items-center justify-center p-6 text-center">
-        <div className="flex max-w-sm flex-col gap-2">
+        <div className="flex max-w-sm flex-col items-center gap-3">
           <p className="text-[14px] font-semibold text-ink">Could not reach the Channel</p>
           <p className="text-[13px] text-ink-2">{state.error}</p>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => window.location.reload()} className="h-8 rounded-[6px] px-3 text-[13px] text-ink shadow-btn hover:bg-hover">
+              Try again
+            </button>
+            <button type="button" onClick={leaveChannel} className="h-8 rounded-[6px] px-3 text-[13px] text-ink-2 hover:bg-hover">
+              Join with another name
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -160,6 +169,8 @@ export default function App() {
                     ? "min-w-0 truncate font-mono text-[13px] font-medium text-ink"
                     : "min-w-0 truncate font-display text-[15px] font-semibold text-ink"
                 }
+                // Beautiful UI balances headings, which would wrap this one-line title.
+                style={{ textWrap: "nowrap" }}
               >
                 {route.view === "task" && <span className="mr-1.5 font-mono text-[13px] font-normal text-ink-3">#{route.number}</span>}
                 {t.title}
