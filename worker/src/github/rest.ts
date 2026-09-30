@@ -1,7 +1,16 @@
 // The real GitHub: the REST API, authenticated with the GITHUB_TOKEN Worker secret.
 
 import type { TaskNumber } from "../../../shared/src/index";
-import type { GitHub, GitHubIssue, IssueRef, IssueState, NewIssue } from "./types";
+import type {
+  Comparison,
+  GitHub,
+  GitHubIssue,
+  IssueRef,
+  IssueState,
+  NewIssue,
+  NewPullRequest,
+  PullRequestRef,
+} from "./types";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -22,6 +31,23 @@ interface RestIssue {
   issue_dependencies_summary?: { blocked_by: number };
 }
 
+/** The fields of a REST pull request object this module reads. */
+interface RestPullRequest {
+  number: number;
+  html_url: string;
+}
+
+/** The fields of a REST comparison this module reads. */
+interface RestComparison {
+  commits: { sha: string; commit: { message: string } }[];
+  files?: { filename: string; additions: number; deletions: number; patch?: string }[];
+}
+
+/** A ref in a URL path: slashes in branch names stay, everything else is escaped. */
+function refPath(ref: string): string {
+  return encodeURIComponent(ref).replace(/%2F/gi, "/");
+}
+
 export class GitHubApiError extends Error {
   constructor(
     readonly status: number,
@@ -38,6 +64,8 @@ function state(value: string): IssueState {
 export class RestGitHub implements GitHub {
   /** The token's user, read once. */
   private viewer: Promise<string> | null = null;
+  /** The repo's default branch, read once. */
+  private mainBranch: Promise<string> | null = null;
 
   constructor(
     private readonly token: string,
@@ -115,6 +143,48 @@ export class RestGitHub implements GitHub {
 
   async setBody(number: TaskNumber, body: string): Promise<void> {
     await this.write("PATCH", `/repos/${this.repo}/issues/${number}`, { body });
+  }
+
+  async defaultBranch(): Promise<string> {
+    this.mainBranch ??= this.request(`/repos/${this.repo}`)
+      .then((response) => this.read<{ default_branch: string }>(response))
+      .then((repo) => repo.default_branch);
+    try {
+      return await this.mainBranch;
+    } catch (error) {
+      this.mainBranch = null;
+      throw error;
+    }
+  }
+
+  async createPullRequest(pr: NewPullRequest): Promise<PullRequestRef> {
+    const response = await this.request(`/repos/${this.repo}/pulls`, { method: "POST", body: JSON.stringify(pr) });
+    // 422: most often, an open pull request from this branch already exists.
+    if (response.status === 422) {
+      const refused = new GitHubApiError(422, `GitHub answered 422: ${(await response.text()).slice(0, 200)}`);
+      const owner = this.repo.split("/")[0] ?? "";
+      const query = new URLSearchParams({ head: `${owner}:${pr.head}`, base: pr.base, state: "open" });
+      const open = await this.read<RestPullRequest[]>(await this.request(`/repos/${this.repo}/pulls?${query}`));
+      const existing = open[0];
+      if (existing === undefined) throw refused;
+      return { number: existing.number, url: existing.html_url };
+    }
+    const created = await this.read<RestPullRequest>(response);
+    return { number: created.number, url: created.html_url };
+  }
+
+  async compare(base: string, head: string): Promise<Comparison> {
+    const response = await this.request(`/repos/${this.repo}/compare/${refPath(base)}...${refPath(head)}`);
+    const comparison = await this.read<RestComparison>(response);
+    return {
+      commits: comparison.commits.map((c) => ({ sha: c.sha, message: c.commit.message })),
+      files: (comparison.files ?? []).map((file) => ({
+        path: file.filename,
+        additions: file.additions,
+        deletions: file.deletions,
+        ...(file.patch === undefined ? {} : { patch: file.patch }),
+      })),
+    };
   }
 
   private async write(method: string, path: string, body: unknown): Promise<void> {

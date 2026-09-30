@@ -26,8 +26,9 @@ import type {
 import { DEFAULT_GONE_AFTER_SECONDS, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
 import { AGENTS_SCHEMA, AgentRoster, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
+import { Branches, type CodeEventResult } from "./branches";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
-import { gitHubFor, type WebhookChange } from "./github/index";
+import { type CodeChange, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { ProxyCapture } from "./proxy-capture";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
@@ -96,6 +97,8 @@ export class Channel extends DurableObject<Env> {
   private readonly proxy: ProxyCapture;
   /** Claims on Tasks, and their Steps. */
   private readonly claims: Claims;
+  /** Task branches, pull requests, and the pushes and merges GitHub reports. */
+  private readonly branches: Branches;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -154,6 +157,13 @@ export class Channel extends DurableObject<Env> {
       gitHub: () => gitHubFor(env),
       append: (event) => this.append(event),
     });
+    this.branches = new Branches({
+      tasks: this.tasks,
+      claims: this.claims,
+      gitHub: () => gitHubFor(env),
+      append: (event) => this.append(event),
+      appendOnce: (id, event) => this.insert(id, event),
+    });
   }
 
   /**
@@ -196,6 +206,21 @@ export class Channel extends DurableObject<Env> {
 
   completeStep(caller: Caller, number: TaskNumber, index: number): Promise<ClaimResult> {
     return this.claims.completeStep(caller, number, index);
+  }
+
+  /** The holder's wrapper reporting the Task branch it created (ADR 0006). */
+  recordBranch(caller: Caller, number: TaskNumber, branch: string): Promise<ClaimResult> {
+    return this.branches.record(caller, number, branch);
+  }
+
+  /** The holder finishing a Task: a pull request that closes the Issue, and the Task goes to review. */
+  finishTask(caller: Caller, number: TaskNumber, summary?: string): Promise<ClaimResult> {
+    return this.branches.finish(caller, number, summary);
+  }
+
+  /** A verified GitHub `push` or `pull_request` delivery, recorded once per delivery ID. */
+  gitHubCodeWebhook(delivery: string, change: CodeChange): Promise<CodeEventResult> {
+    return this.branches.codeEvent(delivery, change);
   }
 
   /** An Agent reporting one call to a Switchboard tool, recorded with the Tool Capture. */

@@ -4,8 +4,8 @@
 // terminal, and through the Channel API the Dashboard reads.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
+import { createHash, createHmac, randomUUID } from "node:crypto";
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -20,9 +20,10 @@ import type {
   AgentsResponse,
   ChannelEvent,
   HistoryResponse,
+  TaskResponse,
   TouchedFilesResponse,
 } from "../../shared/src/index";
-import { agentPath } from "../../shared/src/index";
+import { agentPath, REVIEW_LABEL } from "../../shared/src/index";
 import { GitHubApi } from "./fixtures/github-api";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -30,6 +31,7 @@ const CLI = join(here, "..", "dist", "switchboard.js");
 const FAKE_CLAUDE = join(here, "fixtures", "fake-claude.mjs");
 const WORKER_DIR = join(here, "..", "..", "worker");
 const SECRET = "e2e-join-secret";
+const WEBHOOK_SECRET = "e2e-webhook-secret";
 const GONE_AFTER_SECONDS = 3;
 
 let base = "";
@@ -107,8 +109,13 @@ class Terminal {
   readonly exited: Promise<number>;
   private readonly term: pty.IPty;
 
-  constructor(args: string[], extraEnv: Record<string, string> = {}) {
-    this.term = pty.spawn(process.execPath, [CLI, ...args], { cols: 100, rows: 30, cwd, env: { ...env, ...extraEnv } });
+  constructor(args: string[], extraEnv: Record<string, string> = {}, dir = cwd) {
+    this.term = pty.spawn(process.execPath, [CLI, ...args], {
+      cols: 100,
+      rows: 30,
+      cwd: dir,
+      env: { ...env, ...extraEnv },
+    });
     terminals.push(this.term);
     this.term.onData((data) => {
       this.output += data;
@@ -137,6 +144,42 @@ class Terminal {
     const agentEnv = (await this.waitForOutput(/FAKE-CLAUDE agent=(\S*)/))[1] ?? "";
     return { args, sessionId, agentEnv };
   }
+}
+
+/** Delivers GitHub's signed `issues` webhook for an Issue opened on the stand-in, so the Channel has its Task. */
+async function openedOnGitHub(number: number): Promise<void> {
+  const body = JSON.stringify({
+    action: "opened",
+    issue: { number },
+    repository: { full_name: github.repo },
+    sender: { login: "shlok1806" },
+  });
+  const response = await fetch(`${base}/api/github/webhook`, {
+    method: "POST",
+    body,
+    headers: {
+      "Content-Type": "application/json",
+      "X-GitHub-Event": "issues",
+      "X-GitHub-Delivery": randomUUID(),
+      "X-Hub-Signature-256": `sha256=${createHmac("sha256", WEBHOOK_SECRET).update(body).digest("hex")}`,
+    },
+  });
+  expect(response.status).toBe(204);
+}
+
+/**
+ * Has the fake agent CLI call one of Switchboard's MCP tools, and returns the tool's
+ * answer as the terminal shows it.
+ */
+async function callTool(term: Terminal, tool: string, input: unknown): Promise<string> {
+  const seen = term.output.length;
+  term.type(`call ${tool} ${JSON.stringify(input)}\r`);
+  const done = new RegExp(`FAKE-CLAUDE done ${tool}`);
+  await waitFor(`${tool} to answer`, () => (done.test(term.output.slice(seen)) ? true : undefined), 30_000);
+  const output = term.output.slice(seen);
+  // The tool's answer, up to the next line the fake prints (its PostToolUse hook, then "done").
+  const answer = new RegExp(`FAKE-CLAUDE (${tool}(?: ERROR)?: [\\s\\S]*?)\\nFAKE-CLAUDE `).exec(output)?.[1];
+  return (answer ?? output).replace(/\r/g, "").trim();
 }
 
 beforeAll(async () => {
@@ -172,7 +215,7 @@ beforeAll(async () => {
         JEV_API_KEY: "unused",
         // Task sync talks to the local GitHub stand-in.
         GITHUB_TOKEN: "e2e-github-token",
-        GITHUB_WEBHOOK_SECRET: "unused",
+        GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
         WRANGLER_SEND_METRICS: "false",
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -434,20 +477,11 @@ describe("Switchboard's tools (the Tool Capture)", () => {
     await expect(stat(join(scratch, "claude", "settings.json"))).rejects.toThrow();
     await expect(stat(join(cwd, ".mcp.json"))).rejects.toThrow();
 
-    const call = async (tool: string, input: unknown): Promise<string> => {
-      const seen = term.output.length;
-      term.type(`call ${tool} ${JSON.stringify(input)}\r`);
-      const done = new RegExp(`FAKE-CLAUDE done ${tool}`);
-      await waitFor(`${tool} to answer`, () => (done.test(term.output.slice(seen)) ? true : undefined));
-      const output = term.output.slice(seen);
-      // The tool's answer, up to the next line the fake prints (its PostToolUse hook, then "done").
-      const answer = new RegExp(`FAKE-CLAUDE (${tool}(?: ERROR)?: [\\s\\S]*?)\\nFAKE-CLAUDE `).exec(output)?.[1];
-      return (answer ?? output).replace(/\r/g, "").trim();
-    };
+    const call = (tool: string, input: unknown) => callTool(term, tool, input);
 
     expect(await call("list_tasks", {})).toContain(`#${held} Dashboard [claimed] held by dev`);
     expect(term.output).toContain(
-      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel"]',
+      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","finish_task"]',
     );
     expect(await call("claim_task", { task: held })).toBe(`claim_task ERROR: Task #${held} is held by dev.`);
     expect(await call("claim_task", { task: claims })).toContain(`claim_task: You hold Task #${claims} now`);
@@ -634,5 +668,119 @@ describe("the Proxy Capture", () => {
     term.type("quit\r");
     expect(await term.exited).toBe(0);
     expect(await proxyEvents(id)).toEqual([]);
+  });
+});
+
+describe("a branch per Task (ADR 0006)", () => {
+  // Git as a Person's laptop runs it, without their global config (hooks, signing).
+  const gitEnv = {
+    GIT_AUTHOR_NAME: "E2E",
+    GIT_AUTHOR_EMAIL: "e2e@example.com",
+    GIT_COMMITTER_NAME: "E2E",
+    GIT_COMMITTER_EMAIL: "e2e@example.com",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+  let origin = "";
+  let repo = "";
+
+  async function git(dir: string, ...args: string[]): Promise<string> {
+    const { stdout } = await promisify(execFile)("git", args, { cwd: dir, env: { ...process.env, ...gitEnv } });
+    return stdout.trim();
+  }
+
+  beforeAll(async () => {
+    // A local bare repo stands in for origin, and the GitHub stand-in checks pull requests against it.
+    origin = join(scratch, "origin.git");
+    await git(scratch, "init", "--quiet", "--bare", "-b", "main", origin);
+    const seed = join(scratch, "seed");
+    await git(scratch, "clone", "--quiet", origin, seed);
+    await writeFile(join(seed, "README.md"), "# e2e\n");
+    await git(seed, "add", "README.md");
+    await git(seed, "commit", "--quiet", "-m", "First commit");
+    await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    // The Person's clone, where they run the wrapper.
+    await git(scratch, "clone", "--quiet", origin, join(scratch, "repo"));
+    repo = await realpath(join(scratch, "repo"));
+    github.origin = origin;
+  });
+
+  it("claiming creates the Task branch and its worktree; finishing pushes it and opens the PR", async () => {
+    const number = github.open("Branch per Task", "- [ ] branch\n- [ ] finish");
+    await openedOnGitHub(number);
+    const term = new Terminal(["run", "claude"], gitEnv, repo);
+    const { agentEnv: id } = await term.started();
+    const branch = `task/${number}-branch-per-task`;
+    const worktree = join(repo, ".switchboard", "worktrees", branch);
+
+    // Claiming: the branch is created from origin's main, pushed, and checked out in its own worktree.
+    const claimed = await callTool(term, "claim_task", { task: number });
+    expect(claimed).toContain(`claim_task: You hold Task #${number} now: Branch per Task.`);
+    expect(claimed).toContain(
+      `Work in the worktree at ${worktree}, on branch ${branch} (new, from the latest origin main`,
+    );
+    const main = await git(origin, "rev-parse", "refs/heads/main");
+    expect(await git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(main);
+    expect(await git(worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
+    expect(await git(worktree, "rev-parse", "HEAD")).toBe(main);
+    expect(await git(worktree, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe(`origin/${branch}`);
+    // The worktrees stay out of the Person's own checkout, without a commit to .gitignore.
+    expect(await git(repo, "status", "--porcelain")).toBe("");
+    expect(await readFile(join(repo, ".git", "info", "exclude"), "utf8")).toContain("/.switchboard/");
+    // The Channel records the Task's branch.
+    const recorded = await api<TaskResponse>(`/api/tasks/${number}`);
+    expect(recorded.task).toMatchObject({ status: "claimed", branch });
+
+    // Claiming again picks the same worktree up.
+    expect(await callTool(term, "claim_task", { task: number })).toContain(
+      `Work in the worktree at ${worktree}, on branch ${branch} (picked up where it was`,
+    );
+
+    // The Agent works in the worktree. Uncommitted work is not finished work.
+    await writeFile(join(worktree, "feature.ts"), "export const feature = true;\n");
+    const dirty = await callTool(term, "finish_task", { task: number });
+    expect(dirty).toContain("finish_task ERROR:");
+    expect(dirty).toContain("1 uncommitted change");
+    expect(github.pullRequests.size).toBe(0);
+
+    await git(worktree, "add", "feature.ts");
+    await git(worktree, "commit", "--quiet", "-m", "Add the feature");
+    const head = await git(worktree, "rev-parse", "HEAD");
+    const finished = await callTool(term, "finish_task", { task: number, summary: "Adds the feature." });
+
+    // Finishing: the branch is pushed first, then the pull request is opened on GitHub.
+    const [pr] = [...github.pullRequests.values()];
+    expect(finished).toBe(
+      `finish_task: Pushed ${branch} (${head.slice(0, 7)}) and opened pull request #${pr?.number}: ` +
+        `https://github.com/${github.repo}/pull/${pr?.number}. It closes #${number} when it merges. ` +
+        `Task #${number} is in review.`,
+    );
+    expect(await git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(head);
+    expect(pr).toMatchObject({ title: "Branch per Task", head: branch, base: "main", headSha: head });
+    expect(pr?.body.split("\n")).toEqual([
+      `Closes #${number}`,
+      "",
+      `Opened via Switchboard by Agent \`${id}\` (Person e2e).`,
+      "",
+      "Adds the feature.",
+    ]);
+    const inReview = await api<TaskResponse>(`/api/tasks/${number}`);
+    expect(inReview.task).toMatchObject({ status: "review", branch, pr: pr?.number });
+    expect(github.issues.get(number)?.labels).toEqual([REVIEW_LABEL]);
+
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+
+    // Every step is on the Channel, labelled with the Tool Capture.
+    const tool = (await agentEvents(id)).filter((e) => e.capture === "tool");
+    expect(tool.map((e) => [e.type, e.type === "tool.call" ? [e.payload.tool, e.payload.ok] : e.payload])).toEqual([
+      ["claim", { holder: { kind: "agent", agentId: id } }],
+      ["task.branch", { branch }],
+      ["tool.call", ["claim_task", true]],
+      ["tool.call", ["claim_task", true]],
+      ["tool.call", ["finish_task", false]],
+      ["task.review", { pr: pr?.number, url: `https://github.com/${github.repo}/pull/${pr?.number}`, branch }],
+      ["tool.call", ["finish_task", true]],
+    ]);
   });
 });

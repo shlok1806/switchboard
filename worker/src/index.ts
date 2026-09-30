@@ -12,6 +12,7 @@ import type {
 import { MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
 import { handleAgentRoute, matchAgentRoute } from "./agents-api";
 import { authenticate } from "./auth";
+import { handleBranchRoute, matchBranchRoute } from "./branches-api";
 import { callerOf, handleClaimRoute, matchClaimRoute } from "./claims-api";
 import { fail, json, readJson } from "./http";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
@@ -97,7 +98,8 @@ export default {
     const taskRoute = isTaskRoute(request.method, url.pathname);
     const agentRoute = matchAgentRoute(request.method, url.pathname);
     const claimRoute = matchClaimRoute(request.method, url.pathname);
-    if (!ROUTES.has(route) && !taskRoute && agentRoute === null && claimRoute === null) {
+    const branchRoute = matchBranchRoute(request.method, url.pathname);
+    if (!ROUTES.has(route) && !taskRoute && agentRoute === null && claimRoute === null && branchRoute === null) {
       return fail(404, "Not found.");
     }
 
@@ -106,6 +108,7 @@ export default {
     if (taskRoute) return handleTaskRoute(request, url, env, auth.person);
     if (agentRoute !== null) return handleAgentRoute(agentRoute, request, channel(env), auth.person);
     if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel(env), auth.person);
+    if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel(env), auth.person);
 
     switch (route) {
       case "POST /api/join":

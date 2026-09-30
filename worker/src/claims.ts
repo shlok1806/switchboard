@@ -27,7 +27,7 @@ import type {
   Task,
   TaskNumber,
 } from "../../shared/src/index";
-import { CLAIMED_LABEL, holderName } from "../../shared/src/index";
+import { CLAIMED_LABEL, holderName, REVIEW_LABEL } from "../../shared/src/index";
 import type { AgentRoster } from "./agents";
 import type { NewEvent } from "./channel";
 import { type GitHub, tickStep } from "./github/index";
@@ -63,7 +63,7 @@ export interface ClaimHost {
   append<K extends EventType>(event: NewEvent<K>): ChannelEvent;
 }
 
-type Change = "claim" | "release" | "step.complete";
+export type Change = "claim" | "release" | "step.complete" | "finish";
 
 function sameHolder(a: Holder, b: Holder): boolean {
   return a.kind === "agent"
@@ -172,7 +172,10 @@ export class Claims {
         "unlabel",
         async () => {
           await gitHub.removeLabel(number, CLAIMED_LABEL);
-          this.keepLabels(number, (labels) => labels.filter((label) => label !== CLAIMED_LABEL));
+          if (task.status === "review") await gitHub.removeLabel(number, REVIEW_LABEL);
+          this.keepLabels(number, (labels) =>
+            labels.filter((label) => label !== CLAIMED_LABEL && label !== REVIEW_LABEL),
+          );
         },
       ],
       ["comment", () => gitHub.addComment(number, `Released by ${this.describe(holder)} via Switchboard.`)],
@@ -244,11 +247,7 @@ export class Claims {
   }
 
   /** The Task and its holder, when `acting` may act as the holder: the holder itself, or a holding Agent's Person. */
-  private held(
-    acting: Acting,
-    number: TaskNumber,
-    what: string,
-  ): { ok: true; task: Task; holder: Holder } | ClaimRefusal {
+  held(acting: Acting, number: TaskNumber, what: string): { ok: true; task: Task; holder: Holder } | ClaimRefusal {
     const task = this.host.tasks.read(number);
     if (task === null) return { ok: false, status: 404, reason: `No Task #${number}.` };
     if (task.status === "done") return { ok: false, status: 409, reason: `Task #${number} is done.` };
@@ -286,18 +285,20 @@ export class Claims {
    * The same for the `status:claimed` label: GitHub owns labels, but this one we
    * just set ourselves, so the Task shows it without waiting for the webhook.
    */
-  private keepLabels(number: TaskNumber, change: (labels: string[]) => string[]): void {
+  keepLabels(number: TaskNumber, change: (labels: string[]) => string[]): void {
     const task = this.host.tasks.read(number);
     if (task === null) return;
     const labels = change(task.labels);
-    if (labels.length !== task.labels.length) this.host.tasks.write({ ...task, labels });
+    if (labels.length !== task.labels.length || labels.some((l, i) => l !== task.labels[i])) {
+      this.host.tasks.write({ ...task, labels });
+    }
   }
 
-  private describe(holder: Holder): string {
+  describe(holder: Holder): string {
     return describe(holder, holder.kind === "agent" ? this.host.agents.find(holder.agentId)?.person : undefined);
   }
 
-  private current(number: TaskNumber): ClaimResult {
+  current(number: TaskNumber): ClaimResult {
     const task = this.host.tasks.read(number);
     return task === null ? { ok: false, status: 404, reason: `No Task #${number}.` } : { ok: true, task };
   }
@@ -306,7 +307,7 @@ export class Claims {
    * Runs one change's GitHub calls in order, after any other GitHub work on the
    * Channel. Each call that fails is recorded and the rest still run.
    */
-  private async mirror(
+  async mirror(
     acting: Acting,
     change: Change,
     number: TaskNumber,
