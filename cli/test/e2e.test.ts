@@ -26,8 +26,10 @@ import type {
   Verdict,
 } from "../../shared/src/index";
 import { agentPath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
+import { CODE_ASSIST_SSE, GEMINI_SSE, RESPONSES_SSE, RESPONSES_TURN } from "./fixtures/api-shapes";
 import { GitHubApi } from "./fixtures/github-api";
 import { JevApi } from "./fixtures/jev-api";
+import { acceptWebSockets } from "./fixtures/ws-upstream";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CLI = join(here, "..", "dist", "switchboard.js");
@@ -324,7 +326,8 @@ afterAll(async () => {
   wrangler?.kill();
   github.stop();
   jev.stop();
-  if (scratch) await rm(scratch, { recursive: true, force: true });
+  // Retries: a terminal a failed test left behind may still be writing its config.
+  if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 5 });
   if (cwd) await rm(cwd, { recursive: true, force: true });
 });
 
@@ -1832,9 +1835,198 @@ describe("switchboard run codex and gemini", () => {
     await waitForPresence(id, "gone");
   }, 90_000);
 
-  it("refuses the Proxy Capture for CLIs it cannot read", async () => {
-    const term = new Terminal(["run", "gemini", "--proxy", "digest"], fakeEnv);
-    expect(await term.exited).toBe(2);
-    expect(term.output).toContain("the Proxy Capture does not support Gemini CLI yet");
+  describe("the Proxy Capture", () => {
+    const OPENAI_KEY = "sk-proj-E2EcodexKeyNeverLeaves0123456789";
+    const GEMINI_KEY = "AIzaSyE2E-geminiKeyNeverLeaves012345678";
+    /** The fake model APIs: the Responses API over a WebSocket and HTTP, and generateContent. */
+    let api: Server | null = null;
+    let apiUrl = "";
+    let refuseUpgrades = false;
+    const apiSeen: { url: string; auth: string | undefined; via: string }[] = [];
+    let wsSha = "";
+    const SSE_SHA = createHash("sha256").update(RESPONSES_SSE).digest("hex");
+    const GEMINI_SHA = createHash("sha256").update(GEMINI_SSE).digest("hex");
+    const CODE_ASSIST_SHA = createHash("sha256").update(CODE_ASSIST_SSE).digest("hex");
+    const proxyEvents = async (id: string) => (await agentEvents(id)).filter((e) => e.capture === "proxy");
+
+    beforeAll(async () => {
+      wsSha = createHash("sha256")
+        .update(RESPONSES_TURN.map((e) => JSON.stringify(e)).join("\n"))
+        .digest("hex");
+      api = createHttpServer((req, res) => {
+        apiSeen.push({
+          url: req.url ?? "",
+          auth: (req.headers.authorization ?? req.headers["x-goog-api-key"]) as string | undefined,
+          via: "http",
+        });
+        req.resume();
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          if (req.url?.startsWith("/v1internal")) res.end(CODE_ASSIST_SSE);
+          else if (req.url?.includes("GenerateContent")) res.end(GEMINI_SSE);
+          else res.end(RESPONSES_SSE);
+        });
+      });
+      acceptWebSockets(
+        api,
+        (ws) => {
+          apiSeen.push({ url: ws.path, auth: ws.headers.authorization, via: "websocket" });
+          ws.onMessage = (text) => {
+            if ((JSON.parse(text) as { type?: string }).type !== "response.create") return;
+            for (const event of RESPONSES_TURN) void ws.send(JSON.stringify(event));
+          };
+        },
+        { refuse: () => refuseUpgrades },
+      );
+      await new Promise<void>((resolve) => api?.listen(0, "127.0.0.1", resolve));
+      apiUrl = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+    });
+
+    afterAll(() => {
+      api?.closeAllConnections();
+      api?.close();
+    });
+
+    it("captures Codex's turns over its WebSocket and over HTTPS, leaving what Codex gets unchanged", async () => {
+      apiSeen.length = 0;
+      // The Person's own base URL: the proxy stands in for it and forwards there.
+      const term = new Terminal(["run", "codex", "-c", `openai_base_url="${apiUrl}/v1"`, "-m", "gpt-6-sol"], {
+        ...fakeEnv,
+        FAKE_CODEX_TRUSTED: "1",
+        OPENAI_API_KEY: OPENAI_KEY,
+      });
+      const { args, sessionId } = await startedAs(term, "FAKE-CODEX");
+      expect(args).toEqual(["-m", "gpt-6-sol"]);
+      term.type("model run the tests\r");
+      const first = await term.waitForOutput(/FAKE-CODEX model base=(\S+) via=websocket events=(\d+) sha=(\w+)/);
+      // Codex talked to the local proxy, and got exactly the events the API sent.
+      expect(first[1]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(first[2]).toBe(String(RESPONSES_TURN.length));
+      expect(first[3]).toBe(wsSha);
+      expect(apiSeen).toEqual([{ url: "/v1/responses", auth: `Bearer ${OPENAI_KEY}`, via: "websocket" }]);
+
+      const id = `e2e/codex/${sessionId.slice(-4)}`;
+      const [digest] = await waitFor("Codex's Proxy Digest", async () => {
+        const events = await proxyEvents(id);
+        return events.length > 0 ? events : undefined;
+      });
+      expect(digest).toMatchObject({
+        type: "proxy.digest",
+        capture: "proxy",
+        actor: { kind: "agent", agentId: id },
+        payload: {
+          model: "gpt-6-sol",
+          inputTokens: 221,
+          outputTokens: 101,
+          cacheReadTokens: 30208,
+          reply: "Running the tests. Key is sk-proj-****",
+          toolCalls: [
+            { name: "exec", arg: "npm test" },
+            { name: "shell", arg: "export GITHUB_TOKEN=ghp_****" },
+            { name: "apply_patch", arg: "/repo/src/app.ts" },
+          ],
+          maskedSecrets: 2,
+        },
+      });
+
+      // The API refuses WebSockets: Codex falls back to HTTPS, and the turn is still read.
+      refuseUpgrades = true;
+      const seen = term.output.length;
+      term.type("model again\r");
+      const second = await waitFor(
+        "Codex's HTTPS turn",
+        async () =>
+          /FAKE-CODEX model base=\S+ via=https status=(\d+) sha=(\w+)/.exec(term.output.slice(seen)) ?? undefined,
+      );
+      refuseUpgrades = false;
+      expect(second[1]).toBe("200");
+      expect(second[2]).toBe(SSE_SHA);
+      expect(apiSeen.at(-1)).toEqual({ url: "/v1/responses", auth: `Bearer ${OPENAI_KEY}`, via: "http" });
+      await waitFor("the second Proxy Digest", async () => ((await proxyEvents(id)).length === 2 ? true : undefined));
+
+      term.type("quit\r");
+      expect(await term.exited).toBe(0);
+      expect(JSON.stringify(await agentEvents(id))).not.toContain("E2EcodexKeyNeverLeaves");
+    }, 90_000);
+
+    it("captures Gemini CLI's turns with an API key, keeping its auth type", async () => {
+      apiSeen.length = 0;
+      const term = new Terminal(["run", "gemini"], {
+        ...fakeEnv,
+        GEMINI_API_KEY: GEMINI_KEY,
+        GOOGLE_GEMINI_BASE_URL: apiUrl,
+      });
+      const { sessionId } = await startedAs(term, "FAKE-GEMINI");
+      term.type("model run the tests\r");
+      const answer = await term.waitForOutput(/FAKE-GEMINI model base=(\S+) auth=(\S+) status=(\d+) sha=(\w+)/);
+      expect(answer[1]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(answer[1]).not.toBe(apiUrl);
+      // Gemini CLI would have read "gateway" from the environment, as it does without the proxy.
+      expect(answer[2]).toBe("gateway");
+      expect(answer[4]).toBe(GEMINI_SHA);
+      expect(apiSeen).toEqual([
+        { url: "/v1beta/models/gemini-3-pro:streamGenerateContent?alt=sse", auth: GEMINI_KEY, via: "http" },
+      ]);
+      const id = `e2e/gemini/${sessionId.slice(0, 4)}`;
+      const [digest] = await waitFor("Gemini's Proxy Digest", async () => {
+        const events = await proxyEvents(id);
+        return events.length > 0 ? events : undefined;
+      });
+      expect(digest).toMatchObject({
+        type: "proxy.digest",
+        capture: "proxy",
+        payload: {
+          model: "gemini-3-pro",
+          reply: "Running the tests. Token: xoxb-****",
+          toolCalls: [
+            { name: "run_shell_command", arg: "npm test" },
+            { name: "read_file", arg: "/repo/src/app.ts" },
+          ],
+        },
+      });
+      term.type("quit\r");
+      expect(await term.exited).toBe(0);
+      expect(JSON.stringify(await agentEvents(id))).not.toContain("geminiKeyNeverLeaves");
+    }, 90_000);
+
+    it("captures Gemini CLI's Code Assist turns (Login with Google), and an API key read from the environment stays one", async () => {
+      apiSeen.length = 0;
+      const google = new Terminal(["run", "gemini"], {
+        ...fakeEnv,
+        GOOGLE_GENAI_USE_GCA: "true",
+        CODE_ASSIST_ENDPOINT: apiUrl,
+      });
+      const { sessionId } = await startedAs(google, "FAKE-GEMINI");
+      google.type("model hello\r");
+      const answer = await google.waitForOutput(/FAKE-GEMINI model base=(\S+) auth=(\S+) status=(\d+) sha=(\w+)/);
+      expect(answer[1]).not.toBe(apiUrl);
+      expect(answer[2]).toBe("oauth-personal");
+      expect(answer[4]).toBe(CODE_ASSIST_SHA);
+      expect(apiSeen[0]?.url).toBe("/v1internal:streamGenerateContent?alt=sse");
+      const id = `e2e/gemini/${sessionId.slice(0, 4)}`;
+      await waitFor("the Code Assist Digest", async () => ((await proxyEvents(id)).length > 0 ? true : undefined));
+      google.type("quit\r");
+      expect(await google.exited).toBe(0);
+
+      // A key from the environment: the proxy sets GOOGLE_GEMINI_BASE_URL, so the
+      // session's settings keep Gemini CLI's own choice rather than "gateway".
+      const keyed = new Terminal(["run", "gemini", "--proxy", "digest"], { ...fakeEnv, GEMINI_API_KEY: GEMINI_KEY });
+      await startedAs(keyed, "FAKE-GEMINI");
+      keyed.type("model hello\r");
+      const keyedAnswer = await keyed.waitForOutput(/FAKE-GEMINI model base=(\S+) auth=(\S+) /);
+      expect(keyedAnswer[1]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(keyedAnswer[2]).toBe("gemini-api-key");
+      keyed.type("quit\r");
+      expect(await keyed.exited).toBe(0);
+    }, 90_000);
+
+    it("runs a session it cannot read without the proxy, as the CLI would run without Switchboard", async () => {
+      // No auth type chosen, so no way to tell where Gemini CLI's traffic goes.
+      const term = new Terminal(["run", "gemini", "--proxy", "digest"], fakeEnv);
+      await startedAs(term, "FAKE-GEMINI");
+      expect(term.output).toContain("the Proxy Capture cannot read this session");
+      term.type("quit\r");
+      expect(await term.exited).toBe(0);
+    });
   });
 });
