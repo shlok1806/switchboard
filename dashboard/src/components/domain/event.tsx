@@ -1,4 +1,3 @@
-import { motion } from "motion/react";
 import type { Agent, AgentId, ChannelEvent, Task, ToolCall, Verdict } from "@shared/index";
 import ToolChips, { type ToolStep } from "@/components/primitives/ToolChips";
 import { Tool } from "@/components/ui/tool";
@@ -54,13 +53,8 @@ export function EventRow({
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
   const isMessage = event.type === "update" || event.type === "directive";
   return (
-    <motion.li
-      layout="position"
-      initial={fresh ? { opacity: 0, y: -6 } : false}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-      className="list-none"
-    >
+    // A new Event maps in over two frames, the way the site maps a window: no slide.
+    <li className={cn("list-none", fresh && "notice-in")}>
       <div
         role="button"
         tabIndex={0}
@@ -73,11 +67,11 @@ export function EventRow({
           }
         }}
         className={cn(
-          "group relative grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 border-b border-line-soft px-3 py-2 text-left transition-colors duration-100 hover:bg-inset sm:px-4",
-          selected && "bg-accent-tint/60 hover:bg-accent-tint/80",
+          "group relative grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-b border-line-soft px-3 py-1.5 text-left outline-none hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[hsl(var(--ring))] sm:px-4",
+          // Selected the way the site's file manager selects: the row inverts to the preset's primary.
+          selected && "bg-primary text-primary-foreground hover:bg-primary [&_*]:!text-primary-foreground [&_code]:!bg-transparent",
         )}
       >
-        {selected && <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-accent" />}
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="label-mono !text-[10px]">{EVENT_TYPE_LABEL[event.type]}</span>
           <Actor event={event} agentById={agentById} compact />
@@ -107,7 +101,7 @@ export function EventRow({
           {summarize(event)}
         </p>
       </div>
-    </motion.li>
+    </li>
   );
 }
 
@@ -170,7 +164,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
             <Field label="Tokens in"><span className="tabular-nums">{compact(p.inputTokens)}</span></Field>
             <Field label="Tokens out"><span className="tabular-nums">{compact(p.outputTokens)}</span></Field>
           </dl>
-          <p className="rounded-card bg-inset px-3 py-2 text-[13px] leading-relaxed text-ink">{p.reply}</p>
+          <p className="bevel-in bg-card px-3 py-2 font-mono text-[12.5px] leading-relaxed text-ink">{p.reply}</p>
           {p.toolCalls.length > 0 && (
             <ToolChips
               animate={false}
@@ -183,7 +177,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
             <Reasoning>
               <ReasoningTrigger className="text-[12.5px] font-medium">Model context (raw)</ReasoningTrigger>
               <ReasoningContent contentClassName="mt-2">
-                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-card bg-inset p-3 font-mono text-[11.5px] leading-relaxed text-ink-2">
+                <pre className="bevel-in max-h-64 overflow-auto bg-card p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-ink-2">
                   {event.payload.context}
                 </pre>
               </ReasoningContent>
@@ -214,7 +208,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
       );
     case "takeover":
       return (
-        <div className="flex flex-col gap-2 rounded-card bg-surface p-3 shadow-card">
+        <div className="bevel-in flex flex-col gap-2 bg-card p-3">
           <dl className="grid grid-cols-2 gap-3">
             <Field label="From"><span className="font-mono text-[12px]">{holderName(event.payload.from)}</span></Field>
             <Field label="To"><span className="font-mono text-[12px]">{holderName(event.payload.to)}</span></Field>
@@ -248,7 +242,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
           <p className="text-[13px] text-ink-2">GitHub owns these fields, so the Task now follows the Issue.</p>
           <div className="flex flex-wrap gap-1.5">
             {event.payload.fields.map((f) => (
-              <span key={f} className="rounded-[4px] bg-inset px-1.5 py-0.5 font-mono text-[11.5px] text-ink shadow-hairline">
+              <span key={f} className="bevel-thin-in bg-muted px-1.5 py-[1px] font-mono text-[11px] text-muted-foreground">
                 {TASK_FIELD_LABEL[f]}
               </span>
             ))}
@@ -278,7 +272,7 @@ export function EventDetail({
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
   return (
     <article className="flex flex-col gap-4">
-      <header className="flex flex-col gap-1.5">
+      <header className="flex flex-col gap-1.5 border-b border-border pb-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="label-mono">{EVENT_TYPE_LABEL[event.type]}</span>
           <CaptureChip event={event} />
@@ -292,14 +286,14 @@ export function EventDetail({
       </header>
       <EventBody event={event} />
       <section className="flex flex-col gap-2">
-        <h3 className="flex items-baseline justify-between text-[12.5px] font-semibold text-ink">
+        <h3 className="type-label flex items-baseline justify-between !text-ink">
           Verdicts
-          <span className="font-mono text-[11px] font-normal text-ink-3">Interrupt threshold {threshold.toFixed(2)}</span>
+          <span className="font-mono text-[11px] tracking-normal normal-case text-ink-3">Interrupt threshold {threshold.toFixed(2)}</span>
         </h3>
         {verdictsLive ? (
           <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
         ) : (
-          <p className="rounded-card bg-inset px-3 py-2.5 text-[12.5px] text-ink-3">
+          <p className="bevel-in bg-card px-3 py-2.5 text-[12.5px] text-ink-3">
             Each Agent's Verdict on this Event, with Jev's probabilities, appears once the Relay (<IssueLink capability="verdicts" />) lands.
           </p>
         )}

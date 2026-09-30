@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import NumberFlow from "@number-flow/react";
 import type { AgentId, ProxyMode } from "@shared/index";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
 import { IssueLink } from "@/components/domain/pending";
@@ -88,9 +87,9 @@ export function AgentDetail({ id }: { id: string }) {
 
           <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-card bg-line shadow-card sm:grid-cols-4">
             {[
-              { k: "Events", v: <NumberFlow value={events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === agent.id).length} /> },
-              { k: "Interrupts heard", v: can.verdicts ? <NumberFlow value={heard.i} /> : <span className="text-[13px] text-ink-3">Relay pending</span> },
-              { k: "Queued to it", v: can.verdicts ? <NumberFlow value={heard.q} /> : <span className="text-[13px] text-ink-3">Relay pending</span> },
+              { k: "Events", v: <span className="tabular-nums">{events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === agent.id).length}</span> },
+              { k: "Interrupts heard", v: can.verdicts ? <span className="tabular-nums">{heard.i}</span> : <span className="text-[13px] text-ink-3">Relay pending</span> },
+              { k: "Queued to it", v: can.verdicts ? <span className="tabular-nums">{heard.q}</span> : <span className="text-[13px] text-ink-3">Relay pending</span> },
               { k: "Session started", v: <span className="text-[13px]">{ago(agent.startedAt)}</span> },
             ].map((s) => (
               <div key={s.k} className="flex flex-col gap-0.5 bg-surface px-3 py-2.5">

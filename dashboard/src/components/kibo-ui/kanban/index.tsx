@@ -109,6 +109,7 @@ export const KanbanBoard = ({ id, children, className }: KanbanBoardProps) => {
         className,
       )}
       data-over={isOver || undefined}
+      data-kanban-column={id}
       ref={setNodeRef}
     >
       {children}

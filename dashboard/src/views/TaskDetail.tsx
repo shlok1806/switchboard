@@ -5,7 +5,6 @@ import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { IssueLink } from "@/components/domain/pending";
 import { IssueBody } from "@/components/domain/issue-body";
 import { SegmentedControl } from "@/components/atoms/SegmentedControl";
-import { Steps, StepsContent, StepsItem, StepsTrigger } from "@/components/ui/steps";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
 import {
   Snippet,
@@ -24,6 +23,7 @@ import { Composer } from "@/components/domain/composer";
 import { EVENT_TYPE_LABEL, ago, clock, summarize } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
+import { GroupBox } from "@/components/shell/groupbox";
 
 const WORK: EventType[] = [
   "claim",
@@ -48,13 +48,13 @@ const WORK: EventType[] = [
 const SCOPES = ["Work", "All Events"] as const;
 
 const DOT: Partial<Record<EventType, string>> = {
-  claim: "bg-accent",
+  claim: "bg-accent-ink",
   takeover: "bg-red",
   push: "bg-green",
   merge: "bg-green",
   "task.review": "bg-green",
-  update: "bg-ink",
-  "step.complete": "bg-accent",
+  update: "bg-foreground",
+  "step.complete": "bg-accent-ink",
   "claim.refused": "bg-orange",
 };
 
@@ -91,10 +91,10 @@ export function TaskDetail({ number }: { number: number }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-6xl gap-6 p-4 sm:p-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="flex min-w-0 flex-col gap-6">
+      <div className="mx-auto grid max-w-6xl gap-5 p-3 sm:p-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="flex min-w-0 flex-col gap-5">
           <header className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
+            <div className="flex flex-wrap items-center gap-2 font-mono text-[11.5px] text-ink-3">
               <span className="font-mono">#{task.number}</span>
               <span aria-hidden>·</span>
               <span>{COLUMN_LABEL[col]}</span>
@@ -111,13 +111,13 @@ export function TaskDetail({ number }: { number: number }) {
                 </>
               )}
             </div>
-            <h1 className="font-display text-[22px] font-semibold leading-tight text-ink [overflow-wrap:anywhere] sm:text-[26px]">
+            <h1 className="glow text-[22px] leading-tight font-bold tracking-tight text-accent-ink [overflow-wrap:anywhere] sm:text-[26px]">
               {task.title}
             </h1>
             <IssueBody text={task.description} />
             <div className="flex flex-wrap gap-1.5">
               {task.labels.map((l) => (
-                <span key={l} className="rounded-[4px] bg-inset px-1.5 py-0.5 font-mono text-[11px] text-ink-2 shadow-hairline">
+                <span key={l} className="bevel-thin-in bg-muted px-1.5 py-[1px] font-mono text-[11px] text-muted-foreground">
                   {l}
                 </span>
               ))}
@@ -125,42 +125,38 @@ export function TaskDetail({ number }: { number: number }) {
           </header>
 
           {task.steps.length > 0 && (
-            <section className="rounded-card bg-surface p-3 shadow-card">
-              <Steps defaultOpen>
-                <StepsTrigger className="text-[13px] font-semibold text-ink">
-                  <span className="flex items-center gap-2">
-                    Steps <Progress done={steps.done} total={steps.total} noun="done" />
-                  </span>
-                </StepsTrigger>
-                <StepsContent bar={<div aria-hidden className="h-full w-[2px] rounded-full bg-line" />}>
+            <GroupBox title={<span className="flex items-center gap-2">Steps <Progress done={steps.done} total={steps.total} noun="done" /></span>}>
+              <ul className="flex flex-col gap-1.5">
                   {task.steps.map((s) => (
-                    <StepsItem key={s.index} className="flex items-start gap-2 text-[13px]">
+                    <li key={s.index} className="flex items-start gap-2 text-[13px]">
                       {s.done ? (
-                        <CircleCheck className="mt-0.5 size-4 shrink-0 text-green" aria-label="Done" />
+                        <CircleCheck className="mt-px text-green" aria-label="Done" />
                       ) : (
-                        <Circle className="mt-0.5 size-4 shrink-0 text-line-strong" aria-label="Not done" />
+                        <Circle className="mt-px text-faint" aria-label="Not done" />
                       )}
-                      <span className={s.done ? "text-ink-3" : "text-ink"}>{s.text}</span>
-                    </StepsItem>
+                      <span className={s.done ? "text-ink-3 line-through" : "text-ink"}>{s.text}</span>
+                    </li>
                   ))}
-                </StepsContent>
-              </Steps>
-            </section>
+              </ul>
+            </GroupBox>
           )}
 
           {task.subtasks.length > 0 && (
-            <section className="flex flex-col gap-2">
-              <h2 className="flex items-center gap-2 text-[13px] font-semibold text-ink">
-                Subtasks <Progress done={subs.done} total={subs.total} noun="done" />
-              </h2>
-              <ul className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
+            <GroupBox
+              title={<span className="flex items-center gap-2">Subtasks <Progress done={subs.done} total={subs.total} noun="done" /></span>}
+              bodyClassName="px-1 pb-1"
+            >
+              <ul>
                 {task.subtasks.map((n) => {
                   const s = taskByNumber.get(n);
                   if (!s) return null;
                   const sp = stepProgress(s);
                   return (
                     <li key={n}>
-                      <a href={href({ view: "task", number: n })} className="flex items-center gap-3 px-3 py-2.5 hover:bg-inset">
+                      <a
+                        href={href({ view: "task", number: n })}
+                        className="flex items-center gap-3 px-2 py-[3px] hover:bg-primary hover:text-primary-foreground hover:[&_*]:text-primary-foreground coarse:py-2.5"
+                      >
                         <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
                           <span className="font-mono text-[12px] text-ink-3">#{n}</span> {s.title}
                         </span>
@@ -171,19 +167,19 @@ export function TaskDetail({ number }: { number: number }) {
                   );
                 })}
               </ul>
-            </section>
+            </GroupBox>
           )}
 
-          <section className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-[13px] font-semibold text-ink">Timeline</h2>
+          <section className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-1.5">
+              <h2 className="type-label !text-ink">Timeline</h2>
               <SegmentedControl options={SCOPES} value={scope} onChange={setScope} />
             </div>
             {timeline.length === 0 ? (
               <p className="text-[12.5px] text-ink-3">Nothing has happened on this Task yet.</p>
             ) : (
               <ol className="relative flex flex-col">
-                <span aria-hidden className="absolute top-2 bottom-2 left-[5px] w-px bg-line" />
+                <span aria-hidden className="absolute top-2 bottom-2 left-[4px] w-px bg-border" />
                 {timeline.map((e) => (
                   <TimelineItem key={e.id} event={e} threshold={threshold} />
                 ))}
@@ -199,8 +195,7 @@ export function TaskDetail({ number }: { number: number }) {
             task.claim?.stale && "order-first",
           )}
         >
-          <section className="flex flex-col gap-2 rounded-card bg-surface p-3 shadow-card">
-            <h2 className="label-mono">Claim</h2>
+          <GroupBox title="Claim" tone={task.claim?.stale ? "alert" : undefined} bodyClassName="flex flex-col gap-2">
             {task.claim ? (
               <>
                 <div className="flex flex-wrap items-center gap-2">
@@ -229,37 +224,36 @@ export function TaskDetail({ number }: { number: number }) {
                 )}
               </p>
             )}
-          </section>
+          </GroupBox>
 
           {blocked.length > 0 && (
-            <section className="flex flex-col gap-1.5 rounded-card bg-orange-tint p-3">
-              <h2 className="label-mono !text-orange">Blocked by</h2>
+            <GroupBox title="Blocked by" tone="alert" bodyClassName="flex flex-col gap-1.5">
               {blocked.map((b) => (
                 <TaskLink key={b!.number} number={b!.number} title={b!.title} className="text-[12.5px] text-ink" />
               ))}
-            </section>
+            </GroupBox>
           )}
 
           {(task.branch || task.pr) && (
             <section className="flex flex-col gap-2">
               {task.branch && (
-                <Snippet defaultValue="switch" className="rounded-card border-0 bg-surface shadow-card">
-                  <SnippetHeader className="border-line bg-inset">
+                <Snippet defaultValue="switch" className="bevel-in border-0 bg-card">
+                  <SnippetHeader className="border-b border-border bg-secondary">
                     <SnippetTabsList className="h-7 bg-transparent p-0">
-                      <SnippetTabsTrigger value="switch" className="h-6 text-[12px]">
-                        <GitBranch className="size-3.5" /> Branch
+                      <SnippetTabsTrigger value="switch" className="h-6 border-0 bg-transparent text-[12px] shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+                        <GitBranch /> Branch
                       </SnippetTabsTrigger>
                     </SnippetTabsList>
-                    <SnippetCopyButton value={`git fetch && git switch ${task.branch}`} className="size-7 opacity-100" aria-label="Copy command" />
+                    <SnippetCopyButton value={`git fetch && git switch ${task.branch}`} className="btn-motif size-6 opacity-100" aria-label="Copy command" />
                   </SnippetHeader>
-                  <SnippetTabsContent value="switch" className="bg-surface px-3 py-2.5 font-mono text-[12px] text-ink">
+                  <SnippetTabsContent value="switch" className="bg-card px-3 py-2.5 font-mono text-[12px] text-ink">
                     git switch {task.branch}
                   </SnippetTabsContent>
                 </Snippet>
               )}
               {task.pr && (
                 <p className="flex items-center gap-1.5 text-[12.5px] text-ink-2">
-                  <GitPullRequest className="size-3.5" /> PR <span className="font-mono">#{task.pr}</span>
+                  <GitPullRequest /> PR <span className="font-mono">#{task.pr}</span>
                 </p>
               )}
             </section>
@@ -278,14 +272,14 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
   const verdicts = verdictsByEvent.get(e.id) ?? [];
   const asked = verdicts.filter((v) => v.source === "jev");
   return (
-    <li className="relative grid grid-cols-[11px_minmax(0,1fr)] gap-3 py-2">
+    <li className="relative grid grid-cols-[9px_minmax(0,1fr)] gap-3 py-1.5">
       <span
         aria-hidden
-        className={cn("relative z-10 mt-1.5 size-[11px] rounded-full border-2 border-page", DOT[e.type] ?? "bg-line-strong")}
+        className={cn("relative z-10 mt-1 size-[9px] border border-card", DOT[e.type] ?? "bg-faint")}
       />
       <div className="flex min-w-0 flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-[12.5px] font-semibold text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
+          <span className="type-label !text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
           {e.actor.kind === "agent" ? (
             <AgentLink id={e.actor.agentId} agent={agentById.get(e.actor.agentId)} />
           ) : (

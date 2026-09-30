@@ -1,5 +1,4 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence } from "motion/react";
 import { MessageSquarePlus, X } from "@/components/pixel-icon";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { EventDetail, EventRow } from "@/components/domain/event";
@@ -127,7 +126,6 @@ export function FeedView({ selected }: { selected?: string }) {
         </div>
       ) : (
         <ul>
-          <AnimatePresence initial={false}>
             {shown.map((e) => (
               <EventRow
                 key={e.id}
@@ -140,7 +138,6 @@ export function FeedView({ selected }: { selected?: string }) {
                 onSelect={() => go({ view: "feed", event: e.id })}
               />
             ))}
-          </AnimatePresence>
         </ul>
       )}
     </div>
