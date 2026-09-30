@@ -155,7 +155,7 @@ export function AgentLink({
       className={cn("group/agent inline-flex min-w-0 items-baseline gap-1.5", className)}
       onClick={(e) => e.stopPropagation()}
     >
-      <span className="truncate font-mono text-[12.5px] text-ink group-hover/agent:text-accent-ink">{id}</span>
+      <span className="min-w-0 font-mono text-[12.5px] [overflow-wrap:anywhere] text-ink group-hover/agent:text-accent-ink">{id}</span>
       {showNickname && agent?.nickname && <span className={cn("truncate text-[12.5px] text-ink-3", nicknameClassName)}>{agent.nickname}</span>}
     </a>
   );

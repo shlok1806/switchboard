@@ -41,12 +41,12 @@
   --accent-tint: oklch(95.4% 0.02 266);
   --on-accent: oklch(98.6% 0.004 266);
 
-  /* status: muted, legible as text on the paper */
-  --green: oklch(52% 0.1 155);
+  /* status: muted, and at least 4.5:1 as text on every light surface, hover and tint */
+  --green: oklch(47% 0.1 155);
   --green-tint: oklch(95.6% 0.022 155);
-  --orange: oklch(56% 0.11 62);
+  --orange: oklch(50% 0.11 62);
   --orange-tint: oklch(95.8% 0.03 75);
-  --red: oklch(53% 0.14 25);
+  --red: oklch(50% 0.14 25);
   --red-tint: oklch(96% 0.018 22);
 
   /* Verdict options */

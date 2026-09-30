@@ -5,7 +5,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/r
 import { EVENT_TYPE_LABEL, TASK_FIELD_LABEL, ago, clock, compact, holderName, summarize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ActorAvatar, AgentLink, CaptureChip, CaptureIcon, RawBadge, TaskLink, VerdictTally } from "./pills";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FileDiff } from "./diff";
 import { VerdictTable } from "./verdict";
@@ -79,20 +79,25 @@ export function EventRow({
       >
         {continued ? <span aria-hidden /> : <ActorAvatar actor={event.actor} />}
         <div className="flex min-w-0 flex-col gap-0.5">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className={cn("flex min-w-0 items-center gap-1.5", continued && "sr-only")}>
-              <Actor event={event} agentById={agentById} compact />
-              {event.type === "directive" && (
-                <>
-                  <ArrowRight className="size-3.5 shrink-0 text-ink-4" aria-label="to" />
-                  <AgentLink id={event.payload.to} agent={agentById.get(event.payload.to)} showNickname={false} />
-                </>
-              )}
-            </span>
-            <span className="shrink-0 text-[12px] text-ink-3">{EVENT_TYPE_LABEL[event.type]}</span>
-            {event.type === "proxy.raw" && <RawBadge />}
-            {task && <TaskLink number={task.number} className="shrink-0 text-[12px]" />}
-            <span className="ml-auto flex shrink-0 items-center gap-2">
+          <div className="flex min-w-0 items-start gap-2">
+            {/* Who comes first and is never cut off; the type label wraps to the next line before the Agent ID gives way. */}
+            <div className="flex min-h-5 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5", continued && "sr-only")}>
+                <Actor event={event} agentById={agentById} compact />
+                {event.type === "directive" && (
+                  <>
+                    <ArrowRight className="size-3.5 shrink-0 text-ink-4" aria-label="to" />
+                    <AgentLink id={event.payload.to} agent={agentById.get(event.payload.to)} showNickname={false} />
+                  </>
+                )}
+              </span>
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="text-[12px] text-ink-3">{EVENT_TYPE_LABEL[event.type]}</span>
+                {event.type === "proxy.raw" && <RawBadge />}
+                {task && <TaskLink number={task.number} className="shrink-0 text-[12px]" />}
+              </span>
+            </div>
+            <span className="flex h-5 shrink-0 items-center gap-2">
               <VerdictTally verdicts={verdicts} />
               <CaptureIcon event={event} />
               <time className="font-mono text-[11.5px] text-ink-3 tabular-nums" dateTime={event.at} title={clock(event.at)}>
@@ -284,6 +289,7 @@ export function EventDetail({
   taskByNumber,
   threshold,
   verdictsLive = true,
+  onClose,
 }: {
   event: ChannelEvent;
   verdicts: Verdict[];
@@ -291,6 +297,8 @@ export function EventDetail({
   taskByNumber: Map<number, Task>;
   threshold: number;
   verdictsLive?: boolean;
+  /** Shown as a close button in the header, where the Event opens beside the feed. */
+  onClose?: () => void;
 }) {
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
   return (
@@ -311,6 +319,16 @@ export function EventDetail({
             {task && <TaskLink number={task.number} title={task.title} className="min-w-0 text-ink-2" />}
           </div>
         </div>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close Event"
+            className="-mt-1 -mr-2 grid size-8 shrink-0 place-items-center rounded-md text-ink-3 hover:bg-hover hover:text-ink"
+          >
+            <X className="size-4" aria-hidden />
+          </button>
+        )}
       </header>
       <EventBody event={event} />
       <section className="flex flex-col gap-2.5">
