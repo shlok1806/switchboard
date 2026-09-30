@@ -14,6 +14,7 @@ import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { taskOfBranch } from "../../shared/src/index";
 
 const run = promisify(execFile);
 
@@ -140,6 +141,38 @@ export async function openTaskWorktree(cwd: string, branch: string): Promise<Tas
   }
   await git(path, ["push", "--quiet", "-u", "origin", `HEAD:refs/heads/${branch}`]);
   return { branch, path, created };
+}
+
+/** Every `task/<task>-*` branch, on this machine or on origin. */
+async function taskBranches(root: string, task: number): Promise<string[]> {
+  const pattern = `refs/heads/task/${task}-*`;
+  const local = await git(root, ["for-each-ref", "--format=%(refname:strip=2)", pattern]);
+  const remote = await git(root, ["ls-remote", "--heads", "origin", pattern]);
+  const names = [
+    ...local.split("\n"),
+    ...remote.split("\n").map((line) => line.split("\t")[1]?.replace(/^refs\/heads\//, "") ?? ""),
+  ];
+  return [...new Set(names.filter((name) => taskOfBranch(name) === task))].sort();
+}
+
+/**
+ * The Task branch for a Task the Channel has no branch on record for, as when
+ * setting it up on Claim failed. An existing `task/<task>-*` branch wins (one
+ * the Agent made by hand, say), used from whichever checkout has it; otherwise
+ * `fallback` is opened as on Claim, and `created` says it has no work on it yet.
+ */
+export async function adoptTaskBranch(cwd: string, task: number, fallback: string): Promise<TaskWorktree> {
+  const { root } = await repoOf(cwd);
+  const found = await taskBranches(root, task);
+  if (found.length > 1 && !found.includes(fallback)) {
+    throw new GitError(
+      `Task #${task} has ${found.length} branches (${found.join(", ")}). Delete all but the one with its work.`,
+    );
+  }
+  const branch = found.length === 1 ? (found[0] as string) : fallback;
+  const tree = (await worktrees(root)).find((t) => t.branch === branch);
+  if (tree !== undefined) return { branch, path: tree.path, created: false };
+  return openTaskWorktree(root, branch);
 }
 
 /**

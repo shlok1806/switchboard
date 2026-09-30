@@ -5,7 +5,7 @@
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -870,6 +870,88 @@ describe("a branch per Task (ADR 0006)", () => {
       ["task.review", { pr: pr?.number, url: `https://github.com/${github.repo}/pull/${pr?.number}`, branch }],
       ["tool.call", ["finish_task", true]],
     ]);
+  });
+
+  /** Claims `number` while origin cannot be reached, so the Claim holds but its branch setup fails. */
+  async function claimWithoutOrigin(term: Terminal, number: number): Promise<string> {
+    await rename(origin, `${origin}.away`);
+    try {
+      return await callTool(term, "claim_task", { task: number });
+    } finally {
+      await rename(`${origin}.away`, origin);
+    }
+  }
+
+  it("finishing a Claim whose branch setup failed sets the branch up and says to work there", async () => {
+    const number = github.open("Setup failed", "");
+    await openedOnGitHub(number);
+    const term = new Terminal(["run", "claude"], gitEnv, repo);
+    await term.started();
+    const branch = `task/${number}-setup-failed`;
+    const worktree = join(repo, ".switchboard", "worktrees", branch);
+
+    const claimed = await claimWithoutOrigin(term, number);
+    expect(claimed).toContain(`claim_task: You hold Task #${number} now: Setup failed.`);
+    expect(claimed).toContain(`The Claim holds, but its branch ${branch} could not be set up: git `);
+    expect(claimed).toContain("finish_task");
+    expect((await api<TaskResponse>(`/api/tasks/${number}`)).task).toMatchObject({ status: "claimed" });
+    expect((await api<TaskResponse>(`/api/tasks/${number}`)).task.branch).toBeUndefined();
+
+    // With origin back, finishing sets the branch up. There is no work on it yet, so no pull request.
+    const early = await callTool(term, "finish_task", { task: number });
+    expect(early).toContain("finish_task ERROR:");
+    expect(early).not.toContain("Claim it with claim_task first");
+    expect(early).toContain(`Task #${number} had no branch yet, so there was no work to finish.`);
+    expect(early).toContain(
+      `Work in the worktree at ${worktree}, on branch ${branch} (new, from the latest origin main`,
+    );
+    expect((await api<TaskResponse>(`/api/tasks/${number}`)).task).toMatchObject({ status: "claimed", branch });
+    expect([...github.pullRequests.values()].filter((pr) => pr.head === branch)).toEqual([]);
+
+    await writeFile(join(worktree, "late.ts"), "export const late = true;\n");
+    await git(worktree, "add", "late.ts");
+    await git(worktree, "commit", "--quiet", "-m", "Add late");
+    const finished = await callTool(term, "finish_task", { task: number });
+    expect(finished).toContain(`finish_task: Pushed ${branch} (`);
+    expect((await api<TaskResponse>(`/api/tasks/${number}`)).task).toMatchObject({ status: "review", branch });
+
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  });
+
+  it("finishing a Claim whose branch setup failed adopts a task/<n>-* branch made by hand", async () => {
+    const number = github.open("Made by hand", "");
+    await openedOnGitHub(number);
+    const term = new Terminal(["run", "claude"], gitEnv, repo);
+    await term.started();
+    expect(await claimWithoutOrigin(term, number)).toContain("could not be set up");
+
+    // The Agent works around it: its own branch, under its own name, in a checkout of its own.
+    const branch = `task/${number}-by-hand`;
+    const checkout = join(scratch, `by-hand-${number}`);
+    await git(repo, "fetch", "--quiet", "origin");
+    await git(repo, "worktree", "add", "--quiet", "-b", branch, checkout, "origin/main");
+    await writeFile(join(checkout, "hand.ts"), "export const hand = true;\n");
+    await git(checkout, "add", "hand.ts");
+    await git(checkout, "commit", "--quiet", "-m", "Add hand");
+    const head = await git(checkout, "rev-parse", "HEAD");
+
+    const finished = await callTool(term, "finish_task", { task: number, summary: "By hand." });
+    const pr = [...github.pullRequests.values()].find((p) => p.head === branch);
+    expect(finished).toBe(
+      `finish_task: Pushed ${branch} (${head.slice(0, 7)}) and opened pull request #${pr?.number}: ` +
+        `https://github.com/${github.repo}/pull/${pr?.number}. It closes #${number} when it merges. ` +
+        `Task #${number} is in review.`,
+    );
+    expect(await git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(head);
+    expect((await api<TaskResponse>(`/api/tasks/${number}`)).task).toMatchObject({ status: "review", branch });
+    // No second branch under the name claiming would have given it.
+    expect(await git(origin, "for-each-ref", "--format=%(refname)", `refs/heads/task/${number}-*`)).toBe(
+      `refs/heads/${branch}`,
+    );
+
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
   });
 });
 
