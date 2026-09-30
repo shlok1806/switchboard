@@ -268,7 +268,7 @@ const seedTasks: SeedTask[] = [
     blockedBy: [],
     subtasks: [],
     steps: steps(1, "Draft the rule", "Link ADR 0005", "Ask a Person to review"),
-    status: "claimed",
+    status: "review",
     claim: { task: 19, holder: { kind: "agent", agentId: A.shlokCodex }, claimedAt: ago(60 * 38), stale: false },
     branch: "task/19-channel-rule",
     pr: 22,

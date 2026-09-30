@@ -171,7 +171,7 @@ export function FeedView({ selected }: { selected?: string }) {
         <button
           type="button"
           onClick={() => setComposeOpen(true)}
-          className="btn-motif fixed right-3 bottom-[calc(var(--panel-h)+12px)] z-20 h-11 px-4 font-semibold outline outline-1 outline-[hsl(var(--foreground))]"
+          className="btn-motif fixed right-3 bottom-[calc(var(--panel-h)+37px)] z-20 h-11 px-4 font-semibold outline outline-1 outline-[hsl(var(--foreground))]"
         >
           <MessageSquarePlus /> Post
         </button>

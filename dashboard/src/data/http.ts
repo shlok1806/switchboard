@@ -29,16 +29,18 @@ const DEFAULT_RELAY = { interruptThreshold: 0.6, model: "typesafe/jev" };
  * What the Worker on main can do today: join, Events, Updates, the stream (#5),
  * Tasks (#8), Agents with Presence (#6), Hook Captures (#7), Claims (#9),
  * which the Tasks board claims and releases through, and the Relay's Verdicts
- * (#12). The rest arrives with later issues.
+ * (#12), Takeover of a Stale Claim (#11), and Proxy Capture with each Agent's
+ * Proxy mode (#15), which also makes Captures comparable. Directives arrive
+ * with #14.
  */
 const LIVE_CAPABILITIES: Capabilities = {
   agents: true,
   verdicts: true,
-  captures: false,
+  captures: true,
   claims: true,
-  takeover: false,
+  takeover: true,
   directives: false,
-  proxyMode: false,
+  proxyMode: true,
   createTask: true,
 };
 

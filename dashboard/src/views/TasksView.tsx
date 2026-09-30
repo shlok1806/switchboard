@@ -7,6 +7,7 @@ import { IssueLink, Pending } from "@/components/domain/pending";
 import { COLUMN_LABEL, columnOf, type Column } from "@/components/domain/task";
 import { decideMove, heldByMe } from "@/components/domain/moves";
 import { FilterSelect } from "@/components/domain/filters";
+import { TakeoverAction } from "@/components/domain/takeover";
 import {
   KanbanBoard,
   KanbanCard,
@@ -32,7 +33,7 @@ import { cn } from "@/lib/utils";
 const FLOW: Column[] = ["open", "claimed", "review", "done"];
 
 const HINT: Record<Column, string> = {
-  stale: "The holder is Gone. Held until a Person takes it over.",
+  stale: "The holder is Gone. Held until a Person takes it over with Take over.",
   open: "No Claim yet. Drag a card to Claimed to claim it.",
   claimed: "Held by an Agent or a Person. Drag your own back to Open to release it.",
   review: "Finished. Its pull request is open.",
@@ -81,7 +82,7 @@ export function TasksView() {
       tasks.filter((t) => {
         const h = t.claim?.holder;
         if (filters.mine && !(h && heldByMe(h, me, agentById))) return false;
-        if (filters.blocked && openBlockers(t, taskByNumber).length === 0) return false;
+        if (filters.blocked && openBlockers(t, taskByNumber).length === 0 && !t.claim?.blockedBy?.length) return false;
         if (filters.person && holderPerson(t, agentById) !== filters.person) return false;
         if (filters.agent && !(h?.kind === "agent" && h.agentId === filters.agent)) return false;
         return true;
@@ -327,6 +328,8 @@ function TaskCard({
   moveMenu: ReactNode;
 }) {
   const blockers = openBlockers(task, taskByNumber);
+  // Claimed, and blocked only after the Claim was taken (#11): the Claim stays held.
+  const blockedAfterClaim = task.claim?.blockedBy?.filter((n) => !blockers.includes(n)) ?? [];
   const h = task.claim?.holder;
   const person = h ? (h.kind === "person" ? h.person : (agentById.get(h.agentId)?.person ?? h.agentId.split("/")[0])) : null;
   const mine = h ? heldByMe(h, me, agentById) : false;
@@ -354,6 +357,12 @@ function TaskCard({
         <p className="flex items-center gap-1 text-[12px] font-semibold text-red">
           <PixelIcon name="blocked" />
           Blocked by {blockers.map((n) => `#${n}`).join(", ")}
+        </p>
+      )}
+      {blockedAfterClaim.length > 0 && (
+        <p className="flex items-center gap-1 text-[12px] font-semibold text-orange" title="The Claim stays held until the blocker closes.">
+          <PixelIcon name="blocked" />
+          Claimed, now blocked by {blockedAfterClaim.map((n) => `#${n}`).join(", ")}
         </p>
       )}
 
@@ -391,6 +400,7 @@ function TaskCard({
         )}
         <span className="ml-auto flex items-center gap-1">
           {waiting && <PixelIcon name="hourglass" aria-label="Waiting for the Channel" />}
+          {task.claim?.stale && <TakeoverAction task={task} compact />}
           {moveMenu}
         </span>
       </footer>

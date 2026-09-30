@@ -30,7 +30,7 @@ instead of an icon set.
 | Project | Licence | Copyright | Files |
 | --- | --- | --- | --- |
 | Kibo UI (github.com/shadcnblocks/kibo, registry item `kanban` at kibo-ui.com/r/kanban.json) | MIT | (c) 2023 - present shadcnblocks | `src/components/kibo-ui/kanban` (the Tasks board), `status`, `relative-time`, `snippet`, `banner` |
-| Beautiful UI (github.com/slev12397/beautiful-ui, registry beautifului.dev) | MIT | (c) 2026 Shane Levine | `src/app/beautifui/foundation.css`, `src/components/atoms/*` (Button, Chip, SegmentedControl, StatusPill), `src/components/primitives/*` (ApprovalCard, ChatComposer, CodeBlock, GlideMenu, LoadingState, ToolChips) |
+| Beautiful UI (github.com/slev12397/beautiful-ui, registry beautifului.dev) | MIT | (c) 2026 Shane Levine | `src/app/beautifui/foundation.css`, `src/components/atoms/*` (Button, Chip, SegmentedControl, StatusPill), `src/components/primitives/*` (ChatComposer, CodeBlock, LoadingState, ToolChips) |
 | shadcn/ui (github.com/shadcn-ui/ui) | MIT | (c) 2023 shadcn | `src/components/ui/*` except the prompt-kit files below, `src/hooks/use-mobile.ts` |
 | prompt-kit (github.com/ibelick/prompt-kit) | MIT | (c) 2025 Julien Thibeaut | `src/components/ui/tool.tsx`, `reasoning.tsx` |
 
