@@ -3,26 +3,35 @@
 //
 //   switchboard login --url <channel url> --secret <join secret> --name <your name>
 //   switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
+//   switchboard run codex|gemini [--nickname <name>] [...args for Codex or Gemini CLI]
 //   switchboard whoami
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
 import { normalizePersonName } from "../../shared/src/index";
 import { ChannelClient } from "./channel-client";
+import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig, writeConfig } from "./config";
 import { runMcpServer } from "./mcp-server";
-import { runClaude } from "./run";
+import { runCli } from "./run";
 
 const USAGE = `Usage:
   switchboard login --url <channel url> --secret <join secret> --name <your name>
   switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
+  switchboard run codex [--nickname <name>] [...arguments for Codex]
+  switchboard run gemini [--nickname <name>] [...arguments for Gemini CLI]
   switchboard whoami
 
 \`run claude\` starts Claude Code as usual and joins the session to the Channel as an Agent.
 Its model traffic goes through a local proxy (the Proxy Capture): --proxy sets the
 starting Proxy mode (digest by default; off runs without the proxy), and --no-mask
 turns off secret masking. Every other argument goes to Claude Code, including
---resume and --continue.`;
+--resume and --continue.
+
+\`run codex\` and \`run gemini\` do the same for Codex and Gemini CLI, without the
+Proxy Capture (it reads Anthropic's API only). Codex runs Switchboard's hooks once
+you trust them in its /hooks screen; until then Queued Events reach the Agent
+through the read_channel tool.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -74,11 +83,12 @@ async function main(argv: string[]): Promise<number> {
       return runMcpServer();
     case "run": {
       const [cli, ...args] = rest;
-      if (cli !== "claude") {
-        console.error(cli ? `switchboard can only run claude for now, not ${cli}.` : USAGE);
+      const adapter = cli === undefined ? undefined : ADAPTERS[cli];
+      if (!adapter) {
+        console.error(cli ? `switchboard can run ${Object.keys(ADAPTERS).join(", ")}, not ${cli}.` : USAGE);
         return 2;
       }
-      return runClaude(args);
+      return runCli(adapter, args);
     }
     case undefined:
     case "help":

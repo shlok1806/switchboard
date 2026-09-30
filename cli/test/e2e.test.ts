@@ -1434,3 +1434,253 @@ describe("Directives (ADR 0005)", () => {
     expect(await submitPrompt(term, "again")).toBe("");
   }, 60_000);
 });
+
+// Codex and Gemini CLI through their own adapters, with stand-ins that read their
+// session hooks and MCP servers where the real CLIs do (see fixtures/fake-agent.mjs).
+describe("switchboard run codex and gemini", () => {
+  const FAKE_CODEX = join(here, "fixtures", "fake-codex.mjs");
+  const FAKE_GEMINI = join(here, "fixtures", "fake-gemini.mjs");
+  let fakeEnv: Record<string, string> = {};
+
+  beforeAll(async () => {
+    fakeEnv = {
+      ...INTERRUPT_ENV,
+      SWITCHBOARD_CODEX_BIN: FAKE_CODEX,
+      SWITCHBOARD_GEMINI_BIN: FAKE_GEMINI,
+      CODEX_HOME: join(scratch, "codex-home"),
+      SWITCHBOARD_HOOK_TRUST_SECONDS: "3",
+    };
+    await mkdir(join(scratch, "codex-home"), { recursive: true });
+  });
+
+  /** What a fake started with, under its own tag. */
+  async function startedAs(term: Terminal, tag: string): Promise<{ args: string[]; sessionId: string }> {
+    const args = JSON.parse((await term.waitForOutput(new RegExp(`${tag} args=(\\[.*\\])`)))[1] ?? "[]") as string[];
+    const sessionId = (await term.waitForOutput(new RegExp(`${tag} session=([\\w-]+)`)))[1] ?? "";
+    return { args, sessionId };
+  }
+
+  /** The context the prompt-submit hook added, as the model would see it. */
+  async function promptContext(term: Terminal, tag: string, hook: string, text: string): Promise<string> {
+    const seen = term.output.length;
+    term.type(`prompt ${text}\r`);
+    await waitFor("the prompt", () => (new RegExp(`${tag} prompted`).test(term.output.slice(seen)) ? true : undefined));
+    const output = term.output.slice(seen).replace(/\r/g, "");
+    const found = new RegExp(`${tag} hook ${hook} exit=0(?: context=(".*"))?\\n`).exec(output);
+    return found?.[1] ? (JSON.parse(found[1]) as string) : "";
+  }
+
+  async function callFakeTool(term: Terminal, tag: string, tool: string, input: unknown): Promise<string> {
+    const seen = term.output.length;
+    term.type(`call ${tool} ${JSON.stringify(input)}\r`);
+    await waitFor(
+      `${tool} to answer`,
+      () => (term.output.slice(seen).includes(`${tag} done ${tool}`) ? true : undefined),
+      30_000,
+    );
+    const answer = new RegExp(`${tag} ${tool}(?: ERROR)?: (".*")`).exec(
+      term.output.slice(seen).replace(/\r/g, ""),
+    )?.[1];
+    return answer ? (JSON.parse(answer) as string) : "";
+  }
+
+  function pastedSince(term: Terminal, tag: string, from: number): { prompt: string; during: string }[] {
+    const output = term.output.slice(from).replace(/\r/g, "");
+    return [...output.matchAll(new RegExp(`${tag} pasted prompt=(".*?") during=(\\w+)`, "g"))].map((m) => ({
+      prompt: JSON.parse(m[1] ?? '""') as string,
+      during: m[2] ?? "",
+    }));
+  }
+
+  function directiveDelivery(event: string): Promise<Extract<ChannelEvent, { type: "directive.delivery" }>["payload"]> {
+    return waitFor(
+      "the Directive's delivery",
+      async () =>
+        (await api<HistoryResponse>("/api/events")).events.find(
+          (e): e is Extract<ChannelEvent, { type: "directive.delivery" }> =>
+            e.type === "directive.delivery" && e.payload.directive === event,
+        )?.payload,
+      30_000,
+    );
+  }
+
+  async function direct(to: string, text: string): Promise<string> {
+    const response = await sendDirective("shlok", to, text);
+    expect(response.status).toBe(201);
+    return ((await response.json()) as { event: ChannelEvent }).event.id;
+  }
+
+  it("registers a Codex session by the end of its thread ID, reports its hooks, gives it the tools, and resumes it", async () => {
+    const term = new Terminal(["run", "codex", "--nickname", "cx", "-m", "gpt-6-sol"], {
+      ...fakeEnv,
+      FAKE_CODEX_TRUSTED: "1",
+    });
+    const { args, sessionId } = await startedAs(term, "FAKE-CODEX");
+    // Codex picks the ID; the Agent ID takes its last 4 characters.
+    const id = `e2e/codex/${sessionId.slice(-4)}`;
+    expect(args).toEqual(["-m", "gpt-6-sol"]);
+    await term.waitForOutput(/FAKE-CODEX mcp=\["switchboard"\]/);
+    // Codex starts the session at the first prompt; the standing rule reaches the
+    // model through SessionStart's additionalContext.
+    await promptContext(term, "FAKE-CODEX", "UserPromptSubmit", "hello");
+    const agent = await waitFor("the Codex Agent", async () => (await agents()).find((a) => a.id === id));
+    expect(agent).toMatchObject({ person: "e2e", cli: "codex", nickname: "cx", canReceiveInterrupts: true });
+    const rule = JSON.parse(
+      (await term.waitForOutput(/FAKE-CODEX hook SessionStart exit=0 context=(".*")/))[1] ?? '""',
+    );
+    expect(rule).toBe(STANDING_RULE);
+    // No trust hint: the hooks ran.
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    expect(term.output).not.toContain("/hooks");
+
+    term.type("turn\r");
+    await term.waitForOutput(/FAKE-CODEX turn done/);
+    const hooked = await waitFor("Codex's Hook Events", async () => {
+      const events = await hookEvents(id);
+      return events.some((e) => e.type === "turn.end") ? events : undefined;
+    });
+    expect(hooked.map((e) => [e.type, e.payload])).toEqual([
+      ["session.start", { cwd, resumed: false, source: "startup" }],
+      ["tool.call", { tool: "Bash", arg: "npm test", ok: true }],
+      ["command", { command: "npm test", exitCode: 0 }],
+      ["tool.call", { tool: "Edit", arg: "src/app.ts", ok: true }],
+      ["file.edit", { path: "src/app.ts", additions: 2, deletions: 1 }],
+      ["tool.call", { tool: "Write", arg: "src/new.ts", ok: true }],
+      ["file.edit", { path: "src/new.ts", additions: 1, deletions: 0 }],
+      ["turn.end", { turn: 1 }],
+    ]);
+    expect(hooked.every((e) => e.capture === "hook")).toBe(true);
+
+    // Switchboard's MCP tools, listed and called through Codex's own MCP config.
+    expect(await callFakeTool(term, "FAKE-CODEX", "list_tasks", {})).toContain("#");
+    expect(term.output).toMatch(/FAKE-CODEX tools=\[.*"read_channel".*\]/);
+
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+    await waitForPresence(id, "gone");
+
+    // `codex resume <id>` is the same Agent.
+    const again = new Terminal(["run", "codex", "resume", sessionId], { ...fakeEnv, FAKE_CODEX_TRUSTED: "1" });
+    const resumed = await startedAs(again, "FAKE-CODEX");
+    expect(resumed.sessionId).toBe(sessionId);
+    await again.waitForOutput(/FAKE-CODEX agent=(\S+)/).then((m) => expect(m[1]).toBe(id));
+    await waitForPresence(id, "live");
+    again.type("quit\r");
+    expect(await again.exited).toBe(0);
+    expect((await agents()).filter((a) => a.id === id)).toHaveLength(1);
+  }, 90_000);
+
+  it("types a Directive into Codex mid-turn, and holds one for the next turn while an approval dialog is open", async () => {
+    const term = new Terminal(["run", "codex"], { ...fakeEnv, FAKE_CODEX_TRUSTED: "1" });
+    const { sessionId } = await startedAs(term, "FAKE-CODEX");
+    const id = `e2e/codex/${sessionId.slice(-4)}`;
+    await term.waitForOutput(/FAKE-CODEX mcp=/);
+    await promptContext(term, "FAKE-CODEX", "UserPromptSubmit", "hello");
+    await waitForPresence(id, "live");
+
+    term.type("busy 6\r");
+    await term.waitForOutput(/FAKE-CODEX busy/);
+    const seen = term.output.length;
+    const typed = await direct(id, "Hold off on src/app.ts.");
+    const [pasted] = await waitFor("the Directive typed into Codex", () => {
+      const found = pastedSince(term, "FAKE-CODEX", seen);
+      return found.length > 0 ? found : undefined;
+    });
+    expect(pasted?.during).toBe("busy");
+    expect(pasted?.prompt).toContain("> Hold off on src/app.ts.");
+    expect(await directiveDelivery(typed)).toMatchObject({ delivered: "interrupt" });
+    await term.waitForOutput(/FAKE-CODEX busy done/);
+
+    // An approval dialog (PermissionRequest) is open: typing would answer it.
+    term.type("permission shell\r");
+    await term.waitForOutput(/FAKE-CODEX asking permission for shell/);
+    await new Promise((resolve) => setTimeout(resolve, QUIET_SECONDS * 1000));
+    const held = await direct(id, "Rebase onto main first.");
+    expect(await directiveDelivery(held)).toMatchObject({ delivered: "queue", reason: "dialog-open" });
+    term.type("y\r");
+    await term.waitForOutput(/FAKE-CODEX permission answered "y"/);
+    const told = await waitFor("the Directive at Codex's next turn", async () => {
+      const context = await promptContext(term, "FAKE-CODEX", "UserPromptSubmit", "next");
+      return context.includes("Rebase onto main first.") ? context : undefined;
+    });
+    expect(told).toContain("Directive from shlok");
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  }, 90_000);
+
+  it("tells the Person to trust Codex's hooks, and hands queued items over through read_channel until then", async () => {
+    const term = new Terminal(["run", "codex"], fakeEnv);
+    const { sessionId } = await startedAs(term, "FAKE-CODEX");
+    const id = `e2e/codex/${sessionId.slice(-4)}`;
+    // No hook runs, so the session is found from the session file Codex writes at the first prompt.
+    term.type("prompt hello\r");
+    await waitFor("the untrusted Codex Agent", async () => (await agents()).find((a) => a.id === id));
+    await term.waitForOutput(/Open \/hooks in Codex and trust the switchboard hooks/);
+    expect(await hookEvents(id)).toEqual([]);
+
+    // Without hooks the wrapper cannot tell when typing is safe, so the Directive is held.
+    const held = await direct(id, "Pick up #7 next.");
+    expect(await directiveDelivery(held)).toMatchObject({ delivered: "queue", reason: "session-not-ready" });
+    const answer = await waitFor("read_channel to hand it over", async () => {
+      const text = await callFakeTool(term, "FAKE-CODEX", "read_channel", { limit: 3 });
+      return text.includes("Pick up #7 next.") ? text : undefined;
+    });
+    expect(answer).toContain(STANDING_RULE.split("\n")[0] ?? "");
+    expect(answer).toContain("Directive from shlok");
+    // Handed over once.
+    expect(await callFakeTool(term, "FAKE-CODEX", "read_channel", { limit: 3 })).not.toContain("Pick up #7 next.");
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  }, 90_000);
+
+  it("registers a Gemini CLI session from its hooks, and labels its Interrupts downgraded", async () => {
+    const term = new Terminal(["run", "gemini"], fakeEnv);
+    const { sessionId } = await startedAs(term, "FAKE-GEMINI");
+    const id = `e2e/gemini/${sessionId.slice(0, 4)}`;
+    const agent = await waitFor("the Gemini Agent", async () => (await agents()).find((a) => a.id === id));
+    expect(agent).toMatchObject({ cli: "gemini", canReceiveInterrupts: false });
+    await term.waitForOutput(/FAKE-GEMINI mcp=\["switchboard"\]/);
+    const rule = JSON.parse(
+      (await term.waitForOutput(/FAKE-GEMINI hook SessionStart exit=0 context=(".*")/))[1] ?? '""',
+    );
+    expect(rule).toBe(STANDING_RULE);
+
+    term.type("turn\r");
+    await term.waitForOutput(/FAKE-GEMINI turn done/);
+    const hooked = await waitFor("Gemini's Hook Events", async () => {
+      const events = await hookEvents(id);
+      return events.some((e) => e.type === "turn.end") ? events : undefined;
+    });
+    expect(hooked.map((e) => e.type)).toEqual([
+      "session.start",
+      "tool.call",
+      "command",
+      "tool.call",
+      "file.edit",
+      "tool.call",
+      "file.edit",
+      "turn.end",
+    ]);
+    expect(await callFakeTool(term, "FAKE-GEMINI", "list_tasks", {})).toContain("#");
+
+    // Never typed into Gemini CLI: held, labelled, and told at the next turn (BeforeAgent).
+    const seen = term.output.length;
+    const held = await direct(id, "Take the settings page.");
+    expect(await directiveDelivery(held)).toMatchObject({ delivered: "queue", reason: "cli-cannot-interrupt" });
+    const told = await waitFor("the Directive at Gemini's next turn", async () => {
+      const context = await promptContext(term, "FAKE-GEMINI", "BeforeAgent", "next");
+      return context.includes("Take the settings page.") ? context : undefined;
+    });
+    expect(told).toContain("Directive from shlok");
+    expect(pastedSince(term, "FAKE-GEMINI", seen)).toEqual([]);
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+    await waitForPresence(id, "gone");
+  }, 90_000);
+
+  it("refuses the Proxy Capture for CLIs it cannot read", async () => {
+    const term = new Terminal(["run", "gemini", "--proxy", "digest"], fakeEnv);
+    expect(await term.exited).toBe(2);
+    expect(term.output).toContain("the Proxy Capture does not support Gemini CLI yet");
+  });
+});

@@ -16,21 +16,39 @@ export const CLI_SHORT_NAMES: Record<Cli, string> = {
 
 export const CLIS = Object.keys(CLI_SHORT_NAMES) as Cli[];
 
-/** How many leading characters of the session ID go into the Agent ID. */
+/** How many characters of the session ID go into the Agent ID. */
 export const AGENT_ID_SESSION_CHARS = 4;
 
 /**
+ * Which end of the session ID the Agent ID takes its characters from. Codex session
+ * IDs are UUIDv7: their first characters are the clock, the same for every session
+ * started within years, so a Codex Agent ID takes the last 4 (the random end).
+ */
+export const AGENT_ID_SESSION_END: Record<Cli, "start" | "end"> = {
+  "claude-code": "start",
+  codex: "end",
+  gemini: "start",
+};
+
+/**
  * A CLI session ID: letters, digits and "-", 4 to 128 characters.
- * Claude Code uses UUIDs.
+ * Claude Code and Gemini CLI use UUIDs; Codex uses UUIDv7 thread IDs.
  */
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{3,127}$/;
 
 /** The longest Nickname the Channel accepts, in characters. */
 export const MAX_NICKNAME_LENGTH = 40;
 
-/** The Agent ID for a session: `<person>/<cli short name>/<first 4 of the session id>`. */
+/**
+ * The Agent ID for a session: `<person>/<cli short name>/<4 of the session id>`, the
+ * first 4 characters, or the last 4 for Codex (see `AGENT_ID_SESSION_END`).
+ */
 export function agentIdFor(person: PersonName, cli: Cli, sessionId: string): AgentId {
-  return `${person}/${CLI_SHORT_NAMES[cli]}/${sessionId.slice(0, AGENT_ID_SESSION_CHARS).toLowerCase()}`;
+  const short =
+    AGENT_ID_SESSION_END[cli] === "end"
+      ? sessionId.slice(-AGENT_ID_SESSION_CHARS)
+      : sessionId.slice(0, AGENT_ID_SESSION_CHARS);
+  return `${person}/${CLI_SHORT_NAMES[cli]}/${short.toLowerCase()}`;
 }
 
 /** The path of one Agent's resource. Agent IDs contain "/", so the ID is URL-encoded. */

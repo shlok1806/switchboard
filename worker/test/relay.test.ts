@@ -12,6 +12,7 @@ import type {
   AgentId,
   AgentResponse,
   ChannelEvent,
+  Cli,
   Delivery,
   DeliveryMessage,
   EventOf,
@@ -90,6 +91,8 @@ let hookIds = 0;
 type InterruptAnswer = true | Extract<InterruptResult, { typed: false }>["reason"];
 
 interface FakeAgentOptions {
+  /** Its CLI. Default Claude Code. */
+  cli?: Cli;
   /** Whether its wrapper says at registration that it can type Interrupts. Default true, like Claude Code's. */
   interrupts?: boolean;
   /** Whether its wrapper attaches its socket to the Agent, so Interrupts reach it. Default true. */
@@ -114,7 +117,7 @@ class FakeAgent {
     sessions += 1;
     const sessionId = `${sessions.toString(16).padStart(4, "0")}cccc-0000-4000-8000-000000000000`;
     const response = await post("/api/agents", person, {
-      cli: "claude-code",
+      cli: options.cli ?? "claude-code",
       sessionId,
       resumed: false,
       cwd: "/r",
@@ -716,6 +719,29 @@ describe("Interrupt delivery", () => {
     ]);
     await waitFor(async () => (alice.deliveries.length === 1 ? true : undefined));
     expect(alice.interrupts).toEqual([]);
+  });
+
+  // What `switchboard run gemini` registers: Gemini CLI cannot be typed into (yet).
+  it("labels a Gemini CLI Agent's Interrupts downgraded, and types a Codex Agent's", async () => {
+    const { alice: gemini, push } = await sureInterrupts({ cli: "gemini", interrupts: false });
+    expect(gemini.id).toMatch(/^alice\/gemini\/[0-9a-f]{4}$/);
+    const first = await push();
+    expect(await verdictsOn(first.id, 1)).toMatchObject([
+      { option: "interrupt", delivered: "queue", downgraded: { from: "interrupt", reason: "cli-cannot-interrupt" } },
+    ]);
+    await waitFor(async () => (gemini.deliveries.length === 1 ? true : undefined));
+    expect(gemini.interrupts).toEqual([]);
+
+    // `switchboard run codex` registers Interrupt support: the Interrupt is typed, not downgraded.
+    const codex = await FakeAgent.start("alice", { cli: "codex" });
+    expect(codex.id).toMatch(/^alice\/codex\/0000$/);
+    await codex.edited("src/shared.ts");
+    const second = await push();
+    const verdicts = await verdictsOn(second.id, 2);
+    const onCodex = verdicts.find((v) => v.agent === codex.id);
+    expect(onCodex).toMatchObject({ option: "interrupt", delivered: "interrupt" });
+    expect(onCodex?.downgraded).toBeUndefined();
+    expect(codex.interrupts.map((d) => d.event)).toEqual([second.id]);
   });
 
   it("sends at most one Interrupt per Agent in the interval; extras become Queue", async () => {

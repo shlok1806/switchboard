@@ -2,6 +2,7 @@
 // The command every Switchboard hook runs inside the wrapped Claude Code session:
 //
 //   node switchboard-hook.js <wrapper socket>
+//   node switchboard-hook.js            (the socket in $SWITCHBOARD_HOOK_SOCKET)
 //
 // Claude Code writes the hook's input as JSON on stdin. This hands it, unchanged,
 // to the running wrapper over its local socket, prints the wrapper's answer and
@@ -24,7 +25,7 @@ function done(): never {
 
 setTimeout(done, GIVE_UP_MS).unref();
 
-const socketPath = process.argv[2];
+const socketPath = process.argv[2] || process.env.SWITCHBOARD_HOOK_SOCKET;
 if (!socketPath) done();
 
 const chunks: Buffer[] = [];
