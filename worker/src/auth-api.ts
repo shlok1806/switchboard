@@ -39,7 +39,8 @@ export function isAuthRoute(pathname: string): boolean {
 
 /** Why GitHub sign-in is off, or null when it is on. The dev-only fake sign-in does not need it. */
 function notConfigured(env: Env, dev: boolean): string | null {
-  const missing = missingAppSecrets(env);
+  // A sign-in the tests installed stands in for the App.
+  const missing = signInFor(env) === null ? missingAppSecrets(env) : [];
   if (sessionSecret(env, dev) === null) missing.push("SESSION_SECRET");
   return missing.length === 0 ? null : `${APP_NOT_CONFIGURED} Missing: ${missing.join(", ")}.`;
 }

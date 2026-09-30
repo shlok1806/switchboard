@@ -21,28 +21,28 @@ import type {
   HistoryResponse,
   SendDirectiveResponse,
 } from "../../shared/src/index";
-import { AGENT_HEADER, agentPath, deliveriesNotice, directivesNotice, STANDING_RULE } from "../../shared/src/index";
+import { agentPath, deliveriesNotice, directivesNotice, STANDING_RULE } from "../../shared/src/index";
 import { installJev } from "../src/relay/jev";
+import { bearer, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeJev } from "./fake-jev";
-
-const BASE = "https://switchboard.test";
-const SECRET = "test-join-secret";
 
 let jev: FakeJev;
 
-function headers(person: string, agent?: AgentId): Record<string, string> {
+/** A Person's session, or with `agent` that Agent's token, as the Authorization header. */
+async function headers(person: string, agent?: AgentId): Promise<Record<string, string>> {
   return {
-    Authorization: `Bearer ${SECRET}`,
-    "X-Switchboard-Person": person,
+    Authorization: await bearer({ person, ...(agent === undefined ? {} : { agent }) }),
     "Content-Type": "application/json",
-    ...(agent === undefined ? {} : { [AGENT_HEADER]: agent }),
   };
 }
 
-function post(path: string, person: string, body: unknown = {}, agent?: AgentId): Promise<Response> {
-  return exports.default.fetch(
-    new Request(`${BASE}${path}`, { method: "POST", headers: headers(person, agent), body: JSON.stringify(body) }),
+async function post(path: string, person: string, body: unknown = {}, agent?: AgentId): Promise<Response> {
+  const response = await exports.default.fetch(
+    new Request(url(path), { method: "POST", headers: await headers(person, agent), body: JSON.stringify(body) }),
   );
+  // Registering answers with the Agent's token: keep it, as the wrapper does.
+  if (path === "/api/agents" && response.ok) remember(await response.clone().json<AgentResponse>());
+  return response;
 }
 
 function direct(person: string, to: string, text: string, agent?: AgentId): Promise<Response> {
@@ -50,7 +50,9 @@ function direct(person: string, to: string, text: string, agent?: AgentId): Prom
 }
 
 async function events(): Promise<ChannelEvent[]> {
-  const response = await exports.default.fetch(new Request(`${BASE}/api/events`, { headers: headers("dashboard") }));
+  const response = await exports.default.fetch(
+    new Request(url("/api/events"), { headers: await headers("dashboard") }),
+  );
   return (await response.json<HistoryResponse>()).events;
 }
 
@@ -106,9 +108,10 @@ class FakeAgent {
   }
 
   async connect(): Promise<void> {
-    const query = new URLSearchParams({ secret: SECRET, person: this.person });
+    // The wrapper's stream carries its Agent's token.
+    const query = await streamQuery({ person: this.person, agent: this.id });
     const response = await exports.default.fetch(
-      new Request(`${BASE}/api/stream?${query}`, { headers: { Upgrade: "websocket" } }),
+      new Request(url(`/api/stream?${query}`), { headers: { Upgrade: "websocket" } }),
     );
     const socket = response.webSocket;
     if (!socket) throw new Error("No WebSocket");
@@ -154,6 +157,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  forgetTokens();
   for (const agent of open.splice(0)) agent.close();
   installJev(null);
   await reset();
@@ -284,15 +288,13 @@ describe("Delivering right away", () => {
 });
 
 describe("Refusals", () => {
-  it("refuses a Directive sent through an Agent's credentials, and records nothing", async () => {
+  it("refuses a Directive sent with an Agent token, and records nothing", async () => {
     const sender = await FakeAgent.start("bob");
     const target = await FakeAgent.start("alice");
     const before = (await events()).length;
     const response = await direct("bob", target.id, "Delete your branch.", sender.id);
     expect(response.status).toBe(403);
-    expect((await response.json<ErrorResponse>()).reason).toBe(
-      "Only a Person sends Directives. Agents post Updates instead.",
-    );
+    expect((await response.json<ErrorResponse>()).reason).toContain("Directives, Takeovers and everything else");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect((await events()).slice(before).filter((e) => e.type === "directive")).toEqual([]);
     expect(target.directives).toEqual([]);

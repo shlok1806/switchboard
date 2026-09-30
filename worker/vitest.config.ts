@@ -16,6 +16,8 @@ const secrets = {
   GITHUB_APP_PRIVATE_KEY: "",
   GITHUB_APP_CLIENT_ID: "",
   GITHUB_APP_CLIENT_SECRET: "",
+  // Set LIVE_GITHUB_TOKEN to also run a read-only test against the real repo (test/github-live.test.ts).
+  LIVE_GITHUB_TOKEN: process.env.LIVE_GITHUB_TOKEN ?? "",
 };
 Object.assign(process.env, { JEV_API_KEY: secrets.JEV_API_KEY, GITHUB_WEBHOOK_SECRET: secrets.GITHUB_WEBHOOK_SECRET });
 
