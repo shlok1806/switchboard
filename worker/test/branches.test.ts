@@ -273,6 +273,95 @@ describe("finishing a Task", () => {
   });
 });
 
+/** A PR created without finish_task, as delivered by GitHub. */
+function openedPR(branch: string, pr = 99, action = "opened"): WebhookDelivery {
+  return {
+    event: "pull_request",
+    payload: {
+      action,
+      number: pr,
+      repository: { full_name: github.repo, default_branch: "main" },
+      pull_request: {
+        number: pr,
+        html_url: `https://github.com/${github.repo}/pull/${pr}`,
+        head: { ref: branch, repo: { full_name: github.repo } },
+        base: { ref: "main" },
+      },
+    },
+  };
+}
+
+describe("PRs opened outside finish_task", () => {
+  it.each(["opened", "reopened"])("links a %s PR and missing branch to a claimed Task", async (action) => {
+    const number = github.open({ title: "Manual PR" }).number;
+    const shlok = await agent("shlok");
+    await post(claimPath(number), shlok);
+    const branch = `task/${number}-manual`;
+    const webhook = openedPR(branch, 99, action);
+    await delivered(webhook);
+    expect(await task(number)).toMatchObject({ branch, pr: 99, status: "review", labels: [REVIEW_LABEL] });
+    expect((await task(number)).claim?.holder).toEqual({ kind: "agent", agentId: shlok.agent });
+    expect(github.issue(number).labels).toEqual([REVIEW_LABEL]);
+    expect(await eventsOf("task.branch")).toHaveLength(1);
+    expect(await eventsOf("task.review")).toMatchObject([
+      { actor: { kind: "github" }, capture: null, task: number, payload: { branch, pr: 99 } },
+    ]);
+    await delivered(webhook);
+    await delivered(openedPR(branch, 99, "reopened"));
+    expect(await eventsOf("task.review")).toHaveLength(1);
+    expect(github.calls.filter((c) => c[0] === "createPullRequest")).toEqual([]);
+    expect((await post(finishPath(number), shlok)).status).toBe(200);
+    expect((await task(number)).pr).toBe(99);
+  });
+
+  it("links an existing matching branch and preserves its link against another PR", async () => {
+    const number = github.open({ title: "Keep link" }).number;
+    const shlok = await agent("shlok");
+    const branch = await claimWithBranch(number, shlok);
+    await delivered(openedPR(`task/${number}-other`));
+    expect(await task(number)).toMatchObject({ branch, status: "claimed" });
+    expect((await task(number)).pr).toBeUndefined();
+    await delivered(openedPR(branch));
+    expect(await task(number)).toMatchObject({ branch, pr: 99, status: "review" });
+    const before = await task(number);
+    await delivered(openedPR(branch, 100));
+    expect(await task(number)).toEqual(before);
+    expect(await eventsOf("task.branch")).toHaveLength(1);
+    expect(await eventsOf("task.review")).toHaveLength(1);
+  });
+
+  it("ignores unclaimed and missing Tasks", async () => {
+    const number = github.open({ title: "Unclaimed" }).number;
+    await task(number);
+    await delivered(openedPR(`task/${number}-manual`));
+    await delivered(openedPR("task/999-missing"));
+    expect((await task(number)).status).toBe("open");
+    expect(await eventsOf("task.review")).toEqual([]);
+    expect(await eventsOf("task.branch")).toEqual([]);
+  });
+
+  it.each(["fork", "non-main", "non-task", "other-repo", "synchronize"])("ignores %s PRs", async (kind) => {
+    const number = github.open({ title: "Ignore PR" }).number;
+    const shlok = await agent("shlok");
+    await post(claimPath(number), shlok);
+    const webhook = openedPR(`task/${number}-manual`);
+    const payload = webhook.payload as {
+      action: string;
+      repository: { full_name: string };
+      pull_request: { head: { ref: string; repo: { full_name: string } }; base: { ref: string } };
+    };
+    if (kind === "fork") payload.pull_request.head.repo.full_name = "someone/fork";
+    if (kind === "non-main") payload.pull_request.base.ref = "release";
+    if (kind === "non-task") payload.pull_request.head.ref = "feature/manual";
+    if (kind === "other-repo") payload.repository.full_name = "someone/other";
+    if (kind === "synchronize") payload.action = "synchronize";
+    await delivered(webhook);
+    expect((await task(number)).status).toBe("claimed");
+    expect(await eventsOf("task.review")).toEqual([]);
+    expect(await eventsOf("task.branch")).toEqual([]);
+  });
+});
+
 describe("pushes and merges from the GitHub webhook", () => {
   it("records a push to a Task branch with its Task, commits, changed files and diff hunks", async () => {
     const number = github.open({ title: "Branch per Task" }).number;

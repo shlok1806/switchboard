@@ -12,7 +12,7 @@
 //   GitHub webhook and become `push` and `merge` Events, with the changed files
 //   and capped diff hunks read from the compare API.
 
-import type { ChannelEvent, EventType, Holder, PushCommit, Task, TaskNumber } from "../../shared/src/index";
+import type { Actor, ChannelEvent, EventType, Holder, PushCommit, Task, TaskNumber } from "../../shared/src/index";
 import { CLAIMED_LABEL, REVIEW_LABEL, taskOfBranch } from "../../shared/src/index";
 import type { NewEvent } from "./channel";
 import type { Caller, ClaimResult, Claims } from "./claims";
@@ -138,7 +138,14 @@ export class Branches {
     });
     claims.status.note(number, `Pull request #${pr.number} opened by ${claims.describe(holder)}.`);
 
-    await claims.mirror(acting, "finish", number, async (gh) => [
+    await this.mirrorReview(acting.actor, number);
+    return claims.current(number);
+  }
+
+  /** Keeps the review labels and status comment consistent for tool and webhook finishes. */
+  private async mirrorReview(actor: Actor, number: TaskNumber): Promise<void> {
+    const { claims } = this.host;
+    await claims.mirror({ actor }, "finish", number, async (gh) => [
       [
         "label",
         async () => {
@@ -152,7 +159,6 @@ export class Branches {
       ],
       claims.statusCall(gh, number),
     ]);
-    return claims.current(number);
   }
 
   /**
@@ -163,6 +169,7 @@ export class Branches {
   async codeEvent(delivery: string, change: CodeChange): Promise<CodeEventResult> {
     const gitHub = this.host.gitHub();
     if (gitHub === null) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
+    if (change.kind === "pull_request") return this.linkPullRequest(delivery, change);
     if (change.kind === "push" && change.task !== null) this.linkBranch(change.task, change.branch);
     let comparison: Awaited<ReturnType<GitHub["compare"]>>;
     try {
@@ -229,6 +236,42 @@ export class Branches {
       payload: { branch },
     });
     return linked;
+  }
+
+  /** Links a PR opened outside finish_task without replacing an existing branch or PR. */
+  private async linkPullRequest(
+    delivery: string,
+    change: Extract<CodeChange, { kind: "pull_request" }>,
+  ): Promise<CodeEventResult> {
+    const { tasks, claims } = this.host;
+    const task = tasks.read(change.task);
+    if (
+      task === null ||
+      task.status !== "claimed" ||
+      task.claim === undefined ||
+      (task.branch !== undefined && task.branch !== change.branch) ||
+      task.pr !== undefined
+    )
+      return { ok: true, event: null };
+    this.linkBranch(change.task, change.branch);
+    const event = this.host.appendOnce(`github:${delivery}`, {
+      type: "task.review",
+      actor: { kind: "github" },
+      capture: null,
+      task: change.task,
+      payload: { pr: change.pr, url: change.url, branch: change.branch },
+    });
+    if (event === null) return { ok: true, event: null };
+    tasks.write({
+      ...task,
+      branch: change.branch,
+      pr: change.pr,
+      status: "review",
+      updatedAt: new Date().toISOString(),
+    });
+    claims.status.note(change.task, `Pull request #${change.pr} linked from GitHub.`);
+    await this.mirrorReview({ kind: "github" }, change.task);
+    return { ok: true, event };
   }
 
   /** How the pull request names the holder: its Agent ID (and Person), or the Person. */
