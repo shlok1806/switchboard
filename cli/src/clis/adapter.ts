@@ -8,6 +8,7 @@ import type { Cli } from "../../../shared/src/index";
 import type { HookCapture } from "../hooks/capture";
 import type { ClaudeHookInput } from "../hooks/summarize";
 import type { SessionTools } from "../mcp-config";
+import type { ApiFormat } from "../proxy/api";
 
 /** Which session a launch will be. */
 export type SessionPlan =
@@ -35,6 +36,22 @@ export interface InstallOptions extends SessionContext {
   tools: SessionTools;
   /** The local Proxy Capture's URL, when it runs. Only for CLIs with `proxy`. */
   proxyUrl?: string;
+  /** The route the Proxy Capture took for this session, when it runs. */
+  proxyRoute?: ProxyRoute;
+}
+
+/** Where a session's model traffic really goes, and the API it speaks. */
+export interface ProxyRoute {
+  api: ApiFormat;
+  /** The upstream base URL the proxy forwards to (a path prefix is kept). */
+  upstream: string;
+  /** The CLI setting that points the session at the proxy, when the adapter needs to know. */
+  setting?: string;
+}
+
+/** Why the Proxy Capture cannot read a session's model traffic. */
+export interface ProxyUnsupported {
+  unsupported: string;
 }
 
 export interface Installed {
@@ -59,8 +76,13 @@ export interface CliAdapter {
   interrupts: boolean;
   /** Whether the Proxy Capture can read this CLI's model traffic. */
   proxy: boolean;
-  /** Where the CLI's model traffic goes without Switchboard. Only for CLIs with `proxy`. */
-  proxyUpstream?(ctx: SessionContext): Promise<string | undefined>;
+  /**
+   * Where this session's model traffic goes without Switchboard, and in which API
+   * format; or why the Proxy Capture cannot read it (another model provider, say),
+   * and the session runs without it. `args` are the Person's arguments for the CLI.
+   * Only for CLIs with `proxy`.
+   */
+  proxyRoute?(ctx: SessionContext, args: string[]): Promise<ProxyRoute | ProxyUnsupported>;
   /** Whether a `discover` session's ID can be taken from the first hook's `session_id`. */
   sessionFromHooks: boolean;
   /** Works out the session from the Person's arguments. Throws when it cannot. */

@@ -17,6 +17,7 @@ import type {
   ProxyEvent,
   ProxyMode,
 } from "../../../shared/src/index";
+import type { ApiFormat } from "./api";
 import { DEFAULT_UPSTREAM, ProxyServer } from "./server";
 import { buildProxyEvent } from "./turn";
 
@@ -27,8 +28,10 @@ const MAX_PENDING = 50;
 export type ProxySetting = ProxyMode | "off";
 
 export interface ProxyCaptureOptions {
-  /** The agent CLI's own ANTHROPIC_BASE_URL, if it had one. */
+  /** Where the agent CLI's model traffic really goes. The Anthropic API unless set. */
   upstream?: string;
+  /** The model API the traffic speaks. Anthropic's Messages API unless set. */
+  api?: ApiFormat;
   /** The starting Proxy mode; the Channel's changes follow. */
   mode: ProxyMode;
   /** Whether to mask secrets (on unless `--no-mask`). */
@@ -55,7 +58,8 @@ export class ProxyCapture {
   static async start(options: ProxyCaptureOptions): Promise<ProxyCapture> {
     let capture: ProxyCapture | null = null;
     const server = await ProxyServer.start({
-      upstream: options.upstream || DEFAULT_UPSTREAM,
+      upstream: options.upstream || (options.api?.defaultUpstream ?? DEFAULT_UPSTREAM),
+      ...(options.api ? { api: options.api } : {}),
       capturing: () => ({ capture: capture !== null, raw: capture?.mode === "raw" }),
       onTurn: (turn) => {
         if (!capture) return;
@@ -73,7 +77,7 @@ export class ProxyCapture {
     return capture;
   }
 
-  /** The base URL the agent CLI gets as ANTHROPIC_BASE_URL. */
+  /** The base URL the agent CLI is pointed at. */
   get url(): string {
     return this.server.url;
   }
