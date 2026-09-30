@@ -65,7 +65,7 @@ export function relay(
 ): Verdict[] {
   const verdicts: Verdict[] = [];
   // A Directive is addressed and always delivered; the Relay never gives a Verdict on it.
-  if (event.type === "directive") return verdicts;
+  if (event.type === "directive" || event.type === "directive.delivery") return verdicts;
   const senderAgent = event.actor.kind === "agent" ? event.actor.agentId : null;
 
   for (const agent of agents) {

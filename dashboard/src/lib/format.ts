@@ -134,6 +134,10 @@ export function summarize(e: ChannelEvent): string {
       return e.payload.text;
     case "directive":
       return e.payload.text;
+    case "directive.delivery":
+      return e.payload.delivered === "interrupt"
+        ? `Directive from ${e.payload.from} typed into the session right away`
+        : `Directive from ${e.payload.from} held for the next turn${e.payload.reason ? `: ${DOWNGRADE_LABEL[e.payload.reason]}` : ""}`;
     case "takeover":
       return `Took over from ${holderName(e.payload.from)} for ${holderName(e.payload.to)}`;
     case "push":
@@ -201,6 +205,7 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "step.complete": "Step",
   update: "Update",
   directive: "Directive",
+  "directive.delivery": "Directive delivery",
   takeover: "Takeover",
   push: "Push",
   merge: "Merge",

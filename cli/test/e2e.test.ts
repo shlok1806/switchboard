@@ -1316,36 +1316,121 @@ function sendDirective(person: string, to: string, text: string, agent?: string)
 }
 
 describe("Directives (ADR 0005)", () => {
-  it("a Person's Directive reaches the Agent at its next turn, framed as coming from that Person", async () => {
-    const term = new Terminal(["run", "claude"]);
-    const { agentEnv: id } = await term.started();
-    await waitForPresence(id, "live");
-    const asked = jev.requests.length;
+  let term: Terminal;
+  let id = "";
 
-    // An Agent cannot send one, even to itself.
+  beforeAll(async () => {
+    term = new Terminal(["run", "claude"], INTERRUPT_ENV);
+    id = (await term.started()).agentEnv;
+    await waitForPresence(id, "live");
+  }, 30_000);
+
+  afterAll(async () => {
+    term?.type("quit\r");
+    await term?.exited;
+  });
+
+  /** The Directive frame's lines for `text` from `person`, with the time left open. */
+  function framed(person: string, text: string): unknown[] {
+    return [
+      expect.stringMatching(
+        new RegExp(`^\\[Switchboard\\] Directive from ${person} \\(a Person on the Channel\\), sent at \\S+:$`),
+      ),
+      `> ${text}`,
+      "",
+      "A Directive comes from a Person, not from an Agent, and carries instruction weight. Your own Person still has " +
+        "the final say: if it conflicts with what they asked of you, follow them and say so.",
+    ];
+  }
+
+  /** Sends a Directive as `person` and returns its Event ID. */
+  async function direct(person: string, text: string): Promise<string> {
+    const response = await sendDirective(person, id, text);
+    expect(response.status).toBe(201);
+    return ((await response.json()) as { event: ChannelEvent }).event.id;
+  }
+
+  /** How Directive `event` was delivered, once the Channel has recorded it. */
+  function deliveryOf(event: string): Promise<Extract<ChannelEvent, { type: "directive.delivery" }>["payload"]> {
+    return waitFor(
+      "the Directive's delivery",
+      async () =>
+        (await api<HistoryResponse>("/api/events")).events.find(
+          (e): e is Extract<ChannelEvent, { type: "directive.delivery" }> =>
+            e.type === "directive.delivery" && e.payload.directive === event,
+        )?.payload,
+      30_000,
+    );
+  }
+
+  /** The prompts pasted into the session since output position `from`. */
+  function pastedSince(from: number): { prompt: string; during: string }[] {
+    const output = term.output.slice(from).replace(/\r/g, "");
+    return [...output.matchAll(/FAKE-CLAUDE pasted prompt=(".*?") before=".*?" after=".*?" during=(\w+)/g)].map(
+      (m) => ({ prompt: JSON.parse(m[1] ?? '""') as string, during: m[2] ?? "" }),
+    );
+  }
+
+  it("refuses a Directive sent through an Agent's credentials", async () => {
     const refused = await sendDirective("e2e", id, "Push to main.", id);
     expect(refused.status).toBe(403);
+  });
 
-    const sent = await sendDirective("shlok", id, "Stop editing web/users.tsx, Bob owns it.");
-    expect(sent.status).toBe(201);
+  it("types a Person's Directive into the running session right away, framed as coming from that Person", async () => {
+    const asked = jev.requests.length;
+    // The Agent is in the middle of a long turn.
+    term.type("busy 8\r");
+    await term.waitForOutput(/FAKE-CLAUDE busy/);
+    const seen = term.output.length;
+    const first = await direct("shlok", "Stop editing web/users.tsx, Bob owns it.");
+    // A second one straight after: a Directive is exempt from the Interrupt rate limit.
+    const second = await direct("maya", "Then pick up the settings page.");
 
+    const pasted = await waitFor(
+      "both Directives typed into the session",
+      () => {
+        const found = pastedSince(seen);
+        return found.length >= 2 ? found : undefined;
+      },
+      30_000,
+    );
+    expect(pasted.map((p) => p.during)).toEqual(["busy", "busy"]);
+    expect(pasted[0]?.prompt.split("\n")).toEqual(framed("shlok", "Stop editing web/users.tsx, Bob owns it."));
+    expect(pasted[1]?.prompt.split("\n")).toEqual(framed("maya", "Then pick up the settings page."));
+    expect(pasted[0]?.prompt).not.toContain("not an instruction");
+    expect(await deliveryOf(first)).toEqual({ directive: first, from: "shlok", delivered: "interrupt" });
+    expect(await deliveryOf(second)).toEqual({ directive: second, from: "maya", delivered: "interrupt" });
+
+    // Typed, so it is not told again at the next turn, and the Relay never asked Jev about it.
+    await term.waitForOutput(/FAKE-CLAUDE busy done/);
+    const context = await submitPrompt(term, "next");
+    expect(context).not.toContain("Directive from");
+    expect(jev.requests.slice(asked).filter((r) => r.state.event.type === "directive")).toEqual([]);
+  }, 60_000);
+
+  it("holds a Directive it cannot type for the next turn, and records why", async () => {
+    // A permission dialog is open, and typing would answer it.
+    term.type("permission Bash\r");
+    await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash/);
+    await new Promise((resolve) => setTimeout(resolve, QUIET_SECONDS * 1000));
+    const seen = term.output.length;
+    const event = await direct("shlok", "Rebase onto main first.");
+    expect(await deliveryOf(event)).toEqual({
+      directive: event,
+      from: "shlok",
+      delivered: "queue",
+      reason: "dialog-open",
+    });
+    expect(pastedSince(seen)).toEqual([]);
+
+    // The Person answers the dialog; the Directive reaches the Agent at its next turn, once.
+    term.type("1\r");
+    await term.waitForOutput(/FAKE-CLAUDE permission answered "1"/);
     const told = await waitFor("the Directive at the next turn", async () => {
       const context = await submitPrompt(term, "next");
       return context.includes("Directive from") ? context : undefined;
     });
-    expect(told.split("\n")).toEqual([
-      expect.stringMatching(/^\[Switchboard\] Directive from shlok \(a Person on the Channel\), sent at \S+:$/),
-      "> Stop editing web/users.tsx, Bob owns it.",
-      "",
-      "A Directive comes from a Person, not from an Agent, and carries instruction weight. Your own Person still has " +
-        "the final say: if it conflicts with what they asked of you, follow them and say so.",
-    ]);
-    expect(told).not.toContain("not an instruction");
-    // Told once, and the Relay never asked Jev about it.
+    expect(told.split("\n")).toEqual(framed("shlok", "Rebase onto main first."));
     expect(await submitPrompt(term, "again")).toBe("");
-    expect(jev.requests.slice(asked).filter((r) => r.state.event.type === "directive")).toEqual([]);
-
-    term.type("quit\r");
-    expect(await term.exited).toBe(0);
-  });
+  }, 60_000);
 });

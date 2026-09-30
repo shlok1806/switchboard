@@ -602,7 +602,14 @@ function parseInterruptResult(body: Record<string, unknown>): InterruptResult | 
 /** Sends `message` on `ws`. False when the socket is closing. */
 function send(
   ws: WebSocket,
-  message: StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage | InterruptMessage | DirectiveMessage | DirectiveInterruptMessage,
+  message:
+    | StreamMessage
+    | HookCaptureReply
+    | ProxyCaptureReply
+    | DeliveryMessage
+    | InterruptMessage
+    | DirectiveMessage
+    | DirectiveInterruptMessage,
 ): boolean {
   try {
     ws.send(JSON.stringify(message));

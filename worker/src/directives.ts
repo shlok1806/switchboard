@@ -171,7 +171,12 @@ export class Directives {
       type: "directive.delivery",
       actor: { kind: "agent", agentId: agent.id },
       capture: null,
-      payload: { directive: directive.id, from: directive.from, delivered, ...(reason === undefined ? {} : { reason }) },
+      payload: {
+        directive: directive.id,
+        from: directive.from,
+        delivered,
+        ...(reason === undefined ? {} : { reason }),
+      },
     });
   }
 }

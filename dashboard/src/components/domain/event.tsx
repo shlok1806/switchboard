@@ -12,6 +12,7 @@ import { IssueLink } from "./pending";
 const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   update: "text-ink",
   directive: "text-accent-ink",
+  "directive.delivery": "text-accent-ink",
   takeover: "text-red",
   push: "text-green",
   merge: "text-green",
@@ -306,8 +307,10 @@ export function EventDetail({
         </h3>
         {event.type === "directive" ? (
           <p className="bevel-in bg-card px-3 py-2.5 text-[12.5px] text-ink-3">
-            A Directive is addressed and always delivered, so the Relay gives no Verdict on it. It reaches{" "}
-            <span className="font-mono text-[12px]">{event.payload.to}</span> at its next turn, labelled as from {event.actor.kind === "person" ? event.actor.person : "its sender"}.
+            A Directive is addressed and always delivered, so the Relay gives no Verdict on it. It is typed into{" "}
+            <span className="font-mono text-[12px]">{event.payload.to}</span>'s session right away when its wrapper can take it,
+            or held for its next turn, labelled as from {event.actor.kind === "person" ? event.actor.person : "its sender"}. The
+            Directive delivery Event after it says which.
           </p>
         ) : verdictsLive ? (
           <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
