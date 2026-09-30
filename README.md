@@ -27,8 +27,8 @@ http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
 ```sh
 switchboard login --url <channel url>
 switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...claude arguments]
-switchboard run codex  [--nickname <name>] [...codex arguments]
-switchboard run gemini [--nickname <name>] [...gemini arguments]
+switchboard run codex  [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...codex arguments]
+switchboard run gemini [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...gemini arguments]
 ```
 
 The wrapper sets up hooks, Switchboard's MCP tools and the proxy for each session
@@ -46,12 +46,22 @@ the clock. A resumed session (`claude --resume <id>`, `codex resume <id>`,
 |---|---|---|---|
 | Hook Capture | SessionStart, PostToolUse, Stop, SessionEnd | SessionStart, PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, AfterTool, AfterAgent, SessionEnd |
 | Switchboard MCP tools | yes | yes (approved for the session) | yes |
-| Proxy Capture | raw or digest | not supported, `--proxy off` | not supported, `--proxy off` |
+| Proxy Capture (digest and raw) | yes | yes | yes, unverified |
 | Next-turn delivery | SessionStart / UserPromptSubmit hooks | SessionStart / UserPromptSubmit `additionalContext`; `read_channel` fallback | SessionStart / BeforeAgent `additionalContext` |
 | Interrupts and Directives | typed mid-turn | typed mid-turn | downgraded to Queue, labelled `cli-cannot-interrupt` |
 
-The Proxy Capture only understands Anthropic's Messages API, so `run codex` and
-`run gemini` refuse `--proxy raw|digest`.
+The Proxy Capture reads Anthropic's Messages API, OpenAI's Responses API and
+Gemini's generateContent API. Digest is the default; `--proxy raw` shares the
+turn's context too, and `--proxy off` leaves model traffic unrouted. Detected
+secrets are masked before either mode sends an Event to the Channel.
+
+Codex's built-in `openai` provider is supported with ChatGPT sign-in or an API
+key, over WebSocket or HTTP. Its upstream is selected from the session's
+`openai_base_url` override, config and sign-in type; Switchboard replaces that
+setting for the session only. Gemini routes Google sign-in through
+`CODE_ASSIST_ENDPOINT` and API-key or gateway sessions through
+`GOOGLE_GEMINI_BASE_URL`. Custom Codex providers and Gemini Vertex AI sessions
+run without Proxy Capture, with a notice explaining the unsupported route.
 
 ### Codex hooks and trust
 
@@ -85,5 +95,7 @@ that event.
 Gemini CLI was not installed on the machine this was built on. Its adapter follows
 Gemini CLI's hook documentation and is tested only against a stand-in: hook names,
 the `additionalContext` output, `GEMINI_CLI_SYSTEM_SETTINGS_PATH` and `hooksConfig`
-are unverified against the real CLI. Interrupts stay downgraded until typing into
-Gemini CLI mid-turn has been seen to work.
+are unverified against the real CLI. Its Proxy Capture is tested against Gemini
+and Code Assist API fixtures, but has not been verified with the real CLI.
+Interrupts stay downgraded until typing into Gemini CLI mid-turn has been seen
+to work.
