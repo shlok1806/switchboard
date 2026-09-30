@@ -1,9 +1,8 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Search } from "@/components/pixel-icon";
-import { AppSidebar } from "@/components/app-sidebar";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { Separator } from "@/components/ui/separator";
+import { AlertTriangle, PixelIcon } from "@/components/pixel-icon";
+import { Panel } from "@/components/shell/panel";
+import { TitleButton, WindowFrame } from "@/components/shell/window";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -24,11 +23,12 @@ function ViewFallback() {
   return (
     <div className="flex flex-col gap-2 p-4" aria-busy="true">
       {[0, 1, 2, 3, 4].map((i) => (
-        <Skeleton key={i} className="h-11 rounded-card bg-hover" />
+        <Skeleton key={i} className="h-11 bg-hover" />
       ))}
     </div>
   );
 }
+
 import { prob } from "@/lib/format";
 import { leaveChannel } from "@/lib/session";
 
@@ -82,33 +82,40 @@ function StaleBanner() {
   if (!stale.length) return null;
   const first = stale[0];
   return (
-    <Banner className="gap-3 border-b border-red/20 bg-red-tint px-3 py-1.5 text-red sm:px-4" key={stale.map((t) => t.number).join()}>
-      <BannerIcon icon={AlertTriangle} className="border-red/25 bg-transparent p-0.5 text-red shadow-none" />
-      <BannerTitle className="min-w-0 truncate text-[12.5px]">
+    <Banner
+      className="gap-3 border-b border-border bg-red-tint px-3 py-1 text-red sm:px-4"
+      key={stale.map((t) => t.number).join()}
+    >
+      <BannerIcon icon={AlertTriangle} className="border-0 bg-transparent p-0 text-red" />
+      <BannerTitle className="min-w-0 truncate text-[12.5px] font-semibold">
         {stale.length === 1
           ? `#${first.number} has a Stale Claim. Its holder is Gone.`
           : `${stale.length} Stale Claims. Their holders are Gone.`}
       </BannerTitle>
       <BannerAction
-        className="h-7 border-red/30 px-2.5 text-[12px] text-red hover:bg-red/10 hover:text-red"
+        className="h-[26px] px-3 text-[12px]"
         onClick={() => go(stale.length === 1 ? { view: "task", number: first.number } : { view: "tasks" })}
       >
         Review
       </BannerAction>
-      <BannerClose className="size-7 text-red hover:bg-red/10 hover:text-red" />
+      <BannerClose className="size-[26px]" />
     </Banner>
   );
 }
 
 function Loading() {
   return (
-    <div className="flex h-dvh flex-col items-center justify-center gap-6 p-6">
-      <LoadingState label="Joining the Channel" />
-      <div className="flex w-full max-w-md flex-col gap-2" aria-hidden>
-        {[0, 1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-11 rounded-card bg-hover" />
-        ))}
-      </div>
+    <div className="stipple flex h-dvh items-center justify-center p-4">
+      <WindowFrame title="Switchboard" className="w-full max-w-md flex-none">
+        <div className="flex flex-col items-center gap-5 p-6">
+          <LoadingState label="Joining the Channel" />
+          <div className="flex w-full flex-col gap-2" aria-hidden>
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-9 bg-hover" />
+            ))}
+          </div>
+        </div>
+      </WindowFrame>
     </div>
   );
 }
@@ -123,70 +130,67 @@ export default function App() {
   if (state.status === "loading") return <Loading />;
   if (state.status === "error")
     return (
-      <div className="flex h-dvh items-center justify-center p-6 text-center">
-        <div className="flex max-w-sm flex-col items-center gap-3">
-          <p className="text-[14px] font-semibold text-ink">Could not reach the Channel</p>
-          <p className="text-[13px] text-ink-2">{state.error}</p>
-          <div className="flex gap-2">
-            <button type="button" onClick={() => window.location.reload()} className="h-8 rounded-[6px] px-3 text-[13px] text-ink shadow-btn hover:bg-hover">
-              Try again
-            </button>
-            <button type="button" onClick={leaveChannel} className="h-8 rounded-[6px] px-3 text-[13px] text-ink-2 hover:bg-hover">
+      <div className="stipple flex h-dvh items-center justify-center p-4">
+        <WindowFrame title="Switchboard: error" className="w-full max-w-sm flex-none">
+          <div className="flex gap-3 p-4">
+            <AlertTriangle className="mt-0.5 text-red" />
+            <div className="flex min-w-0 flex-col gap-1">
+              <p className="text-[13px] font-semibold">Could not reach the Channel</p>
+              <p className="font-mono text-[12px] break-words text-ink-2">{state.error}</p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-border bg-secondary p-2">
+            <button type="button" onClick={leaveChannel} className="btn-motif h-[26px] px-3">
               Join with another name
             </button>
+            <button type="button" onClick={() => window.location.reload()} className="btn-motif h-[26px] px-3 font-semibold outline outline-1 outline-[hsl(var(--foreground))]">
+              Try again
+            </button>
           </div>
-        </div>
+        </WindowFrame>
       </div>
     );
 
   const t = title(route, route.view === "task" ? taskByNumber.get(route.number)?.title : undefined);
 
+  const counts = `${state.tasks.length} ${state.tasks.length === 1 ? "Task" : "Tasks"} · ${state.agents.filter((a) => a.presence === "live").length} Live`;
+
   return (
     <TooltipProvider delayDuration={500}>
-      <SidebarProvider className="h-dvh min-h-0">
-        <AppSidebar route={route} />
-        <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-          <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
-            <SidebarTrigger className="-ml-1 size-8" />
-            <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-            <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+      {/*
+        The root window: the preset's stipple, one maximised window on it and
+        the panel along the bottom, as on shlokthakkar.com. On a phone the
+        window fills the screen the way the site maximises its windows there.
+      */}
+      <div className="stipple flex h-dvh flex-col p-0 pb-[var(--panel-h)] md:p-2 md:pb-[calc(var(--panel-h)+8px)]">
+        <WindowFrame
+          title={
+            <span className="flex min-w-0 items-baseline gap-1.5">
+              <span className="hidden shrink-0 sm:inline">Switchboard:</span>
               {t.crumb && (
-                <>
-                  <a
-                    href={route.view === "task" ? "#/tasks" : "#/agents"}
-                    className="hidden text-[13px] text-ink-3 hover:text-ink sm:inline"
-                  >
-                    {t.crumb}
-                  </a>
-                  <span className="hidden text-ink-3 sm:inline" aria-hidden>
-                    /
-                  </span>
-                </>
+                <a href={route.view === "task" ? "#/tasks" : "#/agents"} className="hidden shrink-0 font-normal hover:underline sm:inline">
+                  {t.crumb} /
+                </a>
               )}
-              <h1
-                className={
-                  route.view === "agent"
-                    ? "min-w-0 truncate font-mono text-[13px] font-medium text-ink"
-                    : "min-w-0 truncate font-display text-[15px] font-semibold text-ink"
-                }
-                // Beautiful UI balances headings, which would wrap this one-line title.
-                style={{ textWrap: "nowrap" }}
-              >
-                {route.view === "task" && <span className="mr-1.5 font-mono text-[13px] font-normal text-ink-3">#{route.number}</span>}
-                {t.title}
-              </h1>
-            </div>
-            <button
-              type="button"
-              onClick={() => setPalette(true)}
-              className="inline-flex h-8 shrink-0 items-center gap-2 rounded-[6px] border border-line bg-surface px-2 text-[12.5px] text-ink-3 hover:border-line-strong hover:text-ink"
-              aria-label="Open command palette"
-            >
-              <Search className="size-3.5" />
-              <span className="hidden md:inline">Jump to</span>
-              <kbd className="hidden rounded-[4px] bg-inset px-1 font-mono text-[10.5px] text-ink-3 shadow-hairline md:inline">⌘K</kbd>
-            </button>
-          </header>
+              {route.view === "task" && <span className="shrink-0 font-mono font-normal">#{route.number}</span>}
+              <span className={route.view === "agent" ? "truncate font-mono font-normal" : "truncate"}>{t.title}</span>
+            </span>
+          }
+          left={<PixelIcon name="terminal" className="ml-0.5" />}
+          right={
+            <TitleButton label="Jump to (Ctrl K)" icon="search" onClick={() => setPalette(true)}>
+              <span className="hidden text-[12px] font-normal md:inline">Jump to</span>
+            </TitleButton>
+          }
+          status={
+            <>
+              <span className="truncate font-mono text-[11.5px]">{state.snapshot?.channel.repo ?? "Channel"}</span>
+              <span className="truncate">{counts}</span>
+              <span className="ml-auto hidden font-mono text-[11px] md:inline">⌘K jump to</span>
+            </>
+          }
+          className="md:max-h-full"
+        >
           <StaleBanner />
           <main className="flex min-h-0 flex-1 flex-col">
             <Suspense fallback={<ViewFallback />}>
@@ -198,10 +202,11 @@ export default function App() {
               {route.view === "compare" && <CompareView turn={route.turn} />}
             </Suspense>
           </main>
-        </SidebarInset>
-      </SidebarProvider>
+        </WindowFrame>
+        <Panel route={route} />
+      </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />
-      <Toaster position="bottom-right" closeButton />
+      <Toaster position="bottom-right" offset={{ bottom: "calc(var(--panel-h) + 16px)" }} mobileOffset={{ bottom: "calc(var(--panel-h) + 12px)" }} closeButton />
     </TooltipProvider>
   );
 }

@@ -39,6 +39,16 @@ body {
   outline-offset: 1px;
 }
 
+:root {
+  /* The panel along the bottom: Motif's 30px under a mouse, 52px under a finger */
+  --panel-h: calc(30px + env(safe-area-inset-bottom));
+}
+@media (pointer: coarse) {
+  :root {
+    --panel-h: calc(52px + env(safe-area-inset-bottom));
+  }
+}
+
 #root {
   min-height: 100dvh;
 }

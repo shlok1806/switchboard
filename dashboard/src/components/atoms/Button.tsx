@@ -4,31 +4,30 @@ import type { ButtonHTMLAttributes } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
-const filledShadow = "shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]";
-
-/* Switchboard: 6px radius (Cobalt), not pills. Originally pill-shaped by default - the app's core button style. Explicit symmetric
- * padding (not a fixed height) so the top/bottom spacing is always equal. */
+/*
+ * Switchboard: every variant is a Motif push button, drawn from the bevel
+ * tokens as on shlokthakkar.com: raised at rest, pressed in while held. The
+ * variants that used to be colour fills keep their names so call sites read
+ * the same; "accent" is the default button of a dialog, which Motif marked
+ * with a dark ring around the bevel rather than a colour.
+ */
 export const buttonVariants = cva(
-  `inline-flex items-center justify-center font-medium select-none
-   transition-[transform,background-color,opacity] duration-150 ease-out
-   active:scale-[0.96] disabled:opacity-50 disabled:pointer-events-none`,
+  `btn-motif font-normal disabled:pointer-events-none`,
   {
     variants: {
       variant: {
-        primary: `bg-ink text-canvas hover:opacity-90 dark:bg-ink dark:text-canvas ${filledShadow}`,
-        secondary: "bg-surface text-ink shadow-btn hover:bg-inset aria-expanded:bg-hover",
-        ghost: "bg-hover-2 text-ink hover:bg-line-strong",
-        accent: `bg-accent text-on-accent hover:bg-accent-ink ${filledShadow}`,
-        success: `bg-green text-white hover:brightness-95 ${filledShadow}`,
-        /* transparent until hovered - for dense toolbars/action rows */
-        quiet: "text-ink hover:bg-hover",
+        primary: "font-semibold outline outline-1 outline-offset-0 outline-[hsl(var(--foreground))]",
+        secondary: "",
+        ghost: "",
+        accent: "font-semibold outline outline-1 outline-offset-0 outline-[hsl(var(--foreground))]",
+        success: "font-semibold text-green",
+        /* flat until pressed, for dense rows */
+        quiet: "border-transparent bg-transparent hover:bg-hover",
       },
       size: {
-        /* compact toolbar pill - fixed height, lighter weight */
-        xs: "h-7 rounded-md px-2.5 text-[12px] font-normal leading-none gap-1",
-        /* canonical action pill - 27px tall, roomy sides */
-        sm: "h-[27px] px-3 text-[13px] leading-none rounded-md gap-1.5",
-        md: "px-4 py-[9px] text-sm leading-none rounded-md gap-2",
+        xs: "h-6 px-2 text-[12px] gap-1",
+        sm: "h-[26px] px-3 text-[13px] gap-1.5",
+        md: "h-8 px-4 text-[13px] gap-2",
       },
     },
     defaultVariants: { variant: "secondary", size: "md" },
