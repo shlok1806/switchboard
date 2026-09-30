@@ -41,7 +41,7 @@ import {
 } from "../../shared/src/index";
 import { ChannelClient } from "./channel-client";
 import { type Config, readConfig } from "./config";
-import { openTaskWorktree, pushTaskBranch } from "./task-worktree";
+import { adoptTaskBranch, openTaskWorktree, pushTaskBranch, type TaskWorktree } from "./task-worktree";
 
 /** The env var naming the file the wrapper writes the session's Agent ID into. */
 export const AGENT_FILE_ENV = "SWITCHBOARD_AGENT_FILE";
@@ -230,14 +230,41 @@ export class SwitchboardTools {
     try {
       const tree = await openTaskWorktree(this.repoDir, branch);
       if (task.branch === undefined) await this.post<TaskActionResponse>(agent, branchPath(task.number), { branch });
-      return (
-        `Work in the worktree at ${tree.path}, on branch ${branch} ` +
-        `(${tree.created ? "new, from the latest origin main" : "picked up where it was"}; pushed to origin). ` +
-        "Do all of this Task's work there, commit it there, and call finish_task when it is done."
-      );
+      return worktreeGuide(tree);
     } catch (error) {
-      return `Could not set up the Task branch ${branch}: ${(error as Error).message}`;
+      return (
+        `The Claim holds, but its branch ${branch} could not be set up: ${(error as Error).message} ` +
+        "Once that is fixed, claim_task again or call finish_task: either sets the branch up, and finish_task " +
+        `also picks up a task/${task.number}-* branch made by hand.`
+      );
     }
+  }
+
+  /**
+   * The branch of a held Task the Channel has none on record for, because setting
+   * it up on Claim failed. Sets it up now, or adopts one made by hand, and tells the
+   * Channel. A branch new from main has no work on it, so finishing stops there.
+   */
+  private async recoverBranch(agent: AgentId, task: Task): Promise<string> {
+    const holder = task.claim?.holder;
+    if (holder === undefined) throw new Error(`Task #${task.number} is not claimed. Claim it with claim_task first.`);
+    if (holder.kind === "agent" && holder.agentId !== agent) {
+      throw new Error(`Task #${task.number} is held by ${holderName(holder)}, not by you.`);
+    }
+    let tree: TaskWorktree;
+    try {
+      tree = await adoptTaskBranch(this.repoDir, task.number, taskBranch(task.number, task.title));
+    } catch (error) {
+      throw new Error(
+        `You hold Task #${task.number}, but its branch was never set up, and setting it up now failed: ` +
+          (error as Error).message,
+      );
+    }
+    await this.post<TaskActionResponse>(agent, branchPath(task.number), { branch: tree.branch });
+    if (tree.created) {
+      throw new Error(`Task #${task.number} had no branch yet, so there was no work to finish. ${worktreeGuide(tree)}`);
+    }
+    return tree.branch;
   }
 
   releaseTask(task: number) {
@@ -264,15 +291,13 @@ export class SwitchboardTools {
   finishTask(task: number, summary?: string) {
     return this.run("finish_task", `#${task}`, task, async (agent) => {
       const current = (await this.as<TaskResponse>(agent, `/api/tasks/${task}`)).task;
-      if (current.branch === undefined) {
-        throw new Error(`Task #${task} has no branch. Claim it with claim_task first.`);
-      }
-      const pushed = await pushTaskBranch(this.repoDir, current.branch);
+      const branch = current.branch ?? (await this.recoverBranch(agent, current));
+      const pushed = await pushTaskBranch(this.repoDir, branch);
       const body = summary === undefined ? {} : { summary };
       const finished = (await this.post<TaskActionResponse>(agent, finishPath(task), body)).task;
       const pr = finished.pr === undefined ? "" : ` #${finished.pr}: ${pullUrl(finished.url, finished.pr)}`;
       return (
-        `Pushed ${current.branch} (${pushed.commit.slice(0, 7)}) and opened pull request${pr}. ` +
+        `Pushed ${branch} (${pushed.commit.slice(0, 7)}) and opened pull request${pr}. ` +
         `It closes #${task} when it merges. Task #${task} is in review.`
       );
     });
@@ -294,6 +319,15 @@ export class SwitchboardTools {
       return held === "" ? channel : `${held}\n\n${channel}`;
     });
   }
+}
+
+/** Where the Agent works on a Task, once its branch is set up. */
+function worktreeGuide(tree: TaskWorktree): string {
+  return (
+    `Work in the worktree at ${tree.path}, on branch ${tree.branch} ` +
+    `(${tree.created ? "new, from the latest origin main" : "picked up where it was"}; pushed to origin). ` +
+    "Do all of this Task's work there, commit it there, and call finish_task when it is done."
+  );
 }
 
 /** A pull request's page, next to its Issue's: `.../issues/9` becomes `.../pull/12`. */
