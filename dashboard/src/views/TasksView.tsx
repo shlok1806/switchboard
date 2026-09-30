@@ -122,7 +122,11 @@ export function TasksView() {
       });
     } else {
       toast.error(decision.kind === "claim" ? `Could not claim #${task.number}` : `Could not release #${task.number}`, {
-        description: result.heldBy ? `${result.reason} Held by ${holderName(result.heldBy)}.` : result.reason,
+        // The Channel's reason already names the holder; say it only when it does not.
+        description:
+          result.heldBy && !result.reason.includes(holderName(result.heldBy))
+            ? `${result.reason} Held by ${holderName(result.heldBy)}.`
+            : result.reason,
       });
     }
   };
@@ -227,9 +231,6 @@ export function TasksView() {
               <KanbanHeader className="flex items-center gap-2" title={HINT[column.id as Column]}>
                 <h2 className="type-label !text-secondary-foreground">{column.name}</h2>
                 <span className="bevel-thin-in bg-card px-1.5 font-mono text-[11px] leading-[16px] tabular-nums">{count(column.id as Column)}</span>
-                {column.id === "review" && !cards.some((c) => c.task.pr !== undefined) && (
-                  <span className="ml-auto truncate text-[11px] font-normal text-faint">needs a PR</span>
-                )}
               </KanbanHeader>
               <KanbanCards<Card> id={column.id} empty={<Empty column={column.id as Column} filtered={active > 0} />}>
                 {card}
@@ -332,14 +333,16 @@ function TaskCard({
   const steps = { done: task.stepsDone, total: task.steps.length };
   const subs = { done: task.subtasksDone, total: task.subtasks.length };
   const done = task.status === "done";
+  // `status:*` labels mirror the column the card already sits in (ADR 0001), so the card leaves them out.
+  const labels = task.labels.filter((l) => !l.startsWith("status:"));
 
   return (
     <article className="flex flex-col gap-1.5 text-[13px] leading-snug">
       <p className={cn("line-clamp-3 break-words", done && "text-muted-foreground")}>{task.title}</p>
 
-      {task.labels.length > 0 && (
+      {labels.length > 0 && (
         <ul className="flex flex-wrap gap-1" aria-label="Labels">
-          {task.labels.map((l) => (
+          {labels.map((l) => (
             <li key={l} className="bevel-thin-in bg-muted px-1.5 font-mono text-[10.5px] leading-[16px] text-muted-foreground">
               {l}
             </li>
