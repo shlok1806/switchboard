@@ -107,6 +107,14 @@ export function summarize(e: ChannelEvent): string {
       return `Claim refused, held by ${holderName(e.payload.heldBy)}`;
     case "claim.release":
       return "Released the Claim";
+    case "claim.stale":
+      return `Claim is Stale: ${holderName(e.payload.holder)} is Gone`;
+    case "claim.recovered":
+      return `${holderName(e.payload.holder)} is back, Claim no longer Stale`;
+    case "claim.blocked":
+      return `Claimed but now blocked by ${e.payload.blockedBy.map((n) => `#${n}`).join(", ")}`;
+    case "claim.unblocked":
+      return "Claimed Task no longer blocked";
     case "step.complete":
       return `Step ${e.payload.step} done: ${e.payload.text}`;
     case "update":
@@ -171,6 +179,10 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   claim: "Claim",
   "claim.refused": "Claim refused",
   "claim.release": "Release",
+  "claim.stale": "Stale Claim",
+  "claim.recovered": "Claim recovered",
+  "claim.blocked": "Claim blocked",
+  "claim.unblocked": "Claim unblocked",
   "step.complete": "Step",
   update: "Update",
   directive: "Directive",

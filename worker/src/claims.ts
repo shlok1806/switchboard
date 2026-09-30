@@ -8,7 +8,7 @@
 //   own Agents, never for another Person's Agent.
 // - A Task that is done, or blocked by an open Issue, cannot be claimed.
 // - A held Task cannot be claimed; the refusal names the holder. Moving a Claim is a
-//   Takeover, which only a Person can do (ADR 0002, not here).
+//   Takeover, which only a Person can do (ADR 0002, see stale-claims.ts).
 // - Only the holder releases a Claim or completes its Steps. An Agent's Person may
 //   act for it.
 //
@@ -63,7 +63,7 @@ export interface ClaimHost {
   append<K extends EventType>(event: NewEvent<K>): ChannelEvent;
 }
 
-export type Change = "claim" | "release" | "step.complete" | "finish";
+export type Change = "claim" | "release" | "step.complete" | "finish" | "takeover";
 
 function sameHolder(a: Holder, b: Holder): boolean {
   return a.kind === "agent"
@@ -72,7 +72,7 @@ function sameHolder(a: Holder, b: Holder): boolean {
 }
 
 /** How a holder reads on GitHub. */
-function describe(holder: Holder, owner?: PersonName): string {
+export function describeHolder(holder: Holder, owner?: PersonName): string {
   return holder.kind === "agent"
     ? `Agent \`${holder.agentId}\`${owner === undefined ? "" : ` (Person ${owner})`}`
     : `Person \`${holder.person}\``;
@@ -121,7 +121,9 @@ export class Claims {
       if (sameHolder(task.claim.holder, holder)) return { ok: true, task };
       const heldBy = task.claim.holder;
       this.record(acting, "claim.refused", number, { heldBy });
-      return { ok: false, status: 409, reason: `Task #${number} is held by ${holderName(heldBy)}.`, heldBy };
+      // A Stale Claim still stands: only a Person can take it over (ADR 0002).
+      const stale = task.claim.stale ? " Its Claim is Stale: only a Person can take it over." : "";
+      return { ok: false, status: 409, reason: `Task #${number} is held by ${holderName(heldBy)}.${stale}`, heldBy };
     }
     if (task.blockedBy.length > 0) {
       const blockers = task.blockedBy.map((n) => `#${n}`).join(", ");
@@ -295,7 +297,7 @@ export class Claims {
   }
 
   describe(holder: Holder): string {
-    return describe(holder, holder.kind === "agent" ? this.host.agents.find(holder.agentId)?.person : undefined);
+    return describeHolder(holder, holder.kind === "agent" ? this.host.agents.find(holder.agentId)?.person : undefined);
   }
 
   current(number: TaskNumber): ClaimResult {

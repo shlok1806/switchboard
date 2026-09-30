@@ -46,6 +46,8 @@ export interface TaskHost {
   scheduleReconcile(at: number): Promise<void>;
   append<K extends EventType>(event: NewEvent<K>): ChannelEvent;
   broadcast(message: StreamMessage): void;
+  /** Called after a sync changed a Task's GitHub-owned fields, so its Claim can follow them. */
+  changed?(task: Task): void;
 }
 
 /** An Issue with the relationships a Task shows, read from GitHub. */
@@ -333,11 +335,20 @@ export class Tasks {
         payload: { via },
       });
     }
+    if (fields.length > 0) this.host.changed?.(after);
   }
 
   private remove(number: TaskNumber, via: TaskSyncVia): void {
     this.host.storage.sql.exec("DELETE FROM tasks WHERE number = ?", number);
     this.host.append({ type: "task.remove", actor: { kind: "github" }, capture: null, task: number, payload: { via } });
+  }
+
+  /** Every stored Task, without syncing first. Synchronous, like `read`. */
+  stored(): Task[] {
+    return this.host.storage.sql
+      .exec<TaskRow>("SELECT * FROM tasks ORDER BY number")
+      .toArray()
+      .map((row) => JSON.parse(row.data) as Task);
   }
 
   /** The stored Task, or null. Synchronous, so a caller can check and write it atomically. */

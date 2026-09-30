@@ -11,6 +11,7 @@ import type {
   ChannelEvent,
   EventPayloads,
   EventType,
+  Holder,
   HookCaptureReply,
   Person,
   PersonName,
@@ -31,6 +32,7 @@ import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./clai
 import { type CodeChange, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { ProxyCapture } from "./proxy-capture";
+import { StaleClaims } from "./stale-claims";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
 
 type EventRow = {
@@ -99,6 +101,8 @@ export class Channel extends DurableObject<Env> {
   private readonly claims: Claims;
   /** Task branches, pull requests, and the pushes and merges GitHub reports. */
   private readonly branches: Branches;
+  /** Stale Claims, Takeovers and Claims blocked after they were made (ADR 0002). */
+  private readonly staleClaims: StaleClaims;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -133,6 +137,7 @@ export class Channel extends DurableObject<Env> {
       scheduleReconcile: (at) => this.alarms.set("tasks", at),
       append: (event) => this.append(event),
       broadcast: (message) => this.broadcast(message),
+      changed: (task) => this.staleClaims.taskChanged(task),
     });
     const goneAfterSeconds = Number(env.PRESENCE_GONE_AFTER_SECONDS);
     this.agents = new AgentRoster({
@@ -141,6 +146,7 @@ export class Channel extends DurableObject<Env> {
       goneAfterMs: (goneAfterSeconds > 0 ? goneAfterSeconds : DEFAULT_GONE_AFTER_SECONDS) * 1000,
       append: (event) => this.append(event),
       broadcast: (message) => this.broadcast(message),
+      presenceChanged: (id, presence) => this.staleClaims.presenceChanged(id, presence),
     });
     this.hooks = new HookCapture({
       sql: ctx.storage.sql,
@@ -163,6 +169,13 @@ export class Channel extends DurableObject<Env> {
       gitHub: () => gitHubFor(env),
       append: (event) => this.append(event),
       appendOnce: (id, event) => this.insert(id, event),
+    });
+    this.staleClaims = new StaleClaims({
+      sql: ctx.storage.sql,
+      tasks: this.tasks,
+      agents: this.agents,
+      claims: this.claims,
+      append: (event) => this.append(event),
     });
   }
 
@@ -223,6 +236,12 @@ export class Channel extends DurableObject<Env> {
     return this.branches.codeEvent(delivery, change);
   }
 
+  /** A Person moving a Stale Claim to themselves or one of their own Agents (ADR 0002). */
+  takeoverTask(caller: Caller, number: TaskNumber, to: Holder): Promise<ClaimResult> {
+    this.join(caller.person);
+    return this.staleClaims.takeover(caller, number, to);
+  }
+
   /** An Agent reporting one call to a Switchboard tool, recorded with the Tool Capture. */
   recordToolCall(
     caller: Caller,
@@ -255,13 +274,20 @@ export class Channel extends DurableObject<Env> {
   }
 
   /** Registers an Agent for a CLI session, or brings it back on resume. Joins its Person too. */
-  registerAgent(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
+  async registerAgent(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
     this.join(person);
-    return this.agents.register(person, request);
+    return this.withLostClaims(await this.agents.register(person, request));
   }
 
-  heartbeat(person: PersonName, id: AgentId, presence: ReportedPresence): Promise<RosterResult> {
-    return this.agents.heartbeat(person, id, presence);
+  async heartbeat(person: PersonName, id: AgentId, presence: ReportedPresence): Promise<RosterResult> {
+    return this.withLostClaims(await this.agents.heartbeat(person, id, presence));
+  }
+
+  /** Hands a returning Agent the Claims it lost to a Takeover while it was Gone, once. */
+  private withLostClaims(result: RosterResult): RosterResult {
+    if (!result.ok) return result;
+    const lostClaims = this.staleClaims.takeLostClaims(result.agent.id);
+    return lostClaims.length === 0 ? result : { ...result, lostClaims };
   }
 
   endSession(person: PersonName, id: AgentId): Promise<RosterResult> {

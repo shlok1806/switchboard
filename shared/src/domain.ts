@@ -78,6 +78,11 @@ export interface Claim {
   claimedAt: string;
   /** True when the holder is an Agent that is Gone. Never expires on its own (ADR 0002). */
   stale: boolean;
+  /**
+   * Set when the Task became blocked after it was claimed: the open Issues now
+   * blocking it. The Claim stays held ("claimed but now blocked by #X").
+   */
+  blockedBy?: TaskNumber[];
 }
 
 export interface Task {
@@ -224,12 +229,23 @@ export interface EventPayloads {
    * Mirroring a Claim change to GitHub failed (ADR 0001). The Claim change itself
    * stands; GitHub is behind until the next change or a Person fixes it.
    */
-  "mirror.failed": { change: "claim" | "release" | "step.complete" | "finish"; call: string; reason: string };
+  "mirror.failed": { change: "claim" | "release" | "step.complete" | "finish" | "takeover"; call: string; reason: string };
+  /** The holder of a Claim went Gone, so the Claim is Stale. It stays held until a Person takes it over (ADR 0002). */
+  "claim.stale": { holder: Holder };
+  /** The holder of a Stale Claim came back before any Takeover, so the Claim is no longer Stale. */
+  "claim.recovered": { holder: Holder };
+  /** A claimed Task became blocked by open Issues. The Claim stays held. */
+  "claim.blocked": { holder: Holder; blockedBy: TaskNumber[] };
+  /** A claimed Task that was blocked after its Claim is no longer blocked. */
+  "claim.unblocked": { holder: Holder };
   /** An Event written on purpose, in readable language. */
   "update": { text: string };
   /** A message from a Person to an Agent. The only message with instruction weight. */
   "directive": { to: AgentId; text: string };
-  /** A Person moving a Stale Claim to a new holder, with the hand-off. */
+  /**
+   * A Person moving a Stale Claim to a new holder, with the hand-off: the previous
+   * holder, the Steps it completed and its last Update on the Task.
+   */
   "takeover": {
     from: Holder;
     to: Holder;
