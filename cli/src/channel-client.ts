@@ -131,6 +131,8 @@ export class ChannelClient {
   /**
    * Keeps a WebSocket to the Channel open, reconnecting with backoff, and hands
    * every message to `onMessage`, including replies to what the wrapper sends on it.
+   * The socket speaks for the Agent, so it opens once the Agent token is here (the
+   * registration), and reopens with each new one.
    */
   follow(onMessage: (message: ChannelMessage) => void, onStatus: (connected: boolean) => void): ChannelStream {
     let closed = false;
@@ -141,7 +143,7 @@ export class ChannelClient {
     const connect = () => {
       if (closed) return;
       pending = undefined;
-      const query = new URLSearchParams({ token: this.credential() });
+      const query = new URLSearchParams({ token: this.agentToken ?? this.session });
       const ws = new WebSocket(`${this.base.replace(/^http/, "ws")}/api/stream?${query}`);
       socket = ws;
       let keepalive: ReturnType<typeof setInterval> | undefined;
@@ -183,7 +185,7 @@ export class ChannelClient {
     };
     this.tokenListeners.add(reconnect);
 
-    connect();
+    if (this.agentToken !== null) connect();
     return {
       send: (frame) => {
         if (socket?.readyState !== WebSocket.OPEN) return false;

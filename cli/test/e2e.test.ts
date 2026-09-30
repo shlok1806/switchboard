@@ -845,7 +845,7 @@ describe("a branch per Task (ADR 0006)", () => {
     expect(pr?.body.split("\n")).toEqual([
       `Closes #${number}`,
       "",
-      `Opened via Switchboard by Agent \`${id}\` (Person e2e).`,
+      `Opened via Switchboard by Agent \`${id}\` of \`e2e\`.`,
       "",
       "Adds the feature.",
     ]);

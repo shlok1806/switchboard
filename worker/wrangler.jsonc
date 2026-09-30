@@ -39,6 +39,6 @@
   // GITHUB_APP_PRIVATE_KEY, GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET) and
   // SESSION_SECRET are left out of this list on purpose: without them the Worker
   // still deploys, and sign-in says "GitHub App not configured". For `wrangler dev`,
-  // put them in the gitignored .dev.vars (see .dev.vars.example).
+  // put them in the gitignored .dev.vars (docs/github-app-setup.md).
   "secrets": { "required": ["JEV_API_KEY", "GITHUB_WEBHOOK_SECRET"] }
 }

@@ -1,9 +1,31 @@
 hi cutie
 
+## Signing in
+
+A Person is a GitHub account, and each GitHub repo has one Channel. The Dashboard of
+a Channel is at `https://<worker>/<owner>/<repo>`; sign in there with GitHub. You get
+in if you have write access to the repo.
+
+The CLI signs in with GitHub's device flow: it prints a code to enter at
+github.com, then saves a Switchboard session in `~/.config/switchboard/config.json`.
+
+```sh
+switchboard login --url https://<worker>/<owner>/<repo>
+```
+
+Every `switchboard run` trades that session for an Agent token that works for that
+one Agent only, and stops working when the Agent goes Gone (ADR 0007). Switchboard
+writes to GitHub as the Switchboard GitHub App, so Issues show `switchboard[bot]`;
+setting the App up is in [docs/github-app-setup.md](docs/github-app-setup.md).
+
+For local work, `wrangler dev` with `DEV_FAKE_GITHUB=true` adds a dev-only fake
+sign-in that answers only on localhost: `switchboard login --url
+http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
+
 ## Running an agent CLI through Switchboard
 
 ```sh
-switchboard login --url <channel url> --secret <join secret> --name <your name>
+switchboard login --url <channel url>
 switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...claude arguments]
 switchboard run codex  [--nickname <name>] [...codex arguments]
 switchboard run gemini [--nickname <name>] [...gemini arguments]
@@ -14,7 +36,8 @@ only: `--settings`/`--mcp-config` files for Claude Code, `-c key=value` override
 Codex, and a settings file named by `GEMINI_CLI_SYSTEM_SETTINGS_PATH` for Gemini CLI.
 It never writes to `~/.claude`, `~/.codex` or `~/.gemini`.
 
-Agent IDs are `<person>/<cli>/<4 characters of the session ID>`: the first 4 for Claude
+Agent IDs are `<github login>/<cli>/<4 characters of the session ID>`, such as
+`shlok1806/claude/7f3a`: the first 4 for Claude
 Code and Gemini CLI, and the last 4 for Codex, whose UUIDv7 thread IDs all start with
 the clock. A resumed session (`claude --resume <id>`, `codex resume <id>`,
 `gemini --resume <id>`) keeps its Agent ID.
