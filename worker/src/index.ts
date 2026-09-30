@@ -14,6 +14,7 @@ import { handleAgentRoute, matchAgentRoute } from "./agents-api";
 import { authenticate } from "./auth";
 import { handleBranchRoute, matchBranchRoute } from "./branches-api";
 import { callerOf, handleClaimRoute, matchClaimRoute } from "./claims-api";
+import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
 import { fail, json, readJson } from "./http";
 import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
@@ -89,7 +90,7 @@ async function handleStream(request: Request, url: URL, env: Env, person: Person
   return channel(env).fetch(target, { headers: { Upgrade: "websocket" } });
 }
 
-const ROUTES = new Set(["POST /api/join", "GET /api/events", "POST /api/updates", "GET /api/stream"]);
+const ROUTES = new Set(["POST /api/join", "GET /api/events", "POST /api/updates", "GET /api/stream", DIRECTIVE_ROUTE]);
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -127,6 +128,8 @@ export default {
         return handleHistory(url, env);
       case "POST /api/updates":
         return handlePostUpdate(request, env, auth.person);
+      case DIRECTIVE_ROUTE:
+        return handleDirectiveRoute(request, channel(env), auth.person);
       default:
         return handleStream(request, url, env, auth.person);
     }

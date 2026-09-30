@@ -6,3 +6,4 @@ export * from "./claims";
 export * from "./proxy";
 export * from "./branches";
 export * from "./relay";
+export * from "./directives";

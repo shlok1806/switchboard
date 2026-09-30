@@ -15,6 +15,7 @@ import type {
   ChannelEvent,
   Cli,
   Delivery,
+  DirectiveDelivery,
   EventPayloads,
   EventType,
   LostClaim,
@@ -78,10 +79,12 @@ export interface RosterHost {
 /** A refusal the Worker turns into an HTTP error. */
 export type Refusal = { ok: false; status: 403 | 404 | 409; reason: string };
 /**
- * `lostClaims` and `deliveries` are set by the Channel, not the roster: Claims the
- * Agent lost to a Takeover, and Queued Events for its next turn.
+ * `lostClaims`, `deliveries` and `directives` are set by the Channel, not the roster:
+ * Claims the Agent lost to a Takeover, Queued Events and Directives for its next turn.
  */
-export type RosterResult = { ok: true; agent: Agent; lostClaims?: LostClaim[]; deliveries?: Delivery[] } | Refusal;
+export type RosterResult =
+  | { ok: true; agent: Agent; lostClaims?: LostClaim[]; deliveries?: Delivery[]; directives?: DirectiveDelivery[] }
+  | Refusal;
 
 function rowToAgent(row: AgentRow): Agent {
   return {

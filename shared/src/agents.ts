@@ -3,6 +3,7 @@
  * reports its Presence with heartbeats and ends its session. Terms follow CONTEXT.md.
  */
 import type { LostClaim } from "./claims";
+import type { DirectiveDelivery } from "./directives";
 import type { Agent, AgentId, Cli, PersonName, ProxyMode } from "./domain";
 import type { Delivery } from "./relay";
 
@@ -80,6 +81,11 @@ export interface AgentResponse {
    * over the WebSocket. Present only when there are some; each is handed over once.
    */
   deliveries?: Delivery[];
+  /**
+   * Directives to this Agent that its wrapper has not acknowledged over the
+   * WebSocket. Present only when there are some; each is handed over once.
+   */
+  directives?: DirectiveDelivery[];
 }
 
 /**

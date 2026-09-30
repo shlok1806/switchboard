@@ -12,6 +12,7 @@ import { IssueLink } from "./pending";
 const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   update: "text-ink",
   directive: "text-accent-ink",
+  "directive.delivery": "text-accent-ink",
   takeover: "text-red",
   push: "text-green",
   merge: "text-green",
@@ -75,6 +76,12 @@ export function EventRow({
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="label-mono !text-[10px]">{EVENT_TYPE_LABEL[event.type]}</span>
           <Actor event={event} agentById={agentById} compact />
+          {event.type === "directive" && (
+            <span className="inline-flex min-w-0 items-baseline gap-1.5 text-[12px] text-ink-3">
+              to
+              <AgentLink id={event.payload.to} agent={agentById.get(event.payload.to)} showNickname={false} />
+            </span>
+          )}
           <CaptureChip event={event} />
           {event.type === "proxy.raw" && <RawBadge />}
           {task && <TaskLink number={task.number} className="text-[12px] text-ink-3" />}
@@ -93,11 +100,6 @@ export function EventRow({
             (event.type === "command" || event.type === "tool.call" || event.type === "file.edit") && "font-mono text-[12px]",
           )}
         >
-          {event.type === "directive" && (
-            <span className="mr-1 text-ink-3">
-              to <span className="font-mono text-[12px]">{event.payload.to}</span>:
-            </span>
-          )}
           {summarize(event)}
         </p>
       </div>
@@ -206,6 +208,19 @@ export function EventBody({ event }: { event: ChannelEvent }) {
           }}
         />
       );
+    case "directive":
+      return (
+        <div className="bevel-in flex flex-col gap-2 bg-card p-3">
+          <dl className="grid grid-cols-2 gap-3">
+            <Field label="From">
+              {event.actor.kind === "person" ? event.actor.person : "-"}
+              <span className="text-ink-3"> (Person)</span>
+            </Field>
+            <Field label="To"><AgentLink id={event.payload.to} showNickname={false} /></Field>
+          </dl>
+          <p className="text-[13.5px] leading-relaxed font-medium whitespace-pre-wrap text-accent-ink">{event.payload.text}</p>
+        </div>
+      );
     case "takeover":
       return (
         <div className="bevel-in flex flex-col gap-2 bg-card p-3">
@@ -290,7 +305,14 @@ export function EventDetail({
           Verdicts
           <span className="font-mono text-[11px] tracking-normal normal-case text-ink-3">Interrupt threshold {threshold.toFixed(2)}</span>
         </h3>
-        {verdictsLive ? (
+        {event.type === "directive" ? (
+          <p className="bevel-in bg-card px-3 py-2.5 text-[12.5px] text-ink-3">
+            A Directive is addressed and always delivered, so the Relay gives no Verdict on it. It is typed into{" "}
+            <span className="font-mono text-[12px]">{event.payload.to}</span>'s session right away when its wrapper can take it,
+            or held for its next turn, labelled as from {event.actor.kind === "person" ? event.actor.person : "its sender"}. The
+            Directive delivery Event after it says which.
+          </p>
+        ) : verdictsLive ? (
           <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
         ) : (
           <p className="bevel-in bg-card px-3 py-2.5 text-[12.5px] text-ink-3">

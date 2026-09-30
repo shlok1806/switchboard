@@ -158,7 +158,28 @@ export class MockChannelSource implements ChannelSource {
         const target = this.agents.find((a) => a.id === action.to);
         if (!target) return { ok: false, reason: `No Agent ${action.to} on this Channel.` };
         if (!action.text.trim()) return { ok: false, reason: "A Directive needs some text." };
-        this.record(makeEvent("directive", me, null, { to: action.to, text: action.text.trim() }, { at }), undefined, true);
+        const directive = makeEvent("directive", me, null, { to: action.to, text: action.text.trim() }, { at });
+        this.record(directive, undefined, true);
+        // Like the Worker: typed right away when the Agent's wrapper can take it, else held for its next turn.
+        const typed = target.canReceiveInterrupts && target.presence !== "gone";
+        this.record(
+          makeEvent(
+            "directive.delivery",
+            { kind: "agent", agentId: target.id },
+            null,
+            typed
+              ? { directive: directive.id, from: this.me, delivered: "interrupt" }
+              : {
+                  directive: directive.id,
+                  from: this.me,
+                  delivered: "queue",
+                  reason: target.presence === "gone" ? "wrapper-offline" : "cli-cannot-interrupt",
+                },
+            { at },
+          ),
+          undefined,
+          true,
+        );
         return { ok: true };
       }
       case "takeover": {
