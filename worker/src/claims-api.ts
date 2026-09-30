@@ -44,7 +44,7 @@ export function matchClaimRoute(method: string, pathname: string): ClaimRoute | 
 }
 
 /** An Agent ID is three non-empty parts separated by "/". */
-function isAgentId(value: unknown): value is AgentId {
+export function isAgentId(value: unknown): value is AgentId {
   return typeof value === "string" && /^[^/\s]+\/[^/\s]+\/[^/\s]+$/.test(value);
 }
 
@@ -55,7 +55,7 @@ export function callerOf(request: Request, person: PersonName): Caller | { error
   return isAgentId(agent) ? { person, agent } : { error: `${AGENT_HEADER} must be an Agent ID.` };
 }
 
-function answer(result: ClaimResult): Response {
+export function answer(result: ClaimResult): Response {
   if (result.ok) return json<TaskActionResponse>({ ok: true, task: result.task });
   const body: ClaimRefusalBody = { ok: false, reason: result.reason };
   if (result.heldBy !== undefined) body.heldBy = result.heldBy;

@@ -103,7 +103,14 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
 
 function answer(result: RosterResult, status = 200): Response {
   return result.ok
-    ? json<AgentResponse>({ ok: true, agent: result.agent }, status)
+    ? json<AgentResponse>(
+        {
+          ok: true,
+          agent: result.agent,
+          ...(result.lostClaims && result.lostClaims.length > 0 ? { lostClaims: result.lostClaims } : {}),
+        },
+        status,
+      )
     : fail(result.status, result.reason);
 }
 

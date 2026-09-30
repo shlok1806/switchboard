@@ -3,7 +3,7 @@
  * Step, and the Tool Capture that Agents use through Switchboard's MCP tools.
  * Terms follow CONTEXT.md.
  */
-import type { AgentId, ChannelEvent, Holder, Task, TaskNumber } from "./domain";
+import type { AgentId, ChannelEvent, Holder, PersonName, Task, TaskNumber } from "./domain";
 
 /**
  * Sent by an Agent acting through Switchboard's tools (the Tool Capture). The
@@ -89,6 +89,10 @@ export function releasePath(task: TaskNumber): string {
   return `/api/tasks/${task}/release`;
 }
 
+export function takeoverPath(task: TaskNumber): string {
+  return `/api/tasks/${task}/takeover`;
+}
+
 export function stepPath(task: TaskNumber, index: number): string {
   return `/api/tasks/${task}/steps/${index}/complete`;
 }
@@ -96,4 +100,32 @@ export function stepPath(task: TaskNumber, index: number): string {
 /** How a holder reads in refusals, comments and tool output: its Agent ID or Person name. */
 export function holderName(holder: Holder): string {
   return holder.kind === "agent" ? holder.agentId : holder.person;
+}
+
+/* ── Stale Claims and Takeover (ADR 0002) ─────────────────── */
+
+/**
+ * `POST /api/tasks/:number/takeover`: a Person moves a Stale Claim to themselves or
+ * to one of their own Agents. Refused for an Agent, and for a Claim that is not
+ * Stale. Answers with the Task as it is now (`TaskActionResponse`).
+ */
+export interface TakeoverRequest {
+  to: Holder;
+}
+
+/**
+ * A Claim an Agent lost to a Takeover. The Channel hands each one to the Agent's
+ * wrapper once, in the answer to its next registration or heartbeat
+ * (`AgentResponse.lostClaims`), so a resumed Agent is told at its next turn.
+ */
+export interface LostClaim {
+  task: TaskNumber;
+  title: string;
+  /** The Person who did the Takeover. */
+  by: PersonName;
+  /** The new holder. */
+  to: Holder;
+  at: string;
+  /** The `takeover` Event. */
+  event: string;
 }

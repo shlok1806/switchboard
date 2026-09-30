@@ -16,6 +16,7 @@ import type {
   Cli,
   EventPayloads,
   EventType,
+  LostClaim,
   PersonName,
   Presence,
   ProxyMode,
@@ -69,11 +70,14 @@ export interface RosterHost {
     payload: EventPayloads[K];
   }): ChannelEvent;
   broadcast(message: StreamMessage): void;
+  /** Called after every Presence change is recorded, so Claims can follow it (Stale Claims). */
+  presenceChanged?(id: AgentId, presence: Presence): void;
 }
 
 /** A refusal the Worker turns into an HTTP error. */
 export type Refusal = { ok: false; status: 403 | 404 | 409; reason: string };
-export type RosterResult = { ok: true; agent: Agent } | Refusal;
+/** `lostClaims` is set by the Channel, not the roster: Claims the Agent lost to a Takeover. */
+export type RosterResult = { ok: true; agent: Agent; lostClaims?: LostClaim[] } | Refusal;
 
 function rowToAgent(row: AgentRow): Agent {
   return {
@@ -157,7 +161,7 @@ export class AgentRoster {
       cwd: request.cwd,
       resumed: request.resumed || existing !== undefined,
     });
-    if (existing?.presence !== "live") this.record(id, "presence", { presence: "live" });
+    if (existing?.presence !== "live") this.changed(id, "live");
     this.host.broadcast({ type: "agent", agent });
     await this.watch();
     return { ok: true, agent };
@@ -171,7 +175,7 @@ export class AgentRoster {
     this.host.sql.exec("UPDATE agents SET presence = ?, last_seen_at = ? WHERE id = ?", presence, now, id);
     const agent = this.agent(id);
     if (found.row.presence !== presence) {
-      this.record(id, "presence", { presence });
+      this.changed(id, presence);
       this.host.broadcast({ type: "agent", agent });
     }
     await this.watch();
@@ -186,7 +190,7 @@ export class AgentRoster {
     this.host.sql.exec("UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?", Date.now(), id);
     const agent = this.agent(id);
     this.record(id, "session.end", { reason: "exit" });
-    this.record(id, "presence", { presence: "gone" });
+    this.changed(id, "gone");
     this.host.broadcast({ type: "agent", agent });
     await this.watch();
     return { ok: true, agent };
@@ -205,7 +209,7 @@ export class AgentRoster {
       )
       .toArray();
     for (const row of silent) {
-      this.record(row.id as AgentId, "presence", { presence: "gone" });
+      this.changed(row.id as AgentId, "gone");
       this.host.broadcast({ type: "agent", agent: rowToAgent(row) });
     }
     await this.watch();
@@ -267,6 +271,12 @@ export class AgentRoster {
       return { ok: false, status: 403, reason: `Agent ${id} belongs to ${row.person}.` };
     }
     return { ok: true, row };
+  }
+
+  /** Records a Presence change and tells the host. */
+  private changed(id: AgentId, presence: Presence): void {
+    this.record(id, "presence", { presence });
+    this.host.presenceChanged?.(id, presence);
   }
 
   /**

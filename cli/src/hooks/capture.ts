@@ -5,6 +5,10 @@
 //
 // Hooks never wait on the network: each hook runs `switchboard-hook.js`, which
 // hands its input to this socket and exits. Sending happens here, afterwards.
+// The socket answers each hook at once, from what the wrapper already holds: for
+// the hooks whose output Claude Code adds to the model's context (SessionStart,
+// UserPromptSubmit), that is what the Agent must be told at its next turn, such as
+// a Claim it lost while it was away. Every other hook gets an empty answer.
 // Events wait while the WebSocket is down or the Agent is not registered yet, and
 // every message is sent again on reconnect until the Channel acknowledges it.
 // Event IDs make that safe: the Channel records each Event once.
@@ -15,6 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentId, HookCaptureMessage, HookCaptureReply, HookEvent } from "../../../shared/src/index";
 import { MAX_HOOK_EVENTS_PER_MESSAGE } from "../../../shared/src/index";
+import { CONTEXT_HOOKS } from "../lost-claims";
 import type { SessionSettings } from "../session-settings";
 import { CAPTURED_HOOKS, type ClaudeHookInput, HookSummarizer } from "./summarize";
 
@@ -42,6 +47,11 @@ export interface HookCaptureOptions {
   log: (line: string) => void;
   /** Called with the session ID each hook reports. */
   onSessionId?: (sessionId: string) => void;
+  /**
+   * What a hook prints back into the agent CLI, by hook name. Claude Code adds a
+   * SessionStart or UserPromptSubmit hook's output to the model's context.
+   */
+  context?: (hook: string | undefined) => string;
   /** The hook command's program and script. Defaults to this Node and the built hook script. */
   node?: string;
   script?: string;
@@ -68,18 +78,27 @@ export class HookCapture {
       this.readingHooks += 1;
       const chunks: Buffer[] = [];
       let size = 0;
+      let read = false;
+      // Reads the hook's whole input once, and gives the answer for it.
+      const finish = (): string => {
+        if (read) return "";
+        read = true;
+        if (size <= MAX_INPUT_BYTES) return this.receive(Buffer.concat(chunks).toString("utf8"));
+        this.options.log(`hook input over ${MAX_INPUT_BYTES} bytes dropped`);
+        return "";
+      };
       conn.on("data", (chunk: Buffer) => {
         size += chunk.length;
         if (size <= MAX_INPUT_BYTES) chunks.push(chunk);
       });
       conn.on("error", () => {});
+      // The hook sent everything: answer, then close.
+      conn.on("end", () => conn.end(finish()));
       conn.on("close", () => {
+        finish();
         this.readingHooks -= 1;
-        if (size <= MAX_INPUT_BYTES) this.receive(Buffer.concat(chunks).toString("utf8"));
-        else this.options.log(`hook input over ${MAX_INPUT_BYTES} bytes dropped`);
         this.checkIdle();
       });
-      conn.on("end", () => conn.end());
     });
   }
 
@@ -99,12 +118,10 @@ export class HookCapture {
     const script = this.options.script ?? hookScriptPath();
     const command = [node, script, this.socketPath].map(shellQuote).join(" ");
     const hook = { type: "command" as const, command, timeout: 10 };
+    const names = [...new Set<string>([...CAPTURED_HOOKS, ...CONTEXT_HOOKS])];
     return {
       hooks: Object.fromEntries(
-        CAPTURED_HOOKS.map((name) => [
-          name,
-          [name === "PostToolUse" ? { matcher: "*", hooks: [hook] } : { hooks: [hook] }],
-        ]),
+        names.map((name) => [name, [name === "PostToolUse" ? { matcher: "*", hooks: [hook] } : { hooks: [hook] }]]),
       ),
     };
   }
@@ -156,19 +173,22 @@ export class HookCapture {
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
   }
 
-  private receive(text: string): void {
+  /** Takes one hook's input, and returns what the hook prints back into the agent CLI. */
+  private receive(text: string): string {
     let input: ClaudeHookInput;
     try {
       input = JSON.parse(text) as ClaudeHookInput;
     } catch {
       this.options.log("unreadable hook input dropped");
-      return;
+      return "";
     }
     if (typeof input.session_id === "string") this.options.onSessionId?.(input.session_id);
     const events = this.summarizer.summarize(input).map((draft) => ({ id: randomUUID(), ...draft }) as HookEvent);
-    if (events.length === 0) return;
-    if (this.agent) this.enqueue(events);
-    else this.unsent.push(...events);
+    if (events.length > 0) {
+      if (this.agent) this.enqueue(events);
+      else this.unsent.push(...events);
+    }
+    return this.options.context?.(input.hook_event_name) ?? "";
   }
 
   private enqueue(events: HookEvent[]): void {

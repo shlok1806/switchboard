@@ -15,6 +15,7 @@ import { authenticate } from "./auth";
 import { handleBranchRoute, matchBranchRoute } from "./branches-api";
 import { callerOf, handleClaimRoute, matchClaimRoute } from "./claims-api";
 import { fail, json, readJson } from "./http";
+import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
 
 export { Channel } from "./channel";
@@ -99,7 +100,15 @@ export default {
     const agentRoute = matchAgentRoute(request.method, url.pathname);
     const claimRoute = matchClaimRoute(request.method, url.pathname);
     const branchRoute = matchBranchRoute(request.method, url.pathname);
-    if (!ROUTES.has(route) && !taskRoute && agentRoute === null && claimRoute === null && branchRoute === null) {
+    const takeoverTask = matchTakeoverRoute(request.method, url.pathname);
+    if (
+      !ROUTES.has(route) &&
+      !taskRoute &&
+      agentRoute === null &&
+      claimRoute === null &&
+      branchRoute === null &&
+      takeoverTask === null
+    ) {
       return fail(404, "Not found.");
     }
 
@@ -109,6 +118,7 @@ export default {
     if (agentRoute !== null) return handleAgentRoute(agentRoute, request, channel(env), auth.person);
     if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel(env), auth.person);
     if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel(env), auth.person);
+    if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel(env), auth.person);
 
     switch (route) {
       case "POST /api/join":

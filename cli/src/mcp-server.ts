@@ -73,7 +73,16 @@ function describeEvent(event: AgentDeliverable): string {
       break;
     case "claim":
     case "claim.release":
+    case "claim.stale":
+    case "claim.recovered":
+    case "claim.unblocked":
       detail = holderName(event.payload.holder);
+      break;
+    case "claim.blocked":
+      detail = `${holderName(event.payload.holder)}, now blocked by ${blockers(event.payload.blockedBy)}`;
+      break;
+    case "takeover":
+      detail = `from ${holderName(event.payload.from)} to ${holderName(event.payload.to)}`;
       break;
     case "claim.refused":
       detail = `held by ${holderName(event.payload.heldBy)}`;
@@ -105,12 +114,28 @@ function describeEvent(event: AgentDeliverable): string {
   return `[${event.seq}] ${event.at} ${actorName(event)} ${event.type}${task}${capture}${detail ? `: ${detail}` : ""}`;
 }
 
-/** One line per Task, readable by a model. */
-export function describeTask(task: Task): string {
+function blockers(numbers: readonly number[]): string {
+  return numbers.map((n) => `#${n}`).join(", ");
+}
+
+/**
+ * One line per Task, readable by a model. `me` marks the Tasks the calling Agent
+ * holds, so a resumed Agent can see which Claims it still has.
+ */
+export function describeTask(task: Task, me?: AgentId): string {
   const parts = [`#${task.number} ${task.title}`, `[${task.status}]`];
   if (task.steps.length > 0) parts.push(`${task.stepsDone}/${task.steps.length} Steps`);
-  if (task.claim) parts.push(`held by ${holderName(task.claim.holder)}${task.claim.stale ? " (stale)" : ""}`);
-  if (task.blockedBy.length > 0) parts.push(`blocked by ${task.blockedBy.map((n) => `#${n}`).join(", ")}`);
+  const claim = task.claim;
+  if (claim) {
+    const mine = claim.holder.kind === "agent" && claim.holder.agentId === me ? " (you)" : "";
+    const stale = claim.stale ? " (Stale: its holder is Gone, only a Person can take it over)" : "";
+    parts.push(`held by ${holderName(claim.holder)}${mine}${stale}`);
+  }
+  if (claim?.blockedBy && claim.blockedBy.length > 0) {
+    parts.push(`claimed but now blocked by ${blockers(claim.blockedBy)}`);
+  } else if (task.blockedBy.length > 0) {
+    parts.push(`blocked by ${blockers(task.blockedBy)}`);
+  }
   return parts.join(" ");
 }
 
@@ -171,7 +196,7 @@ export class SwitchboardTools {
     return this.run("list_tasks", status ?? "all", undefined, async (agent) => {
       const { tasks } = await this.as<TaskListResponse>(agent, "/api/tasks");
       const shown = status === undefined ? tasks : tasks.filter((t) => t.status === status);
-      return shown.length === 0 ? "No Tasks." : shown.map(describeTask).join("\n");
+      return shown.length === 0 ? "No Tasks." : shown.map((t) => describeTask(t, agent)).join("\n");
     });
   }
 

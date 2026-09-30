@@ -2,6 +2,7 @@
  * The Agent part of the Channel API: how the laptop wrapper registers an Agent,
  * reports its Presence with heartbeats and ends its session. Terms follow CONTEXT.md.
  */
+import type { LostClaim } from "./claims";
 import type { Agent, AgentId, Cli, PersonName, ProxyMode } from "./domain";
 
 /** The short CLI name used in an Agent ID, such as `claude` in `shlok/claude/7f3a`. */
@@ -63,6 +64,11 @@ export interface RegisterAgentRequest {
 export interface AgentResponse {
   ok: true;
   agent: Agent;
+  /**
+   * Claims this Agent lost to a Takeover that it has not been told about yet.
+   * Present only when there are some; each is sent once.
+   */
+  lostClaims?: LostClaim[];
 }
 
 /**
