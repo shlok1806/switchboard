@@ -1,6 +1,6 @@
 import type { Agent, AgentId, Verdict, VerdictOption } from "@shared/index";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { VERDICT_LABEL, prob } from "@/lib/format";
+import { DOWNGRADE_LABEL, VERDICT_LABEL, prob } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { AgentLink, VerdictPill } from "./pills";
 
@@ -72,10 +72,7 @@ export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict
 
 export function DowngradeNote({ verdict }: { verdict: Verdict }) {
   if (!verdict.downgraded) return null;
-  const why =
-    verdict.downgraded.reason === "below-threshold"
-      ? "Interrupt was below the threshold"
-      : "this CLI cannot receive Interrupts";
+  const why = DOWNGRADE_LABEL[verdict.downgraded.reason];
   return (
     <span className="inline-flex items-center gap-1 border border-orange px-1.5 py-0.5 text-[11px] font-semibold text-orange">
       Downgraded from Interrupt: {why}

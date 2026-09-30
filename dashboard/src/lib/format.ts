@@ -3,6 +3,7 @@ import type {
   Capture,
   ChannelEvent,
   Cli,
+  DowngradeReason,
   Holder,
   Presence,
   TaskField,
@@ -27,6 +28,18 @@ export const VERDICT_LABEL: Record<VerdictOption, string> = {
 };
 
 export const VERDICT_OPTIONS: VerdictOption[] = ["drop", "queue", "interrupt"];
+
+/** Why an Interrupt was delivered as a Queue instead. */
+export const DOWNGRADE_LABEL: Record<DowngradeReason, string> = {
+  "below-threshold": "Interrupt was below the threshold",
+  "cli-cannot-interrupt": "this CLI cannot receive Interrupts",
+  "wrapper-offline": "the Agent's wrapper was offline",
+  "rate-limited": "another Interrupt was sent in the last few seconds",
+  "person-typing": "its Person was typing",
+  "dialog-open": "a prompt was open in the session",
+  "session-not-ready": "the session was still starting",
+  "no-answer": "the wrapper did not answer in time",
+};
 
 export function actorName(actor: Actor): string {
   if (actor.kind === "agent") return actor.agentId;
