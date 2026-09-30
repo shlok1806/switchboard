@@ -115,7 +115,10 @@ export function summarize(e: ChannelEvent): string {
     case "proxy.raw":
       return e.payload.reply;
     case "claim":
-      return "Claimed";
+      // A Person claiming for one of their own Agents names the Agent that holds it.
+      return e.payload.holder.kind === "agent" && !(e.actor.kind === "agent" && e.actor.agentId === e.payload.holder.agentId)
+        ? `Claimed for ${e.payload.holder.agentId}`
+        : "Claimed";
     case "claim.refused":
       return `Claim refused, held by ${holderName(e.payload.heldBy)}`;
     case "claim.release":

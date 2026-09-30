@@ -4,7 +4,7 @@
 // stream, Deliveries pushed to a wrapper's WebSocket and handed over in heartbeat
 // answers, and the framed text an Agent would read.
 
-import { reset } from "cloudflare:test";
+import { env, reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -21,6 +21,7 @@ import type {
   InterruptMessage,
   InterruptResult,
   ProxyEvent,
+  RelayResponse,
   Task,
   TaskResponse,
   Verdict,
@@ -30,6 +31,8 @@ import {
   agentPath,
   branchPath,
   claimPath,
+  DEFAULT_INTERRUPT_INTERVAL_SECONDS,
+  DEFAULT_INTERRUPT_THRESHOLD,
   DELIVERY_DIFF_LINES,
   deliveriesNotice,
   interruptNotice,
@@ -38,7 +41,8 @@ import {
 import type { ComparedFile } from "../src/github/index";
 import { installGitHub, sign } from "../src/github/index";
 import { buildDelivery } from "../src/relay/delivery";
-import { installJev } from "../src/relay/jev";
+import { installJev, JEV_MODEL } from "../src/relay/jev";
+import { relaySettings } from "../src/relay/relay";
 import { FakeGitHub, type WebhookDelivery } from "./fake-github";
 import { FakeJev } from "./fake-jev";
 
@@ -782,5 +786,44 @@ describe("Interrupt delivery", () => {
     );
     expect(alice.interrupts.map((d) => d.event)).toEqual([event.id]);
     expect(other.interrupts).toEqual([]);
+  });
+});
+
+describe("Relay settings", () => {
+  it("answers GET /api/relay with the threshold, the interval and the model the Relay runs with", async () => {
+    const response = await exports.default.fetch(new Request(`${BASE}/api/relay`, { headers: headers("dashboard") }));
+    expect(response.status).toBe(200);
+    // RELAY_INTERRUPT_THRESHOLD and RELAY_INTERRUPT_INTERVAL_SECONDS in wrangler.jsonc; the model is the installed Jev's.
+    expect(await response.json<RelayResponse>()).toEqual({
+      relay: { interruptThreshold: 0.6, interruptIntervalSeconds: 20, model: "fake-jev" },
+    });
+  });
+
+  it("never carries a secret, and needs the join secret like every Channel route", async () => {
+    const response = await exports.default.fetch(new Request(`${BASE}/api/relay`, { headers: headers("dashboard") }));
+    const text = await response.text();
+    for (const secret of [SECRET, WEBHOOK_SECRET, env.JEV_API_KEY, env.GITHUB_TOKEN].filter(Boolean)) {
+      expect(text).not.toContain(secret);
+    }
+    const anonymous = await exports.default.fetch(new Request(`${BASE}/api/relay`));
+    expect(anonymous.status).toBe(401);
+  });
+
+  it("reads the configured values, falls back to the defaults on bad ones, and names Jev's model without a stand-in", () => {
+    installJev(null);
+    expect(relaySettings({ ...env, RELAY_INTERRUPT_THRESHOLD: "0.75", RELAY_INTERRUPT_INTERVAL_SECONDS: "5" })).toEqual(
+      {
+        interruptThreshold: 0.75,
+        interruptIntervalSeconds: 5,
+        model: JEV_MODEL,
+      },
+    );
+    expect(relaySettings({ ...env, RELAY_INTERRUPT_THRESHOLD: "2", RELAY_INTERRUPT_INTERVAL_SECONDS: "soon" })).toEqual(
+      {
+        interruptThreshold: DEFAULT_INTERRUPT_THRESHOLD,
+        interruptIntervalSeconds: DEFAULT_INTERRUPT_INTERVAL_SECONDS,
+        model: JEV_MODEL,
+      },
+    );
   });
 });

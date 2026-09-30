@@ -8,6 +8,7 @@ import type {
   JoinResponse,
   PersonName,
   PostUpdateResponse,
+  RelayResponse,
 } from "../../shared/src/index";
 import { MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
 import { handleAgentRoute, matchAgentRoute } from "./agents-api";
@@ -16,6 +17,7 @@ import { handleBranchRoute, matchBranchRoute } from "./branches-api";
 import { callerOf, handleClaimRoute, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
 import { fail, json, readJson } from "./http";
+import { relaySettings } from "./relay/relay";
 import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
 
@@ -90,7 +92,14 @@ async function handleStream(request: Request, url: URL, env: Env, person: Person
   return channel(env).fetch(target, { headers: { Upgrade: "websocket" } });
 }
 
-const ROUTES = new Set(["POST /api/join", "GET /api/events", "POST /api/updates", "GET /api/stream", DIRECTIVE_ROUTE]);
+const ROUTES = new Set([
+  "POST /api/join",
+  "GET /api/events",
+  "GET /api/relay",
+  "POST /api/updates",
+  "GET /api/stream",
+  DIRECTIVE_ROUTE,
+]);
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -126,6 +135,8 @@ export default {
         return handleJoin(request, env, auth.person);
       case "GET /api/events":
         return handleHistory(url, env);
+      case "GET /api/relay":
+        return json<RelayResponse>({ relay: relaySettings(env) });
       case "POST /api/updates":
         return handlePostUpdate(request, env, auth.person);
       case DIRECTIVE_ROUTE:

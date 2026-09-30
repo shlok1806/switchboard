@@ -1,6 +1,8 @@
 import type {
   ActionResult,
+  AgentId,
   AgentsResponse,
+  ClaimRequest,
   CreateTaskRequest,
   CreateTaskResponse,
   Task,
@@ -12,6 +14,7 @@ import type {
   JoinResponse,
   Person,
   PersonAction,
+  RelayResponse,
   StreamMessage,
   TaskActionResponse,
   TaskListResponse,
@@ -21,9 +24,6 @@ import type {
 } from "@shared/index";
 import { LIVE_PING, MAX_HISTORY_LIMIT, claimPath, releasePath } from "@shared/index";
 import type { Capabilities, ChannelSource, ClaimResult, ConnectionState } from "./source";
-
-/** Relay settings to show until the Worker exposes them. */
-const DEFAULT_RELAY = { interruptThreshold: 0.6, model: "typesafe/jev" };
 
 /**
  * What the Worker on main can do today: join, Events, Updates, the stream (#5),
@@ -50,7 +50,6 @@ const ACTION_NAME: Record<PersonAction["type"], string> = {
   directive: "Directives",
   takeover: "Takeover",
   "proxy-mode": "changing Proxy mode",
-  nickname: "Nicknames",
 };
 
 /**
@@ -58,8 +57,9 @@ const ACTION_NAME: Record<PersonAction["type"], string> = {
  * - every HTTP call sends `Authorization: Bearer <secret>` and `X-Switchboard-Person`;
  * - the WebSocket at `/api/stream` sends `?secret=`, `?person=` and `?after=`;
  * - the history is `GET /api/events`, Tasks `GET /api/tasks`, Agents `GET /api/agents`.
- * Routes the Worker does not have yet (`/api/snapshot`, Nicknames) degrade: the snapshot is assembled from the routes that
- * exist, and the actions answer with a readable refusal.
+ * - the Relay's settings are `GET /api/relay`.
+ * The Worker has no `/api/snapshot`, so the snapshot is assembled from the routes that
+ * exist, and an action whose route is missing answers with a readable refusal.
  */
 export class HttpChannelSource implements ChannelSource {
   readonly me: string;
@@ -128,13 +128,14 @@ export class HttpChannelSource implements ChannelSource {
     const all = await this.allEvents();
     const { events, verdicts } = splitVerdicts(all);
     // Tasks need GitHub; if it is unreachable the board is empty, not broken.
-    const [tasks, agents] = await Promise.all([
+    const [tasks, agents, relay] = await Promise.all([
       this.get<TaskListResponse>("/api/tasks")
         .then((r) => r.tasks)
         .catch((): Task[] => []),
       this.get<AgentsResponse>("/api/agents")
         .then((r) => r.agents)
         .catch(() => []),
+      this.get<RelayResponse>("/api/relay").then((r) => r.relay),
     ]);
 
     return {
@@ -144,7 +145,7 @@ export class HttpChannelSource implements ChannelSource {
       verdicts,
       tasks,
       events,
-      relay: DEFAULT_RELAY,
+      relay,
       cursor: all.at(-1)?.seq ?? 0,
     };
   }
@@ -232,8 +233,9 @@ export class HttpChannelSource implements ChannelSource {
     }
   }
 
-  claim(task: TaskNumber): Promise<ClaimResult> {
-    return this.claimAction(claimPath(task));
+  claim(task: TaskNumber, forAgent?: AgentId): Promise<ClaimResult> {
+    const body: ClaimRequest = forAgent === undefined ? {} : { for: forAgent };
+    return this.claimAction(claimPath(task), body);
   }
 
   release(task: TaskNumber): Promise<ClaimResult> {
@@ -241,9 +243,12 @@ export class HttpChannelSource implements ChannelSource {
   }
 
   /** Claim and release answer with the Task, or a refusal that names the holder in `heldBy`. */
-  private async claimAction(path: string): Promise<ClaimResult> {
+  private async claimAction(path: string, request: ClaimRequest = {}): Promise<ClaimResult> {
     try {
-      const { status, body } = await this.call<TaskActionResponse | ClaimRefusal>(path, { method: "POST", body: "{}" });
+      const { status, body } = await this.call<TaskActionResponse | ClaimRefusal>(path, {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
       if (status < 400 && body && "task" in body) return { ok: true, task: body.task };
       if (body && typeof body === "object" && "reason" in body) {
         const refusal = body as ClaimRefusal;
@@ -266,8 +271,6 @@ export class HttpChannelSource implements ChannelSource {
           return { path: `/api/tasks/${action.task}/takeover`, body: { to: action.to } };
         case "proxy-mode":
           return { path: `/api/agents/${encodeURIComponent(action.agent)}/proxy-mode`, body: { mode: action.mode } };
-        case "nickname":
-          return { path: `/api/agents/${encodeURIComponent(action.agent)}/nickname`, body: { nickname: action.nickname } };
       }
     })();
     try {

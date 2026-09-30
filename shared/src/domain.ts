@@ -464,9 +464,12 @@ export interface Verdict {
   latencyMs?: number;
 }
 
-/** Relay settings visible to Persons. */
+/** Relay settings visible to Persons (`GET /api/relay`). Never carries a secret. */
 export interface RelayConfig {
   /** An Interrupt below this probability becomes a Queue. */
   interruptThreshold: number;
+  /** The fewest seconds between two Interrupts to one Agent. */
+  interruptIntervalSeconds: number;
+  /** The Jev model the Relay asks. */
   model: string;
 }
