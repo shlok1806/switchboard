@@ -9,9 +9,12 @@
 //   line of the same diff still mentions. A rename looks exactly like that.
 // - Symbols the Agent uses: those names, found as whole words in the Agent's
 //   corpus: the added and context lines of recent committed hunks for its touched
-//   and Task files, and of its own Task's pushes. The Channel never sees
-//   uncommitted code, so a name only used in uncommitted work is missed (the shared
-//   file usually catches that case).
+//   and Task files, and of its own Task's pushes; plus uses (not declarations) on
+//   the deleted and context lines of the Event's own hunks for files the Agent
+//   touches, since its copy of
+//   such a file still has the code as it was before the change. The Channel never
+//   sees uncommitted code, so a name only used in uncommitted work in a file the
+//   Event did not change is missed.
 
 import type { ChannelEvent, DiffHunk, FileChange } from "../../../shared/src/index";
 
@@ -81,10 +84,30 @@ export interface AgentWork {
   corpus: ReadonlySet<string>;
 }
 
+/**
+ * The names used on the deleted and context lines of `files`: code as it stood
+ * before those changes, which is what an Agent working on those files still has.
+ * A name a line declares is not a use of it.
+ */
+export function usedBefore(files: readonly FileChange[]): Set<string> {
+  const used = new Set<string>();
+  for (const line of linesOf(
+    files.flatMap((file) => file.hunks),
+    ["del", "ctx"],
+  )) {
+    const declared = new Set([...line.matchAll(DECLARATION)].map((match) => match[1]));
+    for (const word of line.match(WORD) ?? []) if (!declared.has(word)) used.add(word);
+  }
+  return used;
+}
+
 /** Shared files and used symbols between one Event and one Agent's work. */
 export function overlapOf(event: ChannelEvent, work: AgentWork): { files: string[]; symbols: string[] } {
   const mine = new Set([...work.touched, ...work.taskFiles]);
   const files = [...new Set(eventFiles(event).filter((path) => mine.has(path)))];
-  const symbols = removedSymbols(eventChanges(event)).filter((name) => work.corpus.has(name));
+  // A file the Agent works on that used a name before this change still uses it in
+  // the Agent's copy, committed or not: a caller renamed here is a caller there.
+  const before = usedBefore(eventChanges(event).filter((file) => mine.has(file.path)));
+  const symbols = removedSymbols(eventChanges(event)).filter((name) => work.corpus.has(name) || before.has(name));
   return { files, symbols };
 }

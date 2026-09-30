@@ -405,6 +405,36 @@ describe("Verdicts", () => {
     );
   });
 
+  it("finds a renamed symbol in a caller the Agent is editing, when the push updates that caller too", async () => {
+    // Alice is adding code to src/greet.ts, which calls formatName; she has pushed nothing yet.
+    const { alice, bobBranch } = await twoAgents();
+    await alice.edited("src/greet.ts");
+    // Bob renames formatName and updates its caller in src/greet.ts, as a rename does.
+    const push = await pushed(bobBranch, "Rename formatName", [
+      RENAME,
+      file("src/greet.ts", [
+        "-import { formatName } from './shared';",
+        "+import { formatFullName } from './shared';",
+        " export function greet(user: User): string {",
+        '-  return "Hello, " + formatName(user);',
+        '+  return "Hello, " + formatFullName(user);',
+        " }",
+      ]),
+    ]);
+    const [verdict] = await verdictsOn(push.id, 1);
+    // Her copy of src/greet.ts still calls formatName: that is the strongest signal, found in code.
+    expect(verdict).toMatchObject({
+      agent: alice.id,
+      source: "jev",
+      overlap: { files: ["src/greet.ts"], symbols: ["formatName"] },
+    });
+    expect(jev.calls[0]?.overlap).toEqual({
+      sharedFiles: ["src/greet.ts"],
+      symbolsAgentUses: ["formatName"],
+      addressedToAgent: null,
+    });
+  });
+
   it("asks Jev about an Event addressed to the Agent: one on the Task it holds", async () => {
     const { alice, bob } = await twoAgents();
     const response = await post("/api/updates", "bob", { text: "I can help with names", task: 1 }, bob.id);
