@@ -108,6 +108,7 @@ function answer(result: RosterResult, status = 200): Response {
           ok: true,
           agent: result.agent,
           ...(result.lostClaims && result.lostClaims.length > 0 ? { lostClaims: result.lostClaims } : {}),
+          ...(result.deliveries && result.deliveries.length > 0 ? { deliveries: result.deliveries } : {}),
         },
         status,
       )

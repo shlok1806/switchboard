@@ -9,6 +9,7 @@ import type {
   AgentId,
   Capture,
   ChannelEvent,
+  DeliveryMessage,
   EventPayloads,
   EventType,
   Holder,
@@ -32,6 +33,8 @@ import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./clai
 import { type CodeChange, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { ProxyCapture } from "./proxy-capture";
+import { jevFor } from "./relay/jev";
+import { interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
 import { StaleClaims } from "./stale-claims";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
 
@@ -103,6 +106,8 @@ export class Channel extends DurableObject<Env> {
   private readonly branches: Branches;
   /** Stale Claims, Takeovers and Claims blocked after they were made (ADR 0002). */
   private readonly staleClaims: StaleClaims;
+  /** Verdicts for every new Event and connected Agent, and Queue deliveries (ADR 0003, ADR 0005). */
+  private readonly relay: Relay;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -127,6 +132,7 @@ export class Channel extends DurableObject<Env> {
     `);
     ctx.storage.sql.exec(AGENTS_SCHEMA);
     ctx.storage.sql.exec(HOOK_CAPTURE_SCHEMA);
+    ctx.storage.sql.exec(RELAY_SCHEMA);
     // Answer keepalive pings without waking the object from hibernation.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(LIVE_PING, LIVE_PONG));
     this.alarms = new Alarms(ctx.storage);
@@ -176,6 +182,20 @@ export class Channel extends DurableObject<Env> {
       agents: this.agents,
       claims: this.claims,
       append: (event) => this.append(event),
+    });
+    this.relay = new Relay({
+      sql: ctx.storage.sql,
+      agents: () => this.agents.list(),
+      tasks: () => this.tasks.stored(),
+      task: (number) => this.tasks.read(number),
+      touchedFiles: (id) => this.hooks.touchedFiles(id),
+      jev: () => jevFor(env),
+      threshold: interruptThreshold(env.RELAY_INTERRUPT_THRESHOLD),
+      append: (event) => this.append(event),
+      sendTo: (person, message) => {
+        for (const ws of this.ctx.getWebSockets(person)) send(ws, message);
+      },
+      waitUntil: (work) => this.ctx.waitUntil(work),
     });
   }
 
@@ -276,18 +296,27 @@ export class Channel extends DurableObject<Env> {
   /** Registers an Agent for a CLI session, or brings it back on resume. Joins its Person too. */
   async registerAgent(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
     this.join(person);
-    return this.withLostClaims(await this.agents.register(person, request));
+    return this.withNextTurn(await this.agents.register(person, request));
   }
 
   async heartbeat(person: PersonName, id: AgentId, presence: ReportedPresence): Promise<RosterResult> {
-    return this.withLostClaims(await this.agents.heartbeat(person, id, presence));
+    return this.withNextTurn(await this.agents.heartbeat(person, id, presence));
   }
 
-  /** Hands a returning Agent the Claims it lost to a Takeover while it was Gone, once. */
-  private withLostClaims(result: RosterResult): RosterResult {
+  /**
+   * Hands the Agent's wrapper what the Agent must hear at its next turn, once: the
+   * Claims it lost to a Takeover while it was Gone, and the Queued Events its
+   * wrapper has not acknowledged over the WebSocket.
+   */
+  private withNextTurn(result: RosterResult): RosterResult {
     if (!result.ok) return result;
     const lostClaims = this.staleClaims.takeLostClaims(result.agent.id);
-    return lostClaims.length === 0 ? result : { ...result, lostClaims };
+    const deliveries = this.relay.takeDeliveries(result.agent.id);
+    return {
+      ...result,
+      ...(lostClaims.length === 0 ? {} : { lostClaims }),
+      ...(deliveries.length === 0 ? {} : { deliveries }),
+    };
   }
 
   endSession(person: PersonName, id: AgentId): Promise<RosterResult> {
@@ -404,10 +433,21 @@ export class Channel extends DurableObject<Env> {
     }
     if (typeof frame !== "object" || frame === null) return;
     const type = (frame as { type?: unknown }).type;
-    if (type !== "hook" && type !== "proxy") return;
+    if (type !== "hook" && type !== "proxy" && type !== "delivery.ack") return;
     const person = this.ctx.getTags(ws)[0];
     if (person === undefined) return;
     const body = frame as Record<string, unknown>;
+    if (type === "delivery.ack") {
+      // The wrapper holds these Deliveries for its Agent's next turn. Only the Agent's own Person may say so.
+      const agent = body.agent;
+      if (typeof agent !== "string" || !Array.isArray(body.ids)) return;
+      if (this.agents.find(agent as AgentId)?.person !== person) return;
+      this.relay.acknowledge(
+        agent as AgentId,
+        body.ids.filter((id): id is string => typeof id === "string"),
+      );
+      return;
+    }
     send(ws, type === "hook" ? this.hooks.receive(person, body) : this.proxy.receive(person, body));
   }
 
@@ -449,6 +489,8 @@ export class Channel extends DurableObject<Env> {
     if (!row) return null;
     const stored = rowToEvent(row);
     this.broadcast({ type: "event", event: stored });
+    // The Relay decides who hears about it, after this request.
+    this.relay.consider(stored);
     return stored;
   }
 
@@ -457,7 +499,7 @@ export class Channel extends DurableObject<Env> {
   }
 }
 
-function send(ws: WebSocket, message: StreamMessage | HookCaptureReply | ProxyCaptureReply): void {
+function send(ws: WebSocket, message: StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage): void {
   try {
     ws.send(JSON.stringify(message));
   } catch {

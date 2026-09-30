@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentId, HookCaptureMessage, HookCaptureReply, HookEvent } from "../../../shared/src/index";
 import { MAX_HOOK_EVENTS_PER_MESSAGE } from "../../../shared/src/index";
-import { CONTEXT_HOOKS } from "../lost-claims";
+import { CONTEXT_HOOKS } from "../next-turn";
 import type { SessionSettings } from "../session-settings";
 import { CAPTURED_HOOKS, type ClaudeHookInput, HookSummarizer } from "./summarize";
 

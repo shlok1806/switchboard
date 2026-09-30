@@ -4,6 +4,7 @@
  */
 import type { LostClaim } from "./claims";
 import type { Agent, AgentId, Cli, PersonName, ProxyMode } from "./domain";
+import type { Delivery } from "./relay";
 
 /** The short CLI name used in an Agent ID, such as `claude` in `shlok/claude/7f3a`. */
 export const CLI_SHORT_NAMES: Record<Cli, string> = {
@@ -69,6 +70,11 @@ export interface AgentResponse {
    * Present only when there are some; each is sent once.
    */
   lostClaims?: LostClaim[];
+  /**
+   * Queued Events for the Agent's next turn that its wrapper has not acknowledged
+   * over the WebSocket. Present only when there are some; each is handed over once.
+   */
+  deliveries?: Delivery[];
 }
 
 /**

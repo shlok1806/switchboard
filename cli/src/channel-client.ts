@@ -1,10 +1,12 @@
 // The wrapper's side of the Channel API: join, register the Agent, heartbeat its
 // Presence, end its session, and keep a WebSocket to the Channel open. The
-// WebSocket also carries the Hook Capture's Events to the Channel.
+// WebSocket also carries the Hook and Proxy Captures' Events to the Channel, and
+// the Relay's Deliveries for the Agent's next turn back from it.
 
 import type {
   AgentId,
   AgentResponse,
+  DeliveryMessage,
   ErrorResponse,
   HookCaptureReply,
   JoinResponse,
@@ -15,6 +17,9 @@ import type {
 } from "../../shared/src/index";
 import { agentPath, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
 import type { Config } from "./config";
+
+/** Everything the Channel sends the wrapper's WebSocket. */
+export type ChannelMessage = StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage;
 
 export class ChannelError extends Error {
   constructor(
@@ -72,10 +77,7 @@ export class ChannelClient {
    * Keeps a WebSocket to the Channel open, reconnecting with backoff, and hands
    * every message to `onMessage`, including replies to what the wrapper sends on it.
    */
-  follow(
-    onMessage: (message: StreamMessage | HookCaptureReply | ProxyCaptureReply) => void,
-    onStatus: (connected: boolean) => void,
-  ): ChannelStream {
+  follow(onMessage: (message: ChannelMessage) => void, onStatus: (connected: boolean) => void): ChannelStream {
     let closed = false;
     let socket: WebSocket | null = null;
     let keepalive: ReturnType<typeof setInterval> | undefined;
@@ -94,7 +96,7 @@ export class ChannelClient {
       ws.addEventListener("message", (event) => {
         if (event.data === LIVE_PONG) return;
         try {
-          onMessage(JSON.parse(String(event.data)) as StreamMessage | HookCaptureReply | ProxyCaptureReply);
+          onMessage(JSON.parse(String(event.data)) as ChannelMessage);
         } catch {
           // Ignore frames we cannot read.
         }

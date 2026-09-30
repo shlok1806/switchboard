@@ -7,15 +7,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as pty from "@lydell/node-pty";
-import type { Agent } from "../../shared/src/index";
+import type { Agent, AgentId, DeliveryAck } from "../../shared/src/index";
 import { agentIdFor, DEFAULT_IDLE_AFTER_MS, HEARTBEAT_INTERVAL_MS } from "../../shared/src/index";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { ChannelClient, ChannelError } from "./channel-client";
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "./claude-session";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
-import { LostClaimNotices } from "./lost-claims";
 import { prepareSessionTools } from "./mcp-config";
+import { NextTurn } from "./next-turn";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, originalBaseUrl, type ProxyFlags, takeProxyFlags } from "./proxy/options";
@@ -108,17 +108,31 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   });
 
   // The Channel stream stays open for the whole session. It carries the Hook
-  // and Proxy Captures' Events and the Agent's Proxy mode changes; Interrupts
-  // and the next-turn cache will read it too.
+  // and Proxy Captures' Events, the Agent's Proxy mode changes, and the Relay's
+  // Deliveries, which it keeps the next-turn cache current with. Interrupts will
+  // read it too.
   let hooks: HookCapture | null = null;
   let proxy: ProxyCapture | null = null;
-  // Claims the Agent lost to a Takeover while it was Gone, told at its next turn.
-  const lostClaims = new LostClaimNotices();
+  let agentId: AgentId | null = null;
+  // What the Agent is told at its next turn: Claims it lost to a Takeover while it
+  // was Gone, Queued Events, and the standing rule at SessionStart.
+  const nextTurn = new NextTurn();
   const stream = client.follow(
     (message) => {
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
       if (message.type === "proxy.ack" || message.type === "proxy.refused") proxy?.reply(message);
       if (message.type === "agent") proxy?.agentChanged(message.agent);
+      if (message.type === "delivery" && message.agent === agentId) {
+        const kept = nextTurn.add({ deliveries: message.deliveries });
+        if (kept.length > 0) log(`queued for the next turn: ${kept.length} from the Relay`);
+        // Held here now, so the Channel stops handing them over.
+        const ack: DeliveryAck = {
+          type: "delivery.ack",
+          agent: message.agent,
+          ids: message.deliveries.map((d) => d.id),
+        };
+        stream.send(JSON.stringify(ack));
+      }
     },
     (connected) => {
       log(connected ? "stream connected" : "stream disconnected");
@@ -172,7 +186,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
         root: cwd,
         send: (frame) => stream.send(frame),
         log,
-        context: (hook) => lostClaims.take(hook),
+        context: (hook) => nextTurn.take(hook),
       });
       // Claude Code settings can set ANTHROPIC_BASE_URL too, and they win over the
       // environment, so the session's own settings point it at the proxy as well.
@@ -191,6 +205,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   if (tools) args = tools.args(args);
 
   const onRegistered = (agent: Agent) => {
+    agentId = agent.id;
     hooks?.setAgent(agent.id);
     tools?.setAgent(agent.id);
     proxy?.setAgent(agent);
@@ -198,8 +213,8 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
 
   let link: AgentLink | null = null;
   if (plan.kind === "known") {
-    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered, (lost) =>
-      lostClaims.add(lost),
+    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered, (items) =>
+      nextTurn.add(items),
     );
     const expected = agentIdFor(config.person, "claude-code", plan.sessionId);
     childEnv.SWITCHBOARD_AGENT_ID = expected;
@@ -246,8 +261,8 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     const launchedAt = Date.now();
     void waitForPickedSession(projectDir(claudeDir, cwd), launchedAt, picking.signal).then((sessionId) => {
       if (!sessionId) return;
-      link = new AgentLink(client, session(sessionId, true), heartbeatMs, log, onRegistered, (lost) =>
-        lostClaims.add(lost),
+      link = new AgentLink(client, session(sessionId, true), heartbeatMs, log, onRegistered, (items) =>
+        nextTurn.add(items),
       );
       link.report(idle.current);
       link.start();

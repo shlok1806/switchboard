@@ -87,7 +87,15 @@ export function relay(
     }
 
     if (!probabilities) {
-      verdicts.push({ event: event.id, agent: agent.id, at: event.at, option: "drop", source: "skipped", overlap });
+      verdicts.push({
+        event: event.id,
+        agent: agent.id,
+        at: event.at,
+        option: "drop",
+        delivered: "drop",
+        source: "rule",
+        overlap,
+      });
       continue;
     }
 
@@ -105,6 +113,7 @@ export function relay(
       agent: agent.id,
       at: event.at,
       option,
+      delivered: option,
       source: "jev",
       probabilities,
       downgraded,
