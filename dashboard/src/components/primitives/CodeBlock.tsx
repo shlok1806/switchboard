@@ -85,7 +85,7 @@ function Pieces({ pieces }: { pieces: Piece[] }) {
           return (
             <span
               key={i}
-              className=""
+              className="rounded-[3px]"
               style={{
                 background: `color-mix(in srgb, var(--${add ? "green" : "red"}) 18%, transparent)`,
                 padding: "0 2px",
@@ -178,7 +178,7 @@ export default function CodeBlock({
             type="button"
             aria-label="Copy code"
             onClick={copy}
-            className={`-mr-1 ml-auto flex h-6 items-center gap-1 px-1.5 text-[12px]
+            className={`-mr-1 ml-auto flex h-6 items-center gap-1 rounded-[6px] px-1.5 text-[12px]
               font-medium transition-colors duration-100 hover:bg-hover
               ${copied ? "text-green" : "text-ink-3 hover:text-ink"}`}
           >

@@ -16,7 +16,9 @@ import {
   KanbanProvider,
   type KanbanMove,
 } from "@/components/kibo-ui/kanban";
-import { PixelIcon } from "@/components/pixel-icon";
+import { AlertTriangle, Ban, Bot, GitPullRequest, Info, ListTree, Loader2, MoveRight, UserRound, X } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { initials } from "@/components/shell/nav";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,10 +35,10 @@ import { cn } from "@/lib/utils";
 const FLOW: Column[] = ["open", "claimed", "review", "done"];
 
 const HINT: Record<Column, string> = {
-  stale: "The holder is Gone. Held until a Person takes it over with Take over.",
+  stale: "The holder is Gone. Held until a Person takes it over.",
   open: "No Claim yet. Drag a card to Claimed to claim it.",
   claimed: "Held by an Agent or a Person. Drag your own back to Open to release it.",
-  review: "Finished. Its pull request is open.",
+  review: "Finished, pull request open.",
   done: "Closed on GitHub.",
 };
 
@@ -135,10 +137,7 @@ export function TasksView() {
   if (tasks.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
-        <Pending title="No Tasks yet">
-          Every open GitHub Issue in the repo shows up here as a Task. If there should be some, the Channel may not reach
-          GitHub right now.
-        </Pending>
+        <Pending title="No Tasks yet">Open GitHub Issues show up here.</Pending>
         <NewTaskButton />
       </div>
     );
@@ -166,13 +165,12 @@ export function TasksView() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Quick filters, as on a Jira board */}
-      <div className="no-scrollbar flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border bg-secondary px-2 py-1.5 sm:px-3">
-        <span className="type-label hidden shrink-0 pr-1 md:inline">Quick filters</span>
+      <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 sm:px-6 md:flex-nowrap md:overflow-x-auto">
         <Toggle on={filters.mine} onClick={() => set("mine")(!filters.mine)}>
-          My Tasks
+          <UserRound className="size-3.5" aria-hidden /> Mine
         </Toggle>
         <Toggle on={filters.blocked} onClick={() => set("blocked")(!filters.blocked)}>
-          <PixelIcon name="blocked" /> Only blocked
+          <Ban className="size-3.5" aria-hidden /> Blocked
         </Toggle>
         <FilterSelect label="Person" value={filters.person} onChange={set("person")} allLabel="Any Person" options={persons.map((p) => ({ value: p, label: p }))} />
         {can.agents && (
@@ -185,24 +183,28 @@ export function TasksView() {
           />
         )}
         {active > 0 && (
-          <button type="button" className="btn-motif h-[26px] shrink-0 px-2 text-[12px] coarse:h-9" onClick={() => setFilters(NO_FILTERS)}>
-            <PixelIcon name="close" /> Clear {active}
+          <button
+            type="button"
+            className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] text-ink-3 hover:bg-hover hover:text-ink"
+            onClick={() => setFilters(NO_FILTERS)}
+          >
+            <X className="size-3.5" aria-hidden /> Clear
           </button>
         )}
-        <span className="ml-auto shrink-0 pl-2 font-mono text-[11.5px] whitespace-nowrap text-muted-foreground">
-          {shown.length === tasks.length ? `${tasks.length} Tasks` : `${shown.length} of ${tasks.length}`}
+        <span className="ml-auto shrink-0 pl-2 text-[13px] whitespace-nowrap text-ink-3 tabular-nums">
+          {shown.length === tasks.length ? tasks.length : `${shown.length} / ${tasks.length}`}
         </span>
         <span className="shrink-0">
           <NewTaskButton />
         </span>
       </div>
       {!can.claims && (
-        <p className="border-b border-border px-3 py-1.5 text-[12px] text-muted-foreground">
+        <p className="border-b border-line px-4 py-2 text-[13px] text-ink-3 sm:px-6">
           Claims arrive with <IssueLink capability="claims" />.
         </p>
       )}
 
-      <div className="min-h-0 flex-1 overflow-hidden p-1.5 sm:p-2">
+      <div className="min-h-0 flex-1 overflow-hidden px-3 pt-3 sm:px-6 sm:pt-4">
         <KanbanProvider<Card>
           columns={columns.map((c) => ({ id: c, name: COLUMN_LABEL[c] }))}
           data={cards}
@@ -211,14 +213,14 @@ export function TasksView() {
           className={cn(
             "min-h-0",
             // A phone shows one column at a time and scrolls sideways between them.
-            mobile ? "no-scrollbar snap-x snap-mandatory auto-cols-[calc(100%-28px)] overflow-x-auto" : "auto-cols-[minmax(200px,1fr)]",
+            mobile ? "snap-x snap-mandatory auto-cols-[calc(100%-40px)] overflow-x-auto pb-3" : "auto-cols-[minmax(220px,1fr)] pb-4",
           )}
           lane={
             can.claims && stale.length > 0 ? (
               <StaleLane count={stale.length}>
                 <KanbanCards<Card> id="stale" className="flex-row flex-nowrap overflow-x-auto">
                   {(c) => (
-                    <div key={c.id} className="w-[min(280px,80vw)] shrink-0">
+                    <div key={c.id} className="w-[min(300px,78vw)] shrink-0">
                       {card(c)}
                     </div>
                   )}
@@ -229,9 +231,18 @@ export function TasksView() {
         >
           {(column) => (
             <KanbanBoard key={column.id} id={column.id} className="min-h-0 snap-start">
-              <KanbanHeader className="flex items-center gap-2" title={HINT[column.id as Column]}>
-                <h2 className="type-label !text-secondary-foreground">{column.name}</h2>
-                <span className="bevel-thin-in bg-card px-1.5 font-mono text-[11px] leading-[16px] tabular-nums">{count(column.id as Column)}</span>
+              <KanbanHeader className="flex items-center gap-2">
+                <ColumnDot column={column.id as Column} />
+                <h2 className="text-[13px] font-medium text-ink">{column.name}</h2>
+                <span className="text-[13px] text-ink-3 tabular-nums">{count(column.id as Column)}</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button type="button" aria-label={`About ${column.name}`} className="ml-auto grid size-6 place-items-center rounded text-ink-4 hover:text-ink-2">
+                      <Info className="size-3.5" aria-hidden />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{HINT[column.id as Column]}</TooltipContent>
+                </Tooltip>
               </KanbanHeader>
               <KanbanCards<Card> id={column.id} empty={<Empty column={column.id as Column} filtered={active > 0} />}>
                 {card}
@@ -244,13 +255,28 @@ export function TasksView() {
   );
 }
 
+const COLUMN_DOT: Record<Column, string> = {
+  stale: "bg-red",
+  open: "border border-ink-4",
+  claimed: "bg-accent",
+  review: "bg-orange",
+  done: "bg-green",
+};
+
+function ColumnDot({ column }: { column: Column }) {
+  return <span aria-hidden className={cn("size-2 shrink-0 rounded-full", COLUMN_DOT[column])} />;
+}
+
 function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
       aria-pressed={on}
       onClick={onClick}
-      className={cn("btn-motif h-[26px] shrink-0 px-2.5 text-[12px] coarse:h-9", on && "bg-muted font-bold")}
+      className={cn(
+        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors",
+        on ? "border-transparent bg-accent-tint text-accent-ink" : "border-line bg-surface text-ink-2 hover:border-line-strong",
+      )}
     >
       {children}
     </button>
@@ -259,12 +285,19 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
 
 function StaleLane({ count, children }: { count: number; children: ReactNode }) {
   return (
-    <section aria-label="Stale Claims" className="bevel-out mb-2 flex flex-col bg-secondary">
-      <header className="titlebar-alert flex h-[22px] items-center gap-2 px-2 text-[12px] leading-none font-bold">
-        <PixelIcon name="alert" />
+    <section aria-label="Stale Claims" className="mb-3 flex flex-col rounded-xl bg-red-tint p-2">
+      <header className="flex items-center gap-2 px-1.5 pt-0.5 pb-2 text-[13px] font-medium text-red">
+        <AlertTriangle className="size-4" aria-hidden />
         Stale Claim
-        <span className="font-mono font-normal">{count}</span>
-        <span className="ml-2 hidden truncate font-normal sm:inline">{HINT.stale}</span>
+        <span className="tabular-nums opacity-80">{count}</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" aria-label="About Stale Claims" className="grid size-6 place-items-center rounded opacity-70 hover:opacity-100">
+              <Info className="size-3.5" aria-hidden />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{HINT.stale}</TooltipContent>
+        </Tooltip>
       </header>
       {children}
     </section>
@@ -272,15 +305,7 @@ function StaleLane({ count, children }: { count: number; children: ReactNode }) 
 }
 
 function Empty({ column, filtered }: { column: Column; filtered: boolean }) {
-  if (filtered) return <p className="px-2 py-6 text-center text-[12px] text-faint">No Task here matches.</p>;
-  const text: Record<Column, string> = {
-    stale: "No Stale Claims.",
-    open: "Nothing unclaimed.",
-    claimed: "Nobody holds a Task.",
-    review: "Nothing waiting on review.",
-    done: "Nothing closed yet.",
-  };
-  return <p className="px-2 py-6 text-center text-[12px] text-faint">{text[column]}</p>;
+  return <p className="px-2 py-8 text-center text-[13px] text-ink-4">{filtered ? "No match" : column === "stale" ? "None" : "Empty"}</p>;
 }
 
 /** The "Move to" menu that replaces dragging on a phone. */
@@ -288,28 +313,28 @@ function MoveMenu({ column, options, onPick }: { column: Column; options: Column
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" aria-label="Move to" className="btn-motif h-8 shrink-0 px-2 text-[12px]" onClick={(e) => e.stopPropagation()}>
-          Move to <PixelIcon name="down" />
+        <button
+          type="button"
+          aria-label="Move to"
+          className="grid size-8 shrink-0 place-items-center rounded-md text-ink-3 hover:bg-hover"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoveRight className="size-4" aria-hidden />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[180px]">
-        <DropdownMenuLabel>Move to</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-[12px] font-normal text-ink-3">Move to</DropdownMenuLabel>
         {options
           .filter((c) => c !== column)
           .map((c) => (
             <DropdownMenuItem key={c} onSelect={() => onPick(c)}>
+              <ColumnDot column={c} />
               {COLUMN_LABEL[c]}
             </DropdownMenuItem>
           ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
-}
-
-/** Two letters for a holder, the way Jira draws an assignee without a photo. */
-function initials(name: string) {
-  const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
 }
 
 function TaskCard({
@@ -340,67 +365,86 @@ function TaskCard({
   const labels = task.labels.filter((l) => !l.startsWith("status:"));
 
   return (
-    <article className="flex flex-col gap-1.5 text-[13px] leading-snug">
-      <p className={cn("line-clamp-3 break-words", done && "text-muted-foreground")}>{task.title}</p>
+    <article className="flex flex-col gap-2.5 text-[13.5px] leading-snug">
+      <p className={cn("line-clamp-3 break-words", done ? "text-ink-3" : "text-ink")}>{task.title}</p>
 
-      {labels.length > 0 && (
-        <ul className="flex flex-wrap gap-1" aria-label="Labels">
+      {(labels.length > 0 || blockers.length > 0 || blockedAfterClaim.length > 0) && (
+        <ul className="flex flex-wrap gap-1" aria-label="Labels and flags">
+          {blockers.length > 0 && (
+            <li>
+              <Flag tone="red" hint={`Blocked by ${blockers.map((n) => `#${n}`).join(", ")}`}>
+                <Ban className="size-3" aria-hidden />
+                {blockers.map((n) => `#${n}`).join(" ")}
+              </Flag>
+            </li>
+          )}
+          {blockedAfterClaim.length > 0 && (
+            <li>
+              <Flag tone="orange" hint={`Claimed, then blocked by ${blockedAfterClaim.map((n) => `#${n}`).join(", ")}. The Claim stays held.`}>
+                <Ban className="size-3" aria-hidden />
+                {blockedAfterClaim.map((n) => `#${n}`).join(" ")}
+              </Flag>
+            </li>
+          )}
           {labels.map((l) => (
-            <li key={l} className="bevel-thin-in bg-muted px-1.5 font-mono text-[10.5px] leading-[16px] text-muted-foreground">
+            <li key={l} className="rounded-full bg-hover px-2 py-px text-[11.5px] text-ink-3">
               {l}
             </li>
           ))}
         </ul>
       )}
 
-      {blockers.length > 0 && (
-        <p className="flex items-center gap-1 text-[12px] font-semibold text-red">
-          <PixelIcon name="blocked" />
-          Blocked by {blockers.map((n) => `#${n}`).join(", ")}
-        </p>
-      )}
-      {blockedAfterClaim.length > 0 && (
-        <p className="flex items-center gap-1 text-[12px] font-semibold text-orange" title="The Claim stays held until the blocker closes.">
-          <PixelIcon name="blocked" />
-          Claimed, now blocked by {blockedAfterClaim.map((n) => `#${n}`).join(", ")}
-        </p>
-      )}
-
-      {h && (
-        <p className="flex min-w-0 items-center gap-1.5">
-          <span
-            aria-hidden
-            className={cn(
-              "grid size-5 shrink-0 place-items-center font-mono text-[9.5px] leading-none font-bold",
-              task.claim?.stale ? "bg-destructive text-destructive-foreground" : mine ? "bg-primary text-primary-foreground" : "bevel-thin bg-secondary",
-            )}
-          >
-            {initials(person ?? "?")}
-          </span>
-          <span className="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground" title={holderName(h)}>
-            {holderName(h)}
-          </span>
-        </p>
-      )}
-
-      <footer className="flex items-center gap-2 pt-0.5 text-[11.5px] text-muted-foreground">
-        <span className={cn("flex items-center gap-1 font-mono font-bold", done ? "text-faint line-through" : "text-accent-ink")}>
-          <PixelIcon name={done ? "boxcheck" : "document"} />#{task.number}
-        </span>
+      <footer className="flex min-h-6 items-center gap-2.5 text-[12px] text-ink-3">
+        <span className={cn("font-mono tabular-nums", done && "line-through")}>#{task.number}</span>
         {steps.total > 0 && <StepMeter done={steps.done} total={steps.total} />}
         {subs.total > 0 && (
-          <span className="font-mono tabular-nums" title={`${subs.done} of ${subs.total} Subtasks done`}>
-            {subs.done}/{subs.total} sub
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                <ListTree className="size-3.5" aria-hidden />
+                {subs.done}/{subs.total}
+                <span className="sr-only">Subtasks done</span>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{`${subs.done} of ${subs.total} Subtasks done`}</TooltipContent>
+          </Tooltip>
         )}
         {task.pr !== undefined && !done && (
-          <span className="flex items-center gap-0.5 font-mono" title={`Pull request #${task.pr}`}>
-            <PixelIcon name="commit" />PR {task.pr}
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                <GitPullRequest className="size-3.5" aria-hidden />
+                {task.pr}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{`Pull request #${task.pr}`}</TooltipContent>
+          </Tooltip>
         )}
-        <span className="ml-auto flex items-center gap-1">
-          {waiting && <PixelIcon name="hourglass" aria-label="Waiting for the Channel" />}
+        <span className="ml-auto flex items-center gap-1.5">
+          {waiting && <Loader2 className="size-3.5 animate-spin" aria-label="Waiting for the Channel" />}
           {task.claim?.stale && <TakeoverAction task={task} compact />}
+          {h && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className={cn(
+                    "relative grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-semibold",
+                    task.claim?.stale ? "bg-red-tint text-red" : mine ? "bg-accent-tint text-accent-ink" : "bg-hover-2 text-ink-2",
+                  )}
+                  aria-label={`Held by ${holderName(h)}`}
+                  role="img"
+                >
+                  {initials(person ?? "?")}
+                  {h.kind === "agent" && (
+                    <span className="absolute -right-0.5 -bottom-0.5 grid size-3 place-items-center rounded-full bg-surface ring-1 ring-line">
+                      <Bot className="size-2" strokeWidth={2.2} />
+                    </span>
+                  )}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="font-mono">{holderName(h)}</TooltipContent>
+            </Tooltip>
+          )}
           {moveMenu}
         </span>
       </footer>
@@ -408,21 +452,39 @@ function TaskCard({
   );
 }
 
-/** Steps as a row of one-bit cells, filled for each one done. */
-function StepMeter({ done, total }: { done: number; total: number }) {
-  const cells = Math.min(total, 8);
-  const filled = Math.round((done / total) * cells);
+function Flag({ tone, hint, children }: { tone: "red" | "orange"; hint: string; children: ReactNode }) {
   return (
-    <span className="flex items-center gap-1" title={`${done} of ${total} Steps done`}>
-      <span aria-hidden className="bevel-thin-in flex gap-px bg-card p-px">
-        {Array.from({ length: cells }, (_, i) => (
-          <span key={i} className={cn("h-1.5 w-1", i < filled ? "bg-accent-ink" : "bg-transparent")} />
-        ))}
-      </span>
-      <span className="font-mono tabular-nums">
-        {done}/{total}
-      </span>
-      <span className="sr-only">Steps done</span>
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full px-2 py-px font-mono text-[11.5px]",
+            tone === "red" ? "bg-red-tint text-red" : "bg-orange-tint text-orange",
+          )}
+        >
+          {children}
+          <span className="sr-only">{hint}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Steps as a thin bar with a count. */
+function StepMeter({ done, total }: { done: number; total: number }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center gap-1.5 tabular-nums">
+          <span aria-hidden className="h-1 w-8 overflow-hidden rounded-full bg-hover-2">
+            <span className={cn("block h-full rounded-full", done === total ? "bg-green" : "bg-accent")} style={{ width: `${(done / total) * 100}%` }} />
+          </span>
+          {done}/{total}
+          <span className="sr-only">Steps done</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{`${done} of ${total} Steps done`}</TooltipContent>
+    </Tooltip>
   );
 }

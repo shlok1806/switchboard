@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CircleCheck, Circle, GitBranch, GitPullRequest } from "@/components/pixel-icon";
+import { CircleCheck, Circle, ExternalLink, GitBranch, GitPullRequest } from "lucide-react";
 import type { ChannelEvent, EventType } from "@shared/index";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { IssueLink } from "@/components/domain/pending";
@@ -12,7 +12,7 @@ import {
   SnippetHeader,
   SnippetTabsContent,
 } from "@/components/kibo-ui/snippet";
-import { AgentLink, CaptureChip, PresencePill, StalePill, TaskLink, VerdictTally } from "@/components/domain/pills";
+import { AgentLink, CaptureIcon, PresencePill, TaskLink, VerdictTally } from "@/components/domain/pills";
 import { COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from "@/components/domain/task";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { EventBody } from "@/components/domain/event";
@@ -21,7 +21,8 @@ import { Composer } from "@/components/domain/composer";
 import { EVENT_TYPE_LABEL, ago, clock, summarize } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
-import { GroupBox } from "@/components/shell/groupbox";
+import { Section } from "@/components/shell/section";
+import { StatusPill } from "@/components/atoms/StatusPill";
 
 const WORK: EventType[] = [
   "claim",
@@ -43,18 +44,20 @@ const WORK: EventType[] = [
   "mirror.failed",
 ];
 
-const SCOPES = ["Work", "All Events"] as const;
+const SCOPES = ["Work", "All"] as const;
 
 const DOT: Partial<Record<EventType, string>> = {
-  claim: "bg-accent-ink",
+  claim: "bg-accent",
   takeover: "bg-red",
   push: "bg-green",
   merge: "bg-green",
   "task.review": "bg-green",
-  update: "bg-foreground",
-  "step.complete": "bg-accent-ink",
+  update: "bg-ink-2",
+  "step.complete": "bg-accent",
   "claim.refused": "bg-orange",
 };
+
+const COLUMN_TONE = { stale: "red", open: "neutral", claimed: "accent", review: "orange", done: "green" } as const;
 
 export function TaskDetail({ number }: { number: number }) {
   const { events, snapshot } = useChannel();
@@ -67,7 +70,7 @@ export function TaskDetail({ number }: { number: number }) {
   const timeline = useMemo(
     () =>
       events
-        .filter((e) => e.task === number && (scope === "All Events" || WORK.includes(e.type)))
+        .filter((e) => e.task === number && (scope === "All" || WORK.includes(e.type)))
         .slice()
         .reverse(),
     [events, number, scope],
@@ -75,8 +78,8 @@ export function TaskDetail({ number }: { number: number }) {
 
   if (!task) {
     return (
-      <div className="p-6 text-[13px] text-ink-2">
-        No Task #{number} on this Channel. <a href={href({ view: "tasks" })} className="text-accent-ink hover:underline">Back to Tasks</a>
+      <div className="p-6 text-[14px] text-ink-2">
+        No Task #{number}. <a href={href({ view: "tasks" })} className="text-accent-ink hover:underline">Back to the Board</a>
       </div>
     );
   }
@@ -89,61 +92,55 @@ export function TaskDetail({ number }: { number: number }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-6xl gap-5 p-3 sm:p-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="flex min-w-0 flex-col gap-5">
-          <header className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2 font-mono text-[11.5px] text-ink-3">
+      <div className="mx-auto grid max-w-6xl gap-6 px-4 py-5 sm:px-6 sm:py-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-10">
+        <div className="flex min-w-0 flex-col gap-6">
+          <header className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-[13px] text-ink-3">
+              <StatusPill tone={COLUMN_TONE[col]} className="h-6 text-[12.5px]">
+                {COLUMN_LABEL[col]}
+              </StatusPill>
               <span className="font-mono">#{task.number}</span>
-              <span aria-hidden>·</span>
-              <span>{COLUMN_LABEL[col]}</span>
-              <span aria-hidden>·</span>
-              <a href={task.url} target="_blank" rel="noreferrer" className="text-accent-ink hover:underline">
-                Issue on GitHub
-              </a>
               {task.parent && (
-                <>
-                  <span aria-hidden>·</span>
-                  <span>
-                    Subtask of <TaskLink number={task.parent} title={taskByNumber.get(task.parent)?.title} />
-                  </span>
-                </>
-              )}
-            </div>
-            <h1 className="glow text-[22px] leading-tight font-bold tracking-tight text-accent-ink [overflow-wrap:anywhere] sm:text-[26px]">
-              {task.title}
-            </h1>
-            <IssueBody text={task.description} />
-            <div className="flex flex-wrap gap-1.5">
-              {task.labels.map((l) => (
-                <span key={l} className="bevel-thin-in bg-muted px-1.5 py-[1px] font-mono text-[11px] text-muted-foreground">
-                  {l}
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  in <TaskLink number={task.parent} title={taskByNumber.get(task.parent)?.title} className="min-w-0 text-ink-2" />
                 </span>
-              ))}
+              )}
+              <a href={task.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-ink-3 hover:text-accent-ink">
+                GitHub <ExternalLink className="size-3.5" aria-hidden />
+              </a>
             </div>
+            <h1 className="text-[22px] leading-tight font-semibold tracking-tight text-ink [overflow-wrap:anywhere] sm:text-[26px]">{task.title}</h1>
+            <IssueBody text={task.description} />
+            {task.labels.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {task.labels.map((l) => (
+                  <span key={l} className="rounded-full bg-hover px-2 py-0.5 text-[12px] text-ink-2">
+                    {l}
+                  </span>
+                ))}
+              </div>
+            )}
           </header>
 
           {task.steps.length > 0 && (
-            <GroupBox title={<span className="flex items-center gap-2">Steps <Progress done={steps.done} total={steps.total} noun="done" /></span>}>
-              <ul className="flex flex-col gap-1.5">
-                  {task.steps.map((s) => (
-                    <li key={s.index} className="flex items-start gap-2 text-[13px]">
-                      {s.done ? (
-                        <CircleCheck className="mt-px text-green" aria-label="Done" />
-                      ) : (
-                        <Circle className="mt-px text-faint" aria-label="Not done" />
-                      )}
-                      <span className={s.done ? "text-ink-3 line-through" : "text-ink"}>{s.text}</span>
-                    </li>
-                  ))}
+            <Section title="Steps" action={<Progress done={steps.done} total={steps.total} noun="" />}>
+              <ul className="flex flex-col gap-2">
+                {task.steps.map((s) => (
+                  <li key={s.index} className="flex items-start gap-2.5 text-[14px]">
+                    {s.done ? (
+                      <CircleCheck className="mt-0.5 size-4 shrink-0 text-green" aria-label="Done" />
+                    ) : (
+                      <Circle className="mt-0.5 size-4 shrink-0 text-ink-4" aria-label="Not done" />
+                    )}
+                    <span className={s.done ? "text-ink-3 line-through" : "text-ink"}>{s.text}</span>
+                  </li>
+                ))}
               </ul>
-            </GroupBox>
+            </Section>
           )}
 
           {task.subtasks.length > 0 && (
-            <GroupBox
-              title={<span className="flex items-center gap-2">Subtasks <Progress done={subs.done} total={subs.total} noun="done" /></span>}
-              bodyClassName="px-1 pb-1"
-            >
+            <Section title="Subtasks" action={<Progress done={subs.done} total={subs.total} noun="" />} bodyClassName="px-1.5 pb-1.5">
               <ul>
                 {task.subtasks.map((n) => {
                   const s = taskByNumber.get(n);
@@ -153,31 +150,33 @@ export function TaskDetail({ number }: { number: number }) {
                     <li key={n}>
                       <a
                         href={href({ view: "task", number: n })}
-                        className="flex items-center gap-3 px-2 py-[3px] hover:bg-primary hover:text-primary-foreground hover:[&_*]:text-primary-foreground coarse:py-2.5"
+                        className="flex min-h-10 items-center gap-3 rounded-lg px-2.5 hover:bg-hover"
                       >
-                        <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
-                          <span className="font-mono text-[12px] text-ink-3">#{n}</span> {s.title}
+                        <span className="min-w-0 flex-1 truncate text-[14px] text-ink">
+                          <span className="font-mono text-[12.5px] text-ink-3">#{n}</span> {s.title}
                         </span>
-                        {sp.total > 0 && <Progress done={sp.done} total={sp.total} noun="steps" />}
-                        <span className="w-20 text-right text-[11.5px] text-ink-3">{COLUMN_LABEL[columnOf(s)]}</span>
+                        {sp.total > 0 && <Progress done={sp.done} total={sp.total} noun="" />}
+                        <StatusPill tone={COLUMN_TONE[columnOf(s)]} className="h-5 px-2 text-[11.5px]">
+                          {COLUMN_LABEL[columnOf(s)]}
+                        </StatusPill>
                       </a>
                     </li>
                   );
                 })}
               </ul>
-            </GroupBox>
+            </Section>
           )}
 
-          <section className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-1.5">
-              <h2 className="type-label !text-ink">Timeline</h2>
+          <section className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-[15px] font-medium text-ink">Timeline</h2>
               <SegmentedControl options={SCOPES} value={scope} onChange={setScope} />
             </div>
             {timeline.length === 0 ? (
-              <p className="text-[12.5px] text-ink-3">Nothing has happened on this Task yet.</p>
+              <p className="text-[14px] text-ink-3">Nothing yet</p>
             ) : (
               <ol className="relative flex flex-col">
-                <span aria-hidden className="absolute top-2 bottom-2 left-[4px] w-px bg-border" />
+                <span aria-hidden className="absolute top-3 bottom-3 left-[4px] w-px bg-line" />
                 {timeline.map((e) => (
                   <TimelineItem key={e.id} event={e} threshold={threshold} />
                 ))}
@@ -189,11 +188,11 @@ export function TaskDetail({ number }: { number: number }) {
         {/* On a phone the Claim card leads only when a Stale Claim needs a Takeover. */}
         <aside
           className={cn(
-            "flex min-w-0 flex-col gap-4 lg:sticky lg:top-0 lg:order-none lg:self-start",
+            "flex min-w-0 flex-col gap-4 lg:sticky lg:top-8 lg:order-none lg:self-start",
             task.claim?.stale && "order-first",
           )}
         >
-          <GroupBox title="Claim" tone={task.claim?.stale ? "alert" : undefined} bodyClassName="flex flex-col gap-2">
+          <Section title={task.claim?.stale ? "Stale Claim" : "Claim"} tone={task.claim?.stale ? "alert" : undefined} bodyClassName="flex flex-col gap-3">
             {task.claim ? (
               <>
                 <div className="flex flex-wrap items-center gap-2">
@@ -203,33 +202,29 @@ export function TaskDetail({ number }: { number: number }) {
                     <span className="text-[13px] font-medium text-ink">{task.claim.holder.person}</span>
                   )}
                   {holderAgent && <PresencePill presence={holderAgent.presence} />}
-                  {task.claim.stale && <StalePill />}
                 </div>
-                <p className="text-[12px] text-ink-3">
-                  Claimed {ago(task.claim.claimedAt)}
-                  {task.claim.stale && ". The holder is Gone, so this stays held until a Person takes it over."}
-                </p>
+                <p className="text-[12.5px] text-ink-3">Claimed {ago(task.claim.claimedAt)}</p>
                 <TakeoverAction task={task} />
               </>
             ) : (
-              <p className="text-[12.5px] text-ink-3">
+              <p className="text-[13px] text-ink-3">
                 {task.status === "done" ? (
-                  "Done. No Claim."
+                  "Done"
                 ) : can.claims ? (
-                  "Nobody holds this Task."
+                  "Unclaimed"
                 ) : (
-                  <>Nobody holds this Task. Claims arrive with <IssueLink capability="claims" />.</>
+                  <>Claims arrive with <IssueLink capability="claims" />.</>
                 )}
               </p>
             )}
-          </GroupBox>
+          </Section>
 
           {blocked.length > 0 && (
-            <GroupBox title="Blocked by" tone="alert" bodyClassName="flex flex-col gap-1.5">
+            <Section title="Blocked by" tone="alert" bodyClassName="flex flex-col gap-2">
               {blocked.map((b) => (
-                <TaskLink key={b!.number} number={b!.number} title={b!.title} className="text-[12.5px] text-ink" />
+                <TaskLink key={b!.number} number={b!.number} title={b!.title} className="text-[13.5px] text-ink" />
               ))}
-            </GroupBox>
+            </Section>
           )}
 
           {(task.branch || task.pr) && (
@@ -237,8 +232,8 @@ export function TaskDetail({ number }: { number: number }) {
               {task.branch && (
                 <Snippet defaultValue="switch">
                   <SnippetHeader>
-                    <span className="flex items-center gap-1.5 text-[12px] font-bold">
-                      <GitBranch /> Branch
+                    <span className="flex items-center gap-1.5 text-[12.5px] font-medium">
+                      <GitBranch className="size-3.5" aria-hidden /> Branch
                     </span>
                     <SnippetCopyButton value={`git fetch && git switch ${task.branch}`} aria-label="Copy command" />
                   </SnippetHeader>
@@ -248,14 +243,14 @@ export function TaskDetail({ number }: { number: number }) {
                 </Snippet>
               )}
               {task.pr && (
-                <p className="flex items-center gap-1.5 text-[12.5px] text-ink-2">
-                  <GitPullRequest /> PR <span className="font-mono">#{task.pr}</span>
+                <p className="flex items-center gap-1.5 text-[13px] text-ink-2">
+                  <GitPullRequest className="size-3.5" aria-hidden /> PR <span className="font-mono">#{task.pr}</span>
                 </p>
               )}
             </section>
           )}
 
-          {task.status !== "done" && <Composer task={task.number} className="bevel-out" />}
+          {task.status !== "done" && <Composer task={task.number} />}
         </aside>
       </div>
     </div>
@@ -268,30 +263,27 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
   const verdicts = verdictsByEvent.get(e.id) ?? [];
   const asked = verdicts.filter((v) => v.source === "jev");
   return (
-    <li className="relative grid grid-cols-[9px_minmax(0,1fr)] gap-3 py-1.5">
-      <span
-        aria-hidden
-        className={cn("relative z-10 mt-1 size-[9px] border border-card", DOT[e.type] ?? "bg-faint")}
-      />
-      <div className="flex min-w-0 flex-col gap-1.5">
+    <li className="relative grid grid-cols-[9px_minmax(0,1fr)] gap-3 py-2">
+      <span aria-hidden className={cn("relative z-10 mt-1.5 size-[9px] rounded-full ring-4 ring-page", DOT[e.type] ?? "bg-ink-4")} />
+      <div className="flex min-w-0 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="type-label !text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
+          <span className="text-[13px] font-medium text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
           {e.actor.kind === "agent" ? (
             <AgentLink id={e.actor.agentId} agent={agentById.get(e.actor.agentId)} />
           ) : (
-            <span className="text-[12.5px] text-ink-2">{e.actor.kind === "person" ? e.actor.person : "GitHub"}</span>
+            <span className="text-[13px] text-ink-2">{e.actor.kind === "person" ? e.actor.person : "GitHub"}</span>
           )}
-          <CaptureChip event={e} />
-          <time className="ml-auto font-mono text-[11px] text-ink-3 tabular-nums" title={clock(e.at)}>
+          <CaptureIcon event={e} />
+          <time className="ml-auto font-mono text-[11.5px] text-ink-3 tabular-nums" title={clock(e.at)}>
             {ago(e.at)}
           </time>
         </div>
         {e.type === "push" || e.type === "merge" || e.type === "takeover" ? (
           <>
-            <p className="text-[13px] text-ink-2">{summarize(e)}</p>
+            <p className="text-[13.5px] text-ink-2">{summarize(e)}</p>
             <Reasoning>
-              <ReasoningTrigger className="text-[12px] font-medium text-ink-2">
-                {e.type === "push" || e.type === "merge" ? `Diff (${e.payload.files.length} ${e.payload.files.length === 1 ? "file" : "files"})` : "Hand-off"}
+              <ReasoningTrigger className="text-[12.5px] text-ink-3">
+                {e.type === "push" || e.type === "merge" ? `${e.payload.files.length} ${e.payload.files.length === 1 ? "file" : "files"}` : "Hand-off"}
               </ReasoningTrigger>
               <ReasoningContent contentClassName="mt-2 max-w-none">
                 <EventBody event={e} />
@@ -299,11 +291,11 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
             </Reasoning>
           </>
         ) : (
-          <p className={cn("text-[13px] leading-snug", e.type === "update" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
+          <p className={cn("text-[13.5px] leading-snug", e.type === "update" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
         )}
         {asked.length > 0 && (
           <Reasoning>
-            <ReasoningTrigger className="text-[12px] text-ink-3">
+            <ReasoningTrigger className="text-[12.5px] text-ink-3">
               <span className="flex items-center gap-2">
                 Verdicts <VerdictTally verdicts={verdicts} />
               </span>

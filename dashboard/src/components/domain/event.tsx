@@ -4,7 +4,9 @@ import { Tool } from "@/components/ui/tool";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
 import { EVENT_TYPE_LABEL, TASK_FIELD_LABEL, ago, clock, compact, holderName, summarize } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { AgentLink, CaptureChip, RawBadge, TaskLink, VerdictTally } from "./pills";
+import { ActorAvatar, AgentLink, CaptureChip, CaptureIcon, RawBadge, TaskLink, VerdictTally } from "./pills";
+import { ArrowRight } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FileDiff } from "./diff";
 import { VerdictTable } from "./verdict";
 import { IssueLink } from "./pending";
@@ -29,11 +31,11 @@ function Actor({ event, agentById, compact }: { event: ChannelEvent; agentById: 
   if (a.kind === "agent")
     return <AgentLink id={a.agentId} agent={agentById.get(a.agentId)} nicknameClassName={compact ? "hidden sm:inline" : undefined} />;
   if (a.kind === "person")
-    return <span className="text-[12.5px] font-medium text-ink">{a.person}</span>;
-  return <span className="text-[12.5px] font-medium text-ink-2">GitHub</span>;
+    return <span className="truncate text-[13px] font-medium text-ink">{a.person}</span>;
+  return <span className="text-[13px] font-medium text-ink-2">GitHub</span>;
 }
 
-/** One line in the live feed. Dense on desktop, stacked on a phone. */
+/** One message in the live feed: who, what, and when, like a chat line. */
 export function EventRow({
   event,
   verdicts,
@@ -42,6 +44,7 @@ export function EventRow({
   selected,
   fresh,
   onSelect,
+  continued = false,
 }: {
   event: ChannelEvent;
   verdicts: Verdict[];
@@ -50,12 +53,13 @@ export function EventRow({
   selected: boolean;
   fresh: boolean;
   onSelect: () => void;
+  /** Same sender as the row above, moments later: the avatar is left out, as in a chat. */
+  continued?: boolean;
 }) {
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
   const isMessage = event.type === "update" || event.type === "directive";
   return (
-    // A new Event maps in over two frames, the way the site maps a window: no slide.
-    <li className={cn("list-none", fresh && "notice-in")}>
+    <li className={cn("list-none", fresh && "row-in")}>
       <div
         role="button"
         tabIndex={0}
@@ -68,40 +72,46 @@ export function EventRow({
           }
         }}
         className={cn(
-          "group relative grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-b border-line-soft px-3 py-1.5 text-left outline-none hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[hsl(var(--ring))] sm:px-4",
-          // Selected the way the site's file manager selects: the row inverts to the preset's primary.
-          selected && "bg-primary text-primary-foreground hover:bg-primary [&_*]:!text-primary-foreground [&_code]:!bg-transparent",
+          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-lg px-3 text-left outline-none transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+          continued ? "py-1.5" : "pt-3 pb-1.5",
+          selected && "bg-accent-tint hover:bg-accent-tint",
         )}
       >
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="label-mono !text-[10px]">{EVENT_TYPE_LABEL[event.type]}</span>
-          <Actor event={event} agentById={agentById} compact />
-          {event.type === "directive" && (
-            <span className="inline-flex min-w-0 items-baseline gap-1.5 text-[12px] text-ink-3">
-              to
-              <AgentLink id={event.payload.to} agent={agentById.get(event.payload.to)} showNickname={false} />
+        {continued ? <span aria-hidden /> : <ActorAvatar actor={event.actor} />}
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={cn("flex min-w-0 items-center gap-1.5", continued && "sr-only")}>
+              <Actor event={event} agentById={agentById} compact />
+              {event.type === "directive" && (
+                <>
+                  <ArrowRight className="size-3.5 shrink-0 text-ink-4" aria-label="to" />
+                  <AgentLink id={event.payload.to} agent={agentById.get(event.payload.to)} showNickname={false} />
+                </>
+              )}
             </span>
-          )}
-          <CaptureChip event={event} />
-          {event.type === "proxy.raw" && <RawBadge />}
-          {task && <TaskLink number={task.number} className="text-[12px] text-ink-3" />}
+            <span className="shrink-0 text-[12px] text-ink-3">{EVENT_TYPE_LABEL[event.type]}</span>
+            {event.type === "proxy.raw" && <RawBadge />}
+            {task && <TaskLink number={task.number} className="shrink-0 text-[12px]" />}
+            <span className="ml-auto flex shrink-0 items-center gap-2">
+              <VerdictTally verdicts={verdicts} />
+              <CaptureIcon event={event} />
+              <time className="font-mono text-[11.5px] text-ink-3 tabular-nums" dateTime={event.at} title={clock(event.at)}>
+                {ago(event.at)}
+              </time>
+            </span>
+          </div>
+          <p
+            className={cn(
+              "line-clamp-2 min-w-0 text-[13.5px] leading-snug text-ink-2",
+              TONE[event.type],
+              isMessage && "text-ink",
+              event.type === "directive" && "text-accent-ink",
+              (event.type === "command" || event.type === "tool.call" || event.type === "file.edit") && "font-mono text-[12.5px]",
+            )}
+          >
+            {summarize(event)}
+          </p>
         </div>
-        <div className="flex items-center gap-2 self-start pt-0.5">
-          <VerdictTally verdicts={verdicts} />
-          <time className="font-mono text-[11px] text-ink-3 tabular-nums" dateTime={event.at} title={clock(event.at)}>
-            {ago(event.at)}
-          </time>
-        </div>
-        <p
-          className={cn(
-            "col-span-2 line-clamp-2 min-w-0 text-[13px] leading-snug text-ink-2",
-            TONE[event.type],
-            isMessage && "font-medium",
-            (event.type === "command" || event.type === "tool.call" || event.type === "file.edit") && "font-mono text-[12px]",
-          )}
-        >
-          {summarize(event)}
-        </p>
       </div>
     </li>
   );
@@ -123,8 +133,8 @@ export function toolSteps(calls: ToolCall[]): ToolStep[] {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <dt className="label-mono">{label}</dt>
-      <dd className="min-w-0 text-[12.5px] text-ink">{children}</dd>
+      <dt className="text-[12px] text-ink-3">{label}</dt>
+      <dd className="min-w-0 text-[13px] text-ink">{children}</dd>
     </div>
   );
 }
@@ -166,7 +176,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
             <Field label="Tokens in"><span className="tabular-nums">{compact(p.inputTokens)}</span></Field>
             <Field label="Tokens out"><span className="tabular-nums">{compact(p.outputTokens)}</span></Field>
           </dl>
-          <p className="bevel-in bg-card px-3 py-2 font-mono text-[12.5px] leading-relaxed text-ink">{p.reply}</p>
+          <p className="rounded-lg bg-inset px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-ink">{p.reply}</p>
           {p.toolCalls.length > 0 && (
             <ToolChips
               animate={false}
@@ -179,17 +189,17 @@ export function EventBody({ event }: { event: ChannelEvent }) {
             <Reasoning>
               <ReasoningTrigger className="text-[12.5px] font-medium">Model context (raw)</ReasoningTrigger>
               <ReasoningContent contentClassName="mt-2">
-                <pre className="bevel-in max-h-64 overflow-auto bg-card p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-ink-2">
+                <pre className="max-h-64 overflow-auto rounded-lg bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-ink-2">
                   {event.payload.context}
                 </pre>
               </ReasoningContent>
             </Reasoning>
           )}
-          <p className="text-[11.5px] text-ink-3">
-            {p.maskedSecrets > 0
-              ? `${p.maskedSecrets} detected ${p.maskedSecrets === 1 ? "secret was" : "secrets were"} masked before leaving the laptop.`
-              : "No secrets detected."}
-          </p>
+          {p.maskedSecrets > 0 && (
+            <p className="text-[12px] text-ink-3">
+              {p.maskedSecrets} {p.maskedSecrets === 1 ? "secret" : "secrets"} masked
+            </p>
+          )}
         </div>
       );
     }
@@ -210,11 +220,10 @@ export function EventBody({ event }: { event: ChannelEvent }) {
       );
     case "directive":
       return (
-        <div className="bevel-in flex flex-col gap-2 bg-card p-3">
+        <div className="flex flex-col gap-3 rounded-lg bg-inset p-3">
           <dl className="grid grid-cols-2 gap-3">
             <Field label="From">
               {event.actor.kind === "person" ? event.actor.person : "-"}
-              <span className="text-ink-3"> (Person)</span>
             </Field>
             <Field label="To"><AgentLink id={event.payload.to} showNickname={false} /></Field>
           </dl>
@@ -223,7 +232,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
       );
     case "takeover":
       return (
-        <div className="bevel-in flex flex-col gap-2 bg-card p-3">
+        <div className="flex flex-col gap-3 rounded-lg bg-inset p-3">
           <dl className="grid grid-cols-2 gap-3">
             <Field label="From"><span className="font-mono text-[12px]">{holderName(event.payload.from)}</span></Field>
             <Field label="To"><span className="font-mono text-[12px]">{holderName(event.payload.to)}</span></Field>
@@ -247,17 +256,16 @@ export function EventBody({ event }: { event: ChannelEvent }) {
         <div className="flex flex-col gap-2">
           <p className="text-[13.5px] leading-relaxed text-ink">{event.payload.title}</p>
           <a href={event.payload.url} target="_blank" rel="noreferrer" className="self-start text-[12.5px] text-accent-ink hover:underline">
-            Open the Issue on GitHub
+            Issue on GitHub
           </a>
         </div>
       );
     case "task.change":
       return (
         <div className="flex flex-col gap-2">
-          <p className="text-[13px] text-ink-2">GitHub owns these fields, so the Task now follows the Issue.</p>
           <div className="flex flex-wrap gap-1.5">
             {event.payload.fields.map((f) => (
-              <span key={f} className="bevel-thin-in bg-muted px-1.5 py-[1px] font-mono text-[11px] text-muted-foreground">
+              <span key={f} className="rounded-full bg-hover px-2 py-0.5 text-[12px] text-ink-2">
                 {TASK_FIELD_LABEL[f]}
               </span>
             ))}
@@ -286,37 +294,49 @@ export function EventDetail({
 }) {
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
   return (
-    <article className="flex flex-col gap-4">
-      <header className="flex flex-col gap-1.5 border-b border-border pb-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="label-mono">{EVENT_TYPE_LABEL[event.type]}</span>
-          <CaptureChip event={event} />
-          {event.type === "proxy.raw" && <RawBadge />}
-          <time className="ml-auto font-mono text-[11px] text-ink-3 tabular-nums" dateTime={event.at}>
-            {clock(event.at)} · {ago(event.at)}
-          </time>
+    <article className="flex flex-col gap-5">
+      <header className="flex items-start gap-3">
+        <ActorAvatar actor={event.actor} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <Actor event={event} agentById={agentById} />
+            <span className="text-[12.5px] text-ink-3">{EVENT_TYPE_LABEL[event.type]}</span>
+            <CaptureChip event={event} />
+            {event.type === "proxy.raw" && <RawBadge />}
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-3">
+            <time className="font-mono tabular-nums" dateTime={event.at}>
+              {clock(event.at)} · {ago(event.at)}
+            </time>
+            {task && <TaskLink number={task.number} title={task.title} className="min-w-0 text-ink-2" />}
+          </div>
         </div>
-        <Actor event={event} agentById={agentById} />
-        {task && <TaskLink number={task.number} title={task.title} className="text-[12.5px] text-ink-2" />}
       </header>
       <EventBody event={event} />
-      <section className="flex flex-col gap-2">
-        <h3 className="type-label flex items-baseline justify-between !text-ink">
+      <section className="flex flex-col gap-2.5">
+        <h3 className="flex items-center justify-between text-[13px] font-medium text-ink">
           Verdicts
-          <span className="font-mono text-[11px] tracking-normal normal-case text-ink-3">Interrupt threshold {threshold.toFixed(2)}</span>
+          {event.type !== "directive" && verdictsLive && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={0} className="rounded-full bg-hover px-2 py-0.5 font-mono text-[11.5px] font-normal text-ink-3">
+                  threshold {threshold.toFixed(2)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>An Interrupt needs at least this probability. Below it, the Event is Queued.</TooltipContent>
+            </Tooltip>
+          )}
         </h3>
         {event.type === "directive" ? (
-          <p className="bevel-in bg-card px-3 py-2.5 text-[12.5px] text-ink-3">
-            A Directive is addressed and always delivered, so the Relay gives no Verdict on it. It is typed into{" "}
-            <span className="font-mono text-[12px]">{event.payload.to}</span>'s session right away when its wrapper can take it,
-            or held for its next turn, labelled as from {event.actor.kind === "person" ? event.actor.person : "its sender"}. The
-            Directive delivery Event after it says which.
+          <p className="rounded-lg bg-inset px-3 py-2.5 text-[13px] text-ink-3">
+            No Verdict: a Directive always reaches <span className="font-mono text-[12.5px] text-ink-2">{event.payload.to}</span>, labelled
+            as from {event.actor.kind === "person" ? event.actor.person : "its sender"}.
           </p>
         ) : verdictsLive ? (
           <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
         ) : (
-          <p className="bevel-in bg-card px-3 py-2.5 text-[12.5px] text-ink-3">
-            Each Agent's Verdict on this Event, with Jev's probabilities, appears once the Relay (<IssueLink capability="verdicts" />) lands.
+          <p className="rounded-lg bg-inset px-3 py-2.5 text-[13px] text-ink-3">
+            Arrives with the Relay (<IssueLink capability="verdicts" />).
           </p>
         )}
       </section>

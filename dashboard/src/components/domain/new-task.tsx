@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Plus } from "@/components/pixel-icon";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { MAX_TASK_TITLE_LENGTH } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
@@ -43,41 +43,39 @@ export function NewTaskButton() {
   return (
     <>
       <Button variant="accent" size="sm" onClick={() => setOpen(true)} className="gap-1">
-        <Plus /> New Task
+        <Plus className="size-4" aria-hidden /> <span className="max-sm:sr-only">New Task</span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-md">
           <form onSubmit={submit} className="flex flex-col gap-4">
             <DialogHeader>
               <DialogTitle>New Task</DialogTitle>
-              <DialogDescription>
-                Creates a GitHub Issue. Title and description then follow GitHub.
-              </DialogDescription>
+              <DialogDescription>Creates a GitHub Issue.</DialogDescription>
             </DialogHeader>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-semibold">Title</span>
+              <span className="text-[13px] font-medium">Title</span>
               <input
                 name="title"
                 autoFocus
                 maxLength={MAX_TASK_TITLE_LENGTH}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="bevel-in h-8 bg-card px-2 text-[13px] text-card-foreground outline-none focus-visible:outline-2 focus-visible:outline-[hsl(var(--ring))] coarse:h-11 coarse:text-[16px]"
+                className="h-10 rounded-lg border border-line-strong bg-field px-3 text-[14px] text-ink outline-none focus-visible:border-accent max-md:text-[16px]"
               />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-semibold">Description</span>
+              <span className="text-[13px] font-medium">Description <span className="font-normal text-ink-4">optional</span></span>
               <textarea
                 name="description"
                 rows={4}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional. Checklist items (- [ ] ...) become Steps."
-                className="bevel-in resize-none bg-card px-2 py-1.5 font-mono text-[12.5px] text-card-foreground outline-none placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[hsl(var(--ring))] coarse:text-[16px]"
+                placeholder="- [ ] Steps as a checklist"
+                className="resize-none rounded-lg border border-line-strong bg-field px-3 py-2 font-mono text-[13px] text-ink outline-none placeholder:text-ink-4 focus-visible:border-accent max-md:text-[16px]"
               />
             </label>
             {problem && (
-              <p role="alert" className="text-[12.5px] font-semibold text-red">
+              <p role="alert" className="text-[13px] text-red">
                 {problem}
               </p>
             )}

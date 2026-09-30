@@ -11,7 +11,7 @@ import {
   Loader2,
   Settings,
   XCircle,
-} from "@/components/pixel-icon"
+} from "lucide-react"
 import { useState } from "react"
 
 export type ToolPart = {
@@ -54,7 +54,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   }
 
   const getStateBadge = () => {
-    const baseClasses = "px-2 py-0.5 text-[11.5px] font-medium"
+    const baseClasses = "px-2 py-0.5 rounded-full text-[11.5px] font-medium"
     switch (state) {
       case "input-streaming":
         return (
@@ -127,7 +127,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   return (
     <div
       className={cn(
-        "bevel-in overflow-hidden bg-card",
+        "overflow-hidden rounded-card bg-surface shadow-card",
         className
       )}
     >
@@ -135,7 +135,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
         <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            className="h-auto w-full justify-between border-0 border-b border-border bg-secondary px-3 py-1.5 font-normal"
+            className="bg-surface h-auto w-full justify-between rounded-b-none px-3 py-2 font-normal hover:bg-inset"
           >
             <div className="flex items-center gap-2">
               {getStateIcon()}
@@ -153,13 +153,13 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
             "data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
           )}
         >
-          <div className="space-y-3 bg-card p-3">
+          <div className="bg-surface space-y-3 p-3">
             {input && Object.keys(input).length > 0 && (
               <div>
                 <h4 className="text-muted-foreground mb-2 text-sm font-medium">
                   Input
                 </h4>
-                <div className="bg-inset border border-line p-2 font-mono text-[12px]">
+                <div className="bg-inset rounded-[6px] border border-line p-2 font-mono text-[12px]">
                   {Object.entries(input).map(([key, value]) => (
                     <div key={key} className="mb-1">
                       <span className="text-muted-foreground">{key}:</span>{" "}
@@ -175,7 +175,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
                 <h4 className="text-muted-foreground mb-2 text-sm font-medium">
                   Output
                 </h4>
-                <div className="bg-inset max-h-60 overflow-auto border border-line p-2 font-mono text-[12px]">
+                <div className="bg-inset max-h-60 overflow-auto rounded-[6px] border border-line p-2 font-mono text-[12px]">
                   <pre className="whitespace-pre-wrap">
                     {formatValue(output)}
                   </pre>

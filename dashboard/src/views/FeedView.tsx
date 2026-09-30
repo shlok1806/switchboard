@@ -1,19 +1,25 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { MessageSquarePlus, X } from "@/components/pixel-icon";
+import { ArrowLeft, MousePointerClick, X } from "lucide-react";
+import type { ChannelEvent } from "@shared/index";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { EventDetail, EventRow } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
 import { Composer } from "@/components/domain/composer";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { CAPTURE_LABEL, VERDICT_LABEL, VERDICT_OPTIONS } from "@/lib/format";
 import { go } from "@/lib/router";
-import { cn } from "@/lib/utils";
 
 const SHOW = 250;
 // How close to the bottom (px) still counts as "following" the live feed.
 const FOLLOW_SLACK = 80;
+
+/** Two Events from the same sender within two minutes read as one chat group. */
+function continues(prev: ChannelEvent | undefined, e: ChannelEvent): boolean {
+  if (!prev || e.type === "directive") return false;
+  const who = (x: ChannelEvent) => (x.actor.kind === "agent" ? x.actor.agentId : x.actor.kind === "person" ? `p:${x.actor.person}` : x.actor.kind);
+  return who(prev) === who(e) && Date.parse(e.at) - Date.parse(prev.at) < 120_000;
+}
 
 export function FeedView({ selected }: { selected?: string }) {
   const { events, verdictsByEvent, agents, tasks, snapshot, fresh } = useChannel();
@@ -21,7 +27,6 @@ export function FeedView({ selected }: { selected?: string }) {
   const mobile = useIsMobile();
   const can = useCapabilities();
   const [filters, setFilters] = useState<FeedFilters>(EMPTY_FILTERS);
-  const [composeOpen, setComposeOpen] = useState(false);
   const threshold = snapshot?.relay.interruptThreshold ?? 0.6;
 
   const shown = useMemo(() => {
@@ -46,14 +51,15 @@ export function FeedView({ selected }: { selected?: string }) {
     following.current = true;
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [filters, mobile]);
+    // On a phone the list remounts when the Person comes back from an Event.
+  }, [filters, mobile, mobile && !!selected]);
 
   const selectedEvent = selected ? events.find((e) => e.id === selected) : undefined;
   const set = (k: keyof FeedFilters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
   const n = activeCount(filters);
 
   const filterBar = (
-    <div className="no-scrollbar feed-filters flex items-center gap-1.5 overflow-x-auto border-b border-line py-2 pr-8 pl-3 sm:px-4">
+    <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 sm:px-6 md:flex-nowrap md:overflow-x-auto">
       <FilterSelect
         label="Person"
         value={filters.person}
@@ -98,9 +104,9 @@ export function FeedView({ selected }: { selected?: string }) {
         <button
           type="button"
           onClick={() => setFilters(EMPTY_FILTERS)}
-          className="btn-motif h-[26px] shrink-0 px-2 text-[12px]"
+          className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] text-ink-3 hover:bg-hover hover:text-ink"
         >
-          <X /> Clear {n}
+          <X className="size-3.5" aria-hidden /> Clear
         </button>
       )}
     </div>
@@ -113,21 +119,22 @@ export function FeedView({ selected }: { selected?: string }) {
         const el = e.currentTarget;
         following.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK;
       }}
-      className={cn("min-h-0 flex-1 overflow-y-auto", mobile && "pb-24")}
+      className="min-h-0 flex-1 overflow-y-auto"
       aria-live="polite"
       aria-relevant="additions"
     >
       {shown.length === 0 ? (
         <div className="flex h-40 flex-col items-center justify-center gap-1 text-center">
-          <p className="text-[13px] font-medium text-ink">No Events match these filters</p>
-          <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="text-[12.5px] text-accent-ink hover:underline">
+          <p className="text-[14px] text-ink-2">Nothing matches</p>
+          <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="text-[13px] text-accent-ink hover:underline">
             Clear filters
           </button>
         </div>
       ) : (
-        <ul>
-            {shown.map((e) => (
+        <ul className="mx-auto flex max-w-4xl flex-col px-2 py-2 sm:px-3">
+            {shown.map((e, i) => (
               <EventRow
+                continued={continues(shown[i - 1], e)}
                 key={e.id}
                 event={e}
                 verdicts={verdictsByEvent.get(e.id) ?? []}
@@ -153,66 +160,56 @@ export function FeedView({ selected }: { selected?: string }) {
       verdictsLive={can.verdicts}
     />
   ) : (
-    <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-      <p className="text-[13px] font-medium text-ink">Pick an Event</p>
-      <p className="max-w-xs text-[12.5px] text-ink-3">
-        {can.verdicts
-          ? "Its payload and the Relay's Verdict for every Agent show here, with Jev's probabilities."
-          : "Its payload shows here. Verdicts join it once the Relay lands."}
-      </p>
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-ink-3">
+      <MousePointerClick className="size-6 text-ink-4" aria-hidden strokeWidth={1.5} />
+      <p className="text-[14px]">Select an Event</p>
     </div>
   );
 
+  const composer = (
+    <div className="shrink-0 border-t border-line bg-page px-3 py-3 sm:px-6">
+      <div className="mx-auto max-w-4xl">
+        <Composer />
+      </div>
+    </div>
+  );
+
+  // A phone shows one thing at a time: the feed, or the Event it opened.
   if (mobile) {
+    if (selectedEvent)
+      return (
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex h-11 shrink-0 items-center border-b border-line px-2">
+            <button
+              type="button"
+              onClick={() => go({ view: "feed" })}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md px-2 text-[14px] text-ink-2 hover:bg-hover"
+            >
+              <ArrowLeft className="size-4" aria-hidden /> Activity
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{detail}</div>
+        </div>
+      );
     return (
       <div className="flex h-full min-h-0 flex-col">
         {filterBar}
         {list}
-        <button
-          type="button"
-          onClick={() => setComposeOpen(true)}
-          className="btn-motif fixed right-3 bottom-[calc(var(--panel-h)+37px)] z-20 h-11 px-4 font-semibold outline outline-1 outline-[hsl(var(--foreground))]"
-        >
-          <MessageSquarePlus /> Post
-        </button>
-        <Sheet open={!!selectedEvent} onOpenChange={(o) => !o && go({ view: "feed" })}>
-          <SheetContent side="bottom" onOpenAutoFocus={(e) => e.preventDefault()} className="max-h-[88dvh] gap-0">
-            <SheetHeader>
-              <SheetTitle>Event</SheetTitle>
-              <SheetDescription className="sr-only">Event detail and Verdicts</SheetDescription>
-            </SheetHeader>
-            <div className="bevel-in m-[3px] mt-0 min-h-0 overflow-y-auto bg-card px-4 pt-3 pb-[max(2rem,env(safe-area-inset-bottom))] text-card-foreground">
-              {detail}
-            </div>
-          </SheetContent>
-        </Sheet>
-        <Sheet open={composeOpen} onOpenChange={setComposeOpen}>
-          <SheetContent side="bottom" className="gap-0">
-            <SheetHeader>
-              <SheetTitle>Post to the Channel</SheetTitle>
-              <SheetDescription className="sr-only">Write an Update or a Directive</SheetDescription>
-            </SheetHeader>
-            <div className="p-[3px] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-              <Composer />
-            </div>
-          </SheetContent>
-        </Sheet>
+        {composer}
       </div>
     );
   }
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-      <ResizablePanel defaultSize="56" minSize="36" className="flex min-h-0 flex-col">
+      <ResizablePanel defaultSize="58" minSize="36" className="flex min-h-0 flex-col">
         {filterBar}
         {list}
-        <div className="border-t border-border bg-secondary p-[3px]">
-          <Composer />
-        </div>
+        {composer}
       </ResizablePanel>
       <ResizableHandle />
-      <ResizablePanel defaultSize="44" minSize="28" className="min-h-0">
-        <div className="h-full overflow-y-auto bg-card p-4 lg:p-5">{detail}</div>
+      <ResizablePanel defaultSize="42" minSize="28" className="min-h-0">
+        <div className="h-full overflow-y-auto border-l border-line bg-surface px-6 py-5">{detail}</div>
       </ResizablePanel>
     </ResizablePanelGroup>
   );

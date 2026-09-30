@@ -20,8 +20,9 @@
  *   the keyboard, for phones where a "Move to" menu replaces dragging.
  * - Keyboard: Space picks up and drops, Escape cancels, arrows move between
  *   columns (sortableKeyboardCoordinates). Enter and a click open the card.
- * - Re-skinned through the ShlokOS token layer: Card and ScrollArea become
- *   bevelled Motif panes, no rounded corners, no shadows, no ring.
+ * - Re-skinned through the token layer: columns are quiet sunken lanes, cards
+ *   are soft white tiles with a hairline ring, the drop target gets a dashed
+ *   accent outline.
  */
 
 import type {
@@ -104,8 +105,8 @@ export const KanbanBoard = ({ id, children, className }: KanbanBoardProps) => {
   return (
     <div
       className={cn(
-        "bevel-out relative flex size-full min-h-40 flex-col bg-secondary text-xs",
-        isOver && "outline-2 outline-offset-[-2px] outline-[hsl(var(--primary))] outline-dashed",
+        "relative flex size-full min-h-40 flex-col rounded-xl bg-canvas text-xs",
+        isOver && "outline-2 outline-offset-[-2px] outline-accent outline-dashed",
         className,
       )}
       data-over={isOver || undefined}
@@ -161,11 +162,11 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
         }}
         aria-roledescription="Task card"
         ref={setNodeRef}
-        className="outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[hsl(var(--ring))]"
+        className="rounded-lg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <div
           className={cn(
-            "bevel-thin cursor-grab bg-card p-2 text-card-foreground",
+            "cursor-grab rounded-lg bg-surface p-3 text-ink shadow-card transition-shadow hover:shadow-raised",
             isDragging && "pointer-events-none cursor-grabbing opacity-40",
             className,
           )}
@@ -175,7 +176,7 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
       </div>
       {activeCardId === id && (
         <t.In>
-          <div className={cn("bevel-out cursor-grabbing bg-card p-2 text-card-foreground", className)}>
+          <div className={cn("cursor-grabbing rounded-lg bg-surface p-3 text-ink shadow-overlay", className)}>
             {children ?? <p className="m-0 text-sm font-medium">{name}</p>}
           </div>
         </t.In>
@@ -204,9 +205,9 @@ export const KanbanCards = <T extends KanbanItemProps = KanbanItemProps>({
   const items = filteredData.map((item) => item.id);
 
   return (
-    <div className="bevel-in relative m-[3px] mt-0 min-h-0 flex-1 overflow-y-auto bg-muted/40">
+    <div className="relative min-h-0 flex-1 overflow-y-auto">
       <SortableContext items={items} strategy={verticalListSortingStrategy}>
-        <div className={cn("flex min-h-full grow flex-col gap-1.5 p-1.5", className)} {...props}>
+        <div className={cn("flex min-h-full grow flex-col gap-2 px-2 pb-2", className)} {...props}>
           {filteredData.map(children)}
           {filteredData.length === 0 && empty}
         </div>
@@ -218,7 +219,7 @@ export const KanbanCards = <T extends KanbanItemProps = KanbanItemProps>({
 export type KanbanHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 export const KanbanHeader = ({ className, ...props }: KanbanHeaderProps) => (
-  <div className={cn("m-0 px-2 py-1.5 text-[13px] font-bold", className)} {...props} />
+  <div className={cn("m-0 px-3 pt-2.5 pb-2 text-[13px] font-medium", className)} {...props} />
 );
 
 export type KanbanMove<T> = { item: T; from: string; to: string };
@@ -353,7 +354,7 @@ export const KanbanProvider = <
         {...props}
       >
         {lane}
-        <div className={cn("relative grid size-full auto-cols-fr grid-flow-col gap-2", className)}>
+        <div className={cn("relative grid size-full auto-cols-fr grid-flow-col gap-3", className)}>
           {columns.map((column) => children(column))}
         </div>
         {typeof window !== "undefined" &&

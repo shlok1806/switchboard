@@ -8,6 +8,8 @@ import { toolSteps } from "@/components/domain/event";
 import { CAPTURE_LABEL, EVENT_TYPE_LABEL, ago, clock, compact, summarize } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
+import { Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const CAPTURES: Capture[] = ["proxy", "hook", "tool"];
 
@@ -51,8 +53,7 @@ export function CompareView({ turn }: { turn?: string }) {
   if (!can.captures && moments.length === 0) {
     return (
       <Pending title="Nothing to compare yet" className="h-full">
-        Proxy, Hook and Tool Captures of the same model turn show side by side here once Hook Capture (
-        <IssueLink capability="captures" />) and Proxy Capture (<IssueLink capability="proxyMode" />) land.
+        Arrives with <IssueLink capability="captures" /> and <IssueLink capability="proxyMode" />.
       </Pending>
     );
   }
@@ -60,12 +61,20 @@ export function CompareView({ turn }: { turn?: string }) {
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <nav
-        aria-label="Moments"
-        className="no-scrollbar flex shrink-0 gap-[2px] overflow-x-auto border-b border-border bg-secondary p-1.5 lg:w-72 lg:flex-col lg:gap-0 lg:overflow-y-auto lg:border-r lg:border-b-0 lg:bg-card lg:p-0"
+        aria-label="Model turns"
+        className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-line px-3 py-2.5 lg:w-72 lg:flex-col lg:gap-0.5 lg:overflow-y-auto lg:border-r lg:border-b-0 lg:p-2"
       >
-        <p className="hidden border-b border-border bg-secondary px-3 py-2 text-[12px] text-muted-foreground lg:block">
-          A moment is one model turn by one Agent. Pick one to see what each Capture recorded.
-        </p>
+        <h2 className="hidden items-center gap-1.5 px-2.5 pt-1 pb-2 text-[12.5px] text-ink-3 lg:flex">
+          Model turns
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" aria-label="About model turns" className="grid size-5 place-items-center rounded text-ink-4 hover:text-ink-2">
+                <Info className="size-3.5" aria-hidden />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>One model turn by one Agent, as each Capture recorded it.</TooltipContent>
+          </Tooltip>
+        </h2>
         {moments.map((m) => {
           const on = m.turn === moment?.turn;
           const caps = new Set(m.events.map((e) => e.capture));
@@ -75,24 +84,17 @@ export function CompareView({ turn }: { turn?: string }) {
               href={href({ view: "compare", turn: m.turn })}
               aria-current={on ? "true" : undefined}
               className={cn(
-                "flex shrink-0 flex-col gap-1 px-2.5 py-1.5 text-left lg:shrink lg:border-b lg:border-line-soft",
-                // Chosen the way the site's file manager chooses: the row inverts. On a phone each moment is a push button.
-                on
-                  ? "bevel-in bg-muted lg:border-x-0 lg:border-t-0 lg:bg-primary lg:text-primary-foreground lg:[&_*]:!text-primary-foreground"
-                  : "bevel-out bg-secondary hover:bg-hover lg:border-x-0 lg:border-t-0 lg:bg-transparent",
+                "flex shrink-0 flex-col gap-1 rounded-lg px-2.5 py-2 text-left transition-colors lg:shrink",
+                on ? "bg-accent-tint" : "border border-line hover:bg-hover lg:border-transparent",
               )}
             >
-              <span className="truncate font-mono text-[12px] text-ink">{m.agent}</span>
-              <span className="flex items-center gap-1.5 text-[11px] text-ink-3">
-                <span className="tabular-nums">{clock(m.at)}</span>
+              <span className={cn("truncate font-mono text-[12.5px]", on ? "text-accent-ink" : "text-ink")}>{m.agent}</span>
+              <span className="flex items-center gap-2 text-[12px] text-ink-3">
+                <span className="font-mono tabular-nums">{clock(m.at)}</span>
                 {m.task && <span className="font-mono">#{m.task}</span>}
-                <span className="flex gap-0.5">
+                <span className="ml-auto flex gap-1" aria-label={`Captures: ${CAPTURES.filter((c) => caps.has(c)).map((c) => CAPTURE_LABEL[c]).join(", ")}`}>
                   {CAPTURES.map((c) => (
-                    <span
-                      key={c}
-                      title={CAPTURE_LABEL[c]}
-                      className={cn("h-1.5 w-3 border border-current", caps.has(c) ? "bg-current" : "bg-transparent opacity-40")}
-                    />
+                    <span key={c} title={CAPTURE_LABEL[c]} className={cn("size-1.5 rounded-full", caps.has(c) ? "bg-accent" : "bg-hover-2")} />
                   ))}
                 </span>
               </span>
@@ -104,20 +106,18 @@ export function CompareView({ turn }: { turn?: string }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!moment ? (
           <div className="flex h-full items-center justify-center p-6">
-            <p className="font-mono text-[13px] text-ink-2">
-              Waiting for the first model turn<span aria-hidden className="caret-blink ml-0.5 inline-block h-[1em] w-[0.55em] translate-y-[2px] bg-accent-ink" />
-            </p>
+            <p className="text-[14px] text-ink-3">Waiting for the first model turn</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-4 p-3 sm:p-5">
+          <div className="flex flex-col gap-4 px-4 py-5 sm:px-6">
             <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <AgentLink id={moment.agent} agent={agentById.get(moment.agent as never)} />
-              {moment.task && <TaskLink number={moment.task} className="text-[12.5px]" />}
-              <span className="font-mono text-[11.5px] text-ink-3">
+              {moment.task && <TaskLink number={moment.task} className="text-[13px]" />}
+              <span className="font-mono text-[12px] text-ink-3">
                 {clock(moment.at)} · {ago(moment.at)}
               </span>
             </header>
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-3">
               {CAPTURES.map((c) => (
                 <CaptureColumn key={c} capture={c} events={moment.events.filter((e) => e.capture === c)} />
               ))}
@@ -131,19 +131,23 @@ export function CompareView({ turn }: { turn?: string }) {
 
 function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelEvent[] }) {
   return (
-    // Three document windows side by side, each with its own title bar.
-    <section className="bevel-out flex min-w-0 flex-col bg-secondary">
-      <header className="flex flex-col gap-0.5">
-        <h2 className="titlebar-active flex h-[22px] items-center gap-2 px-2 text-[12px] font-bold">
-          {CAPTURE_LABEL[capture]}
-          <span className="font-mono text-[11px] font-normal">{events.length} {events.length === 1 ? "Event" : "Events"}</span>
-          {events.some((e) => e.type === "proxy.raw") && <RawBadge />}
-        </h2>
-        <p className="px-2 pb-1 text-[11.5px] text-muted-foreground">{WHAT[capture]}</p>
+    <section className="flex min-w-0 flex-col rounded-xl border border-line bg-surface">
+      <header className="flex items-center gap-2 border-b border-line-soft px-4 py-2.5">
+        <h2 className="text-[13.5px] font-medium text-ink">{CAPTURE_LABEL[capture]}</h2>
+        <span className="rounded-full bg-hover px-1.5 font-mono text-[11.5px] text-ink-3 tabular-nums">{events.length}</span>
+        {events.some((e) => e.type === "proxy.raw") && <RawBadge />}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" aria-label={`About ${CAPTURE_LABEL[capture]} Capture`} className="ml-auto grid size-6 place-items-center rounded text-ink-4 hover:text-ink-2">
+              <Info className="size-3.5" aria-hidden />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{WHAT[capture]}</TooltipContent>
+        </Tooltip>
       </header>
-      <div className="bevel-in m-[3px] mt-0 flex flex-1 flex-col gap-3 bg-card p-3 text-card-foreground">
+      <div className="flex flex-1 flex-col gap-3 p-4">
         {events.length === 0 ? (
-          <p className="text-[12.5px] text-ink-3">Nothing from this Capture for this moment.</p>
+          <p className="text-[13px] text-ink-4">Nothing</p>
         ) : capture === "proxy" ? (
           events.map((e) => <ProxyCard key={e.id} event={e} />)
         ) : capture === "hook" ? (
@@ -163,10 +167,10 @@ function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelE
                 <button
                   type="button"
                   onClick={() => go({ view: "feed", event: e.id })}
-                  className="bevel-out flex w-full flex-col gap-0.5 bg-secondary px-2.5 py-1.5 text-left text-secondary-foreground active:bevel-in"
+                  className="flex w-full flex-col gap-0.5 rounded-lg bg-inset px-3 py-2 text-left transition-colors hover:bg-hover"
                 >
-                  <span className="label-mono !text-[10px]">{EVENT_TYPE_LABEL[e.type]}</span>
-                  <span className="text-[12.5px] leading-snug text-ink">{summarize(e)}</span>
+                  <span className="text-[12px] text-ink-3">{EVENT_TYPE_LABEL[e.type]}</span>
+                  <span className="text-[13px] leading-snug text-ink">{summarize(e)}</span>
                 </button>
               </li>
             ))}
@@ -206,13 +210,13 @@ function ProxyCard({ event }: { event: ChannelEvent }) {
   const p = event.payload;
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-ink-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11.5px] text-ink-3">
         <span>{p.model}</span>
         <span className="tabular-nums">
           {compact(p.inputTokens)} in · {compact(p.outputTokens)} out
         </span>
       </div>
-      <p className="font-mono text-[12px] leading-relaxed text-ink">{p.reply}</p>
+      <p className="text-[13px] leading-relaxed text-ink">{p.reply}</p>
       {p.toolCalls.length > 0 && (
         <ToolChips
           animate={false}
@@ -222,11 +226,11 @@ function ProxyCard({ event }: { event: ChannelEvent }) {
         />
       )}
       {event.type === "proxy.raw" && (
-        <pre className="bevel-in max-h-40 overflow-auto bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-ink-2">
+        <pre className="max-h-40 overflow-auto rounded-lg bg-inset p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-ink-2">
           {event.payload.context}
         </pre>
       )}
-      {p.maskedSecrets > 0 && <p className="text-[11px] text-ink-3">{p.maskedSecrets} secret masked</p>}
+      {p.maskedSecrets > 0 && <p className="text-[12px] text-ink-3">{p.maskedSecrets} secret masked</p>}
     </div>
   );
 }

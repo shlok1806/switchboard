@@ -1,16 +1,23 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/inter";
-@import "@fontsource/space-mono/400.css";
-@import "@fontsource/space-mono/700.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 @import "./app/beautifui/foundation.css";
 @import "./styles/tokens.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
-/* The site's phone breakpoint for chrome is the pointer, not the width. */
-@custom-variant coarse (@media (pointer: coarse));
 
 /* ── base ─────────────────────────────────────────────────── */
+
+@layer base {
+  /* Tailwind v4 borders default to currentColor; every hairline here is the line token. */
+  *,
+  ::before,
+  ::after,
+  ::backdrop {
+    border-color: var(--line);
+  }
+}
 
 html,
 body {
@@ -18,55 +25,17 @@ body {
 }
 
 body {
-  background-color: hsl(var(--desktop));
+  background: var(--page);
   background-image: none;
   color: var(--ink);
   font-family: var(--font-sans);
-  font-feature-settings: normal;
-  font-size: 13px;
-  letter-spacing: 0;
-  /* Swapping presets should feel like a hardware switch, not a CSS fade */
-  transition: background-color 180ms steps(3), color 180ms steps(3);
-}
-
-::selection {
-  background-color: hsl(var(--primary) / 0.25);
-  color: hsl(var(--foreground));
-}
-
-:focus-visible {
-  outline: 2px solid hsl(var(--ring));
-  outline-offset: 1px;
-}
-
-:root {
-  /* The panel along the bottom: Motif's 30px under a mouse, 52px under a finger */
-  --panel-h: calc(30px + env(safe-area-inset-bottom));
-}
-@media (pointer: coarse) {
-  :root {
-    --panel-h: calc(52px + env(safe-area-inset-bottom));
-  }
+  font-size: 14px;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
 }
 
 #root {
   min-height: 100dvh;
-}
-
-.font-display {
-  font-family: var(--font-display);
-  letter-spacing: -0.01em;
-}
-
-/* Mono labels, the site's `.type-label`: machine-readout voice for ids and meta. */
-.label-mono,
-.type-label {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 400;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink-3);
 }
 
 .tabular {
@@ -74,97 +43,32 @@ body {
 }
 
 /*
- * From shlokthakkar.com app/globals.css. The 3D bevel is the most recognisable
- * thing about Motif: light on the top-left, dark on the bottom-right, inverted
- * when a control is pressed or a field is inset. Declared as utilities so
- * they take variants (active:bevel-in) and lose to a later utility.
+ * Scroll bars stay visible, thin and quiet, so a Person can always see there
+ * is more below or beside.
  */
-@utility bevel-out {
-  border-style: solid;
-  border-width: 2px;
-  border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-4);
 }
 
-@utility bevel-in {
-  border-style: solid;
-  border-width: 2px;
-  border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
-}
-
-@utility bevel-thin {
-  border-style: solid;
-  border-width: 1px;
-  border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
-}
-
-@utility bevel-thin-in {
-  border-style: solid;
-  border-width: 1px;
-  border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
-}
-
-@layer components {
-/* A Motif push button: raised, and pressed in while held */
-.btn-motif {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border-style: solid;
-  border-width: 2px;
-  border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
-  background: hsl(var(--secondary));
-  color: hsl(var(--secondary-foreground));
-  font-family: var(--font-sans);
-  font-size: 13px;
-  line-height: 1;
-  white-space: nowrap;
-  user-select: none;
-}
-.btn-motif:active:not(:disabled),
-.btn-motif[aria-pressed="true"],
-.btn-motif[data-state="open"] {
-  border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
-}
-.btn-motif:disabled {
-  color: hsl(var(--faint));
-  cursor: default;
-}
-}
-
-/* An X11 root window was a two-tone 50% dither, never a flat fill */
-.stipple {
-  background-color: hsl(var(--desktop));
-  background-image:
-    linear-gradient(45deg, hsl(var(--stipple-ink) / var(--stipple-alpha)) 25%, transparent 25%, transparent 75%, hsl(var(--stipple-ink) / var(--stipple-alpha)) 75%),
-    linear-gradient(45deg, hsl(var(--stipple-ink) / var(--stipple-alpha)) 25%, transparent 25%, transparent 75%, hsl(var(--stipple-ink) / var(--stipple-alpha)) 75%);
-  background-size: 4px 4px;
-  background-position: 0 0, 2px 2px;
-}
-
-@layer components {
-/* An X11 title bar was solid when focused and washed out when not */
-.titlebar-active {
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-}
-.titlebar-idle {
-  background: hsl(var(--secondary));
-  color: hsl(var(--muted-foreground));
-}
-.titlebar-alert {
-  background: hsl(var(--destructive));
-  color: hsl(var(--destructive-foreground));
-}
-}
-
-/* No-op on the light presets; only Console sets a strength */
-.glow {
-  text-shadow: 0 0 calc(6px * var(--glow-strength, 0)) hsl(var(--primary) / 0.5);
-}
-
-/* A notice lands the way a window does: mapped in two frames, no slide */
-@keyframes win-in {
+/* A new feed row fades in; no slide. */
+@keyframes row-in {
   from {
     opacity: 0;
   }
@@ -172,75 +76,8 @@ body {
     opacity: 1;
   }
 }
-.notice-in {
-  animation: win-in 100ms steps(2, end) both;
-}
-
-/*
- * Scrollbars drawn the way Motif drew them: an inset trough with a raised
- * thumb, from the same bevel tokens. Fine pointers only; a phone already knows
- * its content swipes.
- */
-@media (pointer: fine) {
-  ::-webkit-scrollbar {
-    width: 15px;
-    height: 15px;
-  }
-  ::-webkit-scrollbar-track {
-    background: hsl(var(--muted));
-    border-style: solid;
-    border-width: 2px;
-    border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
-  }
-  ::-webkit-scrollbar-thumb {
-    background: hsl(var(--secondary));
-    border-style: solid;
-    border-width: 2px;
-    border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
-  }
-  ::-webkit-scrollbar-corner {
-    background: hsl(var(--muted));
-  }
-  @supports not selector(::-webkit-scrollbar) {
-    html {
-      scrollbar-color: hsl(var(--secondary)) hsl(var(--muted));
-    }
-  }
-}
-
-/* The feed filter row scrolls sideways on a phone. */
-@media (max-width: 639px) {
-  .feed-filters {
-    scrollbar-width: none;
-  }
-}
-
-/* Scroll areas that should not show a bar on touch. */
-.no-scrollbar {
-  scrollbar-width: none;
-}
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-
-/* A terminal caret is on or off, never in between */
-@keyframes caret-step {
-  50% {
-    opacity: 0;
-  }
-}
-.caret-blink {
-  animation: caret-step 1s steps(2, start) infinite;
-}
-
-/* prompt-kit TextShimmer keyframes */
-@keyframes shimmer {
-  from {
-    background-position: 100% center;
-  }
-  to {
-    background-position: 0% center;
-  }
+.row-in {
+  animation: row-in var(--dur-base) var(--ease-out) both;
 }
 
 @keyframes collapsible-down {
@@ -260,8 +97,8 @@ body {
   }
 }
 @theme inline {
-  --animate-collapsible-down: collapsible-down 100ms steps(2, end);
-  --animate-collapsible-up: collapsible-up 100ms steps(2, end);
+  --animate-collapsible-down: collapsible-down 200ms var(--ease-out);
+  --animate-collapsible-up: collapsible-up 160ms var(--ease-out);
 }
 
 @media (prefers-reduced-motion: reduce) {

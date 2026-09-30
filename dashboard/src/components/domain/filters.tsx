@@ -1,6 +1,6 @@
 import type { ChannelEvent, Verdict, VerdictOption } from "@shared/index";
 import { actorPerson } from "@/lib/format";
-import { PixelIcon } from "@/components/pixel-icon";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface FeedFilters {
@@ -47,15 +47,13 @@ export function FilterSelect({
   allLabel: string;
 }) {
   const on = value !== "";
-  // A Motif option menu: a raised button with the choice and a bar-and-arrow glyph.
   return (
     <label
       className={cn(
-        "btn-motif relative h-[26px] shrink-0 justify-start gap-1 pr-6 pl-2 text-[12px] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-[hsl(var(--ring))] coarse:h-9",
-        on && "[border-color:hsl(var(--bevel-dark))_hsl(var(--bevel-light))_hsl(var(--bevel-light))_hsl(var(--bevel-dark))] bg-muted",
+        "relative inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border pr-7 pl-3 text-[13px] transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent",
+        on ? "border-transparent bg-accent-tint text-accent-ink" : "border-line bg-surface text-ink-2 hover:border-line-strong",
       )}
     >
-      <span className="text-muted-foreground">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -69,10 +67,8 @@ export function FilterSelect({
           </option>
         ))}
       </select>
-      <span className={cn("max-w-[10rem] truncate", on ? "font-bold text-accent-ink" : "font-semibold")}>
-        {on ? options.find((o) => o.value === value)?.label ?? value : "All"}
-      </span>
-      <PixelIcon name="down" className="pointer-events-none absolute right-1" />
+      <span className="max-w-[11rem] truncate">{on ? (options.find((o) => o.value === value)?.label ?? value) : label}</span>
+      <ChevronDown className="pointer-events-none absolute right-2.5 size-3.5 opacity-70" aria-hidden />
     </label>
   );
 }
