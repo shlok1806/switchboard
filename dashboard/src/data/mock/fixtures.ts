@@ -271,6 +271,7 @@ const seedTasks: SeedTask[] = [
     status: "claimed",
     claim: { task: 19, holder: { kind: "agent", agentId: A.shlokCodex }, claimedAt: ago(60 * 38), stale: false },
     branch: "task/19-channel-rule",
+    pr: 22,
     updatedAt: ago(60 * 3),
   },
   {
@@ -285,6 +286,17 @@ const seedTasks: SeedTask[] = [
     claim: { task: 20, holder: { kind: "agent", agentId: A.mayaClaude }, claimedAt: ago(60 * 20), stale: false },
     branch: "task/20-users-empty-state",
     updatedAt: ago(60 * 20),
+  },
+  {
+    number: 21,
+    title: "Keyboard shortcuts for the users table",
+    description: "j and k move the selection, Enter opens the user.",
+    labels: ["web", "a11y"],
+    blockedBy: [],
+    subtasks: [],
+    steps: steps(0, "Roving selection", "Enter opens the user", "Document the keys"),
+    status: "open",
+    updatedAt: ago(60 * 45),
   },
   {
     number: 10,

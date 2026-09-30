@@ -1,5 +1,6 @@
 import type { ChannelEvent, Verdict, VerdictOption } from "@shared/index";
 import { actorPerson } from "@/lib/format";
+import { PixelIcon } from "@/components/pixel-icon";
 import { cn } from "@/lib/utils";
 
 export interface FeedFilters {
@@ -46,14 +47,15 @@ export function FilterSelect({
   allLabel: string;
 }) {
   const on = value !== "";
+  // A Motif option menu: a raised button with the choice and a bar-and-arrow glyph.
   return (
     <label
       className={cn(
-        "relative inline-flex h-7 shrink-0 items-center gap-1 rounded-[6px] border pl-2 pr-6 text-[12px] transition-colors duration-100 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent",
-        on ? "border-accent/40 bg-accent-tint text-accent-ink" : "border-line bg-surface text-ink-2 hover:bg-hover",
+        "btn-motif relative h-[26px] shrink-0 justify-start gap-1 pr-6 pl-2 text-[12px] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-[hsl(var(--ring))] coarse:h-9",
+        on && "[border-color:hsl(var(--bevel-dark))_hsl(var(--bevel-light))_hsl(var(--bevel-light))_hsl(var(--bevel-dark))] bg-muted",
       )}
     >
-      <span className={on ? "text-accent-ink/80" : "text-ink-3"}>{label}</span>
+      <span className="text-muted-foreground">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -67,12 +69,10 @@ export function FilterSelect({
           </option>
         ))}
       </select>
-      <span className={cn("max-w-[10rem] truncate font-medium", on ? "text-accent-ink" : "text-ink")}>
+      <span className={cn("max-w-[10rem] truncate", on ? "font-bold text-accent-ink" : "font-semibold")}>
         {on ? options.find((o) => o.value === value)?.label ?? value : "All"}
       </span>
-      <svg aria-hidden className="pointer-events-none absolute right-1.5 size-3 text-ink-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M6 9l6 6 6-6" />
-      </svg>
+      <PixelIcon name="down" className="pointer-events-none absolute right-1" />
     </label>
   );
 }

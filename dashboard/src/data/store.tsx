@@ -52,6 +52,14 @@ export class ChannelStore {
     };
   };
 
+  /**
+   * Take in a Task the Channel just answered with (a Claim or a release), so the
+   * board settles without waiting for the stream to echo it.
+   */
+  applyTask(task: Task) {
+    this.set({ tasks: upsert(this.state.tasks, task, (t) => t.number === task.number) });
+  }
+
   /** For side effects such as toasts. */
   onMessage(l: (m: StreamMessage) => void) {
     this.messageListeners.add(l);

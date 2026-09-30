@@ -8,16 +8,17 @@ import { href } from "@/lib/router";
 import { StalePill } from "./pills";
 import { TakeoverAction } from "./takeover";
 
-export type Column = "stale" | "claimed" | "review" | "open" | "done";
+export type Column = "stale" | "open" | "claimed" | "review" | "done";
 
 export const COLUMN_LABEL: Record<Column, string> = {
   stale: "Stale Claim",
+  open: "Open",
   claimed: "Claimed",
   review: "In review",
-  open: "Open",
   done: "Done",
 };
 
+/** Where a Task sits on the board. A finished Task with its PR open is In review (#10). */
 export function columnOf(t: Task): Column {
   if (t.status === "done") return "done";
   if (t.claim?.stale) return "stale";

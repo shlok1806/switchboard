@@ -76,32 +76,34 @@ body {
 /*
  * From shlokthakkar.com app/globals.css. The 3D bevel is the most recognisable
  * thing about Motif: light on the top-left, dark on the bottom-right, inverted
- * when a control is pressed or a field is inset.
+ * when a control is pressed or a field is inset. Declared as utilities so
+ * they take variants (active:bevel-in) and lose to a later utility.
  */
-.bevel-out {
+@utility bevel-out {
   border-style: solid;
   border-width: 2px;
   border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
 }
 
-.bevel-in {
+@utility bevel-in {
   border-style: solid;
   border-width: 2px;
   border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
 }
 
-.bevel-thin {
+@utility bevel-thin {
   border-style: solid;
   border-width: 1px;
   border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
 }
 
-.bevel-thin-in {
+@utility bevel-thin-in {
   border-style: solid;
   border-width: 1px;
   border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
 }
 
+@layer components {
 /* A Motif push button: raised, and pressed in while held */
 .btn-motif {
   display: inline-flex;
@@ -128,6 +130,7 @@ body {
   color: hsl(var(--faint));
   cursor: default;
 }
+}
 
 /* An X11 root window was a two-tone 50% dither, never a flat fill */
 .stipple {
@@ -139,6 +142,7 @@ body {
   background-position: 0 0, 2px 2px;
 }
 
+@layer components {
 /* An X11 title bar was solid when focused and washed out when not */
 .titlebar-active {
   background: hsl(var(--primary));
@@ -151,6 +155,7 @@ body {
 .titlebar-alert {
   background: hsl(var(--destructive));
   color: hsl(var(--destructive-foreground));
+}
 }
 
 /* No-op on the light presets; only Console sets a strength */
