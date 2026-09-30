@@ -25,8 +25,8 @@
   /* ink: soft charcoal, not black */
   --ink: oklch(28% 0.014 260);
   --ink-2: oklch(45% 0.013 260);
-  --ink-3: oklch(56% 0.011 260);
-  --ink-4: oklch(70% 0.008 260);
+  --ink-3: oklch(52.5% 0.012 260);
+  --ink-4: oklch(64% 0.009 260);
 
   /* rules */
   --line: oklch(92.4% 0.005 255);
@@ -117,7 +117,7 @@
   --ink: oklch(91% 0.006 255);
   --ink-2: oklch(76% 0.01 256);
   --ink-3: oklch(64% 0.011 257);
-  --ink-4: oklch(50% 0.011 257);
+  --ink-4: oklch(54% 0.011 257);
 
   --line: oklch(29.5% 0.011 260);
   --line-strong: oklch(35.5% 0.013 260);

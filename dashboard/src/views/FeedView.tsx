@@ -59,7 +59,7 @@ export function FeedView({ selected }: { selected?: string }) {
   const n = activeCount(filters);
 
   const filterBar = (
-    <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 sm:px-6 md:flex-nowrap md:overflow-x-auto">
+    <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-2.5 sm:px-6 md:flex-nowrap md:gap-2 md:overflow-x-auto">
       <FilterSelect
         label="Person"
         value={filters.person}

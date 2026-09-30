@@ -1,5 +1,16 @@
 [
   {
+    "date": "2026-09-30",
+    "macrostructure": "Workbench (app shell)",
+    "theme": "custom",
+    "theme_axes": "light / grotesk-sans / cool",
+    "vibe": "calm low-glare workspace, one soft indigo signal",
+    "enrichment": "none",
+    "nav": "top tabs + Cmd-K (desk), bottom tab bar (phone)",
+    "footer": "none (app)",
+    "brief": "Switchboard Dashboard redesign - calm, low text, four views (Activity, Board, Agents, Compare), every function kept"
+  },
+  {
     "date": "2026-09-29",
     "macrostructure": "Workbench (app shell)",
     "theme": "Cobalt",

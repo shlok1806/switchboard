@@ -34,8 +34,18 @@ export function initTheme() {
   paint(read());
 }
 
+// One choice for the whole page, so every menu that shows it agrees.
+let current: ThemeChoice | null = null;
+const listeners = new Set<(c: ThemeChoice) => void>();
+
 export function useTheme() {
-  const [choice, setChoice] = useState<ThemeChoice>(read);
+  const [choice, setChoice] = useState<ThemeChoice>(() => (current ??= read()));
+  useEffect(() => {
+    listeners.add(setChoice);
+    return () => {
+      listeners.delete(setChoice);
+    };
+  }, []);
   useEffect(() => {
     paint(choice);
     if (choice !== "system") return;
@@ -50,7 +60,8 @@ export function useTheme() {
     } catch {
       /* not persisted; still applies for this visit */
     }
-    setChoice(c);
+    current = c;
+    for (const l of listeners) l(c);
   }, []);
   const resolved = typeof window === "undefined" ? "light" : resolve(choice);
   return { choice, resolved, set };

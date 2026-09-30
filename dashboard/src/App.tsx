@@ -189,10 +189,11 @@ export default function App() {
         {mobile && <TabBar route={route} />}
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />
+      {/* On a phone toasts come in from the top, so they never cover the composer or the tab bar. */}
       <Toaster
-        position="bottom-right"
+        position={mobile ? "top-center" : "bottom-right"}
         offset={{ bottom: "24px", right: "24px" }}
-        mobileOffset={{ bottom: "calc(var(--tabbar-h) + 12px)" }}
+        mobileOffset={{ top: "calc(var(--header-h) + 8px)" }}
         closeButton
       />
     </TooltipProvider>

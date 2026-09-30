@@ -179,7 +179,7 @@ function ProxyMode({ agent }: { agent: Agent }) {
 }
 
 function ClaimCell({ agent, tasks }: { agent: Agent; tasks: Task[] }) {
-  if (!tasks.length) return <span className="text-[13px] text-ink-4">None</span>;
+  if (!tasks.length) return <span className="text-[13px] text-ink-3">None</span>;
   const [first, ...rest] = tasks;
   const stale = tasks.some((t) => t.claim?.stale) && agent.presence === "gone";
   return (

@@ -1,5 +1,7 @@
 "use client";
 
+/* Switchboard: Kibo UI Snippet on the calm token layer; the copy button stays visible and long commands scroll instead of truncating. */
+
 import { CheckIcon, CopyIcon } from "lucide-react";
 import {
   type ComponentProps,
@@ -17,7 +19,7 @@ export type SnippetProps = ComponentProps<typeof Tabs>;
 export const Snippet = ({ className, ...props }: SnippetProps) => (
   <Tabs
     className={cn(
-      "group w-full gap-0 overflow-hidden rounded-md border",
+      "group w-full gap-0 overflow-hidden rounded-xl border border-line bg-surface",
       className
     )}
     {...props}
@@ -29,7 +31,7 @@ export type SnippetHeaderProps = HTMLAttributes<HTMLDivElement>;
 export const SnippetHeader = ({ className, ...props }: SnippetHeaderProps) => (
   <div
     className={cn(
-      "flex flex-row items-center justify-between border-b bg-secondary p-1",
+      "flex flex-row items-center justify-between border-b border-line-soft py-1.5 pr-1.5 pl-4 text-ink",
       className
     )}
     {...props}
@@ -82,7 +84,7 @@ export const SnippetCopyButton = ({
 
   return (
     <Button
-      className="opacity-0 transition-opacity group-hover:opacity-100"
+      className="text-ink-3 hover:text-ink"
       onClick={copyToClipboard}
       size="icon"
       variant="ghost"
@@ -115,9 +117,9 @@ export const SnippetTabsContent = ({
 }: SnippetTabsContentProps) => (
   <TabsContent
     asChild
-    className={cn("mt-0 bg-background p-4 text-sm", className)}
+    className={cn("mt-0 px-4 py-3 font-mono text-[12.5px] text-ink-2", className)}
     {...props}
   >
-    <pre className="truncate">{children}</pre>
+    <pre className="overflow-x-auto whitespace-pre">{children}</pre>
   </TabsContent>
 );

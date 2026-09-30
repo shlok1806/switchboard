@@ -64,7 +64,7 @@ export function NewTaskButton() {
               />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium">Description <span className="font-normal text-ink-4">optional</span></span>
+              <span className="text-[13px] font-medium">Description <span className="font-normal text-ink-3">optional</span></span>
               <textarea
                 name="description"
                 rows={4}

@@ -102,8 +102,8 @@ export function AgentDetail({ id }: { id: string }) {
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
               { k: "Events", v: <NumberFlow value={events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === agent.id).length} /> },
-              { k: "Interrupts", v: can.verdicts ? <NumberFlow value={heard.i} /> : <span className="text-[14px] text-ink-4">-</span> },
-              { k: "Queued", v: can.verdicts ? <NumberFlow value={heard.q} /> : <span className="text-[14px] text-ink-4">-</span> },
+              { k: "Interrupts", v: can.verdicts ? <NumberFlow value={heard.i} /> : <span className="text-[14px] text-ink-3">-</span> },
+              { k: "Queued", v: can.verdicts ? <NumberFlow value={heard.q} /> : <span className="text-[14px] text-ink-3">-</span> },
               { k: "Started", v: <span className="text-[16px]">{ago(agent.startedAt)}</span> },
             ].map((s) => (
               <div key={s.k} className="flex flex-col gap-1 rounded-xl border border-line bg-surface px-4 py-3">

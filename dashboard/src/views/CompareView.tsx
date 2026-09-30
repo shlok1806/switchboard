@@ -147,7 +147,7 @@ function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelE
       </header>
       <div className="flex flex-1 flex-col gap-3 p-4">
         {events.length === 0 ? (
-          <p className="text-[13px] text-ink-4">Nothing</p>
+          <p className="text-[13px] text-ink-3">Nothing</p>
         ) : capture === "proxy" ? (
           events.map((e) => <ProxyCard key={e.id} event={e} />)
         ) : capture === "hook" ? (

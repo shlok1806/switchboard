@@ -7,11 +7,19 @@ import {
   OctagonXIcon,
   TriangleAlertIcon,
 } from "lucide-react"
+import { useSyncExternalStore } from "react"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  // Switchboard: theme follows the .dark class instead of next-themes.
-  const theme = document.documentElement.classList.contains("dark") ? "dark" : "light"
+  // Switchboard: theme follows the .dark class on <html> instead of next-themes, live.
+  const theme = useSyncExternalStore(
+    (on) => {
+      const mo = new MutationObserver(on)
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] })
+      return () => mo.disconnect()
+    },
+    () => (document.documentElement.classList.contains("dark") ? "dark" : "light"),
+  )
 
   return (
     <Sonner

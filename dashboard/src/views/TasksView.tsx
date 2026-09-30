@@ -165,12 +165,12 @@ export function TasksView() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Quick filters, as on a Jira board */}
-      <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 sm:px-6 md:flex-nowrap md:overflow-x-auto">
-        <Toggle on={filters.mine} onClick={() => set("mine")(!filters.mine)}>
-          <UserRound className="size-3.5" aria-hidden /> Mine
+      <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-2.5 sm:px-6 md:flex-nowrap md:gap-2 md:overflow-x-auto">
+        <Toggle on={filters.mine} onClick={() => set("mine")(!filters.mine)} label="Mine">
+          <UserRound className="size-3.5" aria-hidden />
         </Toggle>
-        <Toggle on={filters.blocked} onClick={() => set("blocked")(!filters.blocked)}>
-          <Ban className="size-3.5" aria-hidden /> Blocked
+        <Toggle on={filters.blocked} onClick={() => set("blocked")(!filters.blocked)} label="Blocked">
+          <Ban className="size-3.5" aria-hidden />
         </Toggle>
         <FilterSelect label="Person" value={filters.person} onChange={set("person")} allLabel="Any Person" options={persons.map((p) => ({ value: p, label: p }))} />
         {can.agents && (
@@ -191,10 +191,10 @@ export function TasksView() {
             <X className="size-3.5" aria-hidden /> Clear
           </button>
         )}
-        <span className="ml-auto shrink-0 pl-2 text-[13px] whitespace-nowrap text-ink-3 tabular-nums">
+        <span className="ml-auto shrink-0 pl-2 text-[13px] whitespace-nowrap text-ink-3 tabular-nums max-md:hidden">
           {shown.length === tasks.length ? tasks.length : `${shown.length} / ${tasks.length}`}
         </span>
-        <span className="shrink-0">
+        <span className="shrink-0 max-md:ml-auto">
           <NewTaskButton />
         </span>
       </div>
@@ -267,18 +267,21 @@ function ColumnDot({ column }: { column: Column }) {
   return <span aria-hidden className={cn("size-2 shrink-0 rounded-full", COLUMN_DOT[column])} />;
 }
 
-function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
+/** A quick filter. On a phone only its icon shows; the name stays for screen readers and on hover. */
+function Toggle({ on, onClick, label, children }: { on: boolean; onClick: () => void; label: string; children: ReactNode }) {
   return (
     <button
       type="button"
       aria-pressed={on}
       onClick={onClick}
+      title={label}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors",
+        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors max-md:h-7 max-md:px-2.5",
         on ? "border-transparent bg-accent-tint text-accent-ink" : "border-line bg-surface text-ink-2 hover:border-line-strong",
       )}
     >
       {children}
+      <span className="max-md:sr-only">{label}</span>
     </button>
   );
 }
@@ -305,7 +308,7 @@ function StaleLane({ count, children }: { count: number; children: ReactNode }) 
 }
 
 function Empty({ column, filtered }: { column: Column; filtered: boolean }) {
-  return <p className="px-2 py-8 text-center text-[13px] text-ink-4">{filtered ? "No match" : column === "stale" ? "None" : "Empty"}</p>;
+  return <p className="px-2 py-8 text-center text-[13px] text-ink-3">{filtered ? "No match" : column === "stale" ? "None" : "Empty"}</p>;
 }
 
 /** The "Move to" menu that replaces dragging on a phone. */
