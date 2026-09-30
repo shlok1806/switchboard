@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, MousePointerClick, X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 import type { ChannelEvent } from "@shared/index";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { EventDetail, EventRow } from "@/components/domain/event";
@@ -59,56 +59,59 @@ export function FeedView({ selected }: { selected?: string }) {
   const n = activeCount(filters);
 
   const filterBar = (
-    <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-2.5 sm:px-6 md:flex-nowrap md:gap-2 md:overflow-x-auto">
-      <FilterSelect
-        label="Person"
-        value={filters.person}
-        onChange={set("person")}
-        allLabel="All Persons"
-        options={(snapshot?.persons ?? []).map((p) => ({ value: p.name, label: p.name }))}
-      />
-      <FilterSelect
-        label="Agent"
-        value={filters.agent}
-        onChange={set("agent")}
-        allLabel="All Agents"
-        options={agents.map((a) => ({ value: a.id, label: a.nickname ? `${a.id} (${a.nickname})` : a.id }))}
-      />
-      <FilterSelect
-        label="Task"
-        value={filters.task}
-        onChange={set("task")}
-        allLabel="All Tasks"
-        options={[...tasks]
-          .sort((a, b) => a.number - b.number)
-          .map((t) => ({ value: String(t.number), label: `#${t.number} ${t.title}` }))}
-      />
-      <FilterSelect
-        label="Capture"
-        value={filters.capture}
-        onChange={set("capture")}
-        allLabel="All Captures"
-        options={[
-          ...(["proxy", "hook", "tool"] as const).map((c) => ({ value: c, label: CAPTURE_LABEL[c] })),
-          { value: "none", label: "None (Dashboard, GitHub)" },
-        ]}
-      />
-      {can.verdicts && <FilterSelect
-        label="Verdict"
-        value={filters.verdict}
-        onChange={set("verdict")}
-        allLabel="Any Verdict"
-        options={[...VERDICT_OPTIONS].reverse().map((o) => ({ value: o, label: `Any ${VERDICT_LABEL[o]}` }))}
-      />}
-      {n > 0 && (
-        <button
-          type="button"
-          onClick={() => setFilters(EMPTY_FILTERS)}
-          className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] text-ink-3 hover:bg-hover hover:text-ink"
-        >
-          <X className="size-3.5" aria-hidden /> Clear
-        </button>
-      )}
+    <div className="shrink-0 border-b border-line px-3 py-2.5 sm:px-6">
+      {/* Lines up with the feed and the composer below it. */}
+      <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-wrap items-center gap-1.5 md:flex-nowrap md:gap-2 md:overflow-x-auto">
+        <FilterSelect
+          label="Person"
+          value={filters.person}
+          onChange={set("person")}
+          allLabel="All Persons"
+          options={(snapshot?.persons ?? []).map((p) => ({ value: p.name, label: p.name }))}
+        />
+        <FilterSelect
+          label="Agent"
+          value={filters.agent}
+          onChange={set("agent")}
+          allLabel="All Agents"
+          options={agents.map((a) => ({ value: a.id, label: a.nickname ? `${a.id} (${a.nickname})` : a.id }))}
+        />
+        <FilterSelect
+          label="Task"
+          value={filters.task}
+          onChange={set("task")}
+          allLabel="All Tasks"
+          options={[...tasks]
+            .sort((a, b) => a.number - b.number)
+            .map((t) => ({ value: String(t.number), label: `#${t.number} ${t.title}` }))}
+        />
+        <FilterSelect
+          label="Capture"
+          value={filters.capture}
+          onChange={set("capture")}
+          allLabel="All Captures"
+          options={[
+            ...(["proxy", "hook", "tool"] as const).map((c) => ({ value: c, label: CAPTURE_LABEL[c] })),
+            { value: "none", label: "None (Dashboard, GitHub)" },
+          ]}
+        />
+        {can.verdicts && <FilterSelect
+          label="Verdict"
+          value={filters.verdict}
+          onChange={set("verdict")}
+          allLabel="Any Verdict"
+          options={[...VERDICT_OPTIONS].reverse().map((o) => ({ value: o, label: `Any ${VERDICT_LABEL[o]}` }))}
+        />}
+        {n > 0 && (
+          <button
+            type="button"
+            onClick={() => setFilters(EMPTY_FILTERS)}
+            className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] text-ink-3 hover:bg-hover hover:text-ink"
+          >
+            <X className="size-3.5" aria-hidden /> Clear
+          </button>
+        )}
+      </div>
     </div>
   );
 
@@ -158,13 +161,9 @@ export function FeedView({ selected }: { selected?: string }) {
       taskByNumber={taskByNumber}
       threshold={threshold}
       verdictsLive={can.verdicts}
+      onClose={mobile ? undefined : () => go({ view: "feed" })}
     />
-  ) : (
-    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-ink-3">
-      <MousePointerClick className="size-6 text-ink-4" aria-hidden strokeWidth={1.5} />
-      <p className="text-[14px]">Select an Event</p>
-    </div>
-  );
+  ) : null;
 
   const composer = (
     <div className="shrink-0 border-t border-line bg-page px-3 py-3 sm:px-6">
@@ -188,7 +187,10 @@ export function FeedView({ selected }: { selected?: string }) {
               <ArrowLeft className="size-4" aria-hidden /> Activity
             </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{detail}</div>
+          {/* Keyed, so React never reuses the feed's scroller (scrolled to the bottom) for the Event. */}
+          <div key={`event-${selectedEvent.id}`} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            {detail}
+          </div>
         </div>
       );
     return (
@@ -200,17 +202,26 @@ export function FeedView({ selected }: { selected?: string }) {
     );
   }
 
+  // On a wide screen the feed takes the full width until an Event is picked;
+  // then the Event opens in a resizable pane beside it, never over it.
   return (
     <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-      <ResizablePanel defaultSize="58" minSize="36" className="flex min-h-0 flex-col">
+      <ResizablePanel id="feed" defaultSize={detail ? "58" : "100"} minSize="36" className="flex min-h-0 flex-col">
         {filterBar}
         {list}
         {composer}
       </ResizablePanel>
-      <ResizableHandle />
-      <ResizablePanel defaultSize="42" minSize="28" className="min-h-0">
-        <div className="h-full overflow-y-auto border-l border-line bg-surface px-6 py-5">{detail}</div>
-      </ResizablePanel>
+      {detail && (
+        <>
+          <ResizableHandle />
+          <ResizablePanel id="event" defaultSize="42" minSize="28" className="min-h-0">
+            {/* Keyed per Event, so a newly picked Event opens at its top. */}
+            <div key={selectedEvent?.id} className="h-full overflow-y-auto bg-surface px-6 py-5">
+              {detail}
+            </div>
+          </ResizablePanel>
+        </>
+      )}
     </ResizablePanelGroup>
   );
 }
