@@ -6,7 +6,7 @@
  * which becomes the Channel header; NavProjects becomes the Agents group. */
 
 import * as React from "react"
-import { Activity, Columns3, KanbanSquare, Radio, Users } from "lucide-react"
+import { Activity, Columns3, KanbanSquare, Radio, Users } from "@/components/pixel-icon"
 
 import { NavMain, type NavItem } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"

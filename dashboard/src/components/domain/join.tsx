@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Radio } from "lucide-react";
+import { Radio } from "@/components/pixel-icon";
 import { normalizePersonName, type JoinCredentials } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 

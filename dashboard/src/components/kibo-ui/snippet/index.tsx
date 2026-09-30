@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, CopyIcon } from "@/components/pixel-icon";
 import {
   type ComponentProps,
   cloneElement,

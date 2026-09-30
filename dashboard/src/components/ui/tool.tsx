@@ -11,7 +11,7 @@ import {
   Loader2,
   Settings,
   XCircle,
-} from "lucide-react"
+} from "@/components/pixel-icon"
 import { useState } from "react"
 
 export type ToolPart = {

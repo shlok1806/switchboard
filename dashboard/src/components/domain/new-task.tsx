@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Plus } from "lucide-react";
+import { Plus } from "@/components/pixel-icon";
 import { toast } from "sonner";
 import { MAX_TASK_TITLE_LENGTH } from "@shared/index";
 import { Button } from "@/components/atoms/Button";

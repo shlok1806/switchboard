@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import { GripVerticalIcon } from "lucide-react"
+import { GripVerticalIcon } from "@/components/pixel-icon"
 import * as ResizablePrimitive from "react-resizable-panels"
 
 function ResizablePanelGroup({

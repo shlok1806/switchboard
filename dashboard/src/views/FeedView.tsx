@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence } from "motion/react";
-import { MessageSquarePlus, X } from "lucide-react";
+import { MessageSquarePlus, X } from "@/components/pixel-icon";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { EventDetail, EventRow } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";

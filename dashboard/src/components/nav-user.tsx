@@ -1,7 +1,7 @@
 /* Switchboard: adapted from the shadcn/ui sidebar-07 block's NavUser (MIT).
  * The account menu becomes the Person menu: who you are and the theme. */
 
-import { ChevronsUpDown, LogOut, Monitor, Moon, Sun } from "lucide-react"
+import { ChevronsUpDown, LogOut, Monitor, Moon, Sun } from "@/components/pixel-icon"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {

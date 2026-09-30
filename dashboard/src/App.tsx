@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Search } from "lucide-react";
+import { AlertTriangle, Search } from "@/components/pixel-icon";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";

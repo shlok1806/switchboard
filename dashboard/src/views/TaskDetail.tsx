@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CircleCheck, Circle, GitBranch, GitPullRequest } from "lucide-react";
+import { CircleCheck, Circle, GitBranch, GitPullRequest } from "@/components/pixel-icon";
 import type { ChannelEvent, EventType } from "@shared/index";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { IssueLink } from "@/components/domain/pending";

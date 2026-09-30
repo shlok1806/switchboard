@@ -1,12 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "@fontsource-variable/inter";
-@import "@fontsource-variable/space-grotesk";
-@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource/space-mono/400.css";
+@import "@fontsource/space-mono/700.css";
 @import "./app/beautifui/foundation.css";
 @import "./styles/tokens.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
+/* The site's phone breakpoint for chrome is the pointer, not the width. */
+@custom-variant coarse (@media (pointer: coarse));
 
 /* ── base ─────────────────────────────────────────────────── */
 
@@ -16,12 +18,25 @@ body {
 }
 
 body {
-  background: var(--page);
+  background-color: hsl(var(--desktop));
   background-image: none;
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 13.5px;
-  letter-spacing: -0.006em;
+  font-feature-settings: normal;
+  font-size: 13px;
+  letter-spacing: 0;
+  /* Swapping presets should feel like a hardware switch, not a CSS fade */
+  transition: background-color 180ms steps(3), color 180ms steps(3);
+}
+
+::selection {
+  background-color: hsl(var(--primary) / 0.25);
+  color: hsl(var(--foreground));
+}
+
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
 }
 
 #root {
@@ -30,15 +45,16 @@ body {
 
 .font-display {
   font-family: var(--font-display);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 
-/* Mono labels: machine-readout voice for ids, meta and kbd hints. */
-.label-mono {
+/* Mono labels, the site's `.type-label`: machine-readout voice for ids and meta. */
+.label-mono,
+.type-label {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
+  font-weight: 400;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-3);
 }
@@ -47,11 +63,140 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* The feed filter row scrolls sideways on a phone; the fade says there is more. */
+/*
+ * From shlokthakkar.com app/globals.css. The 3D bevel is the most recognisable
+ * thing about Motif: light on the top-left, dark on the bottom-right, inverted
+ * when a control is pressed or a field is inset.
+ */
+.bevel-out {
+  border-style: solid;
+  border-width: 2px;
+  border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
+}
+
+.bevel-in {
+  border-style: solid;
+  border-width: 2px;
+  border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
+}
+
+.bevel-thin {
+  border-style: solid;
+  border-width: 1px;
+  border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
+}
+
+.bevel-thin-in {
+  border-style: solid;
+  border-width: 1px;
+  border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
+}
+
+/* A Motif push button: raised, and pressed in while held */
+.btn-motif {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-style: solid;
+  border-width: 2px;
+  border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+}
+.btn-motif:active:not(:disabled),
+.btn-motif[aria-pressed="true"],
+.btn-motif[data-state="open"] {
+  border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
+}
+.btn-motif:disabled {
+  color: hsl(var(--faint));
+  cursor: default;
+}
+
+/* An X11 root window was a two-tone 50% dither, never a flat fill */
+.stipple {
+  background-color: hsl(var(--desktop));
+  background-image:
+    linear-gradient(45deg, hsl(var(--stipple-ink) / var(--stipple-alpha)) 25%, transparent 25%, transparent 75%, hsl(var(--stipple-ink) / var(--stipple-alpha)) 75%),
+    linear-gradient(45deg, hsl(var(--stipple-ink) / var(--stipple-alpha)) 25%, transparent 25%, transparent 75%, hsl(var(--stipple-ink) / var(--stipple-alpha)) 75%);
+  background-size: 4px 4px;
+  background-position: 0 0, 2px 2px;
+}
+
+/* An X11 title bar was solid when focused and washed out when not */
+.titlebar-active {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.titlebar-idle {
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+}
+.titlebar-alert {
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+}
+
+/* No-op on the light presets; only Console sets a strength */
+.glow {
+  text-shadow: 0 0 calc(6px * var(--glow-strength, 0)) hsl(var(--primary) / 0.5);
+}
+
+/* A notice lands the way a window does: mapped in two frames, no slide */
+@keyframes win-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.notice-in {
+  animation: win-in 100ms steps(2, end) both;
+}
+
+/*
+ * Scrollbars drawn the way Motif drew them: an inset trough with a raised
+ * thumb, from the same bevel tokens. Fine pointers only; a phone already knows
+ * its content swipes.
+ */
+@media (pointer: fine) {
+  ::-webkit-scrollbar {
+    width: 15px;
+    height: 15px;
+  }
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--muted));
+    border-style: solid;
+    border-width: 2px;
+    border-color: hsl(var(--bevel-dark)) hsl(var(--bevel-light)) hsl(var(--bevel-light)) hsl(var(--bevel-dark));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--secondary));
+    border-style: solid;
+    border-width: 2px;
+    border-color: hsl(var(--bevel-light)) hsl(var(--bevel-dark)) hsl(var(--bevel-dark)) hsl(var(--bevel-light));
+  }
+  ::-webkit-scrollbar-corner {
+    background: hsl(var(--muted));
+  }
+  @supports not selector(::-webkit-scrollbar) {
+    html {
+      scrollbar-color: hsl(var(--secondary)) hsl(var(--muted));
+    }
+  }
+}
+
+/* The feed filter row scrolls sideways on a phone. */
 @media (max-width: 639px) {
   .feed-filters {
-    -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
-    mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+    scrollbar-width: none;
   }
 }
 
@@ -61,6 +206,16 @@ body {
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* A terminal caret is on or off, never in between */
+@keyframes caret-step {
+  50% {
+    opacity: 0;
+  }
+}
+.caret-blink {
+  animation: caret-step 1s steps(2, start) infinite;
 }
 
 /* prompt-kit TextShimmer keyframes */
@@ -90,6 +245,16 @@ body {
   }
 }
 @theme inline {
-  --animate-collapsible-down: collapsible-down 200ms var(--ease-out);
-  --animate-collapsible-up: collapsible-up 160ms var(--ease-out);
+  --animate-collapsible-down: collapsible-down 100ms steps(2, end);
+  --animate-collapsible-up: collapsible-up 100ms steps(2, end);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

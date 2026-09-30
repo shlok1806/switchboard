@@ -2,7 +2,7 @@
  * Our views have no sub-pages, so the Collapsible sub-menu becomes a flat
  * item with an optional SidebarMenuBadge. */
 
-import { type LucideIcon } from "lucide-react"
+import { type LucideIcon } from "@/components/pixel-icon"
 
 import {
   SidebarGroup,
