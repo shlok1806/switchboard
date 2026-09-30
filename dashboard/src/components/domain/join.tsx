@@ -52,8 +52,8 @@ export function SignInScreen({
           </div>
         </header>
         <div className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 shadow-card">
-          <p className="text-[13.5px] leading-relaxed text-ink-2">
-            Sign in with the GitHub account that has write access to this repo.
+          <p className="text-center text-[13.5px] leading-relaxed text-ink-2">
+            Use a GitHub account with write access to this repo.
           </p>
           {notConfigured ? (
             <p role="status" className="flex items-start gap-2 text-[13px] text-ink-2">
