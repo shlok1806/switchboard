@@ -2,14 +2,17 @@ import type {
   CreateTaskRequest,
   ActionResult,
   Agent,
+  AgentId,
   ChannelEvent,
   ChannelSnapshot,
+  Holder,
   PersonAction,
   StreamMessage,
   Task,
   Verdict,
   VerdictProbabilities,
 } from "@shared/index";
+import { holderName } from "@shared/index";
 import { ALL_CAPABILITIES, type ChannelSource, type ClaimResult, type ConnectionState } from "../source";
 import { ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
@@ -210,36 +213,39 @@ export class MockChannelSource implements ChannelSource {
         this.emit({ type: "agent", agent: a });
         return { ok: true };
       }
-      case "nickname": {
-        const a = this.agents.find((x) => x.id === action.agent);
-        if (!a) return { ok: false, reason: "Unknown Agent." };
-        if (a.person !== this.me) return { ok: false, reason: `Only ${a.person} can name this Agent.` };
-        a.nickname = action.nickname ?? undefined;
-        this.emit({ type: "agent", agent: a });
-        return { ok: true };
-      }
     }
   }
 
-  /** Claim for the Person, refused the way the Worker refuses it (worker/src/claims.ts). */
-  async claim(number: number): Promise<ClaimResult> {
+  /**
+   * Claim for the Person, or for one of their own Agents, refused the way the
+   * Worker refuses it (worker/src/claims.ts).
+   */
+  async claim(number: number, forAgent?: AgentId): Promise<ClaimResult> {
     await new Promise((r) => setTimeout(r, 350));
+    let holder: Holder = { kind: "person", person: this.me };
+    if (forAgent !== undefined) {
+      const agent = this.agents.find((a) => a.id === forAgent);
+      if (!agent) return { ok: false, reason: `No Agent ${forAgent} on this Channel.` };
+      if (agent.person !== this.me) {
+        return { ok: false, reason: `Agent ${forAgent} belongs to ${agent.person}. You can claim for yourself or your own Agents.` };
+      }
+      holder = { kind: "agent", agentId: forAgent };
+    }
     const task = this.tasks.find((t) => t.number === number);
     if (!task) return { ok: false, reason: `No Task #${number}.` };
     if (task.status === "done") return { ok: false, reason: `Task #${number} is done.` };
     const me = person(this.me);
     if (task.claim) {
       const h = task.claim.holder;
-      if (h.kind === "person" && h.person === this.me) return { ok: true, task: clone(task) };
-      const name = h.kind === "agent" ? h.agentId : h.person;
+      if (h.kind === holder.kind && holderName(h) === holderName(holder)) return { ok: true, task: clone(task) };
       this.record(makeEvent("claim.refused", me, null, { heldBy: h }, { task: number }), undefined, true);
-      return { ok: false, reason: `Task #${number} is held by ${name}.`, heldBy: h };
+      const stale = task.claim.stale ? " Its Claim is Stale: only a Person can take it over." : "";
+      return { ok: false, reason: `Task #${number} is held by ${holderName(h)}.${stale}`, heldBy: h };
     }
     if (task.blockedBy.length > 0) {
       return { ok: false, reason: `Task #${number} is blocked by ${task.blockedBy.map((n) => `#${n}`).join(", ")}.` };
     }
     const at = new Date().toISOString();
-    const holder = { kind: "person" as const, person: this.me };
     task.status = "claimed";
     task.claim = { task: number, holder, claimedAt: at, stale: false };
     task.updatedAt = at;

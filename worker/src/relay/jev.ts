@@ -104,7 +104,7 @@ declare global {
 }
 
 /** The Jev the Relay asks, or null when JEV_API_KEY is not set. */
-export function jevFor(env: Env): Jev | null {
+export function jevFor(env: Pick<Env, "JEV_API_KEY" | "JEV_API_URL">): Jev | null {
   if (installed !== null) return installed;
   return env.JEV_API_KEY ? new HttpJev(env.JEV_API_KEY, env.JEV_API_URL || undefined) : null;
 }

@@ -1,7 +1,8 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { Agent, AgentId, Task } from "@shared/index";
-import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
+import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
+import { ClaimForAgentItems, ClaimForLabel, ClaimForMeItem, claimable, useClaims } from "@/components/domain/claim";
 import { NewTaskButton } from "@/components/domain/new-task";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { COLUMN_LABEL, columnOf, type Column } from "@/components/domain/task";
@@ -16,7 +17,7 @@ import {
   KanbanProvider,
   type KanbanMove,
 } from "@/components/kibo-ui/kanban";
-import { AlertTriangle, Ban, Bot, GitPullRequest, Info, ListTree, Loader2, MoveRight, UserRound, X } from "lucide-react";
+import { AlertTriangle, Ban, Bot, Ellipsis, GitPullRequest, Info, ListTree, Loader2, MoveRight, UserRound, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { initials } from "@/components/shell/nav";
 import {
@@ -24,6 +25,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -61,8 +63,8 @@ function holderPerson(t: Task, agentById: Map<AgentId, Agent>): string | null {
 export function TasksView() {
   const { tasks, agents, snapshot } = useChannel();
   const { agentById, taskByNumber } = useIndex();
-  const store = useStore();
   const me = useMe();
+  const claims = useClaims();
   const can = useCapabilities();
   const mobile = useIsMobile();
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
@@ -111,28 +113,22 @@ export function TasksView() {
       toast.error(`Can't move #${task.number} to ${COLUMN_LABEL[to]}`, { description: decision.reason });
       return;
     }
-    setPending((p) => new Map(p).set(task.number, to));
-    const result = decision.kind === "claim" ? await store.source.claim(task.number) : await store.source.release(task.number);
-    if (result.ok) store.applyTask(result.task);
+    // A drag claims for the Person; the card's menu can claim for one of their Agents.
+    await waitFor(task.number, to, () => (decision.kind === "claim" ? claims.claim(task) : claims.release(task)));
+  };
+
+  /** The card waits in `to` until the Channel answers. */
+  const waitFor = async (number: number, to: Column, work: () => Promise<boolean>) => {
+    setPending((p) => new Map(p).set(number, to));
+    await work();
     setPending((p) => {
       const next = new Map(p);
-      next.delete(task.number);
+      next.delete(number);
       return next;
     });
-    if (result.ok) {
-      toast.success(decision.kind === "claim" ? `Claimed #${task.number}` : `Released #${task.number}`, {
-        description: decision.kind === "claim" ? `Held by ${me}. Mirrored to GitHub as an assignee.` : "It is Open again.",
-      });
-    } else {
-      toast.error(decision.kind === "claim" ? `Could not claim #${task.number}` : `Could not release #${task.number}`, {
-        // The Channel's reason already names the holder; say it only when it does not.
-        description:
-          result.heldBy && !result.reason.includes(holderName(result.heldBy))
-            ? `${result.reason} Held by ${holderName(result.heldBy)}.`
-            : result.reason,
-      });
-    }
   };
+
+  const claimFor = (task: Task, agent?: AgentId) => waitFor(task.number, "claimed", () => claims.claim(task, agent));
 
   if (tasks.length === 0) {
     return (
@@ -146,16 +142,24 @@ export function TasksView() {
   const set = <K extends keyof Filters>(k: K) => (v: Filters[K]) => setFilters((f) => ({ ...f, [k]: v }));
   const active = Object.values(filters).filter(Boolean).length;
   const card = (c: Card) => (
-    <KanbanCard key={c.id} {...c} onOpen={() => go({ view: "task", number: c.task.number })} className={cn(pending.has(c.task.number) && "opacity-70")}>
+    <KanbanCard key={c.id} {...c} onOpen={() => go({ view: "task", number: c.task.number })} className={cn("group", pending.has(c.task.number) && "opacity-70")}>
       <TaskCard
         task={c.task}
         agentById={agentById}
         taskByNumber={taskByNumber}
         me={me}
         waiting={pending.has(c.task.number)}
-        moveMenu={
-          mobile && can.claims ? (
-            <MoveMenu column={c.column} onPick={(to) => move({ item: c, from: c.column, to })} options={columns} />
+        menu={
+          !can.claims ? null : mobile ? (
+            <MoveMenu
+              column={c.column}
+              onPick={(to) => move({ item: c, from: c.column, to })}
+              options={columns}
+              claimFor={c.column === "open" && claimable(c.task) ? claims.mine : []}
+              onClaimFor={(agent) => void claimFor(c.task, agent)}
+            />
+          ) : c.column === "open" && claimable(c.task) && !pending.has(c.task.number) ? (
+            <ClaimMenu me={me} agents={claims.mine} onPick={(agent) => void claimFor(c.task, agent)} />
           ) : null
         }
       />
@@ -311,8 +315,20 @@ function Empty({ column, filtered }: { column: Column; filtered: boolean }) {
   return <p className="px-2 py-8 text-center text-[13px] text-ink-3">{filtered ? "No match" : column === "stale" ? "None" : "Empty"}</p>;
 }
 
-/** The "Move to" menu that replaces dragging on a phone. */
-function MoveMenu({ column, options, onPick }: { column: Column; options: Column[]; onPick: (c: Column) => void }) {
+/** The "Move to" menu that replaces dragging on a phone. An Open card can also be claimed for one of your Agents. */
+function MoveMenu({
+  column,
+  options,
+  onPick,
+  claimFor,
+  onClaimFor,
+}: {
+  column: Column;
+  options: Column[];
+  onPick: (c: Column) => void;
+  claimFor: Agent[];
+  onClaimFor: (agent: AgentId) => void;
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -325,7 +341,7 @@ function MoveMenu({ column, options, onPick }: { column: Column; options: Column
           <MoveRight className="size-4" aria-hidden />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[180px]">
+      <DropdownMenuContent align="end" className="max-w-[calc(100vw-2rem)] min-w-[180px]">
         <DropdownMenuLabel className="text-[12px] font-normal text-ink-3">Move to</DropdownMenuLabel>
         {options
           .filter((c) => c !== column)
@@ -335,6 +351,37 @@ function MoveMenu({ column, options, onPick }: { column: Column; options: Column
               {COLUMN_LABEL[c]}
             </DropdownMenuItem>
           ))}
+        {claimFor.length > 0 && (
+          <>
+            <DropdownMenuSeparator className="bg-line" />
+            <ClaimForLabel />
+            <ClaimForAgentItems agents={claimFor} onPick={onClaimFor} />
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** An Open card's menu on a desktop: claim for yourself or one of your own Agents. A drag claims for yourself. */
+function ClaimMenu({ me, agents, onPick }: { me: string; agents: Agent[]; onPick: (agent?: AgentId) => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Claim for"
+          className="grid size-6 shrink-0 place-items-center rounded-md text-ink-3 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-hover hover:text-ink focus-visible:opacity-100 data-[state=open]:bg-hover data-[state=open]:opacity-100"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <Ellipsis className="size-4" aria-hidden />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[min(18rem,calc(100vw-2rem))]" onClick={(e) => e.stopPropagation()}>
+        <ClaimForLabel />
+        <ClaimForMeItem me={me} onPick={() => onPick()} />
+        <ClaimForAgentItems agents={agents} onPick={onPick} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -346,14 +393,14 @@ function TaskCard({
   taskByNumber,
   me,
   waiting,
-  moveMenu,
+  menu,
 }: {
   task: Task;
   agentById: Map<AgentId, Agent>;
   taskByNumber: Map<number, Task>;
   me: string;
   waiting: boolean;
-  moveMenu: ReactNode;
+  menu: ReactNode;
 }) {
   const blockers = openBlockers(task, taskByNumber);
   // Claimed, and blocked only after the Claim was taken (#11): the Claim stays held.
@@ -448,7 +495,7 @@ function TaskCard({
               <TooltipContent className="font-mono">{holderName(h)}</TooltipContent>
             </Tooltip>
           )}
-          {moveMenu}
+          {menu}
         </span>
       </footer>
     </article>

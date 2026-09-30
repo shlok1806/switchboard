@@ -54,9 +54,7 @@ export type PersonAction =
   /** `POST /api/tasks/:number/takeover`. Only valid on a Stale Claim (ADR 0002). */
   | { type: "takeover"; task: TaskNumber; to: Holder }
   /** `POST /api/agents/:id/proxy-mode`. Only the Agent's own Person may change it. */
-  | { type: "proxy-mode"; agent: AgentId; mode: ProxyMode }
-  /** `POST /api/agents/:id/nickname` */
-  | { type: "nickname"; agent: AgentId; nickname: string | null };
+  | { type: "proxy-mode"; agent: AgentId; mode: ProxyMode };
 
 export type ActionResult =
   | { ok: true }
@@ -95,6 +93,11 @@ export interface JoinRequest {
 export interface JoinResponse {
   ok: true;
   person: Person;
+}
+
+/** `GET /api/relay`: the Relay's settings, as the Dashboard shows them. Never a secret. */
+export interface RelayResponse {
+  relay: RelayConfig;
 }
 
 /**

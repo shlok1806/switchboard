@@ -8,9 +8,15 @@ import type {
   VerdictOption,
   VerdictProbabilities,
 } from "@shared/index";
+import { DEFAULT_INTERRUPT_INTERVAL_SECONDS, DEFAULT_INTERRUPT_THRESHOLD } from "@shared/index";
 import { AGENT_FILES, AGENT_SYMBOLS } from "./fixtures";
 
-export const RELAY: RelayConfig = { interruptThreshold: 0.6, model: "typesafe/jev" };
+/** The Relay settings a Worker runs with by default (worker/wrangler.jsonc). */
+export const RELAY: RelayConfig = {
+  interruptThreshold: DEFAULT_INTERRUPT_THRESHOLD,
+  interruptIntervalSeconds: DEFAULT_INTERRUPT_INTERVAL_SECONDS,
+  model: "jev-latest",
+};
 
 function eventFiles(event: ChannelEvent): string[] {
   switch (event.type) {

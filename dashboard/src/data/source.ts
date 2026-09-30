@@ -1,5 +1,6 @@
 import type {
   ActionResult,
+  AgentId,
   ChannelSnapshot,
   ClaimRefusal,
   CreateTaskRequest,
@@ -81,8 +82,11 @@ export interface ChannelSource {
   act(action: PersonAction): Promise<ActionResult>;
   /** Create a Task. The Channel creates the GitHub Issue first. */
   createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }>;
-  /** `POST /api/tasks/:number/claim`: claim a Task for the Person using this Dashboard (#9). */
-  claim(task: TaskNumber): Promise<ClaimResult>;
+  /**
+   * `POST /api/tasks/:number/claim`: claim a Task for the Person using this Dashboard (#9),
+   * or, with `forAgent`, for one of that Person's own Agents.
+   */
+  claim(task: TaskNumber, forAgent?: AgentId): Promise<ClaimResult>;
   /** `POST /api/tasks/:number/release`: release a Claim this Person holds (#9). */
   release(task: TaskNumber): Promise<ClaimResult>;
 }

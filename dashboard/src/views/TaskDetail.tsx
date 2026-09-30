@@ -14,6 +14,7 @@ import {
 } from "@/components/kibo-ui/snippet";
 import { AgentLink, CaptureIcon, PresencePill, TaskLink, VerdictTally } from "@/components/domain/pills";
 import { COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from "@/components/domain/task";
+import { ClaimAction } from "@/components/domain/claim";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { EventBody } from "@/components/domain/event";
 import { VerdictTable } from "@/components/domain/verdict";
@@ -88,6 +89,8 @@ export function TaskDetail({ number }: { number: number }) {
   const subs = subtaskProgress(task);
   const col = columnOf(task);
   const holderAgent = task.claim?.holder.kind === "agent" ? agentById.get(task.claim.holder.agentId) : undefined;
+  // `status:*` labels mirror the status pill above (ADR 0001), so they are left out, as on the board.
+  const labels = task.labels.filter((l) => !l.startsWith("status:"));
   const blocked = task.blockedBy.map((n) => taskByNumber.get(n)).filter(Boolean);
 
   return (
@@ -111,9 +114,9 @@ export function TaskDetail({ number }: { number: number }) {
             </div>
             <h1 className="text-[22px] leading-tight font-semibold tracking-tight text-ink [overflow-wrap:anywhere] sm:text-[26px]">{task.title}</h1>
             <IssueBody text={task.description} />
-            {task.labels.length > 0 && (
+            {labels.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
-                {task.labels.map((l) => (
+                {labels.map((l) => (
                   <span key={l} className="rounded-full bg-hover px-2 py-0.5 text-[12px] text-ink-2">
                     {l}
                   </span>
@@ -207,15 +210,18 @@ export function TaskDetail({ number }: { number: number }) {
                 <TakeoverAction task={task} />
               </>
             ) : (
-              <p className="text-[13px] text-ink-3">
-                {task.status === "done" ? (
-                  "Done"
-                ) : can.claims ? (
-                  "Unclaimed"
-                ) : (
-                  <>Claims arrive with <IssueLink capability="claims" />.</>
-                )}
-              </p>
+              <>
+                <p className="text-[13px] text-ink-3">
+                  {task.status === "done" ? (
+                    "Done"
+                  ) : can.claims ? (
+                    "Unclaimed"
+                  ) : (
+                    <>Claims arrive with <IssueLink capability="claims" />.</>
+                  )}
+                </p>
+                <ClaimAction task={task} />
+              </>
             )}
           </Section>
 

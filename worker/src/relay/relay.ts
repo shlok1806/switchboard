@@ -37,6 +37,7 @@ import type {
   InterruptMessage,
   InterruptResult,
   PersonName,
+  RelayConfig,
   RelayState,
   Task,
   TaskNumber,
@@ -53,7 +54,7 @@ import {
 } from "../../../shared/src/index";
 import type { NewEvent } from "../channel";
 import { buildDelivery, diffText, summarizeEvent } from "./delivery";
-import type { Jev, JevAnswer } from "./jev";
+import { JEV_MODEL, type Jev, type JevAnswer, jevFor } from "./jev";
 import { corpusOf, eventFiles, overlapOf } from "./overlap";
 
 export const RELAY_SCHEMA = `
@@ -166,6 +167,20 @@ export function interruptThreshold(raw: string | undefined): number {
   return raw !== undefined && raw.trim() !== "" && Number.isFinite(value) && value >= 0 && value <= 1
     ? value
     : DEFAULT_INTERRUPT_THRESHOLD;
+}
+
+/** The Relay's settings as Persons see them (`GET /api/relay`): the same values the Relay runs with, never a secret. */
+export function relaySettings(
+  env: Pick<Env, "JEV_API_KEY" | "JEV_API_URL"> & {
+    RELAY_INTERRUPT_THRESHOLD?: string;
+    RELAY_INTERRUPT_INTERVAL_SECONDS?: string;
+  },
+): RelayConfig {
+  return {
+    interruptThreshold: interruptThreshold(env.RELAY_INTERRUPT_THRESHOLD),
+    interruptIntervalSeconds: interruptIntervalMs(env.RELAY_INTERRUPT_INTERVAL_SECONDS) / 1000,
+    model: jevFor(env)?.model ?? JEV_MODEL,
+  };
 }
 
 const CLAIM_EVENTS: ReadonlySet<EventType> = new Set([
