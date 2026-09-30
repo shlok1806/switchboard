@@ -9,6 +9,7 @@ import type {
   DeliveryMessage,
   ErrorResponse,
   HookCaptureReply,
+  InterruptMessage,
   JoinResponse,
   ProxyCaptureReply,
   RegisterAgentRequest,
@@ -19,7 +20,7 @@ import { agentPath, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
 import type { Config } from "./config";
 
 /** Everything the Channel sends the wrapper's WebSocket. */
-export type ChannelMessage = StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage;
+export type ChannelMessage = StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage | InterruptMessage;
 
 export class ChannelError extends Error {
   constructor(

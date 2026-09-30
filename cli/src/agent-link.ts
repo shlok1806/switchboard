@@ -17,6 +17,8 @@ export interface AgentSession {
   proxyMode?: ProxyMode;
   /** False when the Person turned secret masking off (`--no-mask`). */
   secretMasking?: boolean;
+  /** Whether the wrapper can type Interrupts into this session. */
+  interrupts?: boolean;
 }
 
 export class AgentLink {
@@ -53,6 +55,7 @@ export class AgentLink {
       ...(this.session.nickname === undefined ? {} : { nickname: this.session.nickname }),
       ...(this.session.proxyMode === undefined ? {} : { proxyMode: this.session.proxyMode }),
       ...(this.session.secretMasking === undefined ? {} : { secretMasking: this.session.secretMasking }),
+      ...(this.session.interrupts === undefined ? {} : { interrupts: this.session.interrupts }),
     });
     const { agent } = answer;
     this.agent = agent;

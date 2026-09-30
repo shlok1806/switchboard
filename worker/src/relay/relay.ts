@@ -8,9 +8,15 @@
 // 3. Otherwise it asks Jev one choice question with structured state (issue #3).
 //    An Interrupt below the threshold becomes a Queue. Jev failing or timing out
 //    never loses the Event: it is Queued (source "fallback") and logged.
-// 4. Every Verdict is an Event (`verdict`, actor `relay`) with its probabilities
-//    and the state sent. A Queue or Interrupt becomes a Delivery for the Agent's
-//    next turn; Interrupts are delivered as Queue until #13.
+// 4. An Interrupt is pushed to the Agent's wrapper right away, over its WebSocket,
+//    and the wrapper types it into the session as a prompt. It becomes a Queue
+//    instead, labelled as downgraded, when the Agent's CLI cannot receive
+//    Interrupts, its wrapper is not connected, it had an Interrupt less than
+//    `interruptIntervalMs` ago, or the wrapper could not type it (its Person was
+//    typing, a dialog was open) or did not answer in time.
+// 5. Every Verdict is an Event (`verdict`, actor `relay`) with its probabilities,
+//    the state sent and how it was delivered. A Queue becomes a Delivery for the
+//    Agent's next turn.
 //
 // The Relay runs after the Event is stored, off the request that stored it, so it
 // never slows or breaks Event intake. It asks Jev about one Event's Agents
@@ -24,8 +30,11 @@ import type {
   ChannelEvent,
   Delivery,
   DeliveryMessage,
+  DowngradeReason,
   EventType,
   FileChange,
+  InterruptMessage,
+  InterruptResult,
   PersonName,
   RelayState,
   Task,
@@ -35,7 +44,9 @@ import type {
 } from "../../../shared/src/index";
 import {
   agentDeliverable,
+  DEFAULT_INTERRUPT_INTERVAL_SECONDS,
   DEFAULT_INTERRUPT_THRESHOLD,
+  INTERRUPT_ANSWER_MS,
   truncate,
   UNRELAYED_EVENT_TYPES,
 } from "../../../shared/src/index";
@@ -52,6 +63,10 @@ export const RELAY_SCHEMA = `
     data TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS deliveries_by_agent ON deliveries (agent, seq);
+  CREATE TABLE IF NOT EXISTS interrupts (
+    agent TEXT PRIMARY KEY,
+    at INTEGER NOT NULL
+  );
 `;
 
 /** How long the Relay waits for Jev before it falls back to Queue. */
@@ -78,14 +93,28 @@ export interface RelayHost {
   jev(): Jev | null;
   /** An Interrupt below this probability becomes a Queue. */
   threshold: number;
-  append(event: NewEvent<"verdict">): ChannelEvent;
+  /** The fewest milliseconds between two Interrupts to one Agent. */
+  interruptIntervalMs: number;
+  /** Records a Verdict Event under `id`. */
+  append(id: string, event: NewEvent<"verdict">): ChannelEvent;
   /** Sends a message to every WebSocket `person` has open. */
   sendTo(person: PersonName, message: DeliveryMessage): void;
+  /** Sends an Interrupt to Agent `agent`'s wrapper. False when that wrapper is not connected. */
+  interruptTo(agent: AgentId, message: InterruptMessage): boolean;
   /** Keeps the Durable Object working on `work` after the response. */
   waitUntil(work: Promise<unknown>): void;
 }
 
 type DeliveryRow = { id: string; agent: string; seq: number; data: string };
+
+/** The Verdict for one Agent before it is recorded. */
+type Decision = Omit<Verdict, "event" | "agent" | "at" | "overlap" | "addressed">;
+
+/** An Interrupt sent to a wrapper, waiting for it to say whether it typed it. */
+interface WaitingInterrupt {
+  agent: AgentId;
+  answer: (outcome: "typed" | DowngradeReason) => void;
+}
 type CodeRow = { type: string; task: number | null; payload: string };
 
 /** A recent push or merge, for corpora and Task files. */
@@ -118,6 +147,16 @@ function actorName(actor: Actor): string {
     case "relay":
       return "relay";
   }
+}
+
+/** Parses RELAY_INTERRUPT_INTERVAL_SECONDS into milliseconds, or the default when it is not a number of seconds. */
+export function interruptIntervalMs(raw: string | undefined): number {
+  const value = Number(raw);
+  const seconds =
+    raw !== undefined && raw.trim() !== "" && Number.isFinite(value) && value >= 0
+      ? value
+      : DEFAULT_INTERRUPT_INTERVAL_SECONDS;
+  return seconds * 1000;
 }
 
 /** Parses RELAY_INTERRUPT_THRESHOLD, or the default when it is not a probability. */
@@ -173,6 +212,8 @@ class Limiter {
 
 export class Relay {
   private readonly calls = new Limiter(MAX_JEV_CALLS);
+  /** Interrupts sent to wrappers that have not answered yet, by Verdict ID. */
+  private readonly waiting = new Map<string, WaitingInterrupt>();
 
   constructor(private readonly host: RelayHost) {}
 
@@ -203,6 +244,13 @@ export class Relay {
     for (const delivery of ids) this.host.sql.exec("DELETE FROM deliveries WHERE agent = ? AND id = ?", id, delivery);
   }
 
+  /** An Agent's wrapper says whether it typed an Interrupt. Only an answer from that Agent counts. */
+  interruptAnswered(result: InterruptResult): void {
+    const waiting = this.waiting.get(result.id);
+    if (waiting === undefined || waiting.agent !== result.agent) return;
+    waiting.answer(result.typed ? "typed" : result.reason);
+  }
+
   private async relay(event: AgentDeliverable): Promise<void> {
     const plans = this.plan(event);
     const asked: Plan[] = [];
@@ -217,11 +265,16 @@ export class Relay {
         asked.push(plan);
       }
     }
-    await Promise.all(asked.map((plan) => this.calls.run(() => this.ask(event, plan))));
+    // Waiting on a wrapper to type an Interrupt does not hold up other Jev calls.
+    await Promise.all(
+      asked.map((plan) =>
+        this.calls.run(() => this.ask(event, plan)).then((decision) => this.deliver(event, plan, decision)),
+      ),
+    );
   }
 
-  /** Asks Jev for one Agent, applies the threshold, records the Verdict and queues the Delivery. */
-  private async ask(event: AgentDeliverable, plan: Plan): Promise<void> {
+  /** Asks Jev for one Agent and applies the threshold. Never rejects: without an answer the Event is Queued. */
+  private async ask(event: AgentDeliverable, plan: Plan): Promise<Decision> {
     const jev = this.host.jev();
     const started = Date.now();
     let answer: JevAnswer;
@@ -231,43 +284,113 @@ export class Relay {
     } catch (error) {
       const reason = truncate((error as Error).message || String(error), 300);
       console.warn(`Relay: Jev gave no Verdict on Event ${event.id} for ${plan.agent.id}, queued instead: ${reason}`);
-      this.record(event, plan, {
+      return {
         option: "queue",
         delivered: "queue",
         source: "fallback",
         state: plan.state,
         error: reason,
         latencyMs: Date.now() - started,
-      });
-      return;
+      };
     }
     let option = answer.choice;
     let downgraded: Verdict["downgraded"];
     if (option === "interrupt" && answer.probabilities.interrupt < this.host.threshold) {
       option = "queue";
       downgraded = { from: "interrupt", reason: "below-threshold" };
-    } else if (option === "interrupt" && !plan.agent.canReceiveInterrupts) {
-      option = "queue";
-      downgraded = { from: "interrupt", reason: "cli-cannot-interrupt" };
     }
-    this.record(event, plan, {
+    return {
       option,
-      // Interrupt delivery is #13: until then an Interrupt reaches the Agent as a Queue.
-      delivered: option === "drop" ? "drop" : "queue",
+      // How an Interrupt is delivered is settled in `deliver`.
+      delivered: option,
       source: "jev",
       probabilities: answer.probabilities,
       confidence: answer.confidence,
       ...(downgraded === undefined ? {} : { downgraded }),
       state: plan.state,
       latencyMs: Date.now() - started,
-    });
+    };
   }
 
-  private record(
-    event: AgentDeliverable,
-    plan: Plan,
-    decision: Omit<Verdict, "event" | "agent" | "at" | "overlap" | "addressed">,
-  ): void {
+  /**
+   * Delivers one Verdict and records it. An Interrupt is typed into the Agent's
+   * session when it can be, else it becomes a Queue labelled with why.
+   */
+  private async deliver(event: AgentDeliverable, plan: Plan, decision: Decision): Promise<void> {
+    if (decision.option !== "interrupt") {
+      this.record(event, plan, decision);
+      return;
+    }
+    const id = crypto.randomUUID();
+    const outcome = await this.interrupt(plan.agent, this.delivery(id, event, plan, decision));
+    this.record(
+      event,
+      plan,
+      outcome === "typed"
+        ? { ...decision, delivered: "interrupt" }
+        : { ...decision, delivered: "queue", downgraded: { from: "interrupt", reason: outcome } },
+      id,
+    );
+  }
+
+  /**
+   * Sends an Interrupt to the Agent's wrapper and waits for it to say whether it
+   * typed it. Returns why not when it could not be sent or was not typed.
+   */
+  private async interrupt(agent: Agent, delivery: Delivery): Promise<"typed" | DowngradeReason> {
+    if (!agent.canReceiveInterrupts) return "cli-cannot-interrupt";
+    const { sql } = this.host;
+    const now = Date.now();
+    const last = sql.exec<{ at: number }>("SELECT at FROM interrupts WHERE agent = ?", agent.id).toArray()[0]?.at;
+    if (last !== undefined && now - last < this.host.interruptIntervalMs) return "rate-limited";
+    // Take the Agent's slot while the wrapper types, so a second Interrupt meanwhile is rate-limited.
+    sql.exec(
+      "INSERT INTO interrupts (agent, at) VALUES (?, ?) ON CONFLICT (agent) DO UPDATE SET at = excluded.at",
+      agent.id,
+      now,
+    );
+    const release = () => {
+      if (last === undefined) sql.exec("DELETE FROM interrupts WHERE agent = ? AND at = ?", agent.id, now);
+      else sql.exec("UPDATE interrupts SET at = ? WHERE agent = ? AND at = ?", last, agent.id, now);
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = new Promise<"typed" | DowngradeReason>((resolve) => {
+      this.waiting.set(delivery.id, { agent: agent.id, answer: resolve });
+      timer = setTimeout(() => resolve("no-answer"), INTERRUPT_ANSWER_MS);
+    });
+    try {
+      if (!this.host.interruptTo(agent.id, { type: "interrupt", agent: agent.id, delivery })) {
+        release();
+        return "wrapper-offline";
+      }
+      const outcome = await answered;
+      // A wrapper that never answered may still have typed it, so only a clear "no" frees the slot.
+      if (outcome !== "typed" && outcome !== "no-answer") release();
+      return outcome;
+    } finally {
+      clearTimeout(timer);
+      this.waiting.delete(delivery.id);
+    }
+  }
+
+  /** The Delivery of `event` to the Agent in `plan`, under Verdict ID `id`. */
+  private delivery(id: string, event: AgentDeliverable, plan: Plan, decision: Decision): Delivery {
+    return buildDelivery(
+      event,
+      plan.sender,
+      {
+        id,
+        option: decision.option,
+        delivered: decision.delivered,
+        overlap: plan.overlap,
+        ...(plan.addressed === null ? {} : { addressed: plan.addressed }),
+      },
+      plan.mine,
+      (n) => this.host.task(n),
+    );
+  }
+
+  private record(event: AgentDeliverable, plan: Plan, decision: Decision, id: string = crypto.randomUUID()): void {
     const verdict: Verdict = {
       event: event.id,
       agent: plan.agent.id,
@@ -276,18 +399,15 @@ export class Relay {
       overlap: plan.overlap,
       ...(plan.addressed === null ? {} : { addressed: plan.addressed }),
     };
-    const stored = this.host.append({
+    this.host.append(id, {
       type: "verdict",
       actor: { kind: "relay" },
       capture: null,
       ...(event.task === undefined ? {} : { task: event.task }),
       payload: verdict,
     });
-    if (verdict.delivered === "drop") return;
-    const delivery = buildDelivery(event, plan.sender, { id: stored.id, ...verdict }, plan.mine, (n) =>
-      this.host.task(n),
-    );
-    this.queue(plan.agent, delivery);
+    if (verdict.delivered !== "queue") return;
+    this.queue(plan.agent, this.delivery(id, event, plan, decision));
   }
 
   /** Keeps a Delivery until the Agent's wrapper has it, and pushes it there now. */

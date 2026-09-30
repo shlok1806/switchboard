@@ -7,13 +7,21 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as pty from "@lydell/node-pty";
-import type { Agent, AgentId, DeliveryAck } from "../../shared/src/index";
-import { agentIdFor, DEFAULT_IDLE_AFTER_MS, HEARTBEAT_INTERVAL_MS } from "../../shared/src/index";
+import type {
+  Agent,
+  AgentId,
+  DeliveryAck,
+  InterruptAttach,
+  InterruptMessage,
+  InterruptResult,
+} from "../../shared/src/index";
+import { agentIdFor, DEFAULT_IDLE_AFTER_MS, HEARTBEAT_INTERVAL_MS, interruptNotice } from "../../shared/src/index";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { ChannelClient, ChannelError } from "./channel-client";
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "./claude-session";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
+import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
 import { prepareSessionTools } from "./mcp-config";
 import { NextTurn } from "./next-turn";
 import { IdleWatch } from "./presence";
@@ -105,15 +113,47 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     ...(nickname === undefined ? {} : { nickname }),
     ...(proxyFlags.proxy === undefined || proxyFlags.proxy === "off" ? {} : { proxyMode: proxyFlags.proxy }),
     ...(proxyFlags.mask ? {} : { secretMasking: false }),
+    // The wrapper types Interrupts into Claude Code's pty.
+    interrupts: true,
   });
 
   // The Channel stream stays open for the whole session. It carries the Hook
   // and Proxy Captures' Events, the Agent's Proxy mode changes, and the Relay's
-  // Deliveries, which it keeps the next-turn cache current with. Interrupts will
-  // read it too.
+  // Deliveries, which it keeps the next-turn cache current with, and Interrupts,
+  // which it types into the session.
   let hooks: HookCapture | null = null;
   let proxy: ProxyCapture | null = null;
   let agentId: AgentId | null = null;
+  let child: pty.IPty | null = null;
+  // Types Interrupts into the session, never over the Person's own typing.
+  const typer = new InterruptTyper({
+    write: (data) => child?.write(data),
+    quietMs: seconds(env.SWITCHBOARD_INTERRUPT_QUIET_SECONDS, DEFAULT_QUIET_MS),
+    waitMs: seconds(env.SWITCHBOARD_INTERRUPT_WAIT_SECONDS, DEFAULT_WAIT_MS),
+    log,
+  });
+  // Tells the Channel this socket is the Agent's wrapper, so its Interrupts come here.
+  const attach = () => {
+    if (agentId === null) return;
+    const frame: InterruptAttach = { type: "interrupt.attach", agent: agentId };
+    stream.send(JSON.stringify(frame));
+  };
+  const interrupted = async (message: InterruptMessage) => {
+    log(`Interrupt ${message.delivery.id} from the Relay`);
+    const outcome = await typer.type(interruptNotice(message.delivery));
+    log(
+      outcome.typed
+        ? `typed Interrupt ${message.delivery.id}`
+        : `Interrupt ${message.delivery.id} left for the Queue: ${outcome.reason}`,
+    );
+    const result: InterruptResult = {
+      type: "interrupt.result",
+      agent: message.agent,
+      id: message.delivery.id,
+      ...outcome,
+    };
+    stream.send(JSON.stringify(result));
+  };
   // What the Agent is told at its next turn: Claims it lost to a Takeover while it
   // was Gone, Queued Events, and the standing rule at SessionStart.
   const nextTurn = new NextTurn();
@@ -133,11 +173,13 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
         };
         stream.send(JSON.stringify(ack));
       }
+      if (message.type === "interrupt" && message.agent === agentId) void interrupted(message);
     },
     (connected) => {
       log(connected ? "stream connected" : "stream disconnected");
       if (connected) hooks?.connected();
       if (connected) proxy?.connected();
+      if (connected) attach();
     },
   );
 
@@ -187,6 +229,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
         send: (frame) => stream.send(frame),
         log,
         context: (hook) => nextTurn.take(hook),
+        onHook: (input) => typer.hook(input),
       });
       // Claude Code settings can set ANTHROPIC_BASE_URL too, and they win over the
       // environment, so the session's own settings point it at the proxy as well.
@@ -209,6 +252,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     hooks?.setAgent(agent.id);
     tools?.setAgent(agent.id);
     proxy?.setAgent(agent);
+    attach();
   };
 
   let link: AgentLink | null = null;
@@ -234,26 +278,28 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   const bin = env.SWITCHBOARD_CLAUDE_BIN || "claude";
   const stdin = process.stdin;
   const stdout = process.stdout;
-  const child = pty.spawn(bin, args, {
+  const claudePty = pty.spawn(bin, args, {
     name: env.TERM || "xterm-256color",
     cols: stdout.columns || 80,
     rows: stdout.rows || 24,
     cwd,
     env: childEnv,
   });
+  child = claudePty;
   log(`started ${bin} ${args.join(" ")}`);
 
   const idle = new IdleWatch(idleAfterMs, (presence) => link?.report(presence));
-  child.onData((data) => {
+  claudePty.onData((data) => {
     stdout.write(data);
     idle.activity();
+    typer.output(data);
   });
 
-  const onInput = (data: Buffer) => child.write(data.toString("utf8"));
+  const onInput = (data: Buffer) => typer.personTyped(data.toString("utf8"));
   if (stdin.isTTY) stdin.setRawMode(true);
   stdin.on("data", onInput);
   stdin.resume();
-  const onResize = () => child.resize(stdout.columns || 80, stdout.rows || 24);
+  const onResize = () => claudePty.resize(stdout.columns || 80, stdout.rows || 24);
   stdout.on("resize", onResize);
 
   const picking = new AbortController();
@@ -274,14 +320,14 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
 
   const forward = (signal: NodeJS.Signals) => () => {
     log(`got ${signal}`);
-    child.kill(signal);
+    claudePty.kill(signal);
     setTimeout(() => process.exit(1), END_TIMEOUT_MS + 2000).unref();
   };
   process.on("SIGTERM", forward("SIGTERM"));
   process.on("SIGHUP", forward("SIGHUP"));
 
   const exitCode = await new Promise<number>((resolve) => {
-    child.onExit(({ exitCode, signal }) => resolve(signal ? 128 + signal : exitCode));
+    claudePty.onExit(({ exitCode, signal }) => resolve(signal ? 128 + signal : exitCode));
   });
 
   picking.abort();

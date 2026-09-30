@@ -131,15 +131,19 @@ export class AgentRoster {
     }
 
     const secretMasking = request.secretMasking === false ? 0 : 1;
+    // The wrapper says, every time it registers, whether it can type Interrupts into its CLI.
+    const interrupts = request.interrupts === true ? 1 : 0;
     if (existing) {
       const nickname = request.nickname === undefined ? existing.nickname : request.nickname;
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
-        `UPDATE agents SET nickname = ?, proxy_mode = ?, secret_masking = ?, presence = 'live', last_seen_at = ?
+        `UPDATE agents SET nickname = ?, proxy_mode = ?, secret_masking = ?, can_receive_interrupts = ?,
+             presence = 'live', last_seen_at = ?
          WHERE id = ?`,
         nickname,
         proxyMode,
         secretMasking,
+        interrupts,
         now,
         id,
       );
@@ -147,7 +151,7 @@ export class AgentRoster {
       this.host.sql.exec(
         `INSERT INTO agents (id, person, cli, session_id, nickname, presence, proxy_mode, secret_masking,
                              can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, 'live', ?, ?, 1, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
@@ -155,6 +159,7 @@ export class AgentRoster {
         request.nickname ?? null,
         request.proxyMode ?? DEFAULT_PROXY_MODE,
         secretMasking,
+        interrupts,
         now,
         new Date(now).toISOString(),
       );

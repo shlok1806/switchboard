@@ -59,6 +59,11 @@ export interface RegisterAgentRequest {
   proxyMode?: ProxyMode;
   /** Whether the wrapper masks secrets in Proxy Events (`--no-mask` turns it off). Omitted means on. */
   secretMasking?: boolean;
+  /**
+   * Whether the wrapper can type Interrupts into this CLI's session. Omitted means
+   * it cannot: the Relay then delivers the Agent's Interrupts as Queue, downgraded.
+   */
+  interrupts?: boolean;
 }
 
 /** `POST /api/agents` and `POST /api/agents/:id/heartbeat` answer with the Agent. */

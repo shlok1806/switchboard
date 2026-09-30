@@ -19,6 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentId, HookCaptureMessage, HookCaptureReply, HookEvent } from "../../../shared/src/index";
 import { MAX_HOOK_EVENTS_PER_MESSAGE } from "../../../shared/src/index";
+import { DIALOG_HOOKS, DIALOG_TOOLS } from "../interrupts";
 import { CONTEXT_HOOKS } from "../next-turn";
 import type { SessionSettings } from "../session-settings";
 import { CAPTURED_HOOKS, type ClaudeHookInput, HookSummarizer } from "./summarize";
@@ -52,6 +53,8 @@ export interface HookCaptureOptions {
    * SessionStart or UserPromptSubmit hook's output to the model's context.
    */
   context?: (hook: string | undefined) => string;
+  /** Called with every hook's input, before it is answered. The Interrupt typer watches them. */
+  onHook?: (input: ClaudeHookInput) => void;
   /** The hook command's program and script. Defaults to this Node and the built hook script. */
   node?: string;
   script?: string;
@@ -118,10 +121,14 @@ export class HookCapture {
     const script = this.options.script ?? hookScriptPath();
     const command = [node, script, this.socketPath].map(shellQuote).join(" ");
     const hook = { type: "command" as const, command, timeout: 10 };
-    const names = [...new Set<string>([...CAPTURED_HOOKS, ...CONTEXT_HOOKS])];
+    const names = [...new Set<string>([...CAPTURED_HOOKS, ...CONTEXT_HOOKS, ...DIALOG_HOOKS])];
+    const matchers: Record<string, string> = { PostToolUse: "*", PreToolUse: DIALOG_TOOLS.join("|") };
     return {
       hooks: Object.fromEntries(
-        names.map((name) => [name, [name === "PostToolUse" ? { matcher: "*", hooks: [hook] } : { hooks: [hook] }]]),
+        names.map((name) => {
+          const matcher = matchers[name];
+          return [name, [matcher === undefined ? { hooks: [hook] } : { matcher, hooks: [hook] }]];
+        }),
       ),
     };
   }
@@ -183,6 +190,7 @@ export class HookCapture {
       return "";
     }
     if (typeof input.session_id === "string") this.options.onSessionId?.(input.session_id);
+    this.options.onHook?.(input);
     const events = this.summarizer.summarize(input).map((draft) => ({ id: randomUUID(), ...draft }) as HookEvent);
     if (events.length > 0) {
       if (this.agent) this.enqueue(events);
