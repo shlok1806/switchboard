@@ -47,6 +47,8 @@ function actorName(event: ChannelEvent): string {
       return event.actor.agentId;
     case "github":
       return "github";
+    case "relay":
+      return "relay";
   }
 }
 
@@ -59,6 +61,8 @@ function format(event: ChannelEvent): string {
       return `${dim(time)} ${who} ${dim("joined the Channel")}`;
     case "update":
       return `${dim(time)} ${who}: ${event.payload.text}`;
+    case "verdict":
+      return `${dim(time)} ${who} ${dim(`${event.payload.option} for ${event.payload.agent} (${event.payload.source})`)}`;
     default:
       return `${dim(time)} ${who} ${dim(event.type)}`;
   }

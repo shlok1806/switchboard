@@ -122,11 +122,13 @@ export type Capture = "proxy" | "hook" | "tool";
 /**
  * Who an Event names. Every Event names its Agent or Person.
  * `github` covers pushes, merges and Issue changes reported by the GitHub webhook.
+ * `relay` is the Relay recording its Verdicts.
  */
 export type Actor =
   | { kind: "agent"; agentId: AgentId }
   | { kind: "person"; person: PersonName }
-  | { kind: "github" };
+  | { kind: "github" }
+  | { kind: "relay" };
 
 /** One changed file in a push or merge, with its committed diff hunks. */
 export interface FileChange {
@@ -287,6 +289,11 @@ export interface EventPayloads {
   "task.reopen": { via: TaskSyncVia };
   /** The Issue was deleted or moved to another repo, so the Task is gone. */
   "task.remove": { via: TaskSyncVia };
+  /**
+   * The Relay's Verdict for one Event and one Agent, with Jev's probabilities and the
+   * state Jev was sent. Recorded by the Relay (actor `relay`), never relayed itself.
+   */
+  "verdict": Verdict;
 }
 
 /**
@@ -335,9 +342,50 @@ export type VerdictProbabilities = Record<VerdictOption, number>;
 
 /** What the Relay worked out in code before asking Jev. */
 export interface Overlap {
+  /** Files the Event changed that the receiving Agent touched, or that its Task's pushes changed. */
   files: string[];
   /** Symbols the diff removed or renamed that the receiving Agent uses. */
   symbols: string[];
+}
+
+/**
+ * Where a Verdict came from.
+ * - `jev`: Jev was asked.
+ * - `rule`: no overlap and nothing addressed to the Agent, so the Relay dropped
+ *   without calling Jev (still recorded).
+ * - `fallback`: Jev failed or timed out, so the Relay queued the Event rather than lose it.
+ */
+export type VerdictSource = "jev" | "rule" | "fallback";
+
+/** The structured state the Relay sends Jev for one Event and one Agent (issue #3). */
+export interface RelayState {
+  agent: {
+    id: AgentId;
+    /** The Task the Agent holds, if any. */
+    task: { number: TaskNumber; title: string; description: string } | null;
+    /** The first Step of its Task that is not done. */
+    currentStep: string | null;
+    /** Files it edited, most recently edited first. */
+    filesTouched: string[];
+  };
+  event: {
+    /** Agent ID, Person name, or "github". */
+    sender: string;
+    type: EventType;
+    task: { number: TaskNumber; title: string } | null;
+    /** One short line of facts. */
+    summary: string;
+    files: string[];
+    /** Committed diff hunks, capped, as unified diff text. Empty when the Event has none. */
+    diff: string;
+  };
+  overlap: {
+    sharedFiles: string[];
+    /** Symbols the diff removed or renamed that this Agent uses. */
+    symbolsAgentUses: string[];
+    /** Why the Event is addressed to the Agent (its Task, a Directive, its Claim), or null. */
+    addressedToAgent: string | null;
+  };
 }
 
 /** The Relay's decision for one Event and one Agent. */
@@ -345,21 +393,30 @@ export interface Verdict {
   event: string;
   agent: AgentId;
   at: string;
-  /** The delivered decision, after any downgrade. */
+  /** The Relay's decision, after the confidence threshold. */
   option: VerdictOption;
   /**
-   * `jev`: Jev was asked. `skipped`: no overlap and not addressed to the Agent,
-   * so the Relay dropped without calling Jev (still recorded).
+   * How the Event reached the Agent. Interrupt delivery is its own ticket (#13):
+   * until then an Interrupt is delivered as a Queue, and `option` stays "interrupt".
    */
-  source: "jev" | "skipped";
-  /** Jev's probabilities. Absent when skipped. */
+  delivered: VerdictOption;
+  source: VerdictSource;
+  /** Jev's probabilities. Absent unless Jev answered. */
   probabilities?: VerdictProbabilities;
-  /** Set when an Interrupt was delivered as a Queue. */
+  /** Jev's confidence in its choice. */
+  confidence?: number;
+  /** Set when an Interrupt became a Queue. */
   downgraded?: {
     from: "interrupt";
     reason: "below-threshold" | "cli-cannot-interrupt";
   };
   overlap: Overlap;
+  /** Why the Event is addressed to the Agent, when it is. */
+  addressed?: string;
+  /** The state sent to Jev. Absent for a `rule` Drop, which never asks. */
+  state?: RelayState;
+  /** Why Jev gave no answer, for a `fallback`. */
+  error?: string;
   latencyMs?: number;
 }
 

@@ -135,6 +135,37 @@ export class GitHubApi {
     return { status: 201, body: this.pullToRest(pr) };
   }
 
+  /**
+   * The compare API (`base...head`), as GitHub answers it, read from the bare repo
+   * standing in for origin: the commits on head since the merge base, oldest first,
+   * and each changed file with its unified diff in `patch`.
+   */
+  private async compare(base: string, head: string): Promise<{ status: number; body?: unknown }> {
+    if (this.origin === null) return { status: 404, body: { message: "Not Found" } };
+    const origin = this.origin;
+    const ref = (name: string) => (/^[0-9a-f]{40}$/.test(name) ? name : `refs/heads/${name}`);
+    const range = `${ref(base)}...${ref(head)}`;
+    const log = await gitIn(origin, ["log", "--reverse", "--format=%H%x00%B%x1e", `${ref(base)}..${ref(head)}`]);
+    const commits = log
+      .split("\x1e")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const [sha = "", message = ""] = entry.split("\0");
+        return { sha, commit: { message: message.trim() } };
+      });
+    const numstat = await gitIn(origin, ["diff", "--numstat", range]);
+    const files = [];
+    for (const line of numstat.split("\n").filter(Boolean)) {
+      const [additions = "0", deletions = "0", filename = ""] = line.split("\t");
+      const diff = await gitIn(origin, ["diff", range, "--", filename]);
+      // GitHub's `patch` starts at the first hunk header.
+      const patch = diff.slice(Math.max(0, diff.indexOf("@@")));
+      files.push({ filename, additions: Number(additions), deletions: Number(deletions), patch });
+    }
+    return { status: 200, body: { commits, files } };
+  }
+
   private pullToRest(pr: ApiPullRequest) {
     return { number: pr.number, html_url: `https://github.com/${this.repo}/pull/${pr.number}`, state: pr.state };
   }
@@ -151,6 +182,10 @@ export class GitHubApi {
       return { status: 200, body: { full_name: this.repo, default_branch: "main" } };
     }
     if (url.pathname === `/repos/${this.repo}/pulls`) return this.pulls(method, url, input);
+    const compare = new RegExp(`^/repos/${this.repo}/compare/(.+)\\.\\.\\.(.+)$`).exec(url.pathname);
+    if (method === "GET" && compare?.[1] && compare[2]) {
+      return this.compare(decodeURIComponent(compare[1]), decodeURIComponent(compare[2]));
+    }
     const prefix = `/repos/${this.repo}/issues`;
     if (!url.pathname.startsWith(prefix)) return { status: 404, body: { message: "Not Found" } };
     if (method === "GET" && url.pathname === prefix) {

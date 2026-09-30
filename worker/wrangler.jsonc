@@ -24,10 +24,13 @@
     // The GitHub repo whose Issues are this Channel's Tasks (ADR 0001).
     "GITHUB_REPO": "shlok1806/switchboard",
     // An Agent goes Gone after this many seconds without a heartbeat.
-    "PRESENCE_GONE_AFTER_SECONDS": "600"
+    "PRESENCE_GONE_AFTER_SECONDS": "600",
+    // The Relay downgrades an Interrupt Jev gives less than this probability to a Queue.
+    "RELAY_INTERRUPT_THRESHOLD": "0.6"
   },
   // Set with `wrangler secret put`. JOIN_SECRET is the shared join secret
-  // (interim identity, issue #1). JEV_API_KEY is for the Relay, unused so far.
+  // (interim identity, issue #1). JEV_API_KEY calls Jev for the Relay's Verdicts
+  // (ADR 0003); for `wrangler dev`, put it in the gitignored .dev.vars.
   // GITHUB_TOKEN reads and creates Issues in GITHUB_REPO. GITHUB_WEBHOOK_SECRET
   // verifies deliveries to /api/github/webhook.
   "secrets": { "required": ["JOIN_SECRET", "JEV_API_KEY", "GITHUB_TOKEN", "GITHUB_WEBHOOK_SECRET"] }

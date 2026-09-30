@@ -21,7 +21,11 @@ export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict
     return (
       <div className={cn("flex flex-col gap-1", className)}>
         <div className="h-2 rounded-full border border-dashed border-line-strong" />
-        <span className="text-[11px] text-ink-3">No overlap. Dropped without asking Jev.</span>
+        <span className="text-[11px] text-ink-3">
+          {verdict.source === "fallback"
+            ? "Jev gave no answer, so it was Queued."
+            : "No overlap. Dropped without asking Jev."}
+        </span>
       </div>
     );
   }

@@ -14,6 +14,7 @@ import type {
   PersonAction,
   StreamMessage,
   TaskListResponse,
+  Verdict,
 } from "@shared/index";
 import { LIVE_PING, MAX_HISTORY_LIMIT } from "@shared/index";
 import type { Capabilities, ChannelSource, ConnectionState } from "./source";
@@ -23,14 +24,14 @@ const DEFAULT_RELAY = { interruptThreshold: 0.6, model: "typesafe/jev" };
 
 /**
  * What the Worker on main can do today: join, Events, Updates, the stream (#5),
- * Tasks (#8), Agents with Presence (#6), Hook Captures (#7) and Claims held on
- * Tasks (#9). Claiming from the Dashboard is a follow-up. The rest arrives with
- * later issues. `captures` stays off until Proxy Capture (#15) makes a
- * side-by-side comparison possible.
+ * Tasks (#8), Agents with Presence (#6), Hook Captures (#7), Claims held on
+ * Tasks (#9) and the Relay's Verdicts (#12). Claiming from the Dashboard is a
+ * follow-up. The rest arrives with later issues. `captures` stays off until Proxy
+ * Capture (#15) makes a side-by-side comparison possible.
  */
 const LIVE_CAPABILITIES: Capabilities = {
   agents: true,
-  verdicts: false,
+  verdicts: true,
   captures: false,
   claims: true,
   takeover: false,
@@ -120,7 +121,9 @@ export class HttpChannelSource implements ChannelSource {
     if (!joined.ok) throw new Error(joined.reason);
     const me = joined.person;
 
-    const events = await this.allEvents();
+    // The Relay records each Verdict as an Event; views show Verdicts next to their Event.
+    const all = await this.allEvents();
+    const { events, verdicts } = splitVerdicts(all);
     // Tasks need GitHub; if it is unreachable the board is empty, not broken.
     const [tasks, agents] = await Promise.all([
       this.get<TaskListResponse>("/api/tasks")
@@ -135,12 +138,11 @@ export class HttpChannelSource implements ChannelSource {
       channel: { id: "main", repo: repoFromTasks(tasks) ?? "Channel", mainBranch: "main" },
       persons: personsFrom(events, me),
       agents,
-      // No Relay yet (#12): the views explain where Verdicts will appear.
-      verdicts: [],
+      verdicts,
       tasks,
       events,
       relay: DEFAULT_RELAY,
-      cursor: events.at(-1)?.seq ?? 0,
+      cursor: all.at(-1)?.seq ?? 0,
     };
   }
 
@@ -189,6 +191,11 @@ export class HttpChannelSource implements ChannelSource {
           return; // the "pong" keepalive answer
         }
         if (message.type === "event") last = Math.max(last, message.event.seq);
+        // A Verdict Event reaches the views as a Verdict, next to the Event it is about.
+        if (message.type === "event" && message.event.type === "verdict") {
+          onMessage({ type: "verdict", verdict: message.event.payload });
+          return;
+        }
         onMessage(message);
       };
       socket.onclose = () => {
@@ -247,6 +254,17 @@ export class HttpChannelSource implements ChannelSource {
       return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
     }
   }
+}
+
+/** Separates the Relay's Verdict Events from the rest, keeping order. */
+function splitVerdicts(all: ChannelEvent[]): { events: ChannelEvent[]; verdicts: Verdict[] } {
+  const events: ChannelEvent[] = [];
+  const verdicts: Verdict[] = [];
+  for (const e of all) {
+    if (e.type === "verdict") verdicts.push(e.payload);
+    else events.push(e);
+  }
+  return { events, verdicts };
 }
 
 /** `owner/name` from an Issue URL such as https://github.com/owner/name/issues/12. */
