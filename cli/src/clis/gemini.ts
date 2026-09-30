@@ -19,12 +19,16 @@
 // - Interrupts: not typed; they are delivered as Queue, labelled downgraded,
 //   until typing mid-turn into Gemini CLI is seen to work.
 // - MCP tools: `mcpServers` in the session's settings.
-// - Proxy Capture: not supported. The Proxy reads Anthropic's Messages API only.
+// - Proxy Capture: CODE_ASSIST_ENDPOINT (Login with Google) or GOOGLE_GEMINI_BASE_URL
+//   (an API key), by auth type (gemini-route.ts); the proxy reads the generateContent
+//   format (proxy/gemini.ts). Vertex AI is not read.
 
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ClaudeHookInput } from "../hooks/summarize";
 import type { CliAdapter, SessionPlan } from "./adapter";
+import { geminiAuth, geminiProxyRoute, readJson } from "./gemini-route";
+import { GEMINI_TOOLS as TOOLS } from "./gemini-tools";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -43,19 +47,6 @@ export const GEMINI_HOOKS: Record<string, string> = {
   AfterAgent: "Stop",
   Notification: "Notification",
   SessionEnd: "SessionEnd",
-};
-
-/** Gemini CLI's built-in tools, as the Claude Code tools the Hook Capture knows. */
-const TOOLS: Record<string, { name: string; fields?: Record<string, string> }> = {
-  run_shell_command: { name: "Bash" },
-  write_file: { name: "Write" },
-  replace: { name: "Edit" },
-  read_file: { name: "Read", fields: { absolute_path: "file_path" } },
-  read_many_files: { name: "Read" },
-  glob: { name: "Glob" },
-  search_file_content: { name: "Grep" },
-  web_fetch: { name: "WebFetch", fields: { prompt: "url" } },
-  google_web_search: { name: "WebSearch" },
 };
 
 /** Works out a Gemini CLI session from the Person's arguments. */
@@ -104,15 +95,9 @@ export function geminiHookAnswer(hook: string | undefined, text: string): string
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: text.trimEnd() } })}\n`;
 }
 
-async function readJson(path: string): Promise<Record<string, unknown>> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
+/** The Person's own system settings, which the session's settings start from. */
+function systemSettings(env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
+  return readJson(env[GEMINI_SYSTEM_SETTINGS_ENV] || DEFAULT_SYSTEM_SETTINGS);
 }
 
 export const gemini: CliAdapter = {
@@ -121,19 +106,21 @@ export const gemini: CliAdapter = {
   command: "gemini",
   binEnv: "SWITCHBOARD_GEMINI_BIN",
   interrupts: false,
-  proxy: false,
+  proxy: true,
   sessionFromHooks: true,
 
   plan: async (args) => planGeminiSession(args),
 
+  proxyRoute: async (ctx) => geminiProxyRoute(await geminiAuth(ctx, await systemSettings(ctx.env)), ctx.env),
+
   translateHook: translateGeminiHook,
   hookAnswer: geminiHookAnswer,
 
-  async install({ args, dir, env, hooks, tools }) {
-    const own = await readJson(env[GEMINI_SYSTEM_SETTINGS_ENV] || DEFAULT_SYSTEM_SETTINGS);
+  async install({ args, dir, cwd, env, hooks, tools, proxyUrl, proxyRoute }) {
+    const own = await systemSettings(env);
     const ownHooks = (own.hooks ?? {}) as Record<string, unknown[]>;
     const hook = { name: "switchboard", type: "command", command: hooks.command(), timeout: 10_000 };
-    const settings = {
+    const settings: Record<string, unknown> = {
       ...own,
       // Hooks are on by default in current Gemini CLI; older ones read this switch (unverified).
       hooksConfig: { ...((own.hooksConfig ?? {}) as Record<string, unknown>), enabled: true },
@@ -151,8 +138,20 @@ export const gemini: CliAdapter = {
         [tools.server.name]: { command: tools.server.command, args: tools.server.args, env: tools.server.env },
       },
     };
+    const proxyEnv: Record<string, string> = {};
+    if (proxyUrl && proxyRoute?.setting) {
+      proxyEnv[proxyRoute.setting] = proxyUrl;
+      // Pointing GOOGLE_GEMINI_BASE_URL at the proxy would turn an auth type read from
+      // the environment into "gateway"; name the one Gemini CLI would have picked.
+      const auth = await geminiAuth({ cwd, env }, own);
+      if (!auth.fromSettings && auth.type) {
+        const security = (own.security ?? {}) as Record<string, unknown>;
+        const authSettings = (security.auth ?? {}) as Record<string, unknown>;
+        settings.security = { ...security, auth: { ...authSettings, selectedType: auth.type } };
+      }
+    }
     const path = join(dir, "gemini-settings.json");
     await writeFile(path, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-    return { args, env: { [GEMINI_SYSTEM_SETTINGS_ENV]: path } };
+    return { args, env: { [GEMINI_SYSTEM_SETTINGS_ENV]: path, ...proxyEnv } };
   },
 };

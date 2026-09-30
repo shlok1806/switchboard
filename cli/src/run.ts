@@ -31,7 +31,7 @@ import {
 } from "../../shared/src/index";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { ChannelClient, ChannelError, targetOf } from "./channel-client";
-import type { CliAdapter, SessionPlan } from "./clis/adapter";
+import type { CliAdapter, ProxyRoute, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
@@ -103,7 +103,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     console.error(`switchboard: ${(error as Error).message}`);
     return 2;
   }
-  // The Proxy Capture reads Anthropic's Messages API only.
+  // The Proxy Capture reads the model APIs of the CLIs whose adapters say so.
   const proxySetting = proxyFlags.proxy ?? (adapter.proxy ? DEFAULT_PROXY_SETTING : "off");
   if (!adapter.proxy && proxySetting !== "off") {
     console.error(`switchboard: the Proxy Capture does not support ${adapter.label} yet; use --proxy off.`);
@@ -144,6 +144,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // which it types into the session.
   let hooks: HookCapture | null = null;
   let proxy: ProxyCapture | null = null;
+  let proxyRoute: ProxyRoute | null = null;
   let tools: SessionTools | null = null;
   let agentId: AgentId | null = null;
   let child: pty.IPty | null = null;
@@ -264,16 +265,25 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     // The Proxy Capture: model traffic goes through a local proxy. If it cannot
     // start, the CLI runs as it would without Switchboard.
     try {
-      const upstream = await adapter.proxyUpstream?.(ctx);
-      proxy = await ProxyCapture.start({
-        ...(upstream === undefined ? {} : { upstream }),
-        mode: proxySetting,
-        mask: proxyFlags.mask,
-        root: cwd,
-        send: (frame) => stream.send(frame),
-        log,
-      });
-      log(`proxy on ${proxy.url} to ${upstream ?? "the Anthropic API"}`);
+      const route = (await adapter.proxyRoute?.(ctx, plan.args)) ?? { unsupported: "no route for its model traffic" };
+      if ("unsupported" in route) {
+        log(`proxy not started: ${route.unsupported}`);
+        console.error(
+          dim(`switchboard: the Proxy Capture cannot read this session (${route.unsupported}). Running without it.`),
+        );
+      } else {
+        proxy = await ProxyCapture.start({
+          upstream: route.upstream,
+          api: route.api,
+          mode: proxySetting,
+          mask: proxyFlags.mask,
+          root: cwd,
+          send: (frame) => stream.send(frame),
+          log,
+        });
+        proxyRoute = route;
+        log(`proxy on ${proxy.url} to ${route.upstream} (${route.api.name})`);
+      }
     } catch (error) {
       proxy = null;
       log(`proxy failed to start: ${(error as Error).message}`);
@@ -334,7 +344,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         dir: hookDir,
         hooks,
         tools,
-        ...(proxy ? { proxyUrl: proxy.url } : {}),
+        ...(proxy && proxyRoute ? { proxyUrl: proxy.url, proxyRoute } : {}),
       });
       args = installed.args;
       Object.assign(childEnv, installed.env);
