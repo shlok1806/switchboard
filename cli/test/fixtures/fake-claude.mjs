@@ -16,6 +16,8 @@
 //   model <prompt>
 //         -> one call to the Messages API through ANTHROPIC_BASE_URL, streaming; prints
 //            the status and a hash of the bytes it got back
+//   edit <path>
+//         -> one Edit tool call on the file at <path> (its PostToolUse hook)
 //   busy <seconds>
 //         -> works for a while, printing as it goes, like a long model turn
 //   permission <tool>
@@ -244,6 +246,15 @@ async function answer(command) {
   }
   const model = /^model (.*)$/.exec(command);
   if (model) await modelTurn(model[1]);
+  const edit = /^edit (.+)$/.exec(command);
+  if (edit) {
+    toolUse(
+      "Edit",
+      { file_path: edit[1], old_string: "}", new_string: "}\n// more" },
+      { filePath: edit[1], structuredPatch: [{ lines: [" }", "+// more"] }] },
+    );
+    console.log("FAKE-CLAUDE edited");
+  }
   if (command === "turn") {
     const longCommand = `echo ${"a".repeat(2000)}`;
     toolUse(

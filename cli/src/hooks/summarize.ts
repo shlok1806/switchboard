@@ -3,7 +3,8 @@
 // shared limits, heredoc bodies are dropped from commands, and file contents are
 // never copied, only counted.
 
-import { isAbsolute, relative } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { EventPayloads, HookEventType } from "../../../shared/src/index";
 import {
   MAX_HOOK_ARG_LENGTH,
@@ -153,12 +154,28 @@ export class HookSummarizer {
     return toolArg(tool, toolInput, (path) => this.path(path));
   }
 
-  /** A path relative to the repo when it is inside it, else as given. */
   private path(path: string): string {
-    const inside = isAbsolute(path) ? relative(this.root, path) : path;
-    const shown = inside === "" || inside.startsWith("..") || isAbsolute(inside) ? path : inside;
-    return truncate(shown, MAX_HOOK_TEXT_LENGTH);
+    return truncate(repoPath(this.root, path), MAX_HOOK_TEXT_LENGTH);
   }
+}
+
+/**
+ * A file's path as git and GitHub name it: relative to the checkout that holds it,
+ * which is the repo at `root` or a worktree inside it, such as a Task worktree at
+ * `.switchboard/worktrees/<branch>` (ADR 0006). A path outside `root` stays as given.
+ * The Relay matches these paths against the files pushes change, so a file edited
+ * in a Task worktree must read `src/app.ts`, never `.switchboard/worktrees/.../src/app.ts`.
+ */
+export function repoPath(root: string, path: string): string {
+  const absolute = isAbsolute(path) ? path : resolve(root, path);
+  const inside = relative(root, absolute);
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return path;
+  // The nearest directory above the file with a `.git` (a worktree has a `.git` file) holds it.
+  for (let dir = dirname(absolute); dir !== root && relative(root, dir) !== ""; dir = dirname(dir)) {
+    if (existsSync(join(dir, ".git"))) return relative(dir, absolute);
+    if (dirname(dir) === dir) break;
+  }
+  return inside;
 }
 
 /** Lines added and removed by a file edit, from Claude Code's patch when it gives one. */

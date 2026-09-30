@@ -1089,6 +1089,104 @@ describe("the Relay and Queue delivery (ADR 0005)", () => {
   });
 });
 
+describe("two Agents on Task worktrees", () => {
+  it("A renames a function B's Task calls; B, editing the caller in its own worktree, is interrupted with it", async () => {
+    // origin: names.ts exports formatName, greet.ts calls it.
+    const origin = join(scratch, "worktrees-origin.git");
+    await git(scratch, "init", "--quiet", "--bare", "-b", "main", origin);
+    const seed = join(scratch, "worktrees-seed");
+    await git(scratch, "clone", "--quiet", origin, seed);
+    await mkdir(join(seed, "src"), { recursive: true });
+    await writeFile(
+      join(seed, "src", "names.ts"),
+      "export function formatName(first: string): string {\n  return first;\n}\n",
+    );
+    await writeFile(
+      join(seed, "src", "greet.ts"),
+      'import { formatName } from "./names";\n\nexport function greet(first: string): string {\n  return "Hello, " + formatName(first);\n}\n',
+    );
+    await git(seed, "add", ".");
+    await git(seed, "commit", "--quiet", "-m", "Greeter");
+    await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    await git(scratch, "clone", "--quiet", origin, join(scratch, "worktrees-a"));
+    await git(scratch, "clone", "--quiet", origin, join(scratch, "worktrees-b"));
+    const repoA = await realpath(join(scratch, "worktrees-a"));
+    const repoB = await realpath(join(scratch, "worktrees-b"));
+    github.origin = origin;
+    const rename = github.open("Rename formatName to formatFullName");
+    const farewell = github.open("Add a farewell", "Add farewell next to greet.\n\n- [ ] Add farewell");
+    await openedOnGitHub(rename);
+    await openedOnGitHub(farewell);
+
+    // B claims the farewell Task and edits the caller in its Task worktree.
+    const b = new Terminal(["run", "claude"], { ...gitEnv, ...INTERRUPT_ENV }, repoB);
+    const bId = (await b.started()).agentEnv;
+    expect(await callTool(b, "claim_task", { task: farewell })).toContain(`You hold Task #${farewell} now`);
+    const bTree = join(repoB, ".switchboard", "worktrees", `task/${farewell}-add-a-farewell`);
+    b.type(`edit ${join(bTree, "src", "greet.ts")}\r`);
+    await b.waitForOutput(/FAKE-CLAUDE edited/);
+    // The Channel knows the file as git names it, not by its place in the worktree.
+    const touched = await waitFor("B's touched files", async () => {
+      const { files } = await api<TouchedFilesResponse>(`${agentPath(bId as AgentId)}/touched-files`);
+      return files.length > 0 ? files.map((f) => f.path) : undefined;
+    });
+    expect(touched).toEqual(["src/greet.ts"]);
+
+    // A claims the rename, renames formatName and its caller in its worktree, and pushes.
+    const a = new Terminal(["run", "claude"], gitEnv, repoA);
+    const aId = (await a.started()).agentEnv;
+    expect(await callTool(a, "claim_task", { task: rename })).toContain(`You hold Task #${rename} now`);
+    const aBranch = `task/${rename}-rename-formatname-to-formatfullname`;
+    const aTree = join(repoA, ".switchboard", "worktrees", aBranch);
+    const before = await git(aTree, "rev-parse", "HEAD");
+    for (const name of ["names.ts", "greet.ts"]) {
+      const path = join(aTree, "src", name);
+      await writeFile(path, (await readFile(path, "utf8")).replaceAll("formatName", "formatFullName"));
+    }
+    await git(aTree, "commit", "--quiet", "-am", "Rename formatName to formatFullName");
+    await git(aTree, "push", "--quiet", "origin", `HEAD:refs/heads/${aBranch}`);
+    const after = await git(aTree, "rev-parse", "HEAD");
+    b.type("busy 10\r");
+    await b.waitForOutput(/FAKE-CLAUDE busy/);
+    const seen = b.output.length;
+    jev.answer = { drop: 0.02, queue: 0.08, interrupt: 0.9 };
+    const asked = jev.requests.length;
+    await pushedOnGitHub(aBranch, before, after);
+
+    // The Relay asks Jev about B with B's real state and the overlap worked out in code.
+    const request = await waitFor("the Relay to ask Jev about B", () =>
+      jev.requests.slice(asked).find((r) => r.state.event.type === "push" && r.state.agent.id === bId),
+    );
+    expect(request.state.agent).toMatchObject({
+      task: { number: farewell, title: "Add a farewell" },
+      currentStep: "Add farewell",
+      filesTouched: ["src/greet.ts"],
+    });
+    expect(request.state.event).toMatchObject({ sender: aId, files: ["src/greet.ts", "src/names.ts"] });
+    expect(request.state.overlap).toEqual({
+      sharedFiles: ["src/greet.ts"],
+      symbolsAgentUses: ["formatName"],
+      addressedToAgent: null,
+    });
+    // A made the push: the Relay never asks about A.
+    expect(jev.requests.slice(asked).filter((r) => r.state.agent.id === aId)).toEqual([]);
+
+    // Typed into B's running session, naming the rename.
+    const pasted = await b
+      .waitForOutput(/FAKE-CLAUDE pasted prompt=(".*?") before=/)
+      .then((m) => (b.output.indexOf(m[0]) >= seen ? (JSON.parse(m[1] ?? '""') as string) : ""));
+    expect(pasted).toContain(`From Agent ${aId} on Task #${rename}`);
+    expect(pasted).toContain("it removed or renamed formatName, which your work uses");
+    expect(pasted).toContain('+  return "Hello, " + formatFullName(first);');
+
+    await b.waitForOutput(/FAKE-CLAUDE busy done/);
+    a.type("quit\r");
+    b.type("quit\r");
+    expect(await a.exited).toBe(0);
+    expect(await b.exited).toBe(0);
+  }, 60_000);
+});
+
 describe("Interrupt delivery", () => {
   let repoA = "";
   let repoB = "";

@@ -16,7 +16,24 @@ const secrets = {
 };
 Object.assign(process.env, secrets);
 
+// The vars tests rely on, as wrangler.jsonc sets them. A developer's .dev.vars
+// overrides vars too (say GITHUB_REPO, pointed at a local stand-in's repo), and
+// then every webhook in the tests would be for the wrong repo.
+const vars = {
+  GITHUB_REPO: "shlok1806/switchboard",
+  PRESENCE_GONE_AFTER_SECONDS: "600",
+  RELAY_INTERRUPT_THRESHOLD: "0.6",
+  RELAY_INTERRUPT_INTERVAL_SECONDS: "20",
+  GITHUB_API_URL: "",
+  JEV_API_URL: "",
+};
+
 export default defineConfig({
-  plugins: [cloudflareTest({ wrangler: { configPath: "./wrangler.jsonc" }, miniflare: { bindings: secrets } })],
+  plugins: [
+    cloudflareTest({
+      wrangler: { configPath: "./wrangler.jsonc" },
+      miniflare: { bindings: { ...vars, ...secrets } },
+    }),
+  ],
   test: { setupFiles: ["./test/setup.ts"] },
 });
