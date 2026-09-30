@@ -25,7 +25,7 @@
     // One Channel per GitHub repo (ADR 0007). While testing, only these repos
     // (comma-separated `owner/repo`) may have a Channel; empty allows any repo the
     // GitHub App is installed on.
-    "ALLOWED_REPOS": "shlok1806/switchboard",
+    "ALLOWED_REPOS": "shlok1806/switchboard,shlok1806/switchboard-playground",
     // An Agent goes Gone after this many seconds without a heartbeat.
     "PRESENCE_GONE_AFTER_SECONDS": "600",
     // The Relay downgrades an Interrupt Jev gives less than this probability to a Queue.
