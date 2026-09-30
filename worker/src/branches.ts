@@ -6,11 +6,13 @@
 // - Finishing a Task opens a pull request from its branch into the default branch
 //   whose body closes the Issue and names the holder, and marks the Task in review.
 //   When the PR merges, GitHub closes the Issue and the Task sync marks it done.
+// - A Task branch pushed without the wrapper reporting it (the Agent made its own)
+//   is linked to its claimed Task when the push arrives.
 // - Pushes to Task branches and merges into the default branch arrive from the
 //   GitHub webhook and become `push` and `merge` Events, with the changed files
 //   and capped diff hunks read from the compare API.
 
-import type { ChannelEvent, EventType, Holder, PushCommit, TaskNumber } from "../../shared/src/index";
+import type { ChannelEvent, EventType, Holder, PushCommit, Task, TaskNumber } from "../../shared/src/index";
 import { CLAIMED_LABEL, REVIEW_LABEL, taskOfBranch } from "../../shared/src/index";
 import type { NewEvent } from "./channel";
 import type { Caller, ClaimResult, Claims } from "./claims";
@@ -161,6 +163,7 @@ export class Branches {
   async codeEvent(delivery: string, change: CodeChange): Promise<CodeEventResult> {
     const gitHub = this.host.gitHub();
     if (gitHub === null) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
+    if (change.kind === "push" && change.task !== null) this.linkBranch(change.task, change.branch);
     let comparison: Awaited<ReturnType<GitHub["compare"]>>;
     try {
       comparison = await gitHub.compare(change.base, change.head);
@@ -203,6 +206,29 @@ export class Branches {
       },
     });
     return { ok: true, event };
+  }
+
+  /**
+   * A Task branch that reached GitHub without the wrapper reporting it, as when
+   * setting it up on Claim failed and the Agent made its own (#45). A claimed Task
+   * with no branch on record takes it, as if its holder had reported it. Returns
+   * the Task when it changed, else null.
+   */
+  linkBranch(number: TaskNumber, branch: string): Task | null {
+    const { tasks } = this.host;
+    const task = tasks.read(number);
+    if (task === null || task.status !== "claimed" || task.claim === undefined) return null;
+    if (task.branch !== undefined || taskOfBranch(branch) !== number) return null;
+    const linked = { ...task, branch, updatedAt: new Date().toISOString() };
+    tasks.write(linked);
+    this.host.append({
+      type: "task.branch",
+      actor: { kind: "github" },
+      capture: null,
+      task: number,
+      payload: { branch },
+    });
+    return linked;
   }
 
   /** How the pull request names the holder: its Agent ID (and Person), or the Person. */

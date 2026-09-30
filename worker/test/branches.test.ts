@@ -366,6 +366,37 @@ describe("pushes and merges from the GitHub webhook", () => {
     expect(push?.payload.files[0]?.truncated).toBeUndefined();
   });
 
+  it("links a Task branch pushed outside the wrapper to its claimed Task that has none (#45)", async () => {
+    const number = github.open({ title: "Made by hand" }).number;
+    const shlok = await agent("shlok");
+    expect((await post(claimPath(number), shlok)).status).toBe(200);
+    const branch = `task/${number}-by-hand`;
+
+    // Even a branch pushed at main, with nothing changed yet, is the Task's branch.
+    await delivered(github.push(branch));
+    expect(await task(number)).toMatchObject({ status: "claimed", branch });
+    const [linked] = await eventsOf("task.branch");
+    expect(linked).toMatchObject({ actor: { kind: "github" }, capture: null, task: number, payload: { branch } });
+
+    // A redelivery, or a second branch for the same Task, changes nothing.
+    await delivered(github.push(branch, { commits: ["More"], files: [added("a.ts", 1)] }));
+    await delivered(github.push(`task/${number}-another`, { commits: ["Other"], files: [added("b.ts", 1)] }));
+    expect((await task(number)).branch).toBe(branch);
+    expect(await eventsOf("task.branch")).toHaveLength(1);
+
+    // With the branch on record, finish_task works as if the wrapper had set it up.
+    expect((await post(finishPath(number), shlok)).status).toBe(200);
+    expect(await task(number)).toMatchObject({ status: "review", branch });
+  });
+
+  it("links no branch to a Task nobody holds", async () => {
+    const number = github.open({ title: "Unclaimed" }).number;
+    await delivered(github.push(`task/${number}-early`, { commits: ["Early"], files: [added("a.ts", 1)] }));
+    expect((await task(number)).branch).toBeUndefined();
+    expect(await eventsOf("task.branch")).toEqual([]);
+    expect(await eventsOf("push")).toHaveLength(1);
+  });
+
   it("ignores pushes to other branches, deleted branches, other repos and unmerged or non-main pull requests", async () => {
     const number = github.open({ title: "Branch per Task" }).number;
     const shlok = await agent("shlok");
