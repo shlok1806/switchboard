@@ -196,6 +196,20 @@ describe("registering an Agent", () => {
     expect((await clash.json<ErrorResponse>()).reason).toContain("shlok/claude/cafe");
   });
 
+  it("names Codex and Gemini CLI Agents by their CLI; a Codex Agent by the end of its session ID", async () => {
+    const shlok = person("shlok");
+    // Codex thread IDs are UUIDv7: every one starts with the clock, so the Agent ID takes the random end.
+    const first = await shlok.registered("01a0f2bb-063c-7f33-be98-906c8b79d278", { cli: "codex", interrupts: true });
+    const second = await shlok.registered("01a0f2bb-070d-7343-b790-4ee9c5fd33b8", { cli: "codex" });
+    const gem = await shlok.registered("9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", { cli: "gemini" });
+    expect([first.id, second.id, gem.id]).toEqual(["shlok/codex/d278", "shlok/codex/33b8", "shlok/gemini/9b1d"]);
+    expect(first).toMatchObject({ cli: "codex", canReceiveInterrupts: true });
+    expect(gem).toMatchObject({ cli: "gemini", canReceiveInterrupts: false });
+    // Resuming keeps the same Agent ID.
+    const resumed = await shlok.registered("01a0f2bb-063c-7f33-be98-906c8b79d278", { cli: "codex", resumed: true });
+    expect(resumed.id).toBe(first.id);
+  });
+
   it("keeps Agents of different Persons apart even with the same session prefix", async () => {
     const a = await person("shlok").registered("1234aaaa-0000-4000-8000-000000000000");
     const b = await person("sam").registered("1234bbbb-0000-4000-8000-000000000000");

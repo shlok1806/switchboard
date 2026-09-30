@@ -1,6 +1,9 @@
-// `switchboard run claude [...args]`: runs Claude Code in a pty so the terminal
-// stays fully interactive, and joins the session to the Channel as an Agent.
-// Its hooks (the Hook Capture) report what the Agent does to the Channel.
+// `switchboard run <cli> [...args]`: runs an agent CLI (Claude Code, Codex or
+// Gemini CLI) in a pty so the terminal stays fully interactive, and joins the
+// session to the Channel as an Agent. Its hooks (the Hook Capture) report what the
+// Agent does to the Channel. What differs from CLI to CLI is in its adapter
+// (clis/): how the session ID is known, how hooks and MCP tools are installed for
+// the session only, and whether Interrupts can be typed into it.
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -24,22 +27,24 @@ import {
   directivesNotice,
   HEARTBEAT_INTERVAL_MS,
   interruptNotice,
+  STANDING_RULE,
 } from "../../shared/src/index";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { ChannelClient, ChannelError } from "./channel-client";
-import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "./claude-session";
+import type { CliAdapter, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
-import { prepareSessionTools } from "./mcp-config";
-import { NextTurn } from "./next-turn";
+import { prepareSessionTools, type SessionTools } from "./mcp-config";
+import { NextTurn, type NextTurnItems } from "./next-turn";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
-import { DEFAULT_PROXY_SETTING, originalBaseUrl, type ProxyFlags, takeProxyFlags } from "./proxy/options";
-import { applySessionSettings } from "./session-settings";
+import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
 
 /** How long the wrapper waits for the Channel to hear that the session ended. */
 const END_TIMEOUT_MS = 3000;
+/** How long the wrapper waits for the first SessionStart hook before it says the hooks are not running. */
+const HOOK_TRUST_WAIT_MS = 8000;
 
 function seconds(raw: string | undefined, fallbackMs: number): number {
   const value = Number(raw);
@@ -72,7 +77,7 @@ export function takeNickname(args: string[]): { nickname?: string; rest: string[
   return nickname === undefined ? { rest } : { nickname, rest };
 }
 
-export async function runClaude(rawArgs: string[]): Promise<number> {
+export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<number> {
   const env = process.env;
   const config = await readConfig();
   if (!config) {
@@ -100,12 +105,18 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     console.error(`switchboard: ${(error as Error).message}`);
     return 2;
   }
+  // The Proxy Capture reads Anthropic's Messages API only.
+  const proxySetting = proxyFlags.proxy ?? (adapter.proxy ? DEFAULT_PROXY_SETTING : "off");
+  if (!adapter.proxy && proxySetting !== "off") {
+    console.error(`switchboard: the Proxy Capture does not support ${adapter.label} yet; use --proxy off.`);
+    return 2;
+  }
   const rest = proxyFlags.rest;
   const cwd = process.cwd();
-  const claudeDir = claudeConfigDir(env);
-  let plan: Awaited<ReturnType<typeof planSession>>;
+  const ctx = { cwd, env };
+  let plan: SessionPlan;
   try {
-    plan = await planSession(rest, { cwd, claudeConfigDir: claudeDir });
+    plan = await adapter.plan(rest, ctx);
   } catch (error) {
     console.error(`switchboard: ${(error as Error).message}`);
     return 1;
@@ -115,15 +126,16 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   const heartbeatMs = seconds(env.SWITCHBOARD_HEARTBEAT_SECONDS, HEARTBEAT_INTERVAL_MS);
   const idleAfterMs = seconds(env.SWITCHBOARD_IDLE_AFTER_SECONDS, DEFAULT_IDLE_AFTER_MS);
   const session = (sessionId: string, resumed: boolean): AgentSession => ({
-    cli: "claude-code",
+    cli: adapter.cli,
     sessionId,
     resumed,
     cwd,
     ...(nickname === undefined ? {} : { nickname }),
-    ...(proxyFlags.proxy === undefined || proxyFlags.proxy === "off" ? {} : { proxyMode: proxyFlags.proxy }),
+    ...(proxySetting === "off" ? {} : { proxyMode: proxySetting }),
     ...(proxyFlags.mask ? {} : { secretMasking: false }),
-    // The wrapper types Interrupts into Claude Code's pty.
-    interrupts: true,
+    // Whether the wrapper types Interrupts into this CLI's pty. When not, the
+    // Relay delivers them as Queue, labelled downgraded.
+    interrupts: adapter.interrupts,
   });
 
   // The Channel stream stays open for the whole session. It carries the Hook
@@ -132,6 +144,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   // which it types into the session.
   let hooks: HookCapture | null = null;
   let proxy: ProxyCapture | null = null;
+  let tools: SessionTools | null = null;
   let agentId: AgentId | null = null;
   let child: pty.IPty | null = null;
   // Types Interrupts into the session, never over the Person's own typing.
@@ -185,13 +198,29 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   // What the Agent is told at its next turn: Claims it lost to a Takeover while it
   // was Gone, Queued Events, Directives, and the standing rule at SessionStart.
   const nextTurn = new NextTurn();
+  // False once a CLI whose hooks need the Person's trust is seen not to run them:
+  // what the Agent must be told then goes to the read_channel tool instead of a hook.
+  let hooksRunning = true;
+  const heldForTools = () => {
+    if (hooksRunning || tools === null) return;
+    const text = nextTurn.take("UserPromptSubmit");
+    if (text !== "") {
+      tools.leaveForNextTurn(text);
+      log("left next-turn notices for the read_channel tool: the CLI's hooks are not running");
+    }
+  };
+  const addForNextTurn = (items: NextTurnItems) => {
+    const kept = nextTurn.add(items);
+    heldForTools();
+    return kept;
+  };
   const stream = client.follow(
     (message) => {
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
       if (message.type === "proxy.ack" || message.type === "proxy.refused") proxy?.reply(message);
       if (message.type === "agent") proxy?.agentChanged(message.agent);
       if (message.type === "delivery" && message.agent === agentId) {
-        const kept = nextTurn.add({ deliveries: message.deliveries });
+        const kept = addForNextTurn({ deliveries: message.deliveries });
         if (kept.length > 0) log(`queued for the next turn: ${kept.length} from the Relay`);
         // Held here now, so the Channel stops handing them over.
         const ack: DeliveryAck = {
@@ -203,7 +232,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
       }
       if (message.type === "interrupt" && message.agent === agentId) void interrupted(message);
       if (message.type === "directives" && message.agent === agentId) {
-        const kept = nextTurn.add({ directives: message.directives });
+        const kept = addForNextTurn({ directives: message.directives });
         if (kept.length > 0) log(`queued for the next turn: ${kept.length} Directive(s)`);
         const ack: DirectiveAck = {
           type: "directive.ack",
@@ -222,7 +251,6 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     },
   );
 
-  // Hooks for this session only: a settings file of its own, passed with --settings.
   let args = plan.args;
   let hookDir: string | null = null;
   const stopHooks = async () => {
@@ -232,60 +260,33 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     if (hookDir) await rm(hookDir, { recursive: true, force: true });
   };
   const childEnv: Record<string, string> = { ...(env as Record<string, string>) };
-  if (plan.kind !== "none") {
-    const setting = proxyFlags.proxy ?? DEFAULT_PROXY_SETTING;
-    if (setting !== "off") {
-      // The Proxy Capture: model traffic goes through a local proxy. If it cannot
-      // start, Claude Code runs as it would without Switchboard.
-      try {
-        const upstream = await originalBaseUrl(env, claudeDir);
-        proxy = await ProxyCapture.start({
-          ...(upstream === undefined ? {} : { upstream }),
-          mode: setting,
-          mask: proxyFlags.mask,
-          root: cwd,
-          send: (frame) => stream.send(frame),
-          log,
-        });
-        childEnv.ANTHROPIC_BASE_URL = proxy.url;
-        log(`proxy on ${proxy.url} to ${upstream ?? "the Anthropic API"}`);
-      } catch (error) {
-        proxy = null;
-        log(`proxy failed to start: ${(error as Error).message}`);
-        console.error(
-          dim(`switchboard: the Proxy Capture could not start (${(error as Error).message}). Running without it.`),
-        );
-      }
-    }
-  }
-  if (plan.kind !== "none") {
+  if (plan.kind !== "none" && proxySetting !== "off") {
+    // The Proxy Capture: model traffic goes through a local proxy. If it cannot
+    // start, the CLI runs as it would without Switchboard.
     try {
-      // Private to the Person: it holds the socket and the settings file.
-      hookDir = await mkdtemp(join(tmpdir(), "switchboard-"));
-      hooks = await HookCapture.start({
-        dir: hookDir,
+      const upstream = await adapter.proxyUpstream?.(ctx);
+      proxy = await ProxyCapture.start({
+        ...(upstream === undefined ? {} : { upstream }),
+        mode: proxySetting,
+        mask: proxyFlags.mask,
         root: cwd,
         send: (frame) => stream.send(frame),
         log,
-        context: (hook) => nextTurn.take(hook),
-        onHook: (input) => typer.hook(input),
       });
-      // Claude Code settings can set ANTHROPIC_BASE_URL too, and they win over the
-      // environment, so the session's own settings point it at the proxy as well.
-      const proxySettings = proxy ? [{ env: { ANTHROPIC_BASE_URL: proxy.url } }] : [];
-      args = await applySessionSettings(plan.args, hookDir, cwd, [hooks.settings(), ...proxySettings]);
+      log(`proxy on ${proxy.url} to ${upstream ?? "the Anthropic API"}`);
     } catch (error) {
-      console.error(`switchboard: could not install the session's hooks: ${(error as Error).message}`);
-      await stopHooks();
-      return 1;
+      proxy = null;
+      log(`proxy failed to start: ${(error as Error).message}`);
+      console.error(
+        dim(`switchboard: the Proxy Capture could not start (${(error as Error).message}). Running without it.`),
+      );
     }
   }
-  // Switchboard's MCP tools for this session only (the Tool Capture), passed with
-  // --mcp-config. Claude Code settings cannot hold MCP servers, so they are not in --settings.
-  const tools = plan.kind === "none" ? null : prepareSessionTools(cwd, env);
-  process.once("exit", () => tools?.dispose());
-  if (tools) args = tools.args(args);
 
+  // The session's Agent, registered once its session ID is known: before launch,
+  // or from the first hook or the adapter's `discover` once the CLI has started.
+  let link: AgentLink | null = null;
+  let idle: IdleWatch | null = null;
   const onRegistered = (agent: Agent) => {
     agentId = agent.id;
     hooks?.setAgent(agent.id);
@@ -293,13 +294,63 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     proxy?.setAgent(agent);
     attach();
   };
+  const linkTo = (sessionId: string, resumed: boolean) => {
+    if (link !== null) return;
+    log(`session ${sessionId}`);
+    link = new AgentLink(client, session(sessionId, resumed), heartbeatMs, log, onRegistered, addForNextTurn);
+    link.report(idle?.current ?? "live");
+    link.start();
+  };
 
-  let link: AgentLink | null = null;
+  let sawSessionStart = false;
+  if (plan.kind !== "none") {
+    try {
+      // Private to the Person: it holds the socket and the session's config files.
+      hookDir = await mkdtemp(join(tmpdir(), "switchboard-"));
+      const discovering = plan.kind === "discover" && adapter.sessionFromHooks ? plan : null;
+      hooks = await HookCapture.start({
+        dir: hookDir,
+        root: cwd,
+        send: (frame) => stream.send(frame),
+        log,
+        context: (hook) => nextTurn.take(hook),
+        onHook: (input) => {
+          if (input.hook_event_name === "SessionStart") sawSessionStart = true;
+          if (!hooksRunning) {
+            hooksRunning = true;
+            log("the CLI's hooks are running");
+          }
+          typer.hook(input);
+        },
+        ...(discovering === null ? {} : { onSessionId: (sessionId: string) => linkTo(sessionId, discovering.resumed) }),
+        ...(adapter.translateHook ? { translate: adapter.translateHook } : {}),
+        ...(adapter.hookAnswer ? { answer: adapter.hookAnswer } : {}),
+      });
+      // Switchboard's MCP tools for this session only (the Tool Capture).
+      tools = prepareSessionTools(cwd, env);
+      const installed = await adapter.install({
+        ...ctx,
+        args: plan.args,
+        dir: hookDir,
+        hooks,
+        tools,
+        ...(proxy ? { proxyUrl: proxy.url } : {}),
+      });
+      args = installed.args;
+      Object.assign(childEnv, installed.env);
+    } catch (error) {
+      console.error(`switchboard: could not install the session's hooks: ${(error as Error).message}`);
+      tools?.dispose();
+      await stopHooks();
+      return 1;
+    }
+  }
+  const sessionTools = tools as SessionTools | null;
+  process.once("exit", () => sessionTools?.dispose());
+
   if (plan.kind === "known") {
-    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered, (items) =>
-      nextTurn.add(items),
-    );
-    const expected = agentIdFor(config.person, "claude-code", plan.sessionId);
+    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered, addForNextTurn);
+    const expected = agentIdFor(config.person, adapter.cli, plan.sessionId);
     childEnv.SWITCHBOARD_AGENT_ID = expected;
     try {
       const agent = await link.register();
@@ -307,6 +358,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     } catch (error) {
       if (error instanceof ChannelError && error.status !== 0) {
         console.error(`switchboard: the Channel refused ${expected}: ${error.message}`);
+        sessionTools?.dispose();
         await stopHooks();
         return 1;
       }
@@ -314,72 +366,101 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     }
   }
 
-  const bin = env.SWITCHBOARD_CLAUDE_BIN || "claude";
+  const bin = env[adapter.binEnv] || adapter.command;
   const stdin = process.stdin;
   const stdout = process.stdout;
-  const claudePty = pty.spawn(bin, args, {
+  const cliPty = pty.spawn(bin, args, {
     name: env.TERM || "xterm-256color",
     cols: stdout.columns || 80,
     rows: stdout.rows || 24,
     cwd,
     env: childEnv,
   });
-  child = claudePty;
+  child = cliPty;
   log(`started ${bin} ${args.join(" ")}`);
 
-  const idle = new IdleWatch(idleAfterMs, (presence) => link?.report(presence));
-  claudePty.onData((data) => {
+  const watch = new IdleWatch(idleAfterMs, (presence) => link?.report(presence));
+  idle = watch;
+  cliPty.onData((data) => {
     stdout.write(data);
-    idle.activity();
+    watch.activity();
     typer.output(data);
   });
 
-  const onInput = (data: Buffer) => typer.personTyped(data.toString("utf8"));
+  const onInput = (data: Buffer) => {
+    const text = data.toString("utf8");
+    typer.personTyped(text);
+    if (/[\r\n]/.test(text)) watchTrust();
+  };
   if (stdin.isTTY) stdin.setRawMode(true);
   stdin.on("data", onInput);
   stdin.resume();
-  const onResize = () => claudePty.resize(stdout.columns || 80, stdout.rows || 24);
+  const onResize = () => cliPty.resize(stdout.columns || 80, stdout.rows || 24);
   stdout.on("resize", onResize);
 
-  const picking = new AbortController();
-  if (plan.kind === "picker") {
-    const launchedAt = Date.now();
-    void waitForPickedSession(projectDir(claudeDir, cwd), launchedAt, picking.signal).then((sessionId) => {
-      if (!sessionId) return;
-      link = new AgentLink(client, session(sessionId, true), heartbeatMs, log, onRegistered, (items) =>
-        nextTurn.add(items),
-      );
-      link.report(idle.current);
-      link.start();
+  // Finds a `discover` session without hooks. Where hooks report the session (they
+  // are exact), this only starts once they are seen not to run: a session file in
+  // the same directory could be another session's.
+  const discovering = new AbortController();
+  const launchedAt = Date.now();
+  const discover = () => {
+    if (plan.kind !== "discover" || !adapter.discover || link !== null) return;
+    const { resumed } = plan;
+    void adapter.discover(ctx, launchedAt, discovering.signal, resumed).then((sessionId) => {
+      if (sessionId) linkTo(sessionId, resumed);
     });
-  }
+  };
+  if (!adapter.sessionFromHooks) discover();
+
+  // A CLI that runs session hooks only once the Person trusts them: say so when
+  // none has arrived in time. Codex starts its session (and runs SessionStart) at
+  // the first prompt, so the wait starts when the Person first presses Enter.
+  // Until a hook arrives, next-turn notices go to the read_channel tool.
+  let trustTimer: ReturnType<typeof setTimeout> | undefined;
+  const hint = plan.kind === "none" ? undefined : adapter.untrustedHooksHint;
+  const watchTrust = () => {
+    if (hint === undefined || trustTimer !== undefined || sawSessionStart) return;
+    trustTimer = setTimeout(
+      () => {
+        if (sawSessionStart) return;
+        log("no SessionStart hook: the CLI's hooks are not trusted");
+        stdout.write(`\r\n${dim(`switchboard: ${hint}`)}\r\n`);
+        hooksRunning = false;
+        sessionTools?.leaveForNextTurn(STANDING_RULE);
+        heldForTools();
+        discover();
+      },
+      seconds(env.SWITCHBOARD_HOOK_TRUST_SECONDS, HOOK_TRUST_WAIT_MS),
+    );
+  };
 
   link?.start();
-  idle.start();
+  watch.start();
 
   const forward = (signal: NodeJS.Signals) => () => {
     log(`got ${signal}`);
-    claudePty.kill(signal);
+    cliPty.kill(signal);
     setTimeout(() => process.exit(1), END_TIMEOUT_MS + 2000).unref();
   };
   process.on("SIGTERM", forward("SIGTERM"));
   process.on("SIGHUP", forward("SIGHUP"));
 
   const exitCode = await new Promise<number>((resolve) => {
-    claudePty.onExit(({ exitCode, signal }) => resolve(signal ? 128 + signal : exitCode));
+    cliPty.onExit(({ exitCode, signal }) => resolve(signal ? 128 + signal : exitCode));
   });
 
-  picking.abort();
-  idle.stop();
+  clearTimeout(trustTimer);
+  discovering.abort();
+  watch.stop();
   stdin.off("data", onInput);
   stdout.off("resize", onResize);
   if (stdin.isTTY) stdin.setRawMode(false);
   stdin.pause();
   // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
   await Promise.all([hooks?.drain(END_TIMEOUT_MS), proxy?.drain(END_TIMEOUT_MS)]);
-  await link?.end(END_TIMEOUT_MS);
+  await (link as AgentLink | null)?.end(END_TIMEOUT_MS);
   await stopHooks();
-  tools?.dispose();
+  sessionTools?.dispose();
   log(`exited ${exitCode}`);
   return exitCode;
 }

@@ -29,6 +29,9 @@ const MAX_PENDING = 1000;
 /** The largest hook input read from a hook, in bytes. A Write's input holds the whole file. */
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
 
+/** Where a hook finds the wrapper's socket when its command does not name it. */
+export const HOOK_SOCKET_ENV = "SWITCHBOARD_HOOK_SOCKET";
+
 /** The hook script, built next to the wrapper's own bundle. */
 export function hookScriptPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "switchboard-hook.js");
@@ -55,6 +58,13 @@ export interface HookCaptureOptions {
   context?: (hook: string | undefined) => string;
   /** Called with every hook's input, before it is answered. The Interrupt typer watches them. */
   onHook?: (input: ClaudeHookInput) => void;
+  /**
+   * Turns another CLI's hook input into Claude Code's shape (hook and tool names,
+   * fields), so everything after it reads one shape. Claude Code's needs none.
+   */
+  translate?: (raw: Record<string, unknown>) => ClaudeHookInput | ClaudeHookInput[];
+  /** Wraps the text for a hook's answer the way the agent CLI reads it. Plain text by default. */
+  answer?: (hook: string | undefined, text: string) => string;
   /** The hook command's program and script. Defaults to this Node and the built hook script. */
   node?: string;
   script?: string;
@@ -115,12 +125,21 @@ export class HookCapture {
     return capture;
   }
 
-  /** The Claude Code settings that install the hooks for this session. */
-  settings(): SessionSettings {
+  /**
+   * The shell command every hook runs. With `socketInEnv` the socket path is left
+   * out, and the hook reads it from `HOOK_SOCKET_ENV` instead: the command then stays
+   * the same from session to session, which a CLI that trusts hooks by their command
+   * (Codex) needs so the Person trusts it once.
+   */
+  command(socketInEnv = false): string {
     const node = this.options.node ?? process.execPath;
     const script = this.options.script ?? hookScriptPath();
-    const command = [node, script, this.socketPath].map(shellQuote).join(" ");
-    const hook = { type: "command" as const, command, timeout: 10 };
+    return [node, script, ...(socketInEnv ? [] : [this.socketPath])].map(shellQuote).join(" ");
+  }
+
+  /** The Claude Code settings that install the hooks for this session. */
+  settings(): SessionSettings {
+    const hook = { type: "command" as const, command: this.command(), timeout: 10 };
     const names = [...new Set<string>([...CAPTURED_HOOKS, ...CONTEXT_HOOKS, ...DIALOG_HOOKS])];
     const matchers: Record<string, string> = { PostToolUse: "*", PreToolUse: DIALOG_TOOLS.join("|") };
     return {
@@ -182,21 +201,28 @@ export class HookCapture {
 
   /** Takes one hook's input, and returns what the hook prints back into the agent CLI. */
   private receive(text: string): string {
-    let input: ClaudeHookInput;
+    let inputs: ClaudeHookInput[];
     try {
-      input = JSON.parse(text) as ClaudeHookInput;
+      const raw = JSON.parse(text) as Record<string, unknown>;
+      // One hook of another CLI can stand for several of Claude Code's (a patch editing several files).
+      inputs = [this.options.translate ? this.options.translate(raw) : (raw as ClaudeHookInput)].flat();
     } catch {
       this.options.log("unreadable hook input dropped");
       return "";
     }
+    const input = inputs[0];
+    if (input === undefined) return "";
     if (typeof input.session_id === "string") this.options.onSessionId?.(input.session_id);
-    this.options.onHook?.(input);
-    const events = this.summarizer.summarize(input).map((draft) => ({ id: randomUUID(), ...draft }) as HookEvent);
+    for (const each of inputs) this.options.onHook?.(each);
+    const events = inputs
+      .flatMap((each) => this.summarizer.summarize(each))
+      .map((draft) => ({ id: randomUUID(), ...draft }) as HookEvent);
     if (events.length > 0) {
       if (this.agent) this.enqueue(events);
       else this.unsent.push(...events);
     }
-    return this.options.context?.(input.hook_event_name) ?? "";
+    const context = this.options.context?.(input.hook_event_name) ?? "";
+    return this.options.answer ? this.options.answer(input.hook_event_name, context) : context;
   }
 
   private enqueue(events: HookEvent[]): void {

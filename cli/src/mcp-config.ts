@@ -1,21 +1,35 @@
-// Gives one wrapped Claude Code session Switchboard's MCP tools, for that session
-// only: a private temp directory holds an MCP config naming `switchboard mcp` and a
-// file with the session's Agent ID, and Claude Code gets `--mcp-config <file>`.
-// Nothing global (~/.claude.json, the repo's .mcp.json) is ever touched, and the
-// directory is removed when the session ends.
+// Gives one wrapped session Switchboard's MCP tools, for that session only. A
+// private temp directory holds a file with the session's Agent ID and, when the
+// CLI's hooks cannot hand it over, what the Agent must be told at its next turn.
+// Each CLI adapter passes the server to its CLI its own way (Claude Code:
+// `--mcp-config <file>`; Codex: `-c mcp_servers...`; Gemini CLI: its session
+// settings). Nothing global (~/.claude.json, ~/.codex, ~/.gemini, the repo's own
+// config) is ever touched, and the directory is removed when the session ends.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentId } from "../../shared/src/index";
 import { configDir } from "./config";
-import { AGENT_FILE_ENV, MCP_SERVER_NAME, REPO_DIR_ENV } from "./mcp-server";
+import { AGENT_FILE_ENV, MCP_SERVER_NAME, NEXT_TURN_FILE_ENV, REPO_DIR_ENV } from "./mcp-server";
+
+/** A stdio MCP server, the way every agent CLI describes one. */
+export interface McpServerSpec {
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
 
 export interface SessionTools {
-  /** Arguments for Claude Code, with `--mcp-config` added. */
-  args(claudeArgs: string[]): string[];
+  /** The `switchboard mcp` server for this session. */
+  server: McpServerSpec;
+  /** The session's private directory, for files an adapter writes. */
+  dir: string;
   /** Names the session's Agent, once known. The tools refuse until then. */
   setAgent(id: AgentId): void;
+  /** Leaves `text` for the `read_channel` tool to hand over at the Agent's next call. */
+  leaveForNextTurn(text: string): void;
   /** Removes the session's files. */
   dispose(): void;
 }
@@ -30,31 +44,41 @@ export function withMcpConfig(args: string[], path: string): string[] {
   return at === -1 ? [...args, ...flag] : [...args.slice(0, at), ...flag, ...args.slice(at)];
 }
 
+/** Claude Code's MCP config file for the server, written in `dir`. Returns its path. */
+export function writeClaudeMcpConfig(tools: SessionTools): string {
+  const { name, command, args, env } = tools.server;
+  const path = join(tools.dir, "mcp.json");
+  const config = { mcpServers: { [name]: { type: "stdio", command, args, env } } };
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  return path;
+}
+
 /**
- * Writes the session's MCP config. The server is this same `switchboard` program
- * run as `switchboard mcp`, with the same config directory, so it reads the stored
- * Channel URL and join secret itself; the config file holds no secret.
+ * Prepares the session's MCP server. It is this same `switchboard` program run as
+ * `switchboard mcp`, with the same config directory, so it reads the stored
+ * Channel URL and join secret itself; nothing given to the agent CLI holds a secret.
  */
 export function prepareSessionTools(cwd: string, env: NodeJS.ProcessEnv = process.env): SessionTools {
   const dir = mkdtempSync(join(tmpdir(), "switchboard-session-"));
   const agentFile = join(dir, "agent");
-  const configFile = join(dir, "mcp.json");
+  const nextTurnFile = join(dir, "next-turn");
   const script = process.argv[1];
   if (!script) throw new Error("Cannot tell where the switchboard program is.");
-  const mcp = {
-    mcpServers: {
-      [MCP_SERVER_NAME]: {
-        type: "stdio",
-        command: process.execPath,
-        args: [script, "mcp"],
-        env: { [AGENT_FILE_ENV]: agentFile, [REPO_DIR_ENV]: cwd, SWITCHBOARD_CONFIG_DIR: configDir(env) },
+  return {
+    server: {
+      name: MCP_SERVER_NAME,
+      command: process.execPath,
+      args: [script, "mcp"],
+      env: {
+        [AGENT_FILE_ENV]: agentFile,
+        [NEXT_TURN_FILE_ENV]: nextTurnFile,
+        [REPO_DIR_ENV]: cwd,
+        SWITCHBOARD_CONFIG_DIR: configDir(env),
       },
     },
-  };
-  writeFileSync(configFile, `${JSON.stringify(mcp, null, 2)}\n`, { mode: 0o600 });
-  return {
-    args: (claudeArgs) => withMcpConfig(claudeArgs, configFile),
+    dir,
     setAgent: (id) => writeFileSync(agentFile, `${id}\n`, { mode: 0o600 }),
+    leaveForNextTurn: (text) => appendFileSync(nextTurnFile, `${text.trimEnd()}\n\n`, { mode: 0o600 }),
     dispose: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
