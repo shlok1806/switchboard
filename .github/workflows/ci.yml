@@ -53,7 +53,21 @@ jobs:
       url: https://switchboard.switchboard-worker.workers.dev
     steps:
       - uses: actions/checkout@v4
+      # Two merges close together start two runs, and the older one can finish
+      # last. Only the run for main's current head deploys, so an older commit
+      # never overwrites a newer deploy. The newer run deploys itself.
+      - name: Skip unless this is main's latest commit
+        id: latest
+        run: |
+          git fetch --quiet origin main
+          if [ "$(git rev-parse origin/main)" = "$GITHUB_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main has moved past $GITHUB_SHA; the newer run deploys."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-node@v4
+        if: steps.latest.outputs.deploy == 'true'
         with:
           node-version: 22
           cache: npm
@@ -61,10 +75,13 @@ jobs:
             worker/package-lock.json
             dashboard/package-lock.json
       - run: npm ci
+        if: steps.latest.outputs.deploy == 'true'
         working-directory: worker
       - run: npm ci
+        if: steps.latest.outputs.deploy == 'true'
         working-directory: dashboard
       - name: Deploy
+        if: steps.latest.outputs.deploy == 'true'
         working-directory: worker
         run: npx wrangler deploy
         env:
