@@ -104,7 +104,7 @@ export const KanbanBoard = ({ id, children, className }: KanbanBoardProps) => {
   return (
     <div
       className={cn(
-        "bevel-out flex size-full min-h-40 flex-col bg-secondary text-xs",
+        "bevel-out relative flex size-full min-h-40 flex-col bg-secondary text-xs",
         isOver && "outline-2 outline-offset-[-2px] outline-[hsl(var(--primary))] outline-dashed",
         className,
       )}
@@ -204,7 +204,7 @@ export const KanbanCards = <T extends KanbanItemProps = KanbanItemProps>({
   const items = filteredData.map((item) => item.id);
 
   return (
-    <div className="bevel-in m-[3px] mt-0 min-h-0 flex-1 overflow-y-auto bg-muted/40">
+    <div className="bevel-in relative m-[3px] mt-0 min-h-0 flex-1 overflow-y-auto bg-muted/40">
       <SortableContext items={items} strategy={verticalListSortingStrategy}>
         <div className={cn("flex min-h-full grow flex-col gap-1.5 p-1.5", className)} {...props}>
           {filteredData.map(children)}
@@ -354,7 +354,7 @@ export const KanbanProvider = <
         {...props}
       >
         {lane}
-        <div className={cn("grid size-full auto-cols-fr grid-flow-col gap-2", className)}>
+        <div className={cn("relative grid size-full auto-cols-fr grid-flow-col gap-2", className)}>
           {columns.map((column) => children(column))}
         </div>
         {typeof window !== "undefined" &&
