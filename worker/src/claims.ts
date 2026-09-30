@@ -319,19 +319,10 @@ export class Claims {
     return ["status comment", () => this.host.status.sync(gitHub, number)];
   }
 
-  /**
-   * After an Update about a claimed Task by its holder (or the holding Agent's
-   * Person), the status comment shows it as the last Update.
-   */
+  /** After an Update about a claimed Task, its status comment shows it as the last Update. */
   async updated(acting: Acting, number: TaskNumber): Promise<void> {
     const task = this.host.tasks.read(number);
-    const holder = task?.claim?.holder;
-    if (task === null || holder === undefined || task.status === "done") return;
-    const byHolder =
-      acting.actor.kind === "agent"
-        ? holder.kind === "agent" && holder.agentId === acting.actor.agentId
-        : holderPerson(this.host.agents, holder) === acting.person;
-    if (!byHolder) return;
+    if (task === null || task.claim === undefined || task.status === "done") return;
     await this.mirror(acting, "update", number, async (gitHub) => [this.statusCall(gitHub, number)]);
   }
 

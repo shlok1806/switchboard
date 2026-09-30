@@ -1,7 +1,7 @@
 // Tasks from GitHub (#8, ADR 0001), driven through the Channel API the way real
 // clients and GitHub do, with an in-memory GitHub behind the sync interface.
 
-import { env, reset, runDurableObjectAlarm } from "cloudflare:test";
+import { reset, runDurableObjectAlarm } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -14,38 +14,35 @@ import type {
   TaskResponse,
 } from "../../shared/src/index";
 import { installGitHub, sign } from "../src/github/index";
+import { bearer, channelStub, url } from "./client";
 import { FakeGitHub, type WebhookDelivery } from "./fake-github";
 
-const BASE = "https://switchboard.test";
 const WEBHOOK_SECRET = "test-webhook-secret";
 
 let github: FakeGitHub;
 
 function call(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`${BASE}${path}`, init));
+  return exports.default.fetch(new Request(url(path), init));
 }
 
-function as(person: string, init: RequestInit = {}): RequestInit {
-  return {
-    ...init,
-    headers: { Authorization: "Bearer test-join-secret", "X-Switchboard-Person": person, ...init.headers },
-  };
+async function as(person: string, init: RequestInit = {}): Promise<RequestInit> {
+  return { ...init, headers: { Authorization: await bearer(person), ...init.headers } };
 }
 
 async function tasks(): Promise<Task[]> {
-  const response = await call("/api/tasks", as("shlok"));
+  const response = await call("/api/tasks", await as("shlok"));
   expect(response.status).toBe(200);
   return (await response.json<TaskListResponse>()).tasks;
 }
 
 async function task(number: number): Promise<Task> {
-  const response = await call(`/api/tasks/${number}`, as("shlok"));
+  const response = await call(`/api/tasks/${number}`, await as("shlok"));
   expect(response.status).toBe(200);
   return (await response.json<TaskResponse>()).task;
 }
 
 async function events(): Promise<ChannelEvent[]> {
-  const response = await call("/api/events", as("shlok"));
+  const response = await call("/api/events", await as("shlok"));
   return (await response.json<HistoryResponse>()).events;
 }
 
@@ -86,7 +83,7 @@ async function delivered(delivery: WebhookDelivery): Promise<void> {
 
 /** Lets the reconcile alarm fire, as it does every few minutes in production. */
 async function reconcile(): Promise<void> {
-  const channel = env.CHANNEL.get(env.CHANNEL.idFromName("main"));
+  const channel = channelStub();
   expect(await runDurableObjectAlarm(channel)).toBe(true);
 }
 
@@ -157,24 +154,24 @@ describe("mirroring GitHub", () => {
     ]);
   });
 
-  it("answers 404 for an unknown Task and refuses a wrong join secret", async () => {
+  it("answers 404 for an unknown Task and refuses a call without a valid session", async () => {
     github.open({ title: "Only one" });
-    const missing = await call("/api/tasks/99", as("shlok"));
+    const missing = await call("/api/tasks/99", await as("shlok"));
     expect(missing.status).toBe(404);
     expect(await missing.json<ErrorResponse>()).toEqual({ ok: false, reason: "No Task #99." });
 
-    const wrong = { headers: { Authorization: "Bearer nope", "X-Switchboard-Person": "mallory" } };
+    const wrong = { headers: { Authorization: "Bearer v1.forged.session" } };
     expect((await call("/api/tasks", wrong)).status).toBe(401);
     expect((await call("/api/tasks/1", wrong)).status).toBe(401);
     expect((await call("/api/tasks", { ...wrong, method: "POST", body: '{"title":"x"}' })).status).toBe(401);
     expect(github.outbox).toHaveLength(1);
   });
 
-  it.skipIf(env.GITHUB_TOKEN)("says so when GitHub sync is not configured", async () => {
+  it("says so when the GitHub App is not configured", async () => {
     installGitHub(null);
-    const response = await call("/api/tasks", as("shlok"));
+    const response = await call("/api/tasks", await as("shlok"));
     expect(response.status).toBe(503);
-    expect((await response.json<ErrorResponse>()).reason).toMatch(/GITHUB_TOKEN/);
+    expect((await response.json<ErrorResponse>()).reason).toMatch(/GitHub App not configured/);
   });
 });
 
@@ -262,7 +259,7 @@ describe("GitHub webhook", () => {
     const number = github.open({ title: "Mistake" }).number;
     await tasks();
     await delivered(github.delete(number));
-    expect((await call(`/api/tasks/${number}`, as("shlok"))).status).toBe(404);
+    expect((await call(`/api/tasks/${number}`, await as("shlok"))).status).toBe(404);
     expect((await taskEvents()).at(-1)).toEqual(["task.remove", "github", number, "webhook"]);
   });
 });
@@ -308,7 +305,7 @@ describe("creating a Task", () => {
     const since = await lastSeq();
     const response = await call(
       "/api/tasks",
-      as("shlok", {
+      await as("shlok", {
         method: "POST",
         body: JSON.stringify({ title: "  Presence  ", description: "- [ ] heartbeat\n- [ ] gone", labels: ["agent"] }),
       }),
@@ -321,7 +318,7 @@ describe("creating a Task", () => {
       body: "- [ ] heartbeat\n- [ ] gone",
       labels: ["agent"],
       state: "open",
-      author: github.tokenLogin,
+      author: github.botLogin,
       assignees: [],
       comments: [],
     });
@@ -346,7 +343,7 @@ describe("creating a Task", () => {
 
   it("refuses a Task without a title, and does not touch GitHub", async () => {
     for (const body of [{}, { title: "   " }, { title: "x".repeat(257) }, { title: "ok", labels: "bug" }]) {
-      const response = await call("/api/tasks", as("shlok", { method: "POST", body: JSON.stringify(body) }));
+      const response = await call("/api/tasks", await as("shlok", { method: "POST", body: JSON.stringify(body) }));
       expect(response.status).toBe(400);
     }
     expect(github.outbox).toEqual([]);

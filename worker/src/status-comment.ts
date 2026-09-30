@@ -159,12 +159,34 @@ export class StatusComments {
     }
     if (task.steps.length > 0) lines.push("", `Steps done: ${task.stepsDone} of ${task.steps.length}.`);
     if (claim !== undefined && task.status !== "done") {
-      const update = lastUpdate(this.host.sql, claim.holder, task.number, claim.claimedAt);
-      if (update !== undefined) lines.push("", `Last Update, ${when(update.at)}:`, quote(update.text));
+      const update = this.latestUpdate(task.number) ?? this.holderUpdate(claim.holder, task.number, claim.claimedAt);
+      if (update !== undefined) {
+        lines.push("", `Last Update, from ${update.by} at ${when(update.at)}:`, quote(update.text));
+      }
     }
     const history = JSON.parse(this.row(task.number)?.history ?? "[]") as string[];
     if (history.length > 0) lines.push("", "History:", ...history.map((line) => `- ${line}`));
     return lines.join("\n");
+  }
+
+  /** The latest Update about Task `number`, from anyone, naming who wrote it. */
+  private latestUpdate(number: TaskNumber): { text: string; at: string; by: string } | undefined {
+    const row = this.host.sql
+      .exec<PayloadRow & { actor: string }>(
+        "SELECT payload, at, actor FROM events WHERE type = 'update' AND task = ? ORDER BY seq DESC LIMIT 1",
+        number,
+      )
+      .toArray()[0];
+    if (row === undefined) return undefined;
+    const actor = JSON.parse(row.actor) as { kind: string; agentId?: string; person?: string };
+    const by = actor.kind === "agent" ? `Agent \`${actor.agentId}\`` : `Person \`${actor.person}\``;
+    return { text: (JSON.parse(row.payload) as { text: string }).text, at: row.at, by };
+  }
+
+  /** The holder's latest Update since it claimed, when none names the Task. */
+  private holderUpdate(holder: Holder, number: TaskNumber, since: string) {
+    const update = lastUpdate(this.host.sql, holder, number, since);
+    return update === undefined ? undefined : { ...update, by: describeHolder(holder) };
   }
 
   private row(number: TaskNumber): StatusRow | undefined {

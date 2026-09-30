@@ -12,12 +12,11 @@ import type {
   PostUpdateResponse,
   StreamMessage,
 } from "../../shared/src/index";
-
-const SECRET = "test-join-secret";
-const BASE = "https://switchboard.test";
+import { signSession } from "../src/session";
+import { bearer, forgetTokens, streamQuery, url } from "./client";
 
 function call(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`${BASE}${path}`, init));
+  return exports.default.fetch(new Request(url(path), init));
 }
 
 /** Summarizes an Event as [type, Person, Update text] for readable assertions. */
@@ -34,20 +33,21 @@ class FakePerson {
 
   constructor(
     readonly name: string,
-    private readonly secret = SECRET,
+    /** A session to use instead of a valid one, to test refusals. */
+    private readonly session?: string,
   ) {}
 
-  private headers(): HeadersInit {
-    return { Authorization: `Bearer ${this.secret}`, "X-Switchboard-Person": this.name };
+  private async headers(): Promise<HeadersInit> {
+    return { Authorization: this.session === undefined ? await bearer(this.name) : `Bearer ${this.session}` };
   }
 
-  join(timeZone?: string): Promise<Response> {
-    return call("/api/join", { method: "POST", headers: this.headers(), body: JSON.stringify({ timeZone }) });
+  async join(timeZone?: string): Promise<Response> {
+    return call("/api/join", { method: "POST", headers: await this.headers(), body: JSON.stringify({ timeZone }) });
   }
 
-  /** Opens the live stream the way a browser does, with credentials in the query string. */
+  /** Opens the live stream with the session in the query string, as the CLI does. */
   async subscribe(after?: number): Promise<void> {
-    const query = new URLSearchParams({ secret: this.secret, person: this.name });
+    const query = await streamQuery(this.name);
     if (after !== undefined) query.set("after", String(after));
     const response = await call(`/api/stream?${query}`, { headers: { Upgrade: "websocket" } });
     expect(response.status).toBe(101);
@@ -61,12 +61,12 @@ class FakePerson {
     this.socket = socket;
   }
 
-  postUpdate(text: string): Promise<Response> {
-    return call("/api/updates", { method: "POST", headers: this.headers(), body: JSON.stringify({ text }) });
+  async postUpdate(text: string): Promise<Response> {
+    return call("/api/updates", { method: "POST", headers: await this.headers(), body: JSON.stringify({ text }) });
   }
 
   async history(): Promise<ChannelEvent[]> {
-    const response = await call("/api/events", { headers: this.headers() });
+    const response = await call("/api/events", { headers: await this.headers() });
     expect(response.status).toBe(200);
     return (await response.json<HistoryResponse>()).events;
   }
@@ -96,8 +96,8 @@ class FakePerson {
 
 const people: FakePerson[] = [];
 
-function person(name: string, secret?: string): FakePerson {
-  const fake = new FakePerson(name, secret);
+function person(name: string, session?: string): FakePerson {
+  const fake = new FakePerson(name, session);
   people.push(fake);
   return fake;
 }
@@ -108,38 +108,35 @@ async function posted(response: Response): Promise<ChannelEvent> {
 }
 
 afterEach(async () => {
+  forgetTokens();
   for (const p of people.splice(0)) p.close();
   await reset();
 });
 
 describe("joining", () => {
-  it("refuses a wrong join secret on every route", async () => {
-    const mallory = person("mallory", "not-the-secret");
+  it("refuses a forged or missing session on every route", async () => {
+    const mallory = person("mallory", await signSession("some-other-secret-that-is-long-enough!!", "mallory"));
 
     const join = await mallory.join();
     expect(join.status).toBe(401);
-    expect(await join.json<ErrorResponse>()).toEqual({ ok: false, reason: "Wrong join secret." });
+    expect((await join.json<ErrorResponse>()).reason).toContain("Sign in again");
     expect((await mallory.postUpdate("hi")).status).toBe(401);
-    expect((await call("/api/events", { headers: { "X-Switchboard-Person": "mallory" } })).status).toBe(401);
-    const stream = await call("/api/stream?person=mallory&secret=nope", { headers: { Upgrade: "websocket" } });
+    expect((await call("/api/events")).status).toBe(401);
+    const stream = await call("/api/stream?token=v1.nope.nope", { headers: { Upgrade: "websocket" } });
     expect(stream.status).toBe(401);
 
     // Nothing a refused client did reached the Channel.
     expect(await person("shlok").history()).toEqual([]);
   });
 
-  it("joins a Person once, under the name they picked", async () => {
-    const response = await person("  Shlok ").join("America/New_York");
+  it("joins a Person once, under their GitHub login", async () => {
+    const response = await person("shlok").join("America/New_York");
     expect(response.status).toBe(200);
     expect((await response.json<JoinResponse>()).person).toMatchObject({ name: "shlok", timeZone: "America/New_York" });
 
     await person("shlok").join();
     const history = await person("shlok").history();
     expect(history.map(brief)).toEqual([["person.join", "shlok", null]]);
-  });
-
-  it("refuses a name that could not be part of an Agent ID", async () => {
-    expect((await person("shlok/claude").join()).status).toBe(400);
   });
 });
 

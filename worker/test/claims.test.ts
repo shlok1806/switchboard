@@ -1,7 +1,7 @@
 // Claims (#9, ADR 0001), driven through the Channel API the way the wrapper's MCP
 // tools and the Dashboard use it, with an in-memory GitHub behind the sync interface.
 
-import { env, reset, runDurableObjectAlarm } from "cloudflare:test";
+import { reset, runDurableObjectAlarm } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -16,25 +16,17 @@ import type {
   TaskResponse,
   ToolCallResponse,
 } from "../../shared/src/index";
-import { AGENT_HEADER, CLAIMED_LABEL, claimPath, releasePath, stepPath } from "../../shared/src/index";
+import { CLAIMED_LABEL, claimPath, releasePath, stepPath } from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
+import { STATUS_MARKER } from "../src/status-comment";
+import { type As, bearer, channelStub, forgetTokens, remember, url } from "./client";
 import { FakeGitHub } from "./fake-github";
-
-const BASE = "https://switchboard.test";
 
 let github: FakeGitHub;
 
-/** Who a call is made as: a Person, or an Agent calling through Switchboard's tools. */
-type As = { person: string; agent?: AgentId };
-
-function call(path: string, as: As, init: RequestInit = {}): Promise<Response> {
-  const headers: Record<string, string> = {
-    Authorization: "Bearer test-join-secret",
-    "X-Switchboard-Person": as.person,
-    "Content-Type": "application/json",
-  };
-  if (as.agent !== undefined) headers[AGENT_HEADER] = as.agent;
-  return exports.default.fetch(new Request(`${BASE}${path}`, { ...init, headers }));
+async function call(path: string, as: As, init: RequestInit = {}): Promise<Response> {
+  const headers = { Authorization: await bearer(as), "Content-Type": "application/json" };
+  return exports.default.fetch(new Request(url(path), { ...init, headers }));
 }
 
 function post(path: string, as: As, body: unknown = {}): Promise<Response> {
@@ -49,7 +41,7 @@ async function agent(person: string): Promise<As & { agent: AgentId }> {
   const sessionId = `${sessions.toString(16).padStart(4, "0")}aaaa-0000-4000-8000-000000000000`;
   const response = await post("/api/agents", { person }, { cli: "claude-code", sessionId, cwd: "/repo" });
   expect(response.status).toBe(200);
-  return { person, agent: (await response.json<AgentResponse>()).agent.id };
+  return { person, agent: remember(await response.json<AgentResponse>()).agent.id };
 }
 
 async function task(number: number): Promise<Task> {
@@ -84,6 +76,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   installGitHub(null);
+  forgetTokens();
   await reset();
 });
 
@@ -154,7 +147,7 @@ describe("claiming", () => {
     github.addBlocker(blocked, blocker);
     await task(done);
     github.close(done);
-    await runDurableObjectAlarm(env.CHANNEL.get(env.CHANNEL.idFromName("main")));
+    await runDurableObjectAlarm(channelStub());
     expect((await task(done)).status).toBe("done");
     const shlok = await agent("shlok");
 
@@ -206,9 +199,11 @@ describe("who may claim", () => {
     const forOther = await post(claimPath(number), one, { for: two.agent });
     expect(forOther.status).toBe(403);
 
-    // sam cannot act through shlok's Agent.
-    const impostor = await post(claimPath(number), { person: "sam", agent: one.agent });
-    expect(impostor.status).toBe(403);
+    // A token nobody issued is not anyone's.
+    const forged = await exports.default.fetch(
+      new Request(url(claimPath(number)), { method: "POST", headers: { Authorization: "Bearer sba_forged" } }),
+    );
+    expect(forged.status).toBe(401);
     expect((await task(number)).claim).toBeUndefined();
   });
 });
@@ -269,49 +264,53 @@ describe("Steps", () => {
 });
 
 describe("mirroring Claims to GitHub", () => {
-  it("assigns the token's user, labels status:claimed and comments with the Agent ID, then undoes it on release", async () => {
+  it("assigns the holder's Person, labels status:claimed and posts one status comment, then undoes it on release", async () => {
     const number = github.open({ title: "Claims", labels: ["ready-for-agent"] }).number;
     const shlok = await agent("shlok");
 
     await post(claimPath(number), shlok);
     expect(github.calls).toEqual([
-      ["addAssignees", number, [github.tokenLogin]],
+      ["addAssignees", number, ["shlok"]],
       ["addLabels", number, [CLAIMED_LABEL]],
-      ["addComment", number, `Claimed by Agent \`${shlok.agent}\` (Person shlok) via Switchboard.`],
+      ["createComment", number, expect.stringContaining(`Held by Agent \`${shlok.agent}\` of \`shlok\``)],
     ]);
-    expect(github.issue(number)).toMatchObject({
-      assignees: [github.tokenLogin],
-      labels: ["ready-for-agent", CLAIMED_LABEL],
-    });
+    expect(github.issue(number)).toMatchObject({ assignees: ["shlok"], labels: ["ready-for-agent", CLAIMED_LABEL] });
     expect((await task(number)).labels).toEqual(["ready-for-agent", CLAIMED_LABEL]);
+    const [comment] = github.commentIds(number);
 
     github.calls.length = 0;
     await post(releasePath(number), shlok);
     expect(github.calls).toEqual([
-      ["removeAssignees", number, [github.tokenLogin]],
+      ["removeAssignees", number, ["shlok"]],
       ["removeLabel", number, CLAIMED_LABEL],
-      ["addComment", number, `Released by Agent \`${shlok.agent}\` (Person shlok) via Switchboard.`],
+      ["updateComment", comment, expect.stringContaining("Not claimed.")],
     ]);
     expect(github.issue(number)).toMatchObject({ assignees: [], labels: ["ready-for-agent"] });
     expect((await task(number)).labels).toEqual(["ready-for-agent"]);
+    // Still one comment, edited in place, with the history of both changes.
+    expect(github.commentIds(number)).toEqual([comment]);
+    const body = github.issue(number).comments[0] ?? "";
+    expect(body.startsWith(STATUS_MARKER)).toBe(true);
+    expect(body).toMatch(/History:\n- .*: Claimed by Agent `.*`\.\n- .*: Released by Agent `.*`\./);
 
     // A reconcile finds nothing it did not already know.
     const since = await lastSeq();
-    await runDurableObjectAlarm(env.CHANNEL.get(env.CHANNEL.idFromName("main")));
+    await runDurableObjectAlarm(channelStub());
     expect((await events()).filter((e) => e.seq > since)).toEqual([]);
   });
 
-  it("names a Person holder in the comment", async () => {
+  it("names a Person holder in the status comment", async () => {
     const number = github.open({ title: "Claims" }).number;
     await post(claimPath(number), { person: "dev" });
-    expect(github.issue(number).comments).toEqual(["Claimed by Person `dev` via Switchboard."]);
+    expect(github.issue(number).comments).toEqual([expect.stringContaining("Held by Person `dev` since")]);
+    expect(github.issue(number).assignees).toEqual(["dev"]);
   });
 
   it("keeps the Claim when GitHub fails, and records each failure as an Event", async () => {
     const number = github.open({ title: "Claims" }).number;
     const shlok = await agent("shlok");
     github.failing.add("addAssignees");
-    github.failing.add("addComment");
+    github.failing.add("createComment");
 
     const response = await post(claimPath(number), shlok);
     expect(response.status).toBe(200);
@@ -325,7 +324,7 @@ describe("mirroring Claims to GitHub", () => {
         "mirror.failed",
         shlok.agent,
         null,
-        { change: "claim", call: "comment", reason: expect.stringContaining("500") },
+        { change: "claim", call: "status comment", reason: expect.stringContaining("500") },
       ],
     ]);
   });
@@ -376,13 +375,11 @@ describe("Updates and tool calls as an Agent", () => {
     });
   });
 
-  it("refuses tool calls from a Person, an unknown tool, and another Person's Agent", async () => {
+  it("refuses tool calls from a Person and an unknown tool", async () => {
     const shlok = await agent("shlok");
     const body = { tool: "claim_task", arg: "#1", ok: true, durationMs: 1 };
     expect((await post("/api/tool-calls", { person: "shlok" }, body)).status).toBe(400);
     expect((await post("/api/tool-calls", shlok, { ...body, tool: "rm_rf" })).status).toBe(400);
-    expect((await post("/api/tool-calls", { person: "sam", agent: shlok.agent }, body)).status).toBe(403);
-    expect((await post("/api/updates", { person: "sam", agent: shlok.agent }, { text: "hi" })).status).toBe(403);
   });
 });
 

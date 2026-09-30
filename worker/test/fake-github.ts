@@ -11,6 +11,7 @@ import type {
   IssueRef,
   NewIssue,
   NewPullRequest,
+  Permission,
   PullRequestRef,
 } from "../src/github/index";
 
@@ -25,7 +26,8 @@ interface FakeIssue {
   parent?: TaskNumber;
   blockedBy: Set<TaskNumber>;
   assignees: string[];
-  comments: string[];
+  /** Comment IDs, oldest first. */
+  comments: number[];
 }
 
 /** One write the Channel made to GitHub, in the order it made them. */
@@ -34,7 +36,8 @@ export type MirrorCall =
   | ["removeAssignees", TaskNumber, string[]]
   | ["addLabels", TaskNumber, string[]]
   | ["removeLabel", TaskNumber, string]
-  | ["addComment", TaskNumber, string]
+  | ["createComment", TaskNumber, string]
+  | ["updateComment", number, string]
   | ["setBody", TaskNumber, string]
   | ["createPullRequest", string, string];
 
@@ -68,8 +71,16 @@ export interface WebhookDelivery {
 
 export class FakeGitHub implements GitHub {
   readonly repo = "shlok1806/switchboard";
-  /** The login the Channel's GITHUB_TOKEN belongs to; Issues it creates are authored by it. */
-  readonly tokenLogin = "switchboard-bot";
+  /** The GitHub App's bot; Issues and comments the Channel creates are authored by it. */
+  readonly botLogin = "switchboard[bot]";
+  /** Each login's permission on the repo; anyone not listed has write access. */
+  readonly permissions = new Map<string, Permission>();
+  /** How many times the Channel asked for someone's permission: the membership checks. */
+  permissionChecks = 0;
+  /** When true, the permission check fails as if GitHub were down. */
+  permissionsDown = false;
+  private readonly commentBodies = new Map<number, { issue: TaskNumber; body: string }>();
+  private nextComment = 1000;
   /** Every delivery GitHub would have sent, oldest first. */
   readonly outbox: WebhookDelivery[] = [];
   /** Every write the Channel made, oldest first. */
@@ -275,7 +286,21 @@ export class FakeGitHub implements GitHub {
     comments: string[];
   } {
     const { title, body, labels, state, author, assignees, comments } = this.must(number);
-    return { title, body, labels: [...labels], state, author, assignees: [...assignees], comments: [...comments] };
+    const bodies = comments.flatMap((id) => {
+      const comment = this.commentBodies.get(id);
+      return comment === undefined ? [] : [comment.body];
+    });
+    return { title, body, labels: [...labels], state, author, assignees: [...assignees], comments: bodies };
+  }
+
+  /** The IDs of an Issue's comments that still exist, oldest first. */
+  commentIds(number: TaskNumber): number[] {
+    return this.must(number).comments.filter((id) => this.commentBodies.has(id));
+  }
+
+  /** Someone deletes a comment on github.com. */
+  deleteComment(id: number): void {
+    this.commentBodies.delete(id);
   }
 
   /* ── The GitHub interface the Channel calls ─────────────── */
@@ -290,7 +315,7 @@ export class FakeGitHub implements GitHub {
   }
 
   async createIssue(input: NewIssue): Promise<GitHubIssue> {
-    const { number } = this.open({ ...input, by: this.tokenLogin });
+    const { number } = this.open({ ...input, by: this.botLogin });
     return this.toIssue(this.must(number));
   }
 
@@ -308,8 +333,10 @@ export class FakeGitHub implements GitHub {
       .map((issue) => ({ number: issue.number, state: issue.state }));
   }
 
-  async login(): Promise<string> {
-    return this.tokenLogin;
+  async permission(login: string): Promise<Permission> {
+    this.permissionChecks += 1;
+    if (this.permissionsDown) throw new Error("GitHub answered 502 to the permission check");
+    return this.permissions.get(login) ?? "write";
   }
 
   async addAssignees(number: TaskNumber, logins: string[]): Promise<void> {
@@ -332,8 +359,21 @@ export class FakeGitHub implements GitHub {
     issue.labels = issue.labels.filter((l) => l !== label);
   }
 
-  async addComment(number: TaskNumber, body: string): Promise<void> {
-    this.write(["addComment", number, body]).comments.push(body);
+  async createComment(number: TaskNumber, body: string): Promise<number> {
+    const issue = this.write(["createComment", number, body]);
+    const id = this.nextComment++;
+    this.commentBodies.set(id, { issue: number, body });
+    issue.comments.push(id);
+    return id;
+  }
+
+  async updateComment(id: number, body: string): Promise<boolean> {
+    if (this.failing.has("updateComment")) throw new Error("GitHub answered 500 to updateComment");
+    this.calls.push(["updateComment", id, body]);
+    const comment = this.commentBodies.get(id);
+    if (comment === undefined) return false;
+    comment.body = body;
+    return true;
   }
 
   async setBody(number: TaskNumber, body: string): Promise<void> {
@@ -362,7 +402,9 @@ export class FakeGitHub implements GitHub {
   /* ── Internals ──────────────────────────────────────────── */
 
   /** Records a write, or fails it when the test says GitHub refuses that call. */
-  private write(call: Exclude<MirrorCall, ["createPullRequest", string, string]>): FakeIssue {
+  private write(
+    call: Exclude<MirrorCall, ["createPullRequest", string, string] | ["updateComment", number, string]>,
+  ): FakeIssue {
     if (this.failing.has(call[0])) throw new Error(`GitHub answered 500 to ${call[0]}`);
     this.calls.push(call);
     return this.must(call[1]);
