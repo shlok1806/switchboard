@@ -1,4 +1,5 @@
 import type { Agent, AgentId, Verdict, VerdictOption } from "@shared/index";
+import { ArrowDown } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DOWNGRADE_LABEL, VERDICT_LABEL, prob } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -20,10 +21,8 @@ export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict
   if (!p) {
     return (
       <div className={cn("flex flex-col gap-1", className)}>
-        <span className="text-[11px] text-ink-3">
-          {verdict.source === "fallback"
-            ? "Jev gave no answer, so it was Queued."
-            : "No overlap. Dropped without asking Jev."}
+        <span className="text-[12px] text-ink-3">
+          {verdict.source === "fallback" ? "Jev did not answer: Queued" : "No overlap: not asked"}
         </span>
       </div>
     );
@@ -34,35 +33,36 @@ export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict
       <Tooltip>
         <TooltipTrigger asChild>
           <div
-            className="bevel-thin-in relative flex h-2.5 w-full overflow-visible bg-card"
+            className="relative flex h-2 w-full overflow-visible rounded-full bg-hover-2"
             role="img"
             aria-label={ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(", ")}
           >
-            <div className="flex h-full w-full overflow-hidden">
+            <div className="flex h-full w-full gap-px overflow-hidden rounded-full">
               {ORDER.map((o) => (
                 <span
                   key={o}
                   className={cn("h-full", FILL[o])}
-                  style={{ width: `${p[o] * 100}%`, boxShadow: "inset -1px 0 0 hsl(var(--card))" }}
+                  style={{ width: `${p[o] * 100}%` }}
                 />
               ))}
             </div>
             <span
               aria-hidden
-              className="absolute -top-1 -bottom-1 w-px bg-ink"
+              className="absolute -top-1 -bottom-1 w-0.5 rounded-full bg-ink-2"
               style={{ left: `${threshold * 100}%` }}
             />
           </div>
         </TooltipTrigger>
         <TooltipContent>
-          Interrupt needs at least {prob(threshold)}. Below that it becomes Queue.
+          {ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(" · ")}. Interrupt needs {prob(threshold)}.
         </TooltipContent>
       </Tooltip>
-      <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 font-mono text-[11px] tabular-nums">
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[11.5px] tabular-nums">
         {ORDER.map((o) => (
           <span key={o} className={cn("inline-flex items-center gap-1", o === top ? "text-ink" : "text-ink-3")}>
-            <span aria-hidden className={cn("size-1.5", FILL[o])} />
-            {VERDICT_LABEL[o]} <b className={o === top ? "font-semibold" : "font-normal"}>{prob(p[o])}</b>
+            <span aria-hidden className={cn("size-1.5 rounded-full", FILL[o])} />
+            <span className="sr-only">{VERDICT_LABEL[o]}</span>
+            {prob(p[o])}
           </span>
         ))}
       </div>
@@ -74,8 +74,9 @@ export function DowngradeNote({ verdict }: { verdict: Verdict }) {
   if (!verdict.downgraded) return null;
   const why = DOWNGRADE_LABEL[verdict.downgraded.reason];
   return (
-    <span className="inline-flex items-center gap-1 border border-orange px-1.5 py-0.5 text-[11px] font-semibold text-orange">
-      Downgraded from Interrupt: {why}
+    <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-orange-tint px-2 py-0.5 text-[12px] text-orange">
+      <ArrowDown className="size-3" aria-hidden />
+      Downgraded: {why}
     </span>
   );
 }
@@ -91,13 +92,13 @@ export function VerdictTable({
   threshold: number;
 }) {
   if (!verdicts.length) {
-    return <p className="text-[12.5px] text-ink-3">No connected Agent was asked about this Event.</p>;
+    return <p className="text-[13px] text-ink-3">No Agent was asked.</p>;
   }
   const sorted = [...verdicts].sort(
     (a, b) => ORDER.indexOf(a.option) - ORDER.indexOf(b.option) || (a.source === "jev" ? -1 : 1),
   );
   return (
-    <ul className="@container bevel-in flex flex-col divide-y divide-line overflow-hidden bg-card">
+    <ul className="@container flex flex-col divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">
       {sorted.map((v) => (
         <li key={v.agent} className="grid gap-2 px-3 py-2.5 @xl:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] @xl:gap-4">
           <div className="flex min-w-0 flex-col gap-1">
@@ -105,20 +106,19 @@ export function VerdictTable({
             <div className="flex flex-wrap items-center gap-1.5">
               <VerdictPill option={v.option} />
               {v.latencyMs !== undefined && (
-                <span className="font-mono text-[11px] text-ink-3 tabular-nums">{v.latencyMs} ms</span>
+                <span className="font-mono text-[11.5px] text-ink-3 tabular-nums">{v.latencyMs} ms</span>
               )}
             </div>
           </div>
           <div className="flex min-w-0 flex-col gap-1.5">
             <VerdictBar verdict={v} threshold={threshold} />
             {(v.overlap.files.length > 0 || v.overlap.symbols.length > 0) && (
-              <div className="flex flex-wrap items-center gap-1 text-[11px] text-ink-3">
-                <span>Overlap</span>
+              <div className="flex flex-wrap items-center gap-1 text-[11.5px]" aria-label="Overlap">
                 {v.overlap.symbols.map((s) => (
-                  <code key={s} className="bevel-thin-in bg-muted px-1 font-mono text-orange">{s}</code>
+                  <code key={s} className="rounded bg-orange-tint px-1.5 py-px font-mono text-orange">{s}</code>
                 ))}
                 {v.overlap.files.map((f) => (
-                  <code key={f} className="bevel-thin-in bg-muted px-1 font-mono text-ink-2">{f}</code>
+                  <code key={f} className="rounded bg-hover px-1.5 py-px font-mono text-ink-2">{f}</code>
                 ))}
               </div>
             )}

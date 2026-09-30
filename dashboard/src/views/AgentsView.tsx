@@ -1,12 +1,13 @@
 import { useMemo } from "react";
 import type { Agent, Presence, Task } from "@shared/index";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useCapabilities, useChannel, useIndex } from "@/data/store";
+import { useCapabilities, useChannel } from "@/data/store";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { Status, StatusIndicator, StatusLabel } from "@/components/kibo-ui/status";
-import { AgentLink, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
+import { PresenceDot, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { CLI_LABEL, PRESENCE_LABEL, ago } from "@/lib/format";
-import { go } from "@/lib/router";
+import { go, href } from "@/lib/router";
+import { cn } from "@/lib/utils";
 
 const KIBO_STATUS: Record<Presence, "online" | "degraded" | "offline"> = {
   live: "online",
@@ -18,7 +19,7 @@ const ORDER: Record<Presence, number> = { live: 0, idle: 1, gone: 2 };
 
 export function PresenceStatus({ presence }: { presence: Presence }) {
   return (
-    <Status status={KIBO_STATUS[presence]} className="h-5 gap-1.5 border-0 bg-transparent px-0 text-[12px] font-semibold text-ink">
+    <Status status={KIBO_STATUS[presence]} className="h-6 gap-1.5 border-0 bg-transparent px-0 text-[13px] font-medium text-ink">
       <StatusIndicator />
       <StatusLabel>{PRESENCE_LABEL[presence]}</StatusLabel>
     </Status>
@@ -41,51 +42,57 @@ export function useClaimsOf() {
 }
 
 export function AgentsView() {
-  const { agents, snapshot } = useChannel();
+  const { agents } = useChannel();
   const claimsOf = useClaimsOf();
-  const { agentById } = useIndex();
   const sorted = [...agents].sort(
     (a, b) => ORDER[a.presence] - ORDER[b.presence] || a.person.localeCompare(b.person) || a.id.localeCompare(b.id),
   );
-  const persons = snapshot?.persons ?? [];
   const can = useCapabilities();
 
   if (agents.length === 0) {
     return (
       <Pending title={can.agents ? "No Agents yet" : "Agents are not on this Channel yet"} className="h-full">
         {can.agents ? (
-          <>An Agent appears here when someone runs <code className="font-mono text-ink-2">switchboard run claude</code>.</>
+          <>
+            Run <code className="font-mono text-ink-2">switchboard run claude</code> to add one.
+          </>
         ) : (
-          <>Agents appear once <IssueLink capability="agents" /> lands.</>
+          <>
+            Agents appear once <IssueLink capability="agents" /> lands.
+          </>
         )}
       </Pending>
     );
   }
 
+  const n = (p: Presence) => agents.filter((a) => a.presence === p).length;
+
   return (
     <div className="h-full overflow-y-auto">
-      <div className="flex flex-col gap-3 p-3 sm:p-4">
-        <p className="font-mono text-[12px] text-ink-2">
-          {agents.filter((a) => a.presence === "live").length} Live, {agents.filter((a) => a.presence === "idle").length} Idle,{" "}
-          {agents.filter((a) => a.presence === "gone").length} Gone across {persons.length} Persons. An Agent is Gone after about ten
-          minutes of silence.
-        </p>
+      <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
+        <div className="flex items-center gap-4 text-[13px] text-ink-2" aria-label="Presence counts">
+          {(["live", "idle", "gone"] as const).map((p) => (
+            <span key={p} className="inline-flex items-center gap-1.5">
+              <PresenceDot presence={p} />
+              <span className="tabular-nums text-ink">{n(p)}</span> {PRESENCE_LABEL[p]}
+            </span>
+          ))}
+        </div>
 
-        {/* desktop: a process table, the way the site's `top` draws one */}
-        <div className="bevel-in hidden overflow-hidden bg-card md:block">
+        {/* desktop: a table */}
+        <div className="hidden overflow-hidden rounded-xl border border-line bg-surface md:block">
           <table className="w-full table-fixed border-collapse text-left">
             <colgroup>
-              <col className="w-[30%]" />
-              <col className="w-[9%]" />
+              <col className="w-[34%]" />
               <col className="w-[12%]" />
-              <col className="w-[10%]" />
-              <col className="w-[11%]" />
-              <col className="w-[28%]" />
+              <col className="w-[12%]" />
+              <col className="w-[12%]" />
+              <col className="w-[30%]" />
             </colgroup>
             <thead>
-              <tr className="bg-primary text-primary-foreground">
-                {["Agent", "Person", "CLI", "Presence", "Proxy mode", "Claims"].map((h) => (
-                  <th key={h} className="px-3 py-1 font-mono text-[11.5px] font-normal">
+              <tr className="border-b border-line text-[12.5px] text-ink-3">
+                {["Agent", "Person", "CLI", "Proxy", "Claims"].map((h) => (
+                  <th key={h} className="px-4 py-2.5 font-normal">
                     {h}
                   </th>
                 ))}
@@ -98,26 +105,31 @@ export function AgentsView() {
                   <tr
                     key={a.id}
                     onClick={() => go({ view: "agent", id: a.id })}
-                    className="cursor-pointer border-b border-line-soft last:border-0 hover:bg-hover"
+                    className={cn("cursor-pointer border-b border-line-soft transition-colors last:border-0 hover:bg-hover", a.presence === "gone" && "text-ink-3")}
                   >
-                    <td className="px-3 py-1.5">
-                      <div className="flex min-w-0 flex-col">
-                        <AgentLink id={a.id} agent={agentById.get(a.id)} showNickname={false} />
-                        <span className="truncate text-[12px] text-ink-3">{a.nickname ?? "No Nickname"}</span>
+                    <td className="px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <PresenceDot presence={a.presence} />
+                        <div className="flex min-w-0 flex-col">
+                          <a
+                            href={href({ view: "agent", id: a.id })}
+                            onClick={(e) => e.stopPropagation()}
+                            className="truncate font-mono text-[13px] text-ink hover:text-accent-ink"
+                          >
+                            {a.id}
+                          </a>
+                          <span className="truncate text-[12.5px] text-ink-3" title={`Last seen ${ago(a.lastSeenAt)}`}>
+                            {a.nickname ?? ago(a.lastSeenAt)}
+                          </span>
+                        </div>
                       </div>
                     </td>
-                    <td className="px-3 py-1.5 text-[13px] text-ink">{a.person}</td>
-                    <td className="px-3 py-1.5 text-[13px] text-ink-2">{CLI_LABEL[a.cli]}</td>
-                    <td className="px-3 py-1.5">
-                      <div className="flex flex-col items-start gap-0.5">
-                        <PresenceStatus presence={a.presence} />
-                        <span className="font-mono text-[10.5px] text-ink-3">{ago(a.lastSeenAt)}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-1.5">
+                    <td className="px-4 py-3 text-[13.5px] text-ink-2">{a.person}</td>
+                    <td className="px-4 py-3 text-[13.5px] text-ink-2">{CLI_LABEL[a.cli]}</td>
+                    <td className="px-4 py-3">
                       <ProxyMode agent={a} />
                     </td>
-                    <td className="px-3 py-1.5">
+                    <td className="px-4 py-3">
                       <ClaimCell agent={a} tasks={held} />
                     </td>
                   </tr>
@@ -127,31 +139,30 @@ export function AgentsView() {
           </table>
         </div>
 
-        {/* phone: cards */}
-        <ul className="bevel-in flex flex-col bg-card md:hidden">
+        {/* phone: a list */}
+        <ul className="flex flex-col divide-y divide-line-soft overflow-hidden rounded-xl border border-line bg-surface md:hidden">
           {sorted.map((a) => {
             const held = claimsOf.get(a.id) ?? [];
             return (
-              <li key={a.id} className="border-b border-line-soft last:border-0">
+              <li key={a.id}>
                 <div
                   role="link"
                   tabIndex={0}
                   onClick={() => go({ view: "agent", id: a.id })}
                   onKeyDown={(e) => e.key === "Enter" && go({ view: "agent", id: a.id })}
-                  className="flex cursor-pointer flex-col gap-2 p-3 active:bg-hover"
+                  className="flex cursor-pointer items-start gap-3 px-4 py-3 active:bg-hover"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 flex-col">
-                      <span className="truncate font-mono text-[12.5px] text-ink">{a.id}</span>
-                      <span className="text-[12px] text-ink-3">
-                        {a.nickname ?? "No Nickname"} · {a.person} · {CLI_LABEL[a.cli]}
-                      </span>
+                  <PresenceDot presence={a.presence} className="mt-1" />
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <span className="truncate font-mono text-[13px] text-ink">{a.id}</span>
+                      <ProxyMode agent={a} />
                     </div>
-                    <PresenceStatus presence={a.presence} />
-                  </div>
-                  <div className="flex items-center justify-between gap-2 border-t border-line-soft pt-2">
-                    <ClaimCell agent={a} tasks={held} />
-                    <ProxyMode agent={a} />
+                    <span className="truncate text-[12.5px] text-ink-3">
+                      {a.nickname ? `${a.nickname} · ` : ""}
+                      {CLI_LABEL[a.cli]}
+                    </span>
+                    {held.length > 0 && <ClaimCell agent={a} tasks={held} />}
                   </div>
                 </div>
               </li>
@@ -164,34 +175,29 @@ export function AgentsView() {
 }
 
 function ProxyMode({ agent }: { agent: Agent }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 text-[12.5px] text-ink-2">
-      {agent.proxyMode === "raw" ? <RawBadge /> : <span>Digest</span>}
-    </span>
-  );
+  return agent.proxyMode === "raw" ? <RawBadge /> : <span className="text-[13px] text-ink-3">Digest</span>;
 }
 
 function ClaimCell({ agent, tasks }: { agent: Agent; tasks: Task[] }) {
-  if (!tasks.length) return <span className="text-[12.5px] text-ink-3">No Claim</span>;
+  if (!tasks.length) return <span className="text-[13px] text-ink-3">None</span>;
   const [first, ...rest] = tasks;
   const stale = tasks.some((t) => t.claim?.stale) && agent.presence === "gone";
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <TaskLink number={first.number} title={first.title} className="min-w-0 text-[12.5px] text-ink" />
+      <TaskLink number={first.number} title={first.title} className="min-w-0 text-[13px] text-ink-2" />
       {rest.length > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
               onClick={(e) => e.stopPropagation()}
-              className="btn-motif h-5 shrink-0 px-1 font-mono text-[11px]"
+              className="h-5 shrink-0 rounded-full bg-hover px-1.5 font-mono text-[11.5px] text-ink-2"
               aria-label={`${tasks.length} Claims: ${tasks.map((t) => `#${t.number}`).join(", ")}`}
             >
               +{rest.length}
             </button>
           </TooltipTrigger>
           <TooltipContent className="flex flex-col gap-0.5">
-            <span className="font-medium">{tasks.length} Claims</span>
             {rest.map((t) => (
               <span key={t.number}>
                 #{t.number} {t.title}

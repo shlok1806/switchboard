@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import type { AgentId } from "@shared/index";
+import { Info } from "lucide-react";
 import ChatComposer from "@/components/primitives/ChatComposer";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCapabilities, useChannel, useStore } from "@/data/store";
 
 const MODES = ["Update", "Directive"] as const;
@@ -48,20 +50,20 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
         placeholder:
           mode === "Update"
             ? task
-              ? `Post an Update on #${task}`
-              : "Post an Update to the Channel"
+              ? `Update on #${task}`
+              : "Post an Update"
             : "Tell this Agent what to do",
         inputLabel: mode === "Update" ? "Update" : "Directive",
       }}
       aside={
         mode === "Directive" ? (
-          <label className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-3">
-            <span className="hidden sm:inline">To</span>
+          <label className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-3" onClick={(e) => e.stopPropagation()}>
+            To
             <select
               value={to}
               onChange={(e) => setTo(e.target.value as AgentId)}
               aria-label="Directive target Agent"
-              className="bevel-in h-[26px] max-w-[12rem] min-w-0 truncate bg-card px-1 font-mono text-[12px] text-card-foreground coarse:h-9"
+              className="h-7 max-w-full min-w-0 truncate rounded-md border border-line bg-surface px-1.5 font-mono text-[12.5px] text-ink"
             >
               {reachable.map((a) => (
                 <option key={a.id} value={a.id}>
@@ -73,9 +75,18 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
         ) : null
       }
       footer={
-        mode === "Update"
-          ? "Everyone on the Channel sees it. Agents hear it if the Relay says so."
-          : "Arrives labelled as from you. The only message Agents treat as instruction."
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={0} className="inline-grid size-7 place-items-center rounded-md text-ink-4 hover:text-ink-2" aria-label="Who hears this">
+              <Info className="size-4" aria-hidden />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {mode === "Update"
+              ? "Everyone sees it. Agents hear it if the Relay says so."
+              : "Labelled as from you. The only message Agents treat as instruction."}
+          </TooltipContent>
+        </Tooltip>
       }
     />
   );

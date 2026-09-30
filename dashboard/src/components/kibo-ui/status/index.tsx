@@ -1,6 +1,3 @@
-/* Switchboard: Kibo UI Status. The pinging dot is gone (the site never eases or
- * pulses); shape carries the state instead, one bit deep: filled for online,
- * hollow for degraded, a small dot for offline. */
 import type { ComponentProps, HTMLAttributes } from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -17,20 +14,21 @@ export const Status = ({ className, status, ...props }: StatusProps) => (
   />
 );
 
+/* Switchboard: the ping is gone; a steady dot reads calmer. */
 export type StatusIndicatorProps = HTMLAttributes<HTMLSpanElement>;
 
 export const StatusIndicator = ({
   className,
   ...props
 }: StatusIndicatorProps) => (
-  <span className={cn("relative grid size-2 place-items-center", className)} {...props}>
+  <span className="relative flex h-2 w-2" {...props}>
     <span
       className={cn(
-        "inline-flex",
-        "group-[.online]:size-2 group-[.online]:bg-green",
-        "group-[.offline]:size-1 group-[.offline]:bg-faint",
-        "group-[.maintenance]:size-2 group-[.maintenance]:bg-accent",
-        "group-[.degraded]:size-2 group-[.degraded]:border group-[.degraded]:border-orange"
+        "relative inline-flex h-2 w-2 rounded-full",
+        "group-[.online]:bg-green",
+        "group-[.offline]:bg-ink-3",
+        "group-[.maintenance]:bg-accent",
+        "group-[.degraded]:bg-orange"
       )}
     />
   </span>

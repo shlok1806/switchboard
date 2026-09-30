@@ -4,26 +4,11 @@ The Switchboard Dashboard copies source code from the projects below into
 `src/`, and depends on the packages listed after them. Every copied file keeps
 a header comment where it was changed. No GPL or AGPL code is included.
 
-## Design taken from shlokthakkar.com
+## Design
 
-The look is the ShlokOS desktop from the owner's own site (repo
-`shlok1806/shlok-portfolio`, local copy `~/PersonalWebsite-plugin`), used by
-its author, not a third party:
-
-- `src/styles/tokens.css`: the four presets (Motif, CDE, Console, twm) as HSL
-  tokens, copied from its `app/globals.css`.
-- `src/index.css`: the `bevel-out` / `bevel-in` / `bevel-thin` classes, the
-  root-window stipple, the Motif scrollbars, the stepped `win-in` and caret
-  keyframes, from the same file.
-- `src/components/pixel-icon.tsx`: the 16x16 one-bit pixmaps and their SVG
-  renderer, from its `lib/os/icons.tsx`, with new pixmaps drawn on the same grid.
-- `src/components/shell/window.tsx` and `panel.tsx`: the window frame and the
-  taskbar, rebuilt after its `components/os/Window.tsx` and `Panel.tsx`.
-
-Vendored components are re-skinned through that token layer the way its
-`docs/adr/0001-vendor-opensourceui-through-the-token-layer.md` describes:
-tokens only, bevels instead of shadows and blur, no rounded corners, pixmaps
-instead of an icon set.
+The look is Switchboard's own: a calm neutral token layer in
+`src/styles/tokens.css` (OKLCH, light and dark) that every vendored component
+reads. Vendored components are re-skinned through those tokens only.
 
 ## Source code copied into this repo
 
@@ -50,7 +35,9 @@ Every file above is re-skinned and says so in a header comment where it changed.
 | tw-animate-css | MIT | (c) 2025 Wombosvideo |
 | class-variance-authority, clsx, tailwind-merge | Apache-2.0 / MIT / MIT | their authors |
 | Tailwind CSS, Vite, React | MIT | their authors |
-| Inter (`@fontsource-variable/inter`), Space Mono (`@fontsource/space-mono`) | SIL OFL 1.1 | their authors |
+| Geist and Geist Mono (`@fontsource-variable/geist`, `@fontsource-variable/geist-mono`) | SIL OFL 1.1 | (c) 2023 Vercel |
+| Lucide (`lucide-react`) | ISC | (c) Lucide Contributors 2022; portions (c) 2013-2022 Cole Bemis (Feather, MIT) |
+| NumberFlow (`@number-flow/react`) | MIT | (c) 2024 Maxwell Barvian |
 
 No GPL or AGPL code is included. Planka, Plane and Focalboard (AGPL) were not
 used.

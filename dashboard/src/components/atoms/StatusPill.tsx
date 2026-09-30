@@ -2,15 +2,15 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const statusPillVariants = cva(
-  "inline-flex h-5 items-center gap-1.5 border border-current/35 px-1.5 text-[12px] font-semibold leading-none",
+  "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium leading-none",
   {
     variants: {
       tone: {
-        green: "text-green",
-        orange: "text-orange",
-        red: "bg-destructive text-destructive-foreground border-transparent",
-        accent: "text-accent-ink",
-        neutral: "text-ink-2",
+        green: "bg-green-tint text-green",
+        orange: "bg-orange-tint text-orange",
+        red: "bg-red-tint text-red",
+        accent: "bg-accent-tint text-accent-ink",
+        neutral: "bg-inset text-ink-2",
       },
     },
     defaultVariants: { tone: "neutral" },
@@ -41,7 +41,7 @@ export function StatusPill({
 }) {
   return (
     <span className={cn(statusPillVariants({ tone }), className)}>
-      {dot && <span className={cn("size-1.5", tone === "red" ? "bg-current" : dotColor[tone])} />}
+      {dot && <span className={cn("size-1.5 rounded-full", dotColor[tone])} />}
       {children}
     </span>
   );

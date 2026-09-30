@@ -1,309 +1,187 @@
-/*
- * Switchboard wears the ShlokOS desktop (shlokthakkar.com, source in
- * shlok1806/shlok-portfolio). The preset values below are copied from that
- * site's app/globals.css: four real UNIX desktops (Motif, CDE, Console, twm),
- * each an HSL triple per semantic name, `--radius: 0`, bevels instead of
- * shadows, Inter for chrome and Space Mono for anything machine-read.
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench (app shell) · theme: custom (Still)
+ * vibe: "calm, low-glare workspace, one soft indigo signal"
+ * paper oklch(98.4% 0.003 255) · accent oklch(52% 0.12 266) indigo · Geist + Geist Mono
+ * axes: light / grotesk-sans / cool · nav: top tabs + ⌘K (app), bottom tab bar on phones · footer: none (app)
+ * tone: calm, utilitarian · anchor hue: indigo 266
+ * pre-emit critique: P4 H5 E4 S4 R5 V4
  *
- * The site's own names (--background, --card, --muted, --faint, --accent-ink,
- * --bevel-light, --desktop ...) are the source of truth. Everything the
- * Dashboard's vendored components read (--ink, --surface, --line, the shadcn
- * names) is derived from them at the bottom of this file, so a component never
- * needs to know which preset is on.
- *
- * Status colours (Live, Idle, Stale, Interrupt) come from the Tango palette,
- * which is the site's Console preset: the site itself never needed a green and
- * an orange, a working tool does.
+ * Switchboard's tokens. They override Beautiful UI's foundation tokens and feed
+ * shadcn/ui's variable names, so every vendored component picks them up.
+ * Light is a soft near-white, never #fff on #000 text; dark is a quiet slate,
+ * never #000. Chroma stays low everywhere except the one accent and the status
+ * hues, which are muted so nothing glows.
  */
 
-/* ── Motif (OSF/1): default light ───────────────────────────── */
-:root,
-.motif {
-  --desktop: 210 23% 37.6%;
-  --background: 0 0% 100%;
-  --card: 0 0% 100%;
-  --card-foreground: 0 0% 10.2%;
-  --popover: 37 9% 82.4%;
-  --popover-foreground: 0 0% 10.2%;
-  --foreground: 0 0% 10.2%;
-  --primary: 240 100% 25.1%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 37 9% 82.4%;
-  --secondary-foreground: 0 0% 10.2%;
-  --muted: 37 9% 82.4%;
-  --muted-foreground: 0 0% 29%;
-  --accent-ink-hsl: 240 100% 25.1%;
-  --destructive: 0 65% 42%;
-  --destructive-foreground: 0 0% 100%;
-  --faint: 38 3% 32.9%;
-  --border: 37 3% 44.5%;
-  --ring: 240 100% 25.1%;
-  --bevel-light: 0 0% 100%;
-  --bevel-dark: 37 4% 41.6%;
-  --stipple-ink: 0 0% 0%;
-  --stipple-alpha: 0.16;
-  --glow-strength: 0;
+:root {
+  /* surfaces */
+  --page: oklch(98.4% 0.003 255);
+  --canvas: oklch(96.6% 0.004 255);
+  --surface: oklch(99.7% 0.001 255);
+  --inset: oklch(97.4% 0.004 255);
+  --hover: oklch(95.9% 0.005 255);
+  --hover-2: oklch(93.8% 0.007 255);
+  --field: oklch(99.7% 0.001 255);
 
-  /* Tango, dark shades: legible as ink on white */
-  --ok: 91 93% 25%;
-  --warn: 24 100% 36%;
-  --bad: 0 65% 42%;
-  --info: 213 51% 38%;
-}
+  /* ink: soft charcoal, not black */
+  --ink: oklch(28% 0.014 260);
+  --ink-2: oklch(45% 0.013 260);
+  --ink-3: oklch(52.5% 0.012 260);
+  --ink-4: oklch(64% 0.009 260);
 
-/* ── CDE (1996) ─────────────────────────────────────────────── */
-.cde {
-  --desktop: 216 30% 26.3%;
-  --background: 233 15% 88%;
-  --card: 233 15% 88%;
-  --card-foreground: 225 17% 9.4%;
-  --popover: 229 15% 72.4%;
-  --popover-foreground: 225 17% 9.4%;
-  --foreground: 225 17% 9.4%;
-  --primary: 210 33% 41.2%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 229 15% 72.4%;
-  --secondary-foreground: 225 17% 9.4%;
-  --muted: 229 15% 72.4%;
-  --muted-foreground: 227 13% 27.6%;
-  --accent-ink-hsl: 210 33% 28%;
-  --destructive: 0 60% 32.2%;
-  --destructive-foreground: 0 0% 100%;
-  --faint: 227 8% 25.7%;
-  --border: 227 8% 37.4%;
-  --ring: 210 33% 41.2%;
-  --bevel-light: 233 15% 88%;
-  --bevel-dark: 228 10% 41.2%;
-  --stipple-ink: 0 0% 0%;
-  --stipple-alpha: 0.18;
-  --glow-strength: 0;
-
-  --ok: 91 93% 22%;
-  --warn: 24 100% 32%;
-  --bad: 0 60% 32.2%;
-  --info: 210 33% 32%;
-}
-
-/* ── Console (Tango): the dark preset ───────────────────────── */
-.tango {
-  --desktop: 195 7% 11.8%;
-  --background: 195 11% 7.1%;
-  --card: 195 11% 7.1%;
-  --card-foreground: 90 9% 82.7%;
-  --popover: 195 8% 19.6%;
-  --popover-foreground: 90 9% 82.7%;
-  --foreground: 90 9% 82.7%;
-  --primary: 91 93% 31.4%;
-  --primary-foreground: 120 11% 5.3%;
-  --secondary: 195 8% 19.6%;
-  --secondary-foreground: 90 9% 82.7%;
-  --muted: 195 8% 19.6%;
-  --muted-foreground: 90 3% 66.3%;
-  --accent-ink-hsl: 91 93% 35.5%;
-  --destructive: 0 70% 69.3%;
-  --destructive-foreground: 120 11% 5.3%;
-  --faint: 150 3% 63.3%;
-  --border: 90 2% 49.6%;
-  --ring: 91 93% 31.4%;
-  --bevel-light: 90 2% 44%;
-  --bevel-dark: 195 9% 8.6%;
-  --stipple-ink: 0 0% 100%;
-  --stipple-alpha: 0.04;
-  --glow-strength: 1;
-
-  /* Tango, light shades: legible as ink on the console black */
-  --ok: 92 73% 55%;
-  --warn: 36 97% 61%;
-  --bad: 0 70% 69.3%;
-  --info: 211 49% 63%;
-}
-
-/* ── twm (X11R5): black on white and nothing else ───────────── */
-.twm {
-  --desktop: 0 0% 54.1%;
-  --background: 0 0% 100%;
-  --card: 0 0% 100%;
-  --card-foreground: 0 0% 0%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 0%;
-  --foreground: 0 0% 0%;
-  --primary: 0 0% 0%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 100%;
-  --secondary-foreground: 0 0% 0%;
-  --muted: 0 0% 100%;
-  --muted-foreground: 0 0% 20%;
-  --accent-ink-hsl: 0 0% 0%;
-  --destructive: 0 0% 0%;
-  --destructive-foreground: 0 0% 100%;
-  --faint: 0 0% 43.6%;
-  --border: 0 0% 0%;
-  --ring: 0 0% 0%;
-  --bevel-light: 0 0% 0%;
-  --bevel-dark: 0 0% 0%;
-  --stipple-ink: 0 0% 0%;
-  --stipple-alpha: 0.4;
-  --glow-strength: 0;
-
-  /* twm had no colour; status still has to read, so it keeps Tango's darks */
-  --ok: 91 93% 22%;
-  --warn: 24 100% 32%;
-  --bad: 0 70% 38%;
-  --info: 0 0% 0%;
-}
-
-/* ── Derived: what the vendored components read ─────────────── */
-:root,
-.motif,
-.cde,
-.tango,
-.twm {
-  --radius: 0px;
-
-  /* surfaces: the document is --card, the chrome around it is --secondary */
-  --page: hsl(var(--card));
-  --canvas: hsl(var(--secondary));
-  --surface: hsl(var(--card));
-  --inset: color-mix(in srgb, hsl(var(--muted)) 40%, hsl(var(--card)));
-  --hover: color-mix(in srgb, hsl(var(--muted)) 55%, hsl(var(--card)));
-  --hover-2: hsl(var(--muted));
-  --field: hsl(var(--card));
-
-  --ink: hsl(var(--card-foreground));
-  --ink-2: hsl(var(--muted-foreground));
-  --ink-3: hsl(var(--faint));
-
-  --line: hsl(var(--muted));
-  --line-strong: hsl(var(--border));
-  --line-soft: color-mix(in srgb, hsl(var(--muted)) 60%, hsl(var(--card)));
+  /* rules */
+  --line: oklch(92.4% 0.005 255);
+  --line-strong: oklch(87.5% 0.008 255);
+  --line-soft: oklch(95% 0.004 255);
   --stripe: transparent;
-  --stripe-bg: hsl(var(--desktop));
+  --stripe-bg: var(--page);
 
-  --accent: hsl(var(--primary));
-  --accent-ink: hsl(var(--accent-ink-hsl));
-  --accent-tint: hsl(var(--primary) / 0.12);
-  --on-accent: hsl(var(--primary-foreground));
+  /* the one signal */
+  --accent: oklch(52% 0.12 266);
+  --accent-ink: oklch(47% 0.12 266);
+  --accent-tint: oklch(95.4% 0.02 266);
+  --on-accent: oklch(98.6% 0.004 266);
 
-  --green: hsl(var(--ok));
-  --green-tint: hsl(var(--ok) / 0.12);
-  --orange: hsl(var(--warn));
-  --orange-tint: hsl(var(--warn) / 0.12);
-  --red: hsl(var(--bad));
-  --red-tint: hsl(var(--bad) / 0.1);
+  /* status: muted, legible as text on the paper */
+  --green: oklch(52% 0.1 155);
+  --green-tint: oklch(95.6% 0.022 155);
+  --orange: oklch(56% 0.11 62);
+  --orange-tint: oklch(95.8% 0.03 75);
+  --red: oklch(53% 0.14 25);
+  --red-tint: oklch(96% 0.018 22);
 
-  --verdict-drop: hsl(var(--faint) / 0.55);
-  --verdict-queue: hsl(var(--info));
-  --verdict-interrupt: hsl(var(--warn));
+  /* Verdict options */
+  --verdict-drop: oklch(85% 0.008 257);
+  --verdict-queue: oklch(62% 0.1 266);
+  --verdict-interrupt: oklch(70% 0.12 62);
 
-  --tooltip-bg: hsl(var(--popover));
-  --tooltip-fg: hsl(var(--popover-foreground));
-  --tooltip-muted: hsl(var(--muted-foreground));
-  --tooltip-border: hsl(var(--border));
-
-  /*
-   * Bevels as box-shadows, so every `shadow-btn` in a vendored component
-   * becomes a Motif control without touching it: light on the top-left, dark
-   * on the bottom-right, inverted when inset.
-   */
-  --bevel-out-2: inset 2px 2px 0 hsl(var(--bevel-light)), inset -2px -2px 0 hsl(var(--bevel-dark));
-  --bevel-in-2: inset 2px 2px 0 hsl(var(--bevel-dark)), inset -2px -2px 0 hsl(var(--bevel-light));
-  --bevel-out-1: inset 1px 1px 0 hsl(var(--bevel-light)), inset -1px -1px 0 hsl(var(--bevel-dark));
-  --bevel-in-1: inset 1px 1px 0 hsl(var(--bevel-dark)), inset -1px -1px 0 hsl(var(--bevel-light));
+  --tooltip-bg: oklch(28% 0.014 260);
+  --tooltip-fg: oklch(97% 0.003 255);
+  --tooltip-muted: oklch(80% 0.01 256);
+  --tooltip-border: oklch(34% 0.014 260);
 
   --shadow-hairline: 0 0 0 1px var(--line);
-  --shadow-btn: var(--bevel-out-2);
-  --shadow-card: 0 0 0 1px var(--line);
-  --shadow-raised: var(--bevel-out-2), 0 0 0 1px hsl(var(--border));
-  --shadow-overlay: var(--bevel-out-2), 0 0 0 1px hsl(var(--border));
-  --shadow-inset-field: var(--bevel-in-2);
+  --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 1px oklch(28% 0.014 260 / 0.04);
+  --shadow-card: 0 0 0 1px var(--line), 0 1px 2px oklch(28% 0.014 260 / 0.035);
+  --shadow-raised: 0 0 0 1px var(--line), 0 6px 18px oklch(28% 0.014 260 / 0.08);
+  --shadow-overlay: 0 0 0 1px var(--line-strong), 0 14px 36px oklch(28% 0.014 260 / 0.12);
+  --shadow-inset-field: none;
 
-  /* shadcn/ui names */
-  --color-scheme-base: light;
-  --background-color: hsl(var(--background));
-  --sidebar: hsl(var(--secondary));
-  --sidebar-foreground: hsl(var(--secondary-foreground));
-  --sidebar-primary: hsl(var(--primary));
-  --sidebar-primary-foreground: hsl(var(--primary-foreground));
-  --sidebar-accent: hsl(var(--muted));
-  --sidebar-accent-foreground: hsl(var(--foreground));
-  --sidebar-border: hsl(var(--border));
-  --sidebar-ring: hsl(var(--ring));
+  /* shadcn/ui variable names, pointed at ours */
+  --background: var(--page);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: var(--on-accent);
+  --secondary: var(--inset);
+  --secondary-foreground: var(--ink);
+  --muted: var(--inset);
+  --muted-foreground: var(--ink-3);
+  --destructive: var(--red);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--accent);
+  --radius: 8px;
 
-  /* type: the site's pairing, a neutral grotesque for chrome and a fixed font inside */
-  --font-inter: "Inter Variable";
-  --font-mono-face: "Space Mono";
-  --font-display-face: "Inter Variable";
+  /* type: one sans for everything, a mono for IDs */
+  --font-sans-face: "Geist Variable";
+  --font-mono-face: "Geist Mono Variable";
+  /* Beautiful UI's foundation reads --font-inter for its sans stack */
+  --font-inter: var(--font-sans-face);
 
-  /*
-   * Motion. The site never eases: windows map in two frames, themes switch in
-   * three steps like a hardware switch. Durations stay short and stepped.
-   */
-  --ease-out: steps(2, end);
-  --ease-in: steps(2, end);
-  --ease-in-out: steps(3, end);
-  --dur-fast: 80ms;
-  --dur-base: 100ms;
+  /* motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+
+  /* layout */
+  --header-h: 52px;
+  --tabbar-h: calc(56px + env(safe-area-inset-bottom));
 
   color-scheme: light;
 }
 
-.tango {
+.dark {
+  --page: oklch(20.5% 0.009 260);
+  --canvas: oklch(19% 0.009 260);
+  --surface: oklch(23.2% 0.01 260);
+  --inset: oklch(21.8% 0.009 260);
+  --hover: oklch(26% 0.011 260);
+  --hover-2: oklch(29.5% 0.012 260);
+  --field: oklch(23.2% 0.01 260);
+
+  --ink: oklch(91% 0.006 255);
+  --ink-2: oklch(76% 0.01 256);
+  --ink-3: oklch(64% 0.011 257);
+  --ink-4: oklch(54% 0.011 257);
+
+  --line: oklch(29.5% 0.011 260);
+  --line-strong: oklch(35.5% 0.013 260);
+  --line-soft: oklch(26.5% 0.01 260);
+
+  --accent: oklch(70% 0.1 266);
+  --accent-ink: oklch(78% 0.08 266);
+  --accent-tint: oklch(70% 0.1 266 / 0.15);
+  --on-accent: oklch(20% 0.02 266);
+
+  --green: oklch(74% 0.1 155);
+  --green-tint: oklch(74% 0.1 155 / 0.13);
+  --orange: oklch(78% 0.1 70);
+  --orange-tint: oklch(78% 0.1 70 / 0.13);
+  --red: oklch(71% 0.12 25);
+  --red-tint: oklch(71% 0.12 25 / 0.14);
+
+  --verdict-drop: oklch(40% 0.01 257);
+  --verdict-queue: oklch(66% 0.09 266);
+  --verdict-interrupt: oklch(74% 0.1 66);
+
+  --tooltip-bg: oklch(30% 0.012 260);
+  --tooltip-fg: oklch(93% 0.005 255);
+  --tooltip-muted: oklch(76% 0.01 256);
+  --tooltip-border: oklch(38% 0.013 260);
+
+  --shadow-hairline: 0 0 0 1px var(--line);
+  --shadow-btn: 0 0 0 1px oklch(100% 0 0 / 0.08), 0 1px 2px oklch(0% 0 0 / 0.25);
+  --shadow-card: 0 0 0 1px oklch(100% 0 0 / 0.06), 0 1px 2px oklch(0% 0 0 / 0.2);
+  --shadow-raised: 0 0 0 1px oklch(100% 0 0 / 0.08), 0 6px 18px oklch(0% 0 0 / 0.28);
+  --shadow-overlay: 0 0 0 1px oklch(100% 0 0 / 0.1), 0 14px 36px oklch(0% 0 0 / 0.4);
+
   color-scheme: dark;
 }
 
 @theme inline {
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-faint: hsl(var(--faint));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--border));
-  --color-ring: hsl(var(--ring));
-  --color-desktop: hsl(var(--desktop));
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
   --color-on-accent: var(--on-accent);
+  --color-ink-4: var(--ink-4);
   --color-line-soft: var(--line-soft);
   --color-verdict-drop: var(--verdict-drop);
   --color-verdict-queue: var(--verdict-queue);
   --color-verdict-interrupt: var(--verdict-interrupt);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
 
-  --font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-sans-face), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, "SF Mono", monospace;
 
-  --radius-xs: 0px;
-  --radius-sm: 0px;
-  --radius-md: 0px;
-  --radius-lg: 0px;
-  --radius-xl: 0px;
-  --radius-2xl: 0px;
-  --radius-chip: 0px;
-  --radius-control: 0px;
-  --radius-card: 0px;
-  --radius-window: 0px;
-  --ease-out-strong: steps(2, end);
-  --ease-in-out-strong: steps(3, end);
-  --ease-link: steps(2, end);
-  /* Every transition in a vendored component steps instead of easing, as on the site */
-  --default-transition-duration: 100ms;
-  --default-transition-timing-function: steps(2, end);
-  --ease-in-out: steps(3, end);
-  --ease-out: steps(2, end);
-  --ease-in: steps(2, end);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
 }

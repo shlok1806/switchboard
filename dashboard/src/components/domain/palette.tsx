@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Activity, Columns3, KanbanSquare, PixelIcon, Users } from "@/components/pixel-icon";
+import { Monitor, Moon, Sun } from "lucide-react";
+import { VIEWS } from "@/components/shell/nav";
 import {
   CommandDialog,
   CommandEmpty,
@@ -11,13 +12,19 @@ import {
 } from "@/components/ui/command";
 import { useChannel } from "@/data/store";
 import { go, type Route } from "@/lib/router";
-import { PRESETS, useTheme } from "@/lib/theme";
+import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { PRESENCE_LABEL } from "@/lib/format";
+
+const THEMES: { id: ThemeChoice; label: string; icon: typeof Sun }[] = [
+  { id: "system", label: "System theme", icon: Monitor },
+  { id: "light", label: "Light theme", icon: Sun },
+  { id: "dark", label: "Dark theme", icon: Moon },
+];
 
 /** ⌘K: jump to any view, Task or Agent. shadcn Command over cmdk. */
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { tasks, agents } = useChannel();
-  const { resolved, set } = useTheme();
+  const { choice, set } = useTheme();
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -36,36 +43,29 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   };
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange} title="Jump to" description="Search views, Tasks and Agents">
-      <CommandInput placeholder="Jump to a view, Task or Agent" />
+    <CommandDialog open={open} onOpenChange={onOpenChange} title="Search" description="Search views, Tasks and Agents">
+      <CommandInput placeholder="Search views, Tasks and Agents" />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
         <CommandGroup heading="Views">
-          <CommandItem onSelect={() => run({ view: "feed" })}>
-            <Activity /> Feed
-          </CommandItem>
-          <CommandItem onSelect={() => run({ view: "tasks" })}>
-            <KanbanSquare /> Tasks
-          </CommandItem>
-          <CommandItem onSelect={() => run({ view: "agents" })}>
-            <Users /> Agents
-          </CommandItem>
-          <CommandItem onSelect={() => run({ view: "compare" })}>
-            <Columns3 /> Compare Captures
-          </CommandItem>
+          {VIEWS.map((v) => (
+            <CommandItem key={v.id} onSelect={() => run({ view: v.id })}>
+              <v.icon aria-hidden /> {v.title}
+            </CommandItem>
+          ))}
         </CommandGroup>
-        <CommandGroup heading="Desktop">
-          {PRESETS.map((p) => (
+        <CommandGroup heading="Theme">
+          {THEMES.map((t) => (
             <CommandItem
-              key={p.id}
-              value={`Desktop ${p.name} ${p.code}`}
+              key={t.id}
+              value={`Theme ${t.label}`}
               onSelect={() => {
-                set(p.id);
+                set(t.id);
                 onOpenChange(false);
               }}
             >
-              <PixelIcon name={resolved === p.id ? "boxcheck" : "box"} /> {p.name}
-              <span className="ml-auto font-mono text-[11px] text-ink-3">{p.code}</span>
+              <t.icon aria-hidden /> {t.label}
+              {choice === t.id && <CommandShortcut>Current</CommandShortcut>}
             </CommandItem>
           ))}
         </CommandGroup>
