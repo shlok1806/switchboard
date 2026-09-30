@@ -2,7 +2,8 @@
 // except the Agent that caused it, it gives one Verdict: Drop, Queue or Interrupt.
 //
 // 1. It works out overlap in code (see overlap.ts) and whether the Event is
-//    addressed to the Agent: its Task, a Directive to it, its Claim changing.
+//    addressed to the Agent: its Task or its Claim changing. Directives never
+//    reach the Relay: they are addressed and always delivered (directives.ts).
 // 2. With neither, it Drops without asking Jev, and still records the Verdict
 //    (source "rule").
 // 3. Otherwise it asks Jev one choice question with structured state (issue #3).
@@ -180,7 +181,6 @@ const CLAIM_EVENTS: ReadonlySet<EventType> = new Set([
 export function addressedTo(event: ChannelEvent, id: AgentId, held: ReadonlySet<TaskNumber>): string | null {
   const names = (holder: { kind: string; agentId?: string }) => holder.kind === "agent" && holder.agentId === id;
   const task = event.task === undefined ? "" : ` on Task #${event.task}`;
-  if (event.type === "directive" && event.payload.to === id) return "it is a Directive to you";
   if (CLAIM_EVENTS.has(event.type) && "holder" in event.payload && names(event.payload.holder)) {
     return `your Claim${task} changed`;
   }

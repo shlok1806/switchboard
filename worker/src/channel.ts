@@ -10,6 +10,8 @@ import type {
   Capture,
   ChannelEvent,
   DeliveryMessage,
+  DirectiveInterruptMessage,
+  DirectiveMessage,
   EventPayloads,
   EventType,
   Holder,
@@ -32,6 +34,7 @@ import { AGENTS_SCHEMA, AgentRoster, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
 import { Branches, type CodeEventResult } from "./branches";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
+import { DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
 import { type CodeChange, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { ProxyCapture } from "./proxy-capture";
@@ -110,6 +113,8 @@ export class Channel extends DurableObject<Env> {
   private readonly staleClaims: StaleClaims;
   /** Verdicts for every new Event and connected Agent, and Queue deliveries (ADR 0003, ADR 0005). */
   private readonly relay: Relay;
+  /** Directives from Persons to Agents, delivered without the Relay (ADR 0005). */
+  private readonly directives: Directives;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -135,6 +140,7 @@ export class Channel extends DurableObject<Env> {
     ctx.storage.sql.exec(AGENTS_SCHEMA);
     ctx.storage.sql.exec(HOOK_CAPTURE_SCHEMA);
     ctx.storage.sql.exec(RELAY_SCHEMA);
+    ctx.storage.sql.exec(DIRECTIVES_SCHEMA);
     // Answer keepalive pings without waking the object from hibernation.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(LIVE_PING, LIVE_PONG));
     this.alarms = new Alarms(ctx.storage);
@@ -199,6 +205,16 @@ export class Channel extends DurableObject<Env> {
         if (!stored) throw new Error("Event ID collision");
         return stored;
       },
+      sendTo: (person, message) => {
+        for (const ws of this.ctx.getWebSockets(person)) send(ws, message);
+      },
+      interruptTo: (agent, message) => this.interruptTo(agent, message),
+      waitUntil: (work) => this.ctx.waitUntil(work),
+    });
+    this.directives = new Directives({
+      sql: ctx.storage.sql,
+      findAgent: (id) => this.agents.find(id),
+      append: (event) => this.append(event),
       sendTo: (person, message) => {
         for (const ws of this.ctx.getWebSockets(person)) send(ws, message);
       },
@@ -314,21 +330,30 @@ export class Channel extends DurableObject<Env> {
   /**
    * Hands the Agent's wrapper what the Agent must hear at its next turn, once: the
    * Claims it lost to a Takeover while it was Gone, and the Queued Events its
-   * wrapper has not acknowledged over the WebSocket.
+   * wrapper has not acknowledged over the WebSocket, and the Directives it has not
+   * acknowledged either.
    */
   private withNextTurn(result: RosterResult): RosterResult {
     if (!result.ok) return result;
     const lostClaims = this.staleClaims.takeLostClaims(result.agent.id);
     const deliveries = this.relay.takeDeliveries(result.agent.id);
+    const directives = this.directives.takeDirectives(result.agent.id);
     return {
       ...result,
       ...(lostClaims.length === 0 ? {} : { lostClaims }),
       ...(deliveries.length === 0 ? {} : { deliveries }),
+      ...(directives.length === 0 ? {} : { directives }),
     };
   }
 
   endSession(person: PersonName, id: AgentId): Promise<RosterResult> {
     return this.agents.endSession(person, id);
+  }
+
+  /** A Person sending a Directive to one Agent. Refused through an Agent's credentials. */
+  sendDirective(caller: Caller, to: AgentId, text: string): DirectiveResult {
+    this.join(caller.person);
+    return this.directives.send(caller, to, text);
   }
 
   /** Sets an Agent's Proxy mode; only its own Person may. Its wrapper hears on the stream. */
@@ -445,15 +470,17 @@ export class Channel extends DurableObject<Env> {
       type !== "hook" &&
       type !== "proxy" &&
       type !== "delivery.ack" &&
+      type !== "directive.ack" &&
       type !== "interrupt.attach" &&
-      type !== "interrupt.result"
+      type !== "interrupt.result" &&
+      type !== "directive.result"
     ) {
       return;
     }
     const person = this.ctx.getTags(ws)[0];
     if (person === undefined) return;
     const body = frame as Record<string, unknown>;
-    if (type === "interrupt.attach" || type === "interrupt.result") {
+    if (type === "interrupt.attach" || type === "interrupt.result" || type === "directive.result") {
       // Only the Agent's own Person's wrapper may speak for it.
       const agent = body.agent;
       if (typeof agent !== "string" || this.agents.find(agent as AgentId)?.person !== person) return;
@@ -464,18 +491,19 @@ export class Channel extends DurableObject<Env> {
         return;
       }
       const result = parseInterruptResult(body);
-      if (result !== null) this.relay.interruptAnswered(result);
+      if (result === null) return;
+      if (type === "interrupt.result") this.relay.interruptAnswered(result);
+      else this.directives.answered(result.agent, result.id, result.typed ? "typed" : result.reason);
       return;
     }
-    if (type === "delivery.ack") {
-      // The wrapper holds these Deliveries for its Agent's next turn. Only the Agent's own Person may say so.
+    if (type === "delivery.ack" || type === "directive.ack") {
+      // The wrapper holds these for its Agent's next turn. Only the Agent's own Person may say so.
       const agent = body.agent;
       if (typeof agent !== "string" || !Array.isArray(body.ids)) return;
       if (this.agents.find(agent as AgentId)?.person !== person) return;
-      this.relay.acknowledge(
-        agent as AgentId,
-        body.ids.filter((id): id is string => typeof id === "string"),
-      );
+      const ids = body.ids.filter((id): id is string => typeof id === "string");
+      if (type === "delivery.ack") this.relay.acknowledge(agent as AgentId, ids);
+      else this.directives.acknowledge(agent as AgentId, ids);
       return;
     }
     send(ws, type === "hook" ? this.hooks.receive(person, body) : this.proxy.receive(person, body));
@@ -485,7 +513,7 @@ export class Channel extends DurableObject<Env> {
    * Sends an Interrupt to the wrapper of Agent `id`: the socket that most recently
    * said it belongs to that wrapper. False when there is none.
    */
-  private interruptTo(id: AgentId, message: InterruptMessage): boolean {
+  private interruptTo(id: AgentId, message: InterruptMessage | DirectiveInterruptMessage): boolean {
     const person = this.agents.find(id)?.person;
     if (person === undefined) return false;
     let target: { ws: WebSocket; at: number } | null = null;
@@ -554,7 +582,7 @@ interface WrapperAttachment {
 
 const WRAPPER_DOWNGRADES: ReadonlySet<string> = new Set(["person-typing", "dialog-open", "session-not-ready"]);
 
-/** A wrapper's `interrupt.result`, or null when it is not one. */
+/** A wrapper's `interrupt.result` (or `directive.result`, the same shape), or null when it is not one. */
 function parseInterruptResult(body: Record<string, unknown>): InterruptResult | null {
   const { agent, id, typed, reason } = body;
   if (typeof agent !== "string" || typeof id !== "string") return null;
@@ -574,7 +602,7 @@ function parseInterruptResult(body: Record<string, unknown>): InterruptResult | 
 /** Sends `message` on `ws`. False when the socket is closing. */
 function send(
   ws: WebSocket,
-  message: StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage | InterruptMessage,
+  message: StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage | InterruptMessage | DirectiveMessage | DirectiveInterruptMessage,
 ): boolean {
   try {
     ws.send(JSON.stringify(message));

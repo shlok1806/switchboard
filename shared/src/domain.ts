@@ -248,6 +248,18 @@ export interface EventPayloads {
   /** A message from a Person to an Agent. The only message with instruction weight. */
   "directive": { to: AgentId; text: string };
   /**
+   * How a Directive reached its Agent: typed into its running session right away
+   * ("interrupt"), or held for its next turn ("queue"), with why it was not typed.
+   * Recorded by the Channel after the `directive` Event (named in `directive`); the
+   * actor is the target Agent.
+   */
+  "directive.delivery": {
+    directive: string;
+    from: PersonName;
+    delivered: "interrupt" | "queue";
+    reason?: DirectiveQueueReason;
+  };
+  /**
    * A Person moving a Stale Claim to a new holder, with the hand-off: the previous
    * holder, the Steps it completed and its last Update on the Task.
    */
@@ -411,6 +423,13 @@ export type DowngradeReason =
   | "dialog-open"
   | "session-not-ready"
   | "no-answer";
+
+/**
+ * Why a Directive waited for the Agent's next turn instead of being typed right away:
+ * the Interrupt downgrade reasons that apply to it. A Directive has no threshold and
+ * is exempt from the Interrupt rate limit.
+ */
+export type DirectiveQueueReason = Exclude<DowngradeReason, "below-threshold" | "rate-limited">;
 
 /** The Relay's decision for one Event and one Agent. */
 export interface Verdict {
