@@ -1,7 +1,9 @@
 // Keeps one Agent registered on the Channel for as long as its session runs:
-// registers it, heartbeats its Presence, re-registers if the Channel forgets it,
-// and ends the session on exit. Failures never stop the agent CLI; they are
-// logged and retried on the next heartbeat.
+// registers it (trading the Person's session for an Agent token, ADR 0007),
+// heartbeats its Presence with that token, registers again for a new token if the
+// Channel forgets the Agent or revokes its token (it went Gone), and ends the
+// session on exit. Failures never stop the agent CLI; they are logged and retried
+// on the next heartbeat.
 
 import type { Agent, AgentId, Cli, ProxyMode, ReportedPresence } from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
@@ -32,8 +34,8 @@ export class AgentLink {
     private readonly session: AgentSession,
     private readonly heartbeatMs: number,
     private readonly log: (line: string) => void,
-    /** Called each time the Channel registers the Agent. */
-    private readonly onRegistered: (agent: Agent) => void = () => {},
+    /** Called each time the Channel registers the Agent, with the Agent token it issued. */
+    private readonly onRegistered: (agent: Agent, token: string | undefined) => void = () => {},
     /**
      * Called with what the Channel hands over for the Agent's next turn: Claims it
      * lost to a Takeover while it was Gone, and Queued Events.
@@ -60,7 +62,7 @@ export class AgentLink {
     const { agent } = answer;
     this.agent = agent;
     this.log(`registered ${agent.id}`);
-    this.onRegistered(agent);
+    this.onRegistered(agent, answer.token);
     this.handOver(answer);
     return agent;
   }
@@ -116,11 +118,15 @@ export class AgentLink {
       if (!id) return;
       this.handOver(await this.client.heartbeat(id, this.presence));
     } catch (error) {
-      if (error instanceof ChannelError && error.status === 404) {
-        // The Channel does not know this Agent (its state was reset): register again next beat.
-        this.agent = null;
-      }
+      const lost =
+        this.agent !== null && error instanceof ChannelError && (error.status === 404 || error.status === 401);
       this.log(`heartbeat failed: ${(error as Error).message}`);
+      if (lost) {
+        // The Channel does not know this Agent (its state was reset), or revoked its
+        // token because it went Gone: register again now, for a new token.
+        this.agent = null;
+        this.beat();
+      }
     }
   }
 }

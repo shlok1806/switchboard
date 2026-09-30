@@ -2,6 +2,10 @@
 // Presence, end its session, and keep a WebSocket to the Channel open. The
 // WebSocket also carries the Hook and Proxy Captures' Events to the Channel, and
 // the Relay's Deliveries for the Agent's next turn back from it.
+//
+// Credentials (ADR 0007): the Person's session registers the Agent, and the
+// registration answers with an Agent token. From then on every call the Agent
+// makes (heartbeats, its WebSocket, its tools) carries that token instead.
 
 import type {
   AgentId,
@@ -18,8 +22,22 @@ import type {
   ReportedPresence,
   StreamMessage,
 } from "../../shared/src/index";
-import { agentPath, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
+import { agentPath, channelApiBase, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
 import type { Config } from "./config";
+
+/** Where a ChannelClient finds its Channel and its credential. */
+export interface ChannelTarget {
+  /** The Worker's origin. */
+  url: string;
+  /** The Channel's repo, `owner/name`. */
+  repo: string;
+  /** The Person's session, or an Agent token. */
+  credential: string;
+}
+
+export function targetOf(config: Config): ChannelTarget {
+  return { url: config.url, repo: config.repo, credential: config.session };
+}
 
 /** Everything the Channel sends the wrapper's WebSocket. */
 export type ChannelMessage =
@@ -41,17 +59,39 @@ export class ChannelError extends Error {
 }
 
 export class ChannelClient {
+  /** The Channel API's base: `<url>/r/<owner>/<repo>`. */
   private readonly base: string;
+  /** The Person's session: it registers Agents. */
+  private readonly session: string;
+  /** The Agent's token once registered; every other call then carries it. */
+  private agentToken: string | null = null;
+  private readonly tokenListeners = new Set<() => void>();
 
-  constructor(private readonly config: Config) {
-    this.base = config.url.replace(/\/+$/, "");
+  constructor(target: ChannelTarget) {
+    this.base = `${target.url.replace(/\/+$/, "")}${channelApiBase(target.repo)}`;
+    this.session = target.credential;
+  }
+
+  /** Makes every later call, and the WebSocket, act as the Agent the token was issued to. */
+  useAgentToken(token: string): void {
+    if (this.agentToken === token) return;
+    this.agentToken = token;
+    for (const listener of this.tokenListeners) listener();
+  }
+
+  /** The credential calls carry now: the Agent's token once there is one, else the Person's session. */
+  private credential(): string {
+    return this.agentToken ?? this.session;
   }
 
   async request<T>(path: string, init: RequestInit = {}, timeoutMs = 10_000): Promise<T> {
+    return this.requestAs<T>(this.credential(), path, init, timeoutMs);
+  }
+
+  private async requestAs<T>(credential: string, path: string, init: RequestInit, timeoutMs: number): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Content-Type", "application/json");
-    headers.set("Authorization", `Bearer ${this.config.secret}`);
-    headers.set("X-Switchboard-Person", this.config.person);
+    headers.set("Authorization", `Bearer ${credential}`);
     let response: Response;
     try {
       response = await fetch(`${this.base}${path}`, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
@@ -65,11 +105,16 @@ export class ChannelClient {
 
   join(): Promise<JoinResponse> {
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return this.request<JoinResponse>("/api/join", { method: "POST", body: JSON.stringify({ timeZone }) });
+    const body = JSON.stringify({ timeZone });
+    return this.requestAs<JoinResponse>(this.session, "/api/join", { method: "POST", body }, 10_000);
   }
 
-  register(request: RegisterAgentRequest): Promise<AgentResponse> {
-    return this.request<AgentResponse>("/api/agents", { method: "POST", body: JSON.stringify(request) });
+  /** Registers the Agent with the Person's session, and from then on acts with the Agent token it answers with. */
+  async register(request: RegisterAgentRequest): Promise<AgentResponse> {
+    const body = JSON.stringify(request);
+    const answer = await this.requestAs<AgentResponse>(this.session, "/api/agents", { method: "POST", body }, 10_000);
+    if (answer.token !== undefined) this.useAgentToken(answer.token);
+    return answer;
   }
 
   heartbeat(id: AgentId, presence: ReportedPresence): Promise<AgentResponse> {
@@ -90,14 +135,16 @@ export class ChannelClient {
   follow(onMessage: (message: ChannelMessage) => void, onStatus: (connected: boolean) => void): ChannelStream {
     let closed = false;
     let socket: WebSocket | null = null;
-    let keepalive: ReturnType<typeof setInterval> | undefined;
     let retry = 0;
+    let pending: ReturnType<typeof setTimeout> | undefined;
 
     const connect = () => {
       if (closed) return;
-      const query = new URLSearchParams({ person: this.config.person, secret: this.config.secret });
+      pending = undefined;
+      const query = new URLSearchParams({ token: this.credential() });
       const ws = new WebSocket(`${this.base.replace(/^http/, "ws")}/api/stream?${query}`);
       socket = ws;
+      let keepalive: ReturnType<typeof setInterval> | undefined;
       ws.addEventListener("open", () => {
         retry = 0;
         onStatus(true);
@@ -113,15 +160,28 @@ export class ChannelClient {
       });
       ws.addEventListener("close", () => {
         clearInterval(keepalive);
-        if (closed) return;
+        // A socket replaced by a reconnect has nothing more to say.
+        if (closed || socket !== ws) return;
         onStatus(false);
+        if (pending !== undefined) return;
         retry += 1;
-        setTimeout(connect, Math.min(30_000, 500 * 2 ** retry));
+        pending = setTimeout(connect, Math.min(30_000, 500 * 2 ** retry));
       });
       ws.addEventListener("error", () => {
         // "close" follows and reconnects.
       });
     };
+
+    // A new Agent token: reconnect with it now, so the socket speaks for the Agent.
+    const reconnect = () => {
+      if (closed) return;
+      clearTimeout(pending);
+      retry = 0;
+      const old = socket;
+      pending = setTimeout(connect, 0);
+      old?.close();
+    };
+    this.tokenListeners.add(reconnect);
 
     connect();
     return {
@@ -132,7 +192,8 @@ export class ChannelClient {
       },
       close: () => {
         closed = true;
-        clearInterval(keepalive);
+        this.tokenListeners.delete(reconnect);
+        clearTimeout(pending);
         socket?.close();
       },
     };

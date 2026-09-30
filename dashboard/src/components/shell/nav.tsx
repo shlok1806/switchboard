@@ -1,7 +1,7 @@
 /*
  * The Dashboard's navigation: four views, always in the same place. On a desk
  * they are tabs in the top bar; on a phone they move to a tab bar at the
- * bottom, where a thumb reaches them. The account menu (theme, leave) sits at
+ * bottom, where a thumb reaches them. The account menu (theme, sign out) sits at
  * the right end of the top bar on both.
  */
 import { useEffect, useState } from "react";
@@ -17,7 +17,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChannel, useMe, useStore } from "@/data/store";
 import { href, type Route } from "@/lib/router";
-import { leaveChannel } from "@/lib/session";
+import { signOut } from "@/lib/session";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -189,7 +189,29 @@ export function initials(name: string) {
   return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
 }
 
-/** The Person's menu: who they are, the theme, and leaving the Channel. */
+/** The Person's GitHub avatar, or their initials while it loads or when it cannot. */
+function Avatar({ login, demo }: { login: string; demo: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const initialsTile = (
+    <span className="grid size-8 place-items-center rounded-full bg-accent-tint text-[12px] font-semibold text-accent-ink">
+      {initials(login)}
+    </span>
+  );
+  // The demo's Persons are made up: no GitHub account to show.
+  if (demo || failed) return initialsTile;
+  return (
+    <img
+      src={`https://github.com/${encodeURIComponent(login)}.png?size=64`}
+      alt=""
+      width={32}
+      height={32}
+      onError={() => setFailed(true)}
+      className="size-8 rounded-full bg-accent-tint object-cover"
+    />
+  );
+}
+
+/** The Person's menu: who they are (their GitHub login), the theme, and signing out. */
 export function AccountMenu() {
   const me = useMe();
   const { agents } = useChannel();
@@ -199,12 +221,8 @@ export function AccountMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Account: ${me}`}
-          className="grid size-8 place-items-center rounded-full bg-accent-tint text-[12px] font-semibold text-accent-ink outline-offset-2"
-        >
-          {initials(me)}
+        <button type="button" aria-label={`Account: ${me}`} className="rounded-full outline-offset-2">
+          <Avatar login={me} demo={isMock} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sideOffset={8} className="w-56">
@@ -226,9 +244,9 @@ export function AccountMenu() {
         {!isMock && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={leaveChannel}>
+            <DropdownMenuItem onSelect={() => void signOut()}>
               <LogOut className="size-4 text-ink-3" aria-hidden />
-              Leave the Channel
+              Sign out
             </DropdownMenuItem>
           </>
         )}

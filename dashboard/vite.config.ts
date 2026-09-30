@@ -16,7 +16,12 @@ export default defineConfig({
     // Point the dev server at a running Worker (for example `wrangler dev` on :8787)
     // with SWITCHBOARD_WORKER=http://localhost:8787 and VITE_CHANNEL_URL=/.
     proxy: process.env.SWITCHBOARD_WORKER
-      ? { "/api": { target: process.env.SWITCHBOARD_WORKER, ws: true, changeOrigin: true } }
+      ? {
+          // Each Channel's API (/r/<owner>/<repo>/api), sign-in (/auth) and the webhook (/api).
+          "/r": { target: process.env.SWITCHBOARD_WORKER, ws: true, changeOrigin: true },
+          "/auth": { target: process.env.SWITCHBOARD_WORKER, changeOrigin: true },
+          "/api": { target: process.env.SWITCHBOARD_WORKER, changeOrigin: true },
+        }
       : undefined,
   },
 });

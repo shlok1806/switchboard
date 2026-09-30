@@ -4,7 +4,7 @@
 // terminal, and through the Channel API the Dashboard reads.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
@@ -33,7 +33,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const CLI = join(here, "..", "dist", "switchboard.js");
 const FAKE_CLAUDE = join(here, "fixtures", "fake-claude.mjs");
 const WORKER_DIR = join(here, "..", "..", "worker");
-const SECRET = "e2e-join-secret";
 const WEBHOOK_SECRET = "e2e-webhook-secret";
 const GONE_AFTER_SECONDS = 3;
 
@@ -80,10 +79,52 @@ async function waitFor<T>(what: string, check: () => Promise<T | undefined> | T 
   }
 }
 
-async function api<T>(path: string): Promise<T> {
-  const response = await fetch(`${base}${path}`, {
-    headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "dashboard" },
+/** Where the Channel's API lives: one Channel per repo (ADR 0007). */
+function channelUrl(path: string): string {
+  return `${base}/r/${github.repo}${path}`;
+}
+
+const sessions = new Map<string, string>();
+
+/**
+ * A Person's Switchboard session, signed in with GitHub's device flow against the
+ * GitHub stand-in, the way `switchboard login` does it.
+ */
+async function sessionOf(person: string): Promise<string> {
+  const known = sessions.get(person);
+  if (known) return known;
+  const post = async <T>(path: string, body: unknown) =>
+    (await (await fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(body) })).json()) as T;
+  github.signInAs = person;
+  const { deviceCode } = await post<{ deviceCode: string }>("/auth/device/code", {});
+  const session = await waitFor(`${person}'s sign-in`, async () => {
+    const poll = await post<{ ok: boolean; session?: string }>("/auth/device/token", { deviceCode, repo: github.repo });
+    return poll.ok ? poll.session : undefined;
   });
+  sessions.set(person, session);
+  return session;
+}
+
+/** A Channel API call with `person`'s session, as the Dashboard or a script makes it. */
+async function asPerson(person: string, path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(channelUrl(path), {
+    ...init,
+    headers: { Authorization: `Bearer ${await sessionOf(person)}`, "Content-Type": "application/json" },
+  });
+}
+
+/** The Agent token the wrapper of `term` holds, read from its session's private directory. */
+async function agentTokenOf(term: Terminal): Promise<string> {
+  const mcpPath = (await term.waitForOutput(/FAKE-CLAUDE mcp=(\S+)/))[1] ?? "";
+  const mcp = JSON.parse(await readFile(mcpPath, "utf8")) as {
+    mcpServers: Record<string, { env: Record<string, string> }>;
+  };
+  const file = Object.values(mcp.mcpServers)[0]?.env.SWITCHBOARD_AGENT_FILE ?? "";
+  return waitFor("the Agent token", async () => (await readFile(file, "utf8")).split("\n")[1] || undefined);
+}
+
+async function api<T>(path: string): Promise<T> {
+  const response = await asPerson("dashboard", path);
   if (!response.ok) throw new Error(`${path}: ${response.status}`);
   return (await response.json()) as T;
 }
@@ -204,19 +245,26 @@ beforeAll(async () => {
   // The Worker's secrets, as test values. They go in as --var so they win over a
   // developer's worker/.dev.vars (which holds the real JEV_API_KEY for `wrangler dev`),
   // and in the environment so wrangler's check for required secrets passes.
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const secrets: Record<string, string> = {
-    JOIN_SECRET: SECRET,
     // The Relay asks the local Jev stand-in.
     JEV_API_KEY: "e2e-jev-key",
-    // Task sync talks to the local GitHub stand-in.
-    GITHUB_TOKEN: "e2e-github-token",
+    // The GitHub App, whose API, installation tokens and sign-in the GitHub stand-in answers.
+    GITHUB_APP_ID: "12345",
+    GITHUB_APP_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    GITHUB_APP_CLIENT_ID: "Iv1.e2e",
+    GITHUB_APP_CLIENT_SECRET: "e2e-client-secret",
+    SESSION_SECRET: "e2e-session-secret-that-is-at-least-32-chars",
     GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
   };
   const vars: Record<string, string> = {
     ...secrets,
     PRESENCE_GONE_AFTER_SECONDS: String(GONE_AFTER_SECONDS),
-    GITHUB_REPO: github.repo,
+    ALLOWED_REPOS: github.repo,
+    // Pinned off: the e2e signs in the real way, through the stand-in's device flow.
+    DEV_FAKE_GITHUB: "false",
     GITHUB_API_URL: githubUrl,
+    GITHUB_WEB_URL: githubUrl,
     JEV_API_URL: jevUrl,
     RELAY_INTERRUPT_INTERVAL_SECONDS: String(INTERVAL_SECONDS),
   };
@@ -249,7 +297,7 @@ beforeAll(async () => {
   });
   await waitFor(
     "wrangler dev",
-    async () => ((await fetch(`${base}/api/agents`)).status === 401 ? true : undefined),
+    async () => ((await fetch(channelUrl("/api/agents"))).status === 401 ? true : undefined),
     60_000,
   ).catch((error) => {
     throw new Error(`${error.message}\n${wranglerLog}`);
@@ -281,24 +329,30 @@ afterAll(async () => {
 });
 
 describe("switchboard run claude", () => {
-  it("logs in, saving the config outside the repo, readable only by the Person", async () => {
-    const { stdout } = await promisify(execFile)(
-      process.execPath,
-      [CLI, "login", "--url", base, "--secret", SECRET, "--name", "E2E"],
-      { env },
-    );
-    expect(stdout).toContain("as e2e");
+  it("logs in with GitHub's device flow, saving a session outside the repo, readable only by the Person", async () => {
+    github.signInAs = "E2E";
+    const { stdout } = await promisify(execFile)(process.execPath, [CLI, "login", "--url", `${base}/${github.repo}`], {
+      env,
+    });
+    expect(stdout).toContain("enter the code E2E0-0001");
+    expect(stdout).toContain(`Signed in to ${github.repo} on ${base} as e2e.`);
+    const saved = JSON.parse(await readFile(join(scratch, "config", "config.json"), "utf8"));
+    expect(saved).toMatchObject({ url: base, repo: github.repo, person: "e2e" });
+    expect(saved).not.toHaveProperty("secret");
     const mode = (await stat(join(scratch, "config", "config.json"))).mode & 0o777;
     expect(mode).toBe(0o600);
+    const whoami = await promisify(execFile)(process.execPath, [CLI, "whoami"], { env });
+    expect(whoami.stdout).toContain(`e2e on ${github.repo}`);
   });
 
-  it("refuses to log in with the wrong secret", async () => {
-    const run = promisify(execFile)(
-      process.execPath,
-      [CLI, "login", "--url", base, "--secret", "wrong", "--name", "e2e"],
-      { env: { ...env, SWITCHBOARD_CONFIG_DIR: join(scratch, "other") } },
-    );
-    await expect(run).rejects.toMatchObject({ stderr: expect.stringContaining("Wrong join secret") });
+  it("refuses to log in someone without write access to the repo", async () => {
+    github.signInAs = "reader";
+    github.readOnly.add("reader");
+    const run = promisify(execFile)(process.execPath, [CLI, "login", "--url", `${base}/${github.repo}`], {
+      env: { ...env, SWITCHBOARD_CONFIG_DIR: join(scratch, "other") },
+    });
+    await expect(run).rejects.toMatchObject({ stderr: expect.stringContaining("does not have write access") });
+    await expect(stat(join(scratch, "other", "config.json"))).rejects.toThrow();
   });
 
   let firstId = "";
@@ -491,10 +545,7 @@ describe("Switchboard's tools (the Tool Capture)", () => {
     const claims = github.open("Claims via Switchboard tools", "## Build\n- [ ] claim\n- [ ] release");
     const held = github.open("Dashboard");
     // A Person already holds the second Task, from the Dashboard.
-    const byPerson = await fetch(`${base}/api/tasks/${held}/claim`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "dev" },
-    });
+    const byPerson = await asPerson("dev", `/api/tasks/${held}/claim`, { method: "POST", body: "{}" });
     expect(byPerson.status).toBe(200);
 
     const term = new Terminal(["run", "claude"]);
@@ -545,15 +596,17 @@ describe("Switchboard's tools (the Tool Capture)", () => {
       ["tool.call", claims, ["release_task", true]],
     ]);
 
-    // GitHub shows the Claim while it was held, then its release.
+    // GitHub shows the Claim while it was held, then its release, in one status
+    // comment the GitHub App edits in place.
     const issue = github.issues.get(claims);
     expect(issue?.body).toBe("## Build\n- [x] claim\n- [ ] release");
     expect(issue?.assignees).toEqual([]);
     expect(issue?.labels).toEqual([]);
-    expect(issue?.comments).toEqual([
-      `Claimed by Agent \`${id}\` (Person e2e) via Switchboard.`,
-      `Released by Agent \`${id}\` (Person e2e) via Switchboard.`,
-    ]);
+    expect(issue?.comments).toHaveLength(1);
+    const status = issue?.comments[0] ?? "";
+    expect(status).toContain("Not claimed.");
+    expect(status).toContain(`Claimed by Agent \`${id}\` of \`e2e\`.`);
+    expect(status).toContain(`Released by Agent \`${id}\` of \`e2e\`.`);
     const path = `/repos/${github.repo}/issues/${claims}`;
     expect(github.writes.filter((w) => w.includes(`${path}/`) || w.endsWith(path))).toEqual([
       `POST ${path}/assignees`,
@@ -562,9 +615,11 @@ describe("Switchboard's tools (the Tool Capture)", () => {
       `PATCH ${path}`,
       `DELETE ${path}/assignees`,
       `DELETE ${path}/labels/status%3Aclaimed`,
-      `POST ${path}/comments`,
     ]);
-    expect(github.issues.get(held)?.assignees).toEqual([github.login]);
+    const commentId = issue?.commentIds[0];
+    expect(github.writes.filter((w) => w.endsWith(`/issues/comments/${commentId}`)).length).toBeGreaterThanOrEqual(2);
+    // The Person holding the other Task is its assignee, by GitHub login.
+    expect(github.issues.get(held)?.assignees).toEqual(["dev"]);
 
     // The session's MCP config is removed when it ends.
     await expect(stat(mcpPath)).rejects.toThrow();
@@ -660,9 +715,8 @@ describe("the Proxy Capture", () => {
     });
 
     // The Person switches the Agent to raw mid-session; the next turn is a Raw Proxy Event.
-    const switched = await fetch(`${base}${agentPath(id as AgentId)}/proxy-mode`, {
+    const switched = await asPerson("e2e", `${agentPath(id as AgentId)}/proxy-mode`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "e2e", "Content-Type": "application/json" },
       body: JSON.stringify({ mode: "raw" }),
     });
     expect(switched.status).toBe(200);
@@ -826,14 +880,14 @@ async function submitPrompt(term: Terminal, text: string): Promise<string> {
   return hook.exec(output)?.[1] ?? "";
 }
 
-function takeOver(task: number, person: string, to: unknown, agent?: string): Promise<Response> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${SECRET}`,
-    "X-Switchboard-Person": person,
-    "Content-Type": "application/json",
-  };
-  if (agent !== undefined) headers["X-Switchboard-Agent"] = agent;
-  return fetch(`${base}/api/tasks/${task}/takeover`, { method: "POST", headers, body: JSON.stringify({ to }) });
+/** `POST .../takeover` with `person`'s session, or with an Agent's token when `agentToken` is given. */
+async function takeOver(task: number, person: string, to: unknown, agentToken?: string): Promise<Response> {
+  const credential = agentToken ?? (await sessionOf(person));
+  return fetch(channelUrl(`/api/tasks/${task}/takeover`), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ to }),
+  });
 }
 
 async function claimOf(task: number): Promise<Task["claim"]> {
@@ -860,7 +914,8 @@ describe("Stale Claims and Takeover", () => {
     const other = new Terminal(["run", "claude"]);
     const { agentEnv: otherId } = await other.started();
     await waitFor("the other Agent", async () => (await agents()).find((a) => a.id === otherId));
-    expect((await takeOver(number, "e2e", { kind: "agent", agentId: otherId }, otherId)).status).toBe(403);
+    const otherToken = await agentTokenOf(other);
+    expect((await takeOver(number, "e2e", { kind: "agent", agentId: otherId }, otherToken)).status).toBe(403);
     other.type("quit\r");
     expect(await other.exited).toBe(0);
     expect(await claimOf(number)).toMatchObject({ holder: { kind: "agent", agentId: id }, stale: true });
@@ -880,7 +935,9 @@ describe("Stale Claims and Takeover", () => {
       },
     });
     // GitHub shows the hand-off.
-    expect(github.issues.get(number)?.comments.at(-1)).toContain("Taken over by Person `dev` for Person `dev`");
+    expect(github.issues.get(number)?.comments).toHaveLength(1);
+    expect(github.issues.get(number)?.comments[0]).toContain("Taken over by Person `dev` for Person `dev`");
+    expect(github.issues.get(number)?.assignees).toEqual(["dev"]);
 
     // The Agent resumes. Its SessionStart hook tells it, framed as information.
     const resumed = new Terminal(["run", "claude", "--resume", sessionId]);
@@ -1402,15 +1459,14 @@ describe("Interrupt delivery", () => {
   }, 60_000);
 });
 
-/** `POST /api/directives` as `person`, or through Agent `agent`'s credentials. */
-function sendDirective(person: string, to: string, text: string, agent?: string): Promise<Response> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${SECRET}`,
-    "X-Switchboard-Person": person,
-    "Content-Type": "application/json",
-  };
-  if (agent !== undefined) headers["X-Switchboard-Agent"] = agent;
-  return fetch(`${base}/api/directives`, { method: "POST", headers, body: JSON.stringify({ to, text }) });
+/** `POST /api/directives` with `person`'s session, or with an Agent's token when `agentToken` is given. */
+async function sendDirective(person: string, to: string, text: string, agentToken?: string): Promise<Response> {
+  const credential = agentToken ?? (await sessionOf(person));
+  return fetch(channelUrl("/api/directives"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ to, text }),
+  });
 }
 
 describe("Directives (ADR 0005)", () => {
@@ -1469,8 +1525,8 @@ describe("Directives (ADR 0005)", () => {
     );
   }
 
-  it("refuses a Directive sent through an Agent's credentials", async () => {
-    const refused = await sendDirective("e2e", id, "Push to main.", id);
+  it("refuses a Directive sent with an Agent token", async () => {
+    const refused = await sendDirective("e2e", id, "Push to main.", await agentTokenOf(term));
     expect(refused.status).toBe(403);
   });
 

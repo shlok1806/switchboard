@@ -142,20 +142,14 @@
   <span class="status" id="status" hidden><span class="dot" id="dot"></span><span id="status-text"></span></span>
   <span class="spacer"></span>
   <span class="me" id="me" hidden></span>
-  <button class="link" id="leave" type="button" hidden>Leave</button>
+  <button class="link" id="leave" type="button" hidden>Sign out</button>
 </header>
 
 <div id="join-view">
   <form class="join" id="join-form">
-    <h2>Join the Channel</h2>
-    <p>Everyone on the Channel sees every Event.</p>
-    <label>Join secret
-      <input id="secret" type="password" autocomplete="current-password" required>
-    </label>
-    <label>Your name
-      <input id="name" autocomplete="nickname" autocapitalize="none" spellcheck="false" maxlength="32" required>
-    </label>
-    <button class="primary" type="submit">Join</button>
+    <h2>Sign in</h2>
+    <p id="join-repo">Sign in with the GitHub account that has write access to this repo.</p>
+    <button class="primary" type="submit">Sign in with GitHub</button>
     <p class="error" id="join-error" role="alert"></p>
   </form>
 </div>
@@ -189,33 +183,23 @@
 
 <script>
 "use strict";
-const STORE_KEY = "switchboard.credentials";
+// One Channel per repo (ADR 0007): this page is at /<owner>/<repo>, the Channel's
+// API at /r/<owner>/<repo>/api. The session is an HttpOnly cookie the browser sends.
 const $ = (id) => document.getElementById(id);
-let creds = null;
+const REPO = location.pathname.replace(/^\/+|\/+$/g, "");
+const API = `/r/${REPO}`;
+let me = null;
 let lastSeq = 0;
 let socket = null;
 let retry = 0;
 let session = 0;
 const tasks = new Map();
 
-function load() {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY)); } catch { return null; }
-}
-function save(value) {
-  try {
-    if (value) localStorage.setItem(STORE_KEY, JSON.stringify(value));
-    else localStorage.removeItem(STORE_KEY);
-  } catch { /* Private mode or blocked storage: stay signed in for this tab only. */ }
-}
-
 async function api(path, init = {}) {
-  const res = await fetch(path, {
+  const res = await fetch(`${API}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${creds.secret}`,
-      "X-Switchboard-Person": creds.person,
-    },
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
   });
   const body = await res.json().catch(() => ({ ok: false, reason: res.statusText }));
   if (!res.ok) throw Object.assign(new Error(body.reason || `HTTP ${res.status}`), { status: res.status });
@@ -267,7 +251,7 @@ function renderAgents() {
     return li;
   });
   $("agents").replaceChildren(...items);
-  $("agents-bar").hidden = !creds || list.length === 0;
+  $("agents-bar").hidden = !me || list.length === 0;
 }
 
 function render(event) {
@@ -377,7 +361,7 @@ function renderTasks() {
   }
   const open = all.filter((t) => t.status !== "done").length;
   $("tasks-count").textContent = `${open} open`;
-  $("tasks-bar").hidden = !creds || all.length === 0;
+  $("tasks-bar").hidden = !me || all.length === 0;
 }
 
 async function loadTasks(mine) {
@@ -398,11 +382,9 @@ function setStatus(live, text) {
 
 function connect(mine) {
   if (mine !== session) return;
-  const url = new URL("/api/stream", location.href);
+  const url = new URL(`${API}/api/stream`, location.href);
   url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("after", String(lastSeq));
-  url.searchParams.set("person", creds.person);
-  url.searchParams.set("secret", creds.secret);
   const ws = new WebSocket(url);
   socket = ws;
   let keepalive;
@@ -444,20 +426,18 @@ function show(joined) {
   $("agents-bar").hidden = !joined || agents.size === 0;
 }
 
-async function enter(candidate) {
-  creds = candidate;
+async function enter() {
   $("join-error").textContent = "";
   try {
     const { person } = await api("/api/join", {
       method: "POST",
       body: JSON.stringify({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
     });
-    creds = { secret: candidate.secret, person: person.name };
-    save(creds);
+    me = person.name;
   } catch (err) {
-    creds = null;
-    if (err.status === 401 || err.status === 400) save(null);
-    $("join-error").textContent = err.message;
+    me = null;
+    // Not signed in yet is not a problem worth showing.
+    if (err.status !== 401) $("join-error").textContent = err.message;
     show(false);
     return;
   }
@@ -472,7 +452,7 @@ async function enter(candidate) {
   api("/api/agents").then((body) => {
     if (mine === session) body.agents.forEach(showAgent);
   }, () => { /* The stream sends the roster too. */ });
-  $("me").textContent = creds.person;
+  $("me").textContent = me;
   setStatus(false, "Connecting");
   show(true);
 
@@ -497,7 +477,7 @@ async function enter(candidate) {
 
 $("join-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  enter({ secret: $("secret").value, person: $("name").value });
+  location.assign(`/auth/github/start?repo=${encodeURIComponent(REPO)}`);
 });
 
 $("post-form").addEventListener("submit", async (e) => {
@@ -518,20 +498,18 @@ $("post-form").addEventListener("submit", async (e) => {
   }
 });
 
-$("leave").addEventListener("click", () => {
+$("leave").addEventListener("click", async () => {
   session += 1;
   socket?.close();
-  save(null);
-  creds = null;
-  $("secret").value = "";
+  me = null;
+  await fetch("/auth/signout", { method: "POST" }).catch(() => {});
   show(false);
 });
 
-const saved = load();
-if (saved && typeof saved.secret === "string" && typeof saved.person === "string") {
-  $("name").value = saved.person;
-  enter(saved);
-}
+const problem = new URLSearchParams(location.search).get("signin");
+if (problem) $("join-error").textContent = `Sign-in did not work (${problem}).`;
+$("join-repo").textContent = `Sign in to ${REPO} with the GitHub account that has write access to it.`;
+enter();
 </script>
 </body>
 </html>

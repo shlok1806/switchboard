@@ -4,10 +4,11 @@
 // finish a Task. Claiming opens the Task branch in a worktree of its own, and
 // finishing pushes it and opens the pull request (ADR 0006).
 //
-// It acts as the session's Agent over the Channel API, authenticated with the
-// stored config plus `X-Switchboard-Agent`, and reports every call as a
-// `tool.call` Event. The wrapper names the Agent in a file, because under Claude
-// Code's session picker the Agent is only known after launch.
+// It acts as the session's Agent over the Channel API with the Agent's own token
+// (ADR 0007), never the Person's session, and reports every call as a `tool.call`
+// Event. The wrapper writes the Agent ID and token to a file, because under Claude
+// Code's session picker the Agent is only known after launch, and a resumed Agent
+// gets a new token.
 
 import { readFile, rename, unlink } from "node:fs/promises";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -26,7 +27,6 @@ import type {
   TaskResponse,
 } from "../../shared/src/index";
 import {
-  AGENT_HEADER,
   agentDeliverables,
   branchPath,
   claimPath,
@@ -155,7 +155,8 @@ function describeSteps(task: Task): string {
 export class SwitchboardTools {
   constructor(
     private readonly client: ChannelClient,
-    private readonly agentId: () => Promise<AgentId | null>,
+    /** The session's Agent and its token, once the wrapper has registered it. */
+    private readonly agentId: () => Promise<{ id: AgentId; token: string } | null>,
     /** Where the session runs, inside the repo whose Tasks these are. */
     private readonly repoDir: string,
     /** Takes what the wrapper holds for the Agent's next turn, if anything. */
@@ -170,10 +171,12 @@ export class SwitchboardTools {
     work: (agent: AgentId) => Promise<string>,
   ): Promise<{ text: string; isError: boolean }> {
     const started = Date.now();
-    const agent = await this.agentId();
-    if (agent === null) {
+    const current = await this.agentId();
+    if (current === null) {
       return { text: "This session is not on the Channel yet. Try again in a moment.", isError: true };
     }
+    this.client.useAgentToken(current.token);
+    const agent = current.id;
     let text: string;
     let ok = true;
     try {
@@ -185,7 +188,6 @@ export class SwitchboardTools {
     try {
       await this.client.request("/api/tool-calls", {
         method: "POST",
-        headers: { [AGENT_HEADER]: agent },
         body: JSON.stringify({ tool, arg, ok, durationMs: Date.now() - started, output: text, task }),
       });
     } catch (error) {
@@ -194,8 +196,9 @@ export class SwitchboardTools {
     return { text, isError: !ok };
   }
 
-  private as<T>(agent: AgentId, path: string, init: RequestInit = {}): Promise<T> {
-    return this.client.request<T>(path, { ...init, headers: { [AGENT_HEADER]: agent } });
+  /** A call as the Agent: the client carries its token. `agent` names who it is for, for readers. */
+  private as<T>(_agent: AgentId, path: string, init: RequestInit = {}): Promise<T> {
+    return this.client.request<T>(path, init);
   }
 
   private post<T>(agent: AgentId, path: string, body: unknown = {}): Promise<T> {
@@ -319,13 +322,13 @@ export function nextTurnFromFile(path: string | undefined): () => Promise<string
   };
 }
 
-/** Reads the Agent ID the wrapper wrote, once it knows it. */
-function agentFromFile(path: string | undefined): () => Promise<AgentId | null> {
+/** Reads the Agent ID and token the wrapper wrote, once it has them. */
+function agentFromFile(path: string | undefined): () => Promise<{ id: AgentId; token: string } | null> {
   return async () => {
     if (!path) return null;
     try {
-      const id = (await readFile(path, "utf8")).trim();
-      return id.split("/").length === 3 ? (id as AgentId) : null;
+      const [id = "", token = ""] = (await readFile(path, "utf8")).trim().split("\n");
+      return id.split("/").length === 3 && token.length > 0 ? { id: id as AgentId, token } : null;
     } catch {
       return null;
     }
@@ -445,8 +448,9 @@ export async function runMcpServer(env: NodeJS.ProcessEnv = process.env): Promis
     console.error("switchboard mcp: not logged in. Run `switchboard login` first.");
     return 1;
   }
+  // Only the Agent's token, never the Person's session: the tools act as the Agent.
   const tools = new SwitchboardTools(
-    new ChannelClient(config),
+    new ChannelClient({ url: config.url, repo: config.repo, credential: "" }),
     agentFromFile(env[AGENT_FILE_ENV]),
     env[REPO_DIR_ENV] || process.cwd(),
     nextTurnFromFile(env[NEXT_TURN_FILE_ENV]),

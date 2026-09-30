@@ -1,6 +1,6 @@
 "use client";
 
-/* Switchboard: Kibo UI Snippet on the calm token layer; the copy button stays visible and long commands scroll instead of truncating. */
+/* Switchboard: Kibo UI Snippet on the calm token layer; the copy button stays visible and long commands wrap inside the card instead of running past its edge. */
 
 import { CheckIcon, CopyIcon } from "lucide-react";
 import {
@@ -120,6 +120,6 @@ export const SnippetTabsContent = ({
     className={cn("mt-0 px-4 py-3 font-mono text-[12.5px] text-ink-2", className)}
     {...props}
   >
-    <pre className="overflow-x-auto whitespace-pre">{children}</pre>
+    <pre className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{children}</pre>
   </TabsContent>
 );

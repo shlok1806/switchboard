@@ -13,7 +13,7 @@ import { useChannel, useIndex, useStore } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { DOWNGRADE_LABEL, prob } from "@/lib/format";
 import { go, href, useRoute, type Route } from "@/lib/router";
-import { leaveChannel } from "@/lib/session";
+import { signOut } from "@/lib/session";
 
 // One chunk per route, loaded on first visit.
 const FeedView = lazy(() => import("@/views/FeedView").then((m) => ({ default: m.FeedView })));
@@ -137,8 +137,8 @@ export default function App() {
             </div>
           </div>
           <div className="flex justify-end gap-2">
-            <Button size="sm" onClick={leaveChannel}>
-              Use another name
+            <Button size="sm" onClick={() => void signOut()}>
+              Sign out
             </Button>
             <Button size="sm" variant="accent" onClick={() => window.location.reload()}>
               Try again

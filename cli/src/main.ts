@@ -1,26 +1,29 @@
 #!/usr/bin/env node
 // The Switchboard laptop CLI.
 //
-//   switchboard login --url <channel url> --secret <join secret> --name <your name>
+//   switchboard login --url <channel url> [--repo <owner>/<repo>]
 //   switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
 //   switchboard run codex|gemini [--nickname <name>] [...args for Codex or Gemini CLI]
 //   switchboard whoami
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
-import { normalizePersonName } from "../../shared/src/index";
-import { ChannelClient } from "./channel-client";
 import { ADAPTERS } from "./clis/index";
-import { configPath, readConfig, writeConfig } from "./config";
+import { configPath, readConfig } from "./config";
+import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
 import { runCli } from "./run";
 
 const USAGE = `Usage:
-  switchboard login --url <channel url> --secret <join secret> --name <your name>
+  switchboard login --url <channel url> [--repo <owner>/<repo>]
   switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
   switchboard run codex [--nickname <name>] [...arguments for Codex]
   switchboard run gemini [--nickname <name>] [...arguments for Gemini CLI]
   switchboard whoami
+
+\`login\` signs you in with GitHub (a code to enter at github.com) for one Channel.
+The Channel URL is its Dashboard's, https://<host>/<owner>/<repo>. You need write
+access to the repo.
 
 \`run claude\` starts Claude Code as usual and joins the session to the Channel as an Agent.
 Its model traffic goes through a local proxy (the Proxy Capture): --proxy sets the
@@ -36,30 +39,28 @@ through the read_channel tool.`;
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
-    options: { url: { type: "string" }, secret: { type: "string" }, name: { type: "string" } },
+    options: { url: { type: "string" }, repo: { type: "string" }, "dev-login": { type: "string" } },
   });
-  if (!values.url || !values.secret || !values.name) {
-    console.error("Usage: switchboard login --url <channel url> --secret <join secret> --name <your name>");
+  if (!values.url) {
+    console.error("Usage: switchboard login --url <channel url> [--repo <owner>/<repo>]");
     return 2;
   }
-  let url: URL;
   try {
-    url = new URL(values.url);
-  } catch {
-    console.error(`Not a URL: ${values.url}`);
-    return 2;
+    const { path, config } = await signIn({
+      url: values.url,
+      ...(values.repo === undefined ? {} : { repo: values.repo }),
+      ...(values["dev-login"] === undefined ? {} : { devLogin: values["dev-login"] }),
+      say: (line) => console.log(line),
+    });
+    console.log(`Signed in to ${config.repo} on ${config.url} as ${config.person}. Saved to ${path}.`);
+    return 0;
+  } catch (error) {
+    if (error instanceof LoginError || (error as { status?: number }).status !== undefined) {
+      console.error(`switchboard: ${(error as Error).message}`);
+      return 1;
+    }
+    throw error;
   }
-  const person = normalizePersonName(values.name);
-  if (person === null) {
-    console.error("Pick a name of 1 to 32 characters: letters, digits, '-' or '_', starting with a letter or digit.");
-    return 2;
-  }
-  const config = { url: url.origin + url.pathname.replace(/\/+$/, ""), secret: values.secret, person };
-  // Joining checks the URL, the secret and the name before we save them.
-  const joined = await new ChannelClient(config).join();
-  const path = await writeConfig({ ...config, person: joined.person.name });
-  console.log(`Joined ${config.url} as ${joined.person.name}. Saved to ${path}.`);
-  return 0;
 }
 
 async function whoami(): Promise<number> {
@@ -68,7 +69,7 @@ async function whoami(): Promise<number> {
     console.error(`Not logged in (no ${configPath()}).`);
     return 1;
   }
-  console.log(`${config.person} on ${config.url}`);
+  console.log(`${config.person} on ${config.repo} at ${config.url}`);
   return 0;
 }
 
