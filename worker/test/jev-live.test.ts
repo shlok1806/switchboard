@@ -5,23 +5,23 @@
 import { env, reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentResponse, ChannelEvent, HistoryResponse, VerdictOption } from "../../shared/src/index";
-import { AGENT_HEADER } from "../../shared/src/index";
+import type { AgentId, AgentResponse, ChannelEvent, HistoryResponse, VerdictOption } from "../../shared/src/index";
 import { HttpJev, installJev } from "../src/relay/jev";
+import { bearer, forgetTokens, remember, streamQuery, url } from "./client";
 
-const BASE = "https://switchboard.test";
+async function post(path: string, person: string, body: unknown): Promise<Response> {
+  const headers = { Authorization: await bearer(person), "Content-Type": "application/json" };
+  return exports.default.fetch(new Request(url(path), { method: "POST", headers, body: JSON.stringify(body) }));
+}
 
-function post(path: string, person: string, body: unknown, agent?: string): Promise<Response> {
-  const headers: Record<string, string> = {
-    Authorization: "Bearer test-join-secret",
-    "X-Switchboard-Person": person,
-    "Content-Type": "application/json",
-  };
-  if (agent !== undefined) headers[AGENT_HEADER] = agent;
-  return exports.default.fetch(new Request(`${BASE}${path}`, { method: "POST", headers, body: JSON.stringify(body) }));
+async function stream(person: string, agent: AgentId): Promise<WebSocket | null> {
+  const query = await streamQuery({ person, agent });
+  return (await exports.default.fetch(new Request(url(`/api/stream?${query}`), { headers: { Upgrade: "websocket" } })))
+    .webSocket;
 }
 
 afterEach(async () => {
+  forgetTokens();
   installJev(null);
   await reset();
 });
@@ -30,19 +30,16 @@ describe.skipIf(!env.JEV_API_KEY)("the real Jev", () => {
   it("gives a Verdict with a probability for each option", async () => {
     installJev(new HttpJev(env.JEV_API_KEY));
     const register = async (person: string, sessionId: string) =>
-      (
+      remember(
         await (
           await post("/api/agents", person, { cli: "claude-code", sessionId, resumed: false, cwd: "/r" })
-        ).json<AgentResponse>()
+        ).json<AgentResponse>(),
       ).agent.id;
     const alice = await register("alice", "a1100000-0000-4000-8000-000000000000");
     const bob = await register("bob", "b0b00000-0000-4000-8000-000000000000");
 
     // Alice edits the file Bob then edits too: the Relay asks Jev.
-    const query = new URLSearchParams({ secret: "test-join-secret", person: "alice" });
-    const socket = (
-      await exports.default.fetch(new Request(`${BASE}/api/stream?${query}`, { headers: { Upgrade: "websocket" } }))
-    ).webSocket;
+    const socket = await stream("alice", alice);
     socket?.accept();
     socket?.send(
       JSON.stringify({
@@ -57,13 +54,7 @@ describe.skipIf(!env.JEV_API_KEY)("the real Jev", () => {
         ],
       }),
     );
-    const bobSocket = (
-      await exports.default.fetch(
-        new Request(`${BASE}/api/stream?${new URLSearchParams({ secret: "test-join-secret", person: "bob" })}`, {
-          headers: { Upgrade: "websocket" },
-        }),
-      )
-    ).webSocket;
+    const bobSocket = await stream("bob", bob);
     bobSocket?.accept();
     const edit = crypto.randomUUID();
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -80,9 +71,7 @@ describe.skipIf(!env.JEV_API_KEY)("the real Jev", () => {
     while (verdict === undefined && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 200));
       const response = await exports.default.fetch(
-        new Request(`${BASE}/api/events`, {
-          headers: { Authorization: "Bearer test-join-secret", "X-Switchboard-Person": "t" },
-        }),
+        new Request(url("/api/events"), { headers: { Authorization: await bearer("t") } }),
       );
       const events = (await response.json<HistoryResponse>()).events;
       verdict = events.find(

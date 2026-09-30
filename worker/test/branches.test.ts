@@ -17,7 +17,6 @@ import type {
   TaskResponse,
 } from "../../shared/src/index";
 import {
-  AGENT_HEADER,
   branchPath,
   CLAIMED_LABEL,
   claimPath,
@@ -30,23 +29,16 @@ import {
 } from "../../shared/src/index";
 import type { ComparedFile } from "../src/github/index";
 import { installGitHub, sign } from "../src/github/index";
+import { type As, bearer, forgetTokens, remember, url } from "./client";
 import { FakeGitHub, type WebhookDelivery } from "./fake-github";
 
-const BASE = "https://switchboard.test";
 const WEBHOOK_SECRET = "test-webhook-secret";
 
 let github: FakeGitHub;
 
-type As = { person: string; agent?: AgentId };
-
-function call(path: string, as: As, init: RequestInit = {}): Promise<Response> {
-  const headers: Record<string, string> = {
-    Authorization: "Bearer test-join-secret",
-    "X-Switchboard-Person": as.person,
-    "Content-Type": "application/json",
-  };
-  if (as.agent !== undefined) headers[AGENT_HEADER] = as.agent;
-  return exports.default.fetch(new Request(`${BASE}${path}`, { ...init, headers }));
+async function call(path: string, as: As, init: RequestInit = {}): Promise<Response> {
+  const headers = { Authorization: await bearer(as), "Content-Type": "application/json" };
+  return exports.default.fetch(new Request(url(path), { ...init, headers }));
 }
 
 function post(path: string, as: As, body: unknown = {}): Promise<Response> {
@@ -61,7 +53,7 @@ async function agent(person: string): Promise<As & { agent: AgentId }> {
   const sessionId = `${sessions.toString(16).padStart(4, "0")}bbbb-0000-4000-8000-000000000000`;
   const response = await post("/api/agents", { person }, { cli: "claude-code", sessionId, cwd: "/repo" });
   expect(response.status).toBe(200);
-  return { person, agent: (await response.json<AgentResponse>()).agent.id };
+  return { person, agent: remember(await response.json<AgentResponse>()).agent.id };
 }
 
 async function task(number: number): Promise<Task> {
@@ -82,7 +74,7 @@ async function eventsOf<K extends ChannelEvent["type"]>(type: K): Promise<EventO
 async function deliver(delivery: WebhookDelivery, options: { secret?: string; id?: string } = {}): Promise<Response> {
   const body = JSON.stringify(delivery.payload);
   return exports.default.fetch(
-    new Request(`${BASE}/api/github/webhook`, {
+    new Request(url("/api/github/webhook"), {
       method: "POST",
       body,
       headers: {
@@ -121,6 +113,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   installGitHub(null);
+  forgetTokens();
   await reset();
 });
 
@@ -199,7 +192,7 @@ describe("finishing a Task", () => {
     expect(pr?.body.split("\n")).toEqual([
       `Closes #${number}`,
       "",
-      `Opened via Switchboard by Agent \`${shlok.agent}\` (Person shlok).`,
+      `Opened via Switchboard by Agent \`${shlok.agent}\` of \`shlok\`.`,
       "",
       "Adds finish_task.",
     ]);
@@ -425,7 +418,7 @@ describe("pushes and merges from the GitHub webhook", () => {
     const pushed = github.push("task/6-signed", { commits: ["Signed"], files: [added("a.ts", 1)] });
 
     const unsigned = await exports.default.fetch(
-      new Request(`${BASE}/api/github/webhook`, {
+      new Request(url("/api/github/webhook"), {
         method: "POST",
         body: JSON.stringify(pushed.payload),
         headers: { "X-GitHub-Event": "push", "X-GitHub-Delivery": "d-1" },

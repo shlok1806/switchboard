@@ -14,7 +14,7 @@ import type { ChannelEvent, EventType, Holder, PushCommit, TaskNumber } from "..
 import { CLAIMED_LABEL, REVIEW_LABEL, taskOfBranch } from "../../shared/src/index";
 import type { NewEvent } from "./channel";
 import type { Caller, ClaimResult, Claims } from "./claims";
-import { type CodeChange, capFileChanges, type GitHub } from "./github/index";
+import { APP_NOT_CONFIGURED, type CodeChange, capFileChanges, type GitHub } from "./github/index";
 import type { Tasks } from "./tasks";
 
 /** A push Event lists at most this many commits, the newest ones. */
@@ -33,8 +33,6 @@ export interface BranchHost {
 export type CodeEventResult =
   | { ok: true; event: ChannelEvent | null }
   | { ok: false; status: 502 | 503; reason: string };
-
-const NOT_CONFIGURED = "GitHub sync is not configured: set the GITHUB_TOKEN Worker secret.";
 
 function firstLine(message: string): string {
   return (message.split("\n")[0] ?? "").slice(0, 200);
@@ -109,7 +107,7 @@ export class Branches {
       };
     }
     const gitHub = this.host.gitHub();
-    if (gitHub === null) return { ok: false, status: 503, reason: NOT_CONFIGURED };
+    if (gitHub === null) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
 
     let pr: { number: number; url: string };
     try {
@@ -136,6 +134,7 @@ export class Branches {
       task: number,
       payload: { pr: pr.number, url: pr.url, branch },
     });
+    claims.status.note(number, `Pull request #${pr.number} opened by ${claims.describe(holder)}.`);
 
     await claims.mirror(acting, "finish", number, async (gh) => [
       [
@@ -149,6 +148,7 @@ export class Branches {
           ]);
         },
       ],
+      claims.statusCall(gh, number),
     ]);
     return claims.current(number);
   }
@@ -160,7 +160,7 @@ export class Branches {
    */
   async codeEvent(delivery: string, change: CodeChange): Promise<CodeEventResult> {
     const gitHub = this.host.gitHub();
-    if (gitHub === null) return { ok: false, status: 503, reason: NOT_CONFIGURED };
+    if (gitHub === null) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
     let comparison: Awaited<ReturnType<GitHub["compare"]>>;
     try {
       comparison = await gitHub.compare(change.base, change.head);

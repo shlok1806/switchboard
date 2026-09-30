@@ -1,5 +1,6 @@
-// The wrapper's local config: which Channel to join and as whom. It lives in the
-// user's config directory, never in a repo, because it holds the join secret.
+// The wrapper's local config: which Channel to use and the Person's Switchboard
+// session for it (ADR 0007). It lives in the user's config directory, never in a
+// repo, because the session acts as the Person.
 //
 //   $SWITCHBOARD_CONFIG_DIR, else $XDG_CONFIG_HOME/switchboard, else ~/.config/switchboard
 
@@ -9,9 +10,13 @@ import { join } from "node:path";
 import type { PersonName } from "../../shared/src/index";
 
 export interface Config {
-  /** The Channel's base URL, such as `https://switchboard.example.workers.dev`. */
+  /** The Worker's origin, such as `https://switchboard.example.workers.dev`. */
   url: string;
-  secret: string;
+  /** The Channel's repo, `owner/name`: its API is at `<url>/r/<repo>/api`. */
+  repo: string;
+  /** The Person's Switchboard session, from `switchboard login`. */
+  session: string;
+  /** The Person's GitHub login. */
   person: PersonName;
 }
 
@@ -34,13 +39,21 @@ export async function readConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     return null;
   }
   const parsed = JSON.parse(raw) as Partial<Config>;
-  if (typeof parsed.url !== "string" || typeof parsed.secret !== "string" || typeof parsed.person !== "string") {
-    throw new Error(`${configPath(env)} is incomplete. Run \`switchboard login\` again.`);
+  const { url, repo, session, person } = parsed;
+  if (
+    typeof url !== "string" ||
+    typeof repo !== "string" ||
+    typeof session !== "string" ||
+    typeof person !== "string"
+  ) {
+    throw new Error(
+      `${configPath(env)} is from an older Switchboard. Run \`switchboard login --url <channel url>\` again.`,
+    );
   }
-  return { url: parsed.url, secret: parsed.secret, person: parsed.person };
+  return { url, repo, session, person };
 }
 
-/** Writes the config readable by its owner only, since it holds the join secret. */
+/** Writes the config readable by its owner only, since it holds the Person's session. */
 export async function writeConfig(config: Config, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const dir = configDir(env);
   await mkdir(dir, { recursive: true, mode: 0o700 });

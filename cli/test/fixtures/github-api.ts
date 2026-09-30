@@ -4,6 +4,7 @@
 // GitHub would show.
 
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { promisify } from "node:util";
 
@@ -13,7 +14,9 @@ export interface ApiIssue {
   body: string;
   labels: string[];
   assignees: string[];
+  /** Comment bodies, oldest first, and their IDs alongside. */
   comments: string[];
+  commentIds: number[];
   state: "open" | "closed";
 }
 
@@ -39,7 +42,15 @@ export class GitHubApi {
   origin: string | null = null;
   /** Every write, as `METHOD path`, oldest first. */
   readonly writes: string[] = [];
-  readonly login = "switchboard-bot";
+  /** The GitHub App's bot: every write the Worker makes is its. */
+  readonly login = "switchboard[bot]";
+  /** Who the next device-flow sign-in approves as. */
+  signInAs = "e2e";
+  /** Logins that have only read access to the repo; everyone else can write. */
+  readonly readOnly = new Set<string>();
+  /** Device codes polled once already: the second poll approves. */
+  private readonly polled = new Set<string>();
+  private nextComment = 5000;
   private server: Server | null = null;
   private url = "";
 
@@ -47,7 +58,16 @@ export class GitHubApi {
 
   open(title: string, body = ""): number {
     const number = this.issues.size + this.pullRequests.size + 1;
-    this.issues.set(number, { number, title, body, labels: [], assignees: [], comments: [], state: "open" });
+    this.issues.set(number, {
+      number,
+      title,
+      body,
+      labels: [],
+      assignees: [],
+      comments: [],
+      commentIds: [],
+      state: "open",
+    });
     return number;
   }
 
@@ -175,9 +195,53 @@ export class GitHubApi {
     const method = request.method ?? "GET";
     let text = "";
     for await (const chunk of request) text += chunk;
-    const input = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    // OAuth calls come form-encoded, like GitHub's own; the REST API sends JSON.
+    const form = (request.headers["content-type"] ?? "").includes("x-www-form-urlencoded");
+    const input: Record<string, unknown> = !text
+      ? {}
+      : form
+        ? Object.fromEntries(new URLSearchParams(text))
+        : (JSON.parse(text) as Record<string, unknown>);
 
-    if (method === "GET" && url.pathname === "/user") return { status: 200, body: { login: this.login } };
+    // The GitHub App: its installation and installation tokens (any JWT will do here).
+    if (method === "GET" && url.pathname === `/repos/${this.repo}/installation`)
+      return { status: 200, body: { id: 7 } };
+    if (method === "POST" && url.pathname === "/app/installations/7/access_tokens") {
+      const expires = new Date(Date.now() + 60 * 60_000).toISOString();
+      return { status: 201, body: { token: "ghs_e2e_installation", expires_at: expires } };
+    }
+    // Sign-in with GitHub's device flow: pending on the first poll, approved as `signInAs` on the next.
+    if (method === "POST" && url.pathname === "/login/device/code") {
+      const code = `device-${randomUUID()}`;
+      return {
+        status: 200,
+        body: {
+          device_code: code,
+          user_code: "E2E0-0001",
+          verification_uri: `${this.url}/login/device`,
+          interval: 1,
+          expires_in: 900,
+        },
+      };
+    }
+    if (method === "POST" && url.pathname === "/login/oauth/access_token") {
+      const code = String(input.device_code ?? "");
+      if (!this.polled.has(code)) {
+        this.polled.add(code);
+        return { status: 200, body: { error: "authorization_pending" } };
+      }
+      return { status: 200, body: { access_token: `gho_${this.signInAs}`, token_type: "bearer" } };
+    }
+    if (method === "GET" && url.pathname === "/user") {
+      const token = (request.headers.authorization ?? "").replace(/^Bearer /, "");
+      return { status: 200, body: { login: token.startsWith("gho_") ? token.slice(4) : this.login } };
+    }
+    const permission = new RegExp(`^/repos/${this.repo}/collaborators/([^/]+)/permission$`).exec(url.pathname);
+    if (method === "GET" && permission?.[1]) {
+      const login = decodeURIComponent(permission[1]);
+      const role = this.readOnly.has(login) ? "read" : "write";
+      return { status: 200, body: { permission: role, role_name: role } };
+    }
     if (method === "GET" && url.pathname === `/repos/${this.repo}`) {
       return { status: 200, body: { full_name: this.repo, default_branch: "main" } };
     }
@@ -188,6 +252,15 @@ export class GitHubApi {
     }
     const prefix = `/repos/${this.repo}/issues`;
     if (!url.pathname.startsWith(prefix)) return { status: 404, body: { message: "Not Found" } };
+    const edit = /^\/comments\/(\d+)$/.exec(url.pathname.slice(prefix.length));
+    if (edit?.[1] && method === "PATCH") {
+      this.writes.push(`PATCH ${url.pathname}`);
+      const id = Number(edit[1]);
+      const owner = [...this.issues.values()].find((i) => i.commentIds.includes(id));
+      if (!owner) return { status: 404, body: { message: "Not Found" } };
+      owner.comments[owner.commentIds.indexOf(id)] = String(input.body);
+      return { status: 200, body: { id, body: input.body } };
+    }
     if (method === "GET" && url.pathname === prefix) {
       const open = [...this.issues.values()].filter((issue) => issue.state === "open");
       return { status: 200, body: open.map((issue) => this.toRest(issue)) };
@@ -222,8 +295,10 @@ export class GitHubApi {
       return { status: 200, body: issue.labels.map((l) => ({ name: l })) };
     }
     if (part === "comments" && method === "POST") {
+      const id = this.nextComment++;
       issue.comments.push(String(input.body));
-      return { status: 201, body: { body: input.body } };
+      issue.commentIds.push(id);
+      return { status: 201, body: { id, body: input.body } };
     }
     return { status: 404, body: { message: "Not Found" } };
   }

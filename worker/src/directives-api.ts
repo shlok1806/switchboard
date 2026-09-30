@@ -2,13 +2,14 @@
 //
 //   POST /api/directives   a Person sends { to: <Agent ID>, text } to one Agent
 //
-// A call made through an Agent's tools (`X-Switchboard-Agent`) is refused: Agents
-// inform each other, only People instruct.
+// A call made with an Agent token is refused: Agents inform each other, only
+// People instruct.
 
-import type { PersonName, SendDirectiveResponse } from "../../shared/src/index";
+import type { SendDirectiveResponse } from "../../shared/src/index";
 import { MAX_DIRECTIVE_LENGTH } from "../../shared/src/index";
 import type { Channel } from "./channel";
-import { callerOf, isAgentId } from "./claims-api";
+import type { Caller } from "./claims";
+import { isAgentId } from "./claims-api";
 import { fail, json, readJson } from "./http";
 
 export const DIRECTIVE_ROUTE = "POST /api/directives";
@@ -16,10 +17,8 @@ export const DIRECTIVE_ROUTE = "POST /api/directives";
 export async function handleDirectiveRoute(
   request: Request,
   channel: DurableObjectStub<Channel>,
-  person: PersonName,
+  caller: Caller,
 ): Promise<Response> {
-  const caller = callerOf(request, person);
-  if ("error" in caller) return fail(400, caller.error);
   const body = await readJson(request);
   if (!isAgentId(body.to)) return fail(400, '"to" must be the target Agent ID.');
   const text = typeof body.text === "string" ? body.text.trim() : "";

@@ -5,14 +5,6 @@
  */
 import type { AgentId, ChannelEvent, Holder, PersonName, Task, TaskNumber } from "./domain";
 
-/**
- * Sent by an Agent acting through Switchboard's tools (the Tool Capture). The
- * Channel checks that the Agent belongs to the authenticated Person, then records
- * the call's Events as the Agent's, labelled with the Tool Capture. Without it,
- * the call is the Person's own.
- */
-export const AGENT_HEADER = "X-Switchboard-Agent";
-
 /** The `status:*` label a claimed Task carries on GitHub (ADR 0001). */
 export const CLAIMED_LABEL = "status:claimed";
 

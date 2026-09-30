@@ -61,6 +61,7 @@ export type ReportedPresence = "live" | "idle";
 
 /**
  * `POST /api/agents`: register an Agent for a session, or re-register it on resume.
+ * It needs the Person's session, and answers with a new Agent token.
  * The Channel derives the Agent ID from the authenticated Person, `cli` and `sessionId`,
  * so the same session always gets the same Agent ID. It answers 409 when a different
  * session of the same Person already holds that Agent ID.
@@ -104,6 +105,13 @@ export interface AgentResponse {
    * WebSocket. Present only when there are some; each is handed over once.
    */
   directives?: DirectiveDelivery[];
+  /**
+   * `POST /api/agents` only: the new Agent token, bound to this one Agent (ADR 0007).
+   * `switchboard run` trades its Person session for it here. The token posts the
+   * Agent's Events, claims and releases for it and reads the Channel; it stops
+   * working when the Agent goes Gone, and registering again issues a new one.
+   */
+  token?: string;
 }
 
 /**

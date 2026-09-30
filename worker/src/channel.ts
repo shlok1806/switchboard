@@ -1,6 +1,8 @@
-// One Durable Object per Channel (ADR 0004). It owns the Channel's Persons, its
-// append-only Event stream in SQLite, and every live WebSocket, using WebSocket
-// hibernation so idle subscribers cost nothing.
+// One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
+// named by `owner/repo` (ADR 0007). It owns the Channel's Persons, who may join
+// (write access to the repo, and the Agent tokens), its append-only Event stream
+// in SQLite, and every live WebSocket, using WebSocket hibernation so idle
+// subscribers cost nothing.
 
 import { DurableObject } from "cloudflare:workers";
 import type {
@@ -30,17 +32,20 @@ import type {
   TouchedFile,
 } from "../../shared/src/index";
 import { DEFAULT_GONE_AFTER_SECONDS, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
+import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
 import { AGENTS_SCHEMA, AgentRoster, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
+import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
 import { DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
-import { type CodeChange, gitHubFor, type WebhookChange } from "./github/index";
+import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
 import { StaleClaims } from "./stale-claims";
+import { StatusComments } from "./status-comment";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
 
 type EventRow = {
@@ -115,6 +120,10 @@ export class Channel extends DurableObject<Env> {
   private readonly relay: Relay;
   /** Directives from Persons to Agents, delivered without the Relay (ADR 0005). */
   private readonly directives: Directives;
+  /** Who may use the Channel: membership of the repo, and Agent tokens (ADR 0007). */
+  private readonly access: Access;
+  /** Each Issue's one status comment (issue #2). */
+  private readonly status: StatusComments;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -144,9 +153,14 @@ export class Channel extends DurableObject<Env> {
     // Answer keepalive pings without waking the object from hibernation.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(LIVE_PING, LIVE_PONG));
     this.alarms = new Alarms(ctx.storage);
+    this.access = new Access({
+      sql: ctx.storage.sql,
+      gitHub: () => this.gitHub(),
+      refused: (person) => this.closeSockets(person, 4003, "No longer a member of this Channel's repo."),
+    });
     this.tasks = new Tasks({
       storage: ctx.storage,
-      gitHub: () => gitHubFor(env),
+      gitHub: () => this.gitHub(),
       nextReconcile: () => this.alarms.deadline("tasks"),
       scheduleReconcile: (at) => this.alarms.set("tasks", at),
       append: (event) => this.append(event),
@@ -160,7 +174,13 @@ export class Channel extends DurableObject<Env> {
       goneAfterMs: (goneAfterSeconds > 0 ? goneAfterSeconds : DEFAULT_GONE_AFTER_SECONDS) * 1000,
       append: (event) => this.append(event),
       broadcast: (message) => this.broadcast(message),
-      presenceChanged: (id, presence) => this.staleClaims.presenceChanged(id, presence),
+      presenceChanged: (id, presence) => {
+        this.staleClaims.presenceChanged(id, presence);
+        // An Agent's token stops working when it goes Gone; resuming issues a new one.
+        if (presence === "gone" && this.access.revokeAgent(id)) {
+          this.closeSockets(agentTag(id), 4001, "Agent token revoked: the Agent is Gone.");
+        }
+      },
     });
     this.hooks = new HookCapture({
       sql: ctx.storage.sql,
@@ -171,16 +191,18 @@ export class Channel extends DurableObject<Env> {
       touchAgent: (person, id) => this.agents.touch(person, id),
       appendOnce: (id, event) => this.insert(id, event),
     });
+    this.status = new StatusComments({ sql: ctx.storage.sql, tasks: this.tasks, agents: this.agents });
     this.claims = new Claims({
       tasks: this.tasks,
       agents: this.agents,
-      gitHub: () => gitHubFor(env),
+      status: this.status,
+      gitHub: () => this.gitHub(),
       append: (event) => this.append(event),
     });
     this.branches = new Branches({
       tasks: this.tasks,
       claims: this.claims,
-      gitHub: () => gitHubFor(env),
+      gitHub: () => this.gitHub(),
       append: (event) => this.append(event),
       appendOnce: (id, event) => this.insert(id, event),
     });
@@ -232,8 +254,52 @@ export class Channel extends DurableObject<Env> {
     try {
       if (due.has("tasks")) await this.tasks.alarm();
       if (due.has("presence")) await this.agents.expireSilent();
+      if (due.has("members")) await this.recheckMembers();
     } finally {
       await this.alarms.arm();
+    }
+  }
+
+  /** The GitHub for this Channel's repo, or null when the App is not configured. */
+  private gitHub(): GitHub | null {
+    const repo = this.access.repo();
+    return repo === null ? null : gitHubFor(this.env, repo);
+  }
+
+  /**
+   * Admits a call to the Channel of `repo` (ADR 0007): a live Agent token, and a
+   * Person with write access to the repo, checked with GitHub at most every few
+   * minutes. `fresh` asks GitHub now, as sign-in does.
+   */
+  admit(repo: string, credential: Credential, dev: boolean, fresh = false): Promise<AdmitResult> {
+    this.access.setRepo(repo);
+    return this.access.admit(credential, dev, fresh);
+  }
+
+  /**
+   * While streams are open, re-checks their Persons' access every few minutes, so
+   * someone removed from the repo stops seeing the Channel even without a new call.
+   */
+  private async recheckMembers(): Promise<void> {
+    const persons = new Set(this.ctx.getWebSockets().flatMap((ws) => this.ctx.getTags(ws).slice(0, 1)));
+    await this.access.recheck(persons);
+    await this.watchMembers();
+  }
+
+  private async watchMembers(): Promise<void> {
+    const open = this.ctx.getWebSockets().length > 0;
+    if (!open) await this.alarms.set("members", null);
+    else if (this.alarms.deadline("members") === null) await this.alarms.set("members", Date.now() + MEMBERSHIP_TTL_MS);
+  }
+
+  /** Closes every WebSocket carrying `tag`: a Person's, or an Agent's (`agentTag`). */
+  private closeSockets(tag: string, code: number, reason: string): void {
+    for (const ws of this.ctx.getWebSockets(tag)) {
+      try {
+        ws.close(code, reason);
+      } catch {
+        // Already closed.
+      }
     }
   }
 
@@ -276,7 +342,8 @@ export class Channel extends DurableObject<Env> {
   }
 
   /** A verified GitHub `push` or `pull_request` delivery, recorded once per delivery ID. */
-  gitHubCodeWebhook(delivery: string, change: CodeChange): Promise<CodeEventResult> {
+  gitHubCodeWebhook(repo: string, delivery: string, change: CodeChange): Promise<CodeEventResult> {
+    this.access.setRepo(repo);
     return this.branches.codeEvent(delivery, change);
   }
 
@@ -308,7 +375,8 @@ export class Channel extends DurableObject<Env> {
   }
 
   /** A verified GitHub webhook delivery, reduced to the Issues it touched. */
-  gitHubWebhook(change: WebhookChange): Promise<TaskResult<null>> {
+  gitHubWebhook(repo: string, change: WebhookChange): Promise<TaskResult<null>> {
+    this.access.setRepo(repo);
     return this.tasks.webhook(change);
   }
 
@@ -317,10 +385,16 @@ export class Channel extends DurableObject<Env> {
     return this.agents.list();
   }
 
-  /** Registers an Agent for a CLI session, or brings it back on resume. Joins its Person too. */
+  /**
+   * Registers the Agent for a CLI session, or brings it back on resume, and joins
+   * its Person. This is where `switchboard run` trades the Person's session for a
+   * new Agent token, bound to this one Agent (ADR 0007).
+   */
   async registerAgent(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
     this.join(person);
-    return this.withNextTurn(await this.agents.register(person, request));
+    const result = this.withNextTurn(await this.agents.register(person, request));
+    if (!result.ok) return result;
+    return { ...result, token: await this.access.issueAgentToken(result.agent.id, person) };
   }
 
   async heartbeat(person: PersonName, id: AgentId, presence: ReportedPresence): Promise<RosterResult> {
@@ -408,6 +482,8 @@ export class Channel extends DurableObject<Env> {
       payload: { text },
       ...(task === undefined ? {} : { task }),
     });
+    // The holder's Update shows as the last Update in the Issue's status comment.
+    if (task !== undefined) this.ctx.waitUntil(this.claims.updated(who.acting, task));
     return { ok: true, event };
   }
 
@@ -428,17 +504,20 @@ export class Channel extends DurableObject<Env> {
   }
 
   /**
-   * Upgrades an already-authenticated request to a live stream. The Worker
-   * passes the verified Person as `?person=` and the resume cursor as `?after=`.
+   * Upgrades an already-admitted request to the live stream. The Worker passes the
+   * admitted Person as `?person=`, the Agent when the stream was opened with an
+   * Agent token as `?agent=`, and the resume cursor as `?after=`. An Agent's stream
+   * is its wrapper's: only it may send that Agent's Hook and Proxy Events.
    */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const name = url.searchParams.get("person");
+    const agent = url.searchParams.get("agent");
     const after = url.searchParams.get("after");
     if (name === null) return new Response("Missing person", { status: 400 });
 
     const { 0: client, 1: server } = new WebSocketPair();
-    this.ctx.acceptWebSocket(server, [name]);
+    this.ctx.acceptWebSocket(server, agent === null ? [name] : [name, agentTag(agent as AgentId)]);
     // Everything below is synchronous, so no other Event can be appended
     // between the backlog and the live stream: none is missed or sent twice.
     if (after !== null) {
@@ -448,6 +527,7 @@ export class Channel extends DurableObject<Env> {
     }
     for (const agent of this.agents.list()) send(server, { type: "agent", agent });
     this.join(name);
+    await this.watchMembers();
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -477,13 +557,15 @@ export class Channel extends DurableObject<Env> {
     ) {
       return;
     }
-    const person = this.ctx.getTags(ws)[0];
+    const [person, tag] = this.ctx.getTags(ws);
     if (person === undefined) return;
+    // The Agent whose token opened this socket; a Person's socket speaks for no Agent.
+    const socketAgent = tag?.startsWith(AGENT_TAG) ? (tag.slice(AGENT_TAG.length) as AgentId) : null;
     const body = frame as Record<string, unknown>;
     if (type === "interrupt.attach" || type === "interrupt.result" || type === "directive.result") {
-      // Only the Agent's own Person's wrapper may speak for it.
+      // Only the Agent's own wrapper may speak for it.
       const agent = body.agent;
-      if (typeof agent !== "string" || this.agents.find(agent as AgentId)?.person !== person) return;
+      if (typeof agent !== "string" || agent !== socketAgent) return;
       if (type === "interrupt.attach") {
         // Kept on the socket itself, so it survives hibernation and goes when the socket does.
         const attached: WrapperAttachment = { agent: agent as AgentId, at: Date.now() };
@@ -500,13 +582,16 @@ export class Channel extends DurableObject<Env> {
       // The wrapper holds these for its Agent's next turn. Only the Agent's own Person may say so.
       const agent = body.agent;
       if (typeof agent !== "string" || !Array.isArray(body.ids)) return;
-      if (this.agents.find(agent as AgentId)?.person !== person) return;
+      if (agent !== socketAgent) return;
       const ids = body.ids.filter((id): id is string => typeof id === "string");
       if (type === "delivery.ack") this.relay.acknowledge(agent as AgentId, ids);
       else this.directives.acknowledge(agent as AgentId, ids);
       return;
     }
-    send(ws, type === "hook" ? this.hooks.receive(person, body) : this.proxy.receive(person, body));
+    send(
+      ws,
+      type === "hook" ? this.hooks.receive(person, socketAgent, body) : this.proxy.receive(person, socketAgent, body),
+    );
   }
 
   /**
@@ -572,6 +657,13 @@ export class Channel extends DurableObject<Env> {
   private broadcast(message: StreamMessage): void {
     for (const ws of this.ctx.getWebSockets()) send(ws, message);
   }
+}
+
+/** The tag on a WebSocket opened with an Agent's token. */
+const AGENT_TAG = "agent:";
+
+function agentTag(id: AgentId): string {
+  return `${AGENT_TAG}${id}`;
 }
 
 /** What a wrapper's socket carries: the Agent whose Interrupts it types, and since when. */

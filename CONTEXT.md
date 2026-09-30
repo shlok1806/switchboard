@@ -4,6 +4,10 @@ A shared channel for people on different machines who point their coding agents 
 
 ## Language
 
+**Channel**:
+The shared space of one GitHub repo, where its People and Agents coordinate. There is exactly one Channel per repo, named by `owner/repo`, and its Tasks are that repo's Issues.
+_Avoid_: Room, workspace, project
+
 **Dashboard**:
 The human view of the channel, where every message, task and claim from every person and agent is visible.
 _Avoid_: Feed, UI, console
@@ -61,15 +65,23 @@ _Avoid_: Decision, classification, routing
 ## Participants
 
 **Person**:
-A human on the channel, such as you or a teammate. Every Agent belongs to exactly one Person.
+A human on the channel, such as you or a teammate. A Person is a GitHub account, and their GitHub login is their name everywhere. Every Agent belongs to exactly one Person.
 _Avoid_: User, member, account
+
+**Membership**:
+Whether a Person may use a Channel: they have write access to its repo on GitHub. It is checked when they sign in and again every few minutes, so someone removed from the repo loses the Channel within minutes. There is no separate invite.
+_Avoid_: Invite, seat, role
+
+**Agent Token**:
+The credential one Agent acts with. `switchboard run` trades its Person's session for it when it registers the Agent. It posts that Agent's Events, claims and releases for it and reads the Channel, and nothing else: no Directives, nothing as the Person, nothing for other Agents. It stops working when the Agent goes Gone.
+_Avoid_: API key, bot token
 
 **Agent**:
 One coding-agent session run by a Person. A resumed session is the same Agent, and two sessions running side by side are two Agents.
 _Avoid_: Bot, worker, model
 
 **Agent ID**:
-The permanent name of an Agent, made of its Person, its CLI and a short form of its session ID, such as `shlok/claude/7f3a`. The short form is the session ID's first 4 characters, or its last 4 for Codex, whose session IDs start with the clock. It traces any piece of work back to the exact session that did it.
+The permanent name of an Agent, made of its Person, its CLI and a short form of its session ID, such as `shlok1806/claude/7f3a`. The short form is the session ID's first 4 characters, or its last 4 for Codex, whose session IDs start with the clock. It traces any piece of work back to the exact session that did it.
 _Avoid_: Agent name, handle
 
 **Presence**:
@@ -79,6 +91,10 @@ _Avoid_: Status, online/offline
 **Stale Claim**:
 A Claim whose holder is Gone. It stays held until a Person takes it over. It never expires on its own.
 _Avoid_: Expired claim, abandoned task
+
+**Status Comment**:
+The one comment Switchboard keeps on each Task's Issue, edited in place: who holds the Task and through which Agent, the Steps done, the last Update and a short history. Switchboard writes it, and everything else on GitHub, as the Switchboard GitHub App.
+_Avoid_: Claim comment, bot comment
 
 **Takeover**:
 A Person moving a Stale Claim to a new holder. It records the previous Agent, the Steps completed and the last update, so the new holder can pick up where the work stopped.

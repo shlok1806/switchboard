@@ -8,7 +8,14 @@
 import type { AgentId, EventPayloads } from "./domain";
 
 /** The Event types the Hook Capture records. */
-export const HOOK_EVENT_TYPES = ["session.start", "session.end", "tool.call", "file.edit", "command", "turn.end"] as const;
+export const HOOK_EVENT_TYPES = [
+  "session.start",
+  "session.end",
+  "tool.call",
+  "file.edit",
+  "command",
+  "turn.end",
+] as const;
 
 export type HookEventType = (typeof HOOK_EVENT_TYPES)[number];
 

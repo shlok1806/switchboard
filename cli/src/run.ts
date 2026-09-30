@@ -30,7 +30,7 @@ import {
   STANDING_RULE,
 } from "../../shared/src/index";
 import { AgentLink, type AgentSession } from "./agent-link";
-import { ChannelClient, ChannelError } from "./channel-client";
+import { ChannelClient, ChannelError, targetOf } from "./channel-client";
 import type { CliAdapter, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
@@ -81,9 +81,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const env = process.env;
   const config = await readConfig();
   if (!config) {
-    console.error(
-      "Not logged in. Run: switchboard login --url <channel url> --secret <join secret> --name <your name>",
-    );
+    console.error("Not logged in. Run: switchboard login --url <channel url>");
     return 2;
   }
 
@@ -122,7 +120,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     return 1;
   }
 
-  const client = new ChannelClient(config);
+  // Registering trades the Person's session for the Agent's token; the client then
+  // acts with the token, and the stream reconnects with it (ADR 0007).
+  const client = new ChannelClient(targetOf(config));
   const heartbeatMs = seconds(env.SWITCHBOARD_HEARTBEAT_SECONDS, HEARTBEAT_INTERVAL_MS);
   const idleAfterMs = seconds(env.SWITCHBOARD_IDLE_AFTER_SECONDS, DEFAULT_IDLE_AFTER_MS);
   const session = (sessionId: string, resumed: boolean): AgentSession => ({
@@ -287,10 +287,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // or from the first hook or the adapter's `discover` once the CLI has started.
   let link: AgentLink | null = null;
   let idle: IdleWatch | null = null;
-  const onRegistered = (agent: Agent) => {
+  const onRegistered = (agent: Agent, token: string | undefined) => {
     agentId = agent.id;
     hooks?.setAgent(agent.id);
-    tools?.setAgent(agent.id);
+    if (token !== undefined) tools?.setAgent(agent.id, token);
     proxy?.setAgent(agent);
     attach();
   };
@@ -354,7 +354,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     childEnv.SWITCHBOARD_AGENT_ID = expected;
     try {
       const agent = await link.register();
-      console.error(dim(`switchboard: ${agent.id} is on the Channel at ${config.url}`));
+      console.error(dim(`switchboard: ${agent.id} is on the Channel for ${config.repo} at ${config.url}`));
     } catch (error) {
       if (error instanceof ChannelError && error.status !== 0) {
         console.error(`switchboard: the Channel refused ${expected}: ${error.message}`);

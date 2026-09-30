@@ -3,8 +3,8 @@
 // an Event labelled with the Hook Capture, and keeps every Agent's touched-files
 // list from its `file.edit` Events (the Relay reads it later).
 //
-// - Only an Agent's own Person may send its Events, and only on a socket that
-//   Person opened.
+// - Only an Agent's own wrapper may send its Events: on a socket opened with that
+//   Agent's token.
 // - Each Event carries an ID the wrapper picked, so a message sent again after a
 //   reconnect is recorded once, and a file edit is counted once.
 // - Payloads stay small: text is cut to the shared limits here too, whatever the
@@ -157,7 +157,7 @@ export class HookCapture {
   constructor(private readonly host: HookCaptureHost) {}
 
   /** Handles one message from a wrapper's WebSocket, sent by `person`. */
-  receive(person: PersonName, message: Record<string, unknown>): HookCaptureReply {
+  receive(person: PersonName, socketAgent: AgentId | null, message: Record<string, unknown>): HookCaptureReply {
     const ids = Array.isArray(message.events)
       ? message.events.flatMap((e) => (typeof e?.id === "string" ? [e.id as string] : []))
       : [];
@@ -165,6 +165,7 @@ export class HookCapture {
 
     const agent = message.agent;
     if (typeof agent !== "string" || agent.split("/").length !== 3) return refuse('"agent" must be an Agent ID.');
+    if (agent !== socketAgent) return refuse(`Only Agent ${agent}'s own token may send its Events.`);
     const parsed = parseEvents(message.events);
     if (!parsed.ok) return refuse(parsed.reason);
     const allowed = this.host.touchAgent(person, agent as AgentId);

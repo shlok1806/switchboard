@@ -6,7 +6,7 @@
 // settings). Nothing global (~/.claude.json, ~/.codex, ~/.gemini, the repo's own
 // config) is ever touched, and the directory is removed when the session ends.
 
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentId } from "../../shared/src/index";
@@ -26,8 +26,8 @@ export interface SessionTools {
   server: McpServerSpec;
   /** The session's private directory, for files an adapter writes. */
   dir: string;
-  /** Names the session's Agent, once known. The tools refuse until then. */
-  setAgent(id: AgentId): void;
+  /** Names the session's Agent and hands over its token, once known. The tools refuse until then. */
+  setAgent(id: AgentId, token: string): void;
   /** Leaves `text` for the `read_channel` tool to hand over at the Agent's next call. */
   leaveForNextTurn(text: string): void;
   /** Removes the session's files. */
@@ -55,8 +55,10 @@ export function writeClaudeMcpConfig(tools: SessionTools): string {
 
 /**
  * Prepares the session's MCP server. It is this same `switchboard` program run as
- * `switchboard mcp`, with the same config directory, so it reads the stored
- * Channel URL and join secret itself; nothing given to the agent CLI holds a secret.
+ * `switchboard mcp`, with the same config directory, so it reads the Channel's URL
+ * and repo itself. It acts only with the Agent's token (ADR 0007), which the
+ * wrapper writes to the session's private directory with the Agent ID; nothing
+ * given to the agent CLI on its command line holds a credential.
  */
 export function prepareSessionTools(cwd: string, env: NodeJS.ProcessEnv = process.env): SessionTools {
   const dir = mkdtempSync(join(tmpdir(), "switchboard-session-"));
@@ -77,7 +79,11 @@ export function prepareSessionTools(cwd: string, env: NodeJS.ProcessEnv = proces
       },
     },
     dir,
-    setAgent: (id) => writeFileSync(agentFile, `${id}\n`, { mode: 0o600 }),
+    setAgent: (id, token) => {
+      // Written whole and renamed into place, so the server never reads half a file.
+      writeFileSync(`${agentFile}.new`, `${id}\n${token}\n`, { mode: 0o600 });
+      renameSync(`${agentFile}.new`, agentFile);
+    },
     leaveForNextTurn: (text) => appendFileSync(nextTurnFile, `${text.trimEnd()}\n\n`, { mode: 0o600 }),
     dispose: () => rmSync(dir, { recursive: true, force: true }),
   };

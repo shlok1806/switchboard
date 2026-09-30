@@ -5,18 +5,17 @@
 //   POST /api/tasks/:number/steps/:index/complete   tick one Step
 //   POST /api/tool-calls                            an Agent reports a call to a Switchboard tool
 //
-// An Agent calling through Switchboard's tools sends `X-Switchboard-Agent`; its
-// Events then name the Agent and carry the Tool Capture.
+// A call made with an Agent token (ADR 0007) is that Agent's: its Events name the
+// Agent and carry the Tool Capture. An Agent claims for itself only.
 
 import type {
   AgentId,
   ClaimRefusal as ClaimRefusalBody,
-  PersonName,
   SwitchboardTool,
   TaskActionResponse,
   ToolCallResponse,
 } from "../../shared/src/index";
-import { AGENT_HEADER, MAX_TOOL_ARG_LENGTH, MAX_TOOL_OUTPUT_LENGTH, SWITCHBOARD_TOOLS } from "../../shared/src/index";
+import { MAX_TOOL_ARG_LENGTH, MAX_TOOL_OUTPUT_LENGTH, SWITCHBOARD_TOOLS } from "../../shared/src/index";
 import type { Channel } from "./channel";
 import type { Caller, ClaimResult } from "./claims";
 import { fail, json, readJson } from "./http";
@@ -48,13 +47,6 @@ export function isAgentId(value: unknown): value is AgentId {
   return typeof value === "string" && /^[^/\s]+\/[^/\s]+\/[^/\s]+$/.test(value);
 }
 
-/** The Person, and the Agent they act through when `X-Switchboard-Agent` is sent. */
-export function callerOf(request: Request, person: PersonName): Caller | { error: string } {
-  const agent = request.headers.get(AGENT_HEADER);
-  if (agent === null) return { person };
-  return isAgentId(agent) ? { person, agent } : { error: `${AGENT_HEADER} must be an Agent ID.` };
-}
-
 export function answer(result: ClaimResult): Response {
   if (result.ok) return json<TaskActionResponse>({ ok: true, task: result.task });
   const body: ClaimRefusalBody = { ok: false, reason: result.reason };
@@ -66,15 +58,16 @@ export async function handleClaimRoute(
   route: ClaimRoute,
   request: Request,
   channel: DurableObjectStub<Channel>,
-  person: PersonName,
+  caller: Caller,
 ): Promise<Response> {
-  const caller = callerOf(request, person);
-  if ("error" in caller) return fail(400, caller.error);
   const body = await readJson(request);
   switch (route.kind) {
     case "claim": {
       const forAgent = body.for;
       if (forAgent !== undefined && !isAgentId(forAgent)) return fail(400, '"for" must be an Agent ID.');
+      if (forAgent !== undefined && caller.agent !== undefined && forAgent !== caller.agent) {
+        return fail(403, "An Agent claims for itself only.");
+      }
       return answer(await channel.claimTask(caller, route.task, forAgent));
     }
     case "release":

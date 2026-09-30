@@ -22,12 +22,10 @@ import type {
   StreamMessage,
 } from "../../shared/src/index";
 import { agentDeliverable, agentDeliverables, agentPath, RAW_PROXY_CAP_BYTES } from "../../shared/src/index";
-
-const SECRET = "test-join-secret";
-const BASE = "https://switchboard.test";
+import { type As, bearer, forgetTokens, remember, streamQuery, url } from "./client";
 
 function call(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`${BASE}${path}`, init));
+  return exports.default.fetch(new Request(url(path), init));
 }
 
 let nextId = 0;
@@ -68,39 +66,48 @@ function raw(
   };
 }
 
-/** A laptop wrapper (or Dashboard) for one Person, with its WebSocket to the Channel. */
+/**
+ * A laptop wrapper (or Dashboard) for one Person. Each of its Agents has its own
+ * WebSocket, opened with that Agent's token; the Dashboard's is the Person's.
+ */
 class FakeWrapper {
   readonly replies: ProxyCaptureReply[] = [];
   readonly stream: StreamMessage[] = [];
-  private socket: WebSocket | null = null;
+  private readonly sockets = new Map<string, WebSocket>();
+  private readonly mine = new Set<string>();
 
   constructor(readonly name: string) {}
 
-  headers(): HeadersInit {
-    return { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": this.name };
+  async headers(): Promise<HeadersInit> {
+    return { Authorization: await bearer(this.name) };
   }
 
   async register(sessionId: string, extra: Record<string, unknown> = {}): Promise<Agent> {
     const response = await call("/api/agents", {
       method: "POST",
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify({ cli: "claude-code", sessionId, resumed: false, cwd: "/repo", ...extra }),
     });
     expect(response.status).toBe(200);
-    return (await response.json<AgentResponse>()).agent;
+    const { agent } = remember(await response.json<AgentResponse>());
+    this.mine.add(agent.id);
+    return agent;
   }
 
-  setMode(agent: AgentId, mode: unknown): Promise<Response> {
+  async setMode(agent: AgentId, mode: unknown): Promise<Response> {
     return call(`${agentPath(agent)}/proxy-mode`, {
       method: "POST",
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify({ mode }),
     });
   }
 
-  async connect(): Promise<void> {
-    const query = new URLSearchParams({ secret: SECRET, person: this.name });
-    const response = await call(`/api/stream?${query}`, { headers: { Upgrade: "websocket" } });
+  /** Opens the WebSocket of `agent` with its token; without one of its own Agents, the Person's. */
+  async connect(agent = ""): Promise<WebSocket> {
+    const known = this.sockets.get(agent);
+    if (known) return known;
+    const as: As = this.mine.has(agent) ? { person: this.name, agent: agent as AgentId } : { person: this.name };
+    const response = await call(`/api/stream?${await streamQuery(as)}`, { headers: { Upgrade: "websocket" } });
     const socket = response.webSocket;
     if (!socket) throw new Error("No WebSocket in the upgrade response");
     socket.accept();
@@ -109,13 +116,14 @@ class FakeWrapper {
       if (frame.type === "proxy.ack" || frame.type === "proxy.refused") this.replies.push(frame as ProxyCaptureReply);
       else this.stream.push(frame as StreamMessage);
     });
-    this.socket = socket;
+    this.sockets.set(agent, socket);
+    return socket;
   }
 
   async send(message: ProxyCaptureMessage | Record<string, unknown>): Promise<ProxyCaptureReply> {
-    if (!this.socket) await this.connect();
+    const socket = await this.connect(String(message.agent));
     const seen = this.replies.length;
-    this.socket?.send(JSON.stringify(message));
+    socket.send(JSON.stringify(message));
     const deadline = Date.now() + 2000;
     for (;;) {
       const reply = this.replies[seen];
@@ -130,7 +138,7 @@ class FakeWrapper {
   }
 
   async events(): Promise<ChannelEvent[]> {
-    const response = await call("/api/events", { headers: this.headers() });
+    const response = await call("/api/events", { headers: await this.headers() });
     return (await response.json<HistoryResponse>()).events;
   }
 
@@ -148,7 +156,7 @@ class FakeWrapper {
   }
 
   close(): void {
-    this.socket?.close();
+    for (const socket of this.sockets.values()) socket.close();
   }
 }
 
@@ -161,6 +169,7 @@ function wrapper(name: string): FakeWrapper {
 
 afterEach(async () => {
   for (const w of wrappers.splice(0)) w.close();
+  forgetTokens();
   await reset();
 });
 
@@ -180,7 +189,7 @@ describe("Proxy mode", () => {
 
     const bad = await call("/api/agents", {
       method: "POST",
-      headers: shlok.headers(),
+      headers: await shlok.headers(),
       body: JSON.stringify({ cli: "claude-code", sessionId: SESSION, proxyMode: "everything" }),
     });
     expect(bad.status).toBe(400);
@@ -189,14 +198,14 @@ describe("Proxy mode", () => {
   it("is changed by the Agent's own Person, mid-session, and the wrapper hears of it on its WebSocket", async () => {
     const shlok = wrapper("shlok");
     const agent = await shlok.register(SESSION);
-    await shlok.connect();
+    await shlok.connect(agent.id);
 
     const response = await shlok.setMode(agent.id, "raw");
     expect(response.status).toBe(200);
     expect((await response.json<AgentResponse>()).agent).toMatchObject({ id: agent.id, proxyMode: "raw" });
     await shlok.heardMode(agent.id, "raw");
 
-    const listed = await call("/api/agents", { headers: shlok.headers() });
+    const listed = await call("/api/agents", { headers: await shlok.headers() });
     expect((await listed.json<{ agents: Agent[] }>()).agents[0]?.proxyMode).toBe("raw");
 
     expect((await shlok.setMode(agent.id, "digest")).status).toBe(200);
@@ -277,7 +286,7 @@ describe("recording Proxy Events", () => {
     const maya = wrapper("maya");
     const agent = await shlok.register(SESSION);
     const reply = await maya.proxy(agent.id, digest());
-    expect(reply).toMatchObject({ type: "proxy.refused", reason: expect.stringContaining("belongs to shlok") });
+    expect(reply).toMatchObject({ type: "proxy.refused", reason: expect.stringContaining("own token") });
 
     const noId = await shlok.send({ type: "proxy", agent: agent.id, event: { ...digest(), id: "nope" } });
     expect(noId.type).toBe("proxy.refused");
@@ -305,12 +314,12 @@ describe("raw Proxy content and Agents (ADR 0005)", () => {
     await shlok.proxy(agent.id, digestEvent);
     await call("/api/updates", {
       method: "POST",
-      headers: shlok.headers(),
+      headers: await shlok.headers(),
       body: JSON.stringify({ text: "Renamed getJson" }),
     });
 
     // Everything the Channel holds, as the Relay or the read_channel tool reads it.
-    const all = (await (await call("/api/events?tail=100", { headers: maya.headers() })).json<HistoryResponse>())
+    const all = (await (await call("/api/events?tail=100", { headers: await maya.headers() })).json<HistoryResponse>())
       .events;
     expect(all.some((e) => e.type === "proxy.raw")).toBe(true);
 

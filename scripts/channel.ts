@@ -1,36 +1,50 @@
 // A tiny terminal client for the Channel: join, watch live Events, type Updates.
+// It uses the session `switchboard login` saved (ADR 0007), so sign in with the CLI first.
 //
-//   npx tsx scripts/channel.ts --url https://switchboard.<account>.workers.dev --secret <join secret> --name shlok
+//   npx tsx scripts/channel.ts
+//   npx tsx scripts/channel.ts --config ~/.config/switchboard/config.json --history 50
 //
 // Needs Node 22 or newer (built-in fetch and WebSocket), and nothing else.
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import type { ChannelEvent, ErrorResponse, HistoryResponse, JoinResponse, StreamMessage } from "../shared/src/index";
-import { LIVE_PING, LIVE_PONG } from "../shared/src/index";
+import { channelApiBase, LIVE_PING, LIVE_PONG } from "../shared/src/index";
+
+const defaultConfig = join(
+  process.env.SWITCHBOARD_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "switchboard"),
+  "config.json",
+);
 
 const { values } = parseArgs({
   options: {
-    url: { type: "string", default: process.env.SWITCHBOARD_URL },
-    secret: { type: "string", default: process.env.SWITCHBOARD_SECRET },
-    name: { type: "string" },
+    config: { type: "string", default: defaultConfig },
     history: { type: "string", default: "20" },
   },
 });
 
-if (!values.url || !values.secret || !values.name) {
+let saved: { url?: unknown; repo?: unknown; session?: unknown; person?: unknown };
+try {
+  saved = JSON.parse(readFileSync(values.config, "utf8"));
+} catch {
+  saved = {};
+}
+if (typeof saved.url !== "string" || typeof saved.repo !== "string" || typeof saved.session !== "string") {
   console.error(
-    "Usage: npx tsx scripts/channel.ts --url <channel url> --secret <join secret> --name <your name> [--history 20]\n" +
-      "(--url and --secret can also come from SWITCHBOARD_URL and SWITCHBOARD_SECRET)",
+    `No Switchboard session in ${values.config}. Sign in first: switchboard login --url <channel url>\n` +
+      "Usage: npx tsx scripts/channel.ts [--config <config.json>] [--history 20]",
   );
   process.exit(2);
 }
 
-const base = values.url.replace(/\/+$/, "");
-const secret = values.secret;
+const base = `${saved.url.replace(/\/+$/, "")}${channelApiBase(saved.repo)}`;
+const session = saved.session;
 const historyCount = Math.max(0, Number(values.history) || 0);
 const colors = [31, 32, 33, 34, 35, 36];
-let name = values.name;
+let name = typeof saved.person === "string" ? saved.person : "";
 let lastSeq = 0;
 
 function colorFor(person: string): number {
@@ -86,8 +100,7 @@ function show(event: ChannelEvent): void {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
-  headers.set("Authorization", `Bearer ${secret}`);
-  headers.set("X-Switchboard-Person", name);
+  headers.set("Authorization", `Bearer ${session}`);
   const response = await fetch(`${base}${path}`, { ...init, headers });
   const body = (await response.json().catch(() => ({ ok: false, reason: response.statusText }))) as T | ErrorResponse;
   if (!response.ok) throw new Error(`${response.status}: ${(body as ErrorResponse).reason}`);
@@ -95,7 +108,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 function connect(): void {
-  const query = new URLSearchParams({ after: String(lastSeq), person: name, secret });
+  const query = new URLSearchParams({ after: String(lastSeq), token: session });
   const socket = new WebSocket(`${base.replace(/^http/, "ws")}/api/stream?${query}`);
   let keepalive: ReturnType<typeof setInterval> | undefined;
   socket.addEventListener("open", () => {

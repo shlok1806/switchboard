@@ -27,7 +27,6 @@ import type {
   Verdict,
 } from "../../shared/src/index";
 import {
-  AGENT_HEADER,
   agentPath,
   branchPath,
   claimPath,
@@ -43,33 +42,36 @@ import { installGitHub, sign } from "../src/github/index";
 import { buildDelivery } from "../src/relay/delivery";
 import { installJev, JEV_MODEL } from "../src/relay/jev";
 import { relaySettings } from "../src/relay/relay";
+import { bearer, forgetTokens, remember, SESSION_SECRET, streamQuery, url } from "./client";
 import { FakeGitHub, type WebhookDelivery } from "./fake-github";
 import { FakeJev } from "./fake-jev";
 
-const BASE = "https://switchboard.test";
-const SECRET = "test-join-secret";
 const WEBHOOK_SECRET = "test-webhook-secret";
 
 let github: FakeGitHub;
 let jev: FakeJev;
 
-function headers(person: string, agent?: AgentId): Record<string, string> {
+/** A Person's session, or with `agent` that Agent's token, as the Authorization header. */
+async function headers(person: string, agent?: AgentId): Promise<Record<string, string>> {
   return {
-    Authorization: `Bearer ${SECRET}`,
-    "X-Switchboard-Person": person,
+    Authorization: await bearer({ person, ...(agent === undefined ? {} : { agent }) }),
     "Content-Type": "application/json",
-    ...(agent === undefined ? {} : { [AGENT_HEADER]: agent }),
   };
 }
 
-function post(path: string, person: string, body: unknown = {}, agent?: AgentId): Promise<Response> {
-  return exports.default.fetch(
-    new Request(`${BASE}${path}`, { method: "POST", headers: headers(person, agent), body: JSON.stringify(body) }),
+async function post(path: string, person: string, body: unknown = {}, agent?: AgentId): Promise<Response> {
+  const response = await exports.default.fetch(
+    new Request(url(path), { method: "POST", headers: await headers(person, agent), body: JSON.stringify(body) }),
   );
+  // Registering answers with the Agent's token: keep it, as the wrapper does.
+  if (path === "/api/agents" && response.ok) remember(await response.clone().json<AgentResponse>());
+  return response;
 }
 
 async function events(): Promise<ChannelEvent[]> {
-  const response = await exports.default.fetch(new Request(`${BASE}/api/events`, { headers: headers("dashboard") }));
+  const response = await exports.default.fetch(
+    new Request(url("/api/events"), { headers: await headers("dashboard") }),
+  );
   return (await response.json<HistoryResponse>()).events;
 }
 
@@ -117,6 +119,14 @@ class FakeAgent {
     readonly id: AgentId,
   ) {}
 
+  /** The wrapper of an Agent registered some other way, with its own socket. */
+  static async of(person: string, id: AgentId): Promise<FakeAgent> {
+    const agent = new FakeAgent(person, id);
+    await agent.connect();
+    agents.push(agent);
+    return agent;
+  }
+
   static async start(person: string, options: FakeAgentOptions = {}): Promise<FakeAgent> {
     sessions += 1;
     const sessionId = `${sessions.toString(16).padStart(4, "0")}cccc-0000-4000-8000-000000000000`;
@@ -146,9 +156,10 @@ class FakeAgent {
   }
 
   private async connect(): Promise<void> {
-    const query = new URLSearchParams({ secret: SECRET, person: this.person });
+    // The wrapper's stream carries its Agent's token.
+    const query = await streamQuery({ person: this.person, agent: this.id });
     const response = await exports.default.fetch(
-      new Request(`${BASE}/api/stream?${query}`, { headers: { Upgrade: "websocket" } }),
+      new Request(url(`/api/stream?${query}`), { headers: { Upgrade: "websocket" } }),
     );
     const socket = response.webSocket;
     if (!socket) throw new Error("No WebSocket");
@@ -202,7 +213,7 @@ class FakeAgent {
   async claim(number: number): Promise<string> {
     expect((await post(claimPath(number), this.person, {}, this.id)).status).toBe(200);
     const response = await exports.default.fetch(
-      new Request(`${BASE}/api/tasks/${number}`, { headers: headers(this.person) }),
+      new Request(url(`/api/tasks/${number}`), { headers: await headers(this.person) }),
     );
     const task: Task = (await response.json<TaskResponse>()).task;
     const branch = taskBranch(number, task.title);
@@ -231,7 +242,7 @@ async function waitFor<T>(check: () => Promise<T | undefined>, ms = 4000): Promi
 async function delivered(delivery: WebhookDelivery): Promise<void> {
   const body = JSON.stringify(delivery.payload);
   const response = await exports.default.fetch(
-    new Request(`${BASE}/api/github/webhook`, {
+    new Request(url("/api/github/webhook"), {
       method: "POST",
       body,
       headers: {
@@ -308,6 +319,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  forgetTokens();
   for (const agent of agents.splice(0)) agent.close();
   installGitHub(null);
   installJev(null);
@@ -671,14 +683,14 @@ describe("Queue delivery", () => {
         truncated: { context: false, response: false },
       },
     };
-    // Bob's wrapper sends it over his own WebSocket (a second Agent of his opens it).
-    const bobSocket = await FakeAgent.start("bob");
+    // Bob.s wrapper sends it over the WebSocket it opened with that Agent.s token.
+    const bobSocket = await FakeAgent.of("bob", bob);
     bobSocket.send({ type: "proxy", agent: bob, event: raw });
     await waitFor(async () => ((await events()).some((e) => e.id === raw.id) ? true : undefined));
     // A later Event proves the Relay has caught up.
     const response = await post("/api/updates", "bob", { text: "done" }, bob);
     const update = (await response.json<{ event: ChannelEvent }>()).event;
-    await verdictsOn(update.id, 2);
+    await verdictsOn(update.id, 1);
 
     expect((await verdictEvents()).some((e) => e.payload.event === raw.id)).toBe(false);
     expect(jev.calls.some((state) => JSON.stringify(state).includes("IGNORE ALL"))).toBe(false);
@@ -821,7 +833,9 @@ describe("Interrupt delivery", () => {
 
 describe("Relay settings", () => {
   it("answers GET /api/relay with the threshold, the interval and the model the Relay runs with", async () => {
-    const response = await exports.default.fetch(new Request(`${BASE}/api/relay`, { headers: headers("dashboard") }));
+    const response = await exports.default.fetch(
+      new Request(url("/api/relay"), { headers: await headers("dashboard") }),
+    );
     expect(response.status).toBe(200);
     // RELAY_INTERRUPT_THRESHOLD and RELAY_INTERRUPT_INTERVAL_SECONDS in wrangler.jsonc; the model is the installed Jev's.
     expect(await response.json<RelayResponse>()).toEqual({
@@ -829,13 +843,15 @@ describe("Relay settings", () => {
     });
   });
 
-  it("never carries a secret, and needs the join secret like every Channel route", async () => {
-    const response = await exports.default.fetch(new Request(`${BASE}/api/relay`, { headers: headers("dashboard") }));
+  it("never carries a secret, and needs a session like every Channel route", async () => {
+    const response = await exports.default.fetch(
+      new Request(url("/api/relay"), { headers: await headers("dashboard") }),
+    );
     const text = await response.text();
-    for (const secret of [SECRET, WEBHOOK_SECRET, env.JEV_API_KEY, env.GITHUB_TOKEN].filter(Boolean)) {
+    for (const secret of [SESSION_SECRET, WEBHOOK_SECRET, env.JEV_API_KEY].filter(Boolean)) {
       expect(text).not.toContain(secret);
     }
-    const anonymous = await exports.default.fetch(new Request(`${BASE}/api/relay`));
+    const anonymous = await exports.default.fetch(new Request(url("/api/relay")));
     expect(anonymous.status).toBe(401);
   });
 

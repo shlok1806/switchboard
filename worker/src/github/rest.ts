@@ -1,4 +1,5 @@
-// The real GitHub: the REST API, authenticated with the GITHUB_TOKEN Worker secret.
+// The real GitHub: the REST API for one repo, authenticated with the GitHub App's
+// installation token for that repo (app.ts).
 
 import type { TaskNumber } from "../../../shared/src/index";
 import type {
@@ -9,8 +10,16 @@ import type {
   IssueState,
   NewIssue,
   NewPullRequest,
+  Permission,
   PullRequestRef,
 } from "./types";
+
+/** Where a RestGitHub gets its token: the App's installation token, minted and cached by app.ts. */
+export interface TokenSource {
+  token(): Promise<string>;
+  /** Forgets the cached token after GitHub refused it, so the next call mints a new one. */
+  invalidate(): void;
+}
 
 const GITHUB_API = "https://api.github.com";
 
@@ -62,13 +71,11 @@ function state(value: string): IssueState {
 }
 
 export class RestGitHub implements GitHub {
-  /** The token's user, read once. */
-  private viewer: Promise<string> | null = null;
   /** The repo's default branch, read once. */
   private mainBranch: Promise<string> | null = null;
 
   constructor(
-    private readonly token: string,
+    private readonly tokens: TokenSource,
     readonly repo: string,
     private readonly api = GITHUB_API,
   ) {}
@@ -107,14 +114,21 @@ export class RestGitHub implements GitHub {
     return this.refs(`/repos/${this.repo}/issues/${number}/dependencies/blocking`);
   }
 
-  async login(): Promise<string> {
-    this.viewer ??= this.read<{ login: string }>(await this.request("/user")).then((user) => user.login);
-    try {
-      return await this.viewer;
-    } catch (error) {
-      this.viewer = null;
-      throw error;
+  async permission(login: string): Promise<Permission> {
+    const response = await this.request(`/repos/${this.repo}/collaborators/${encodeURIComponent(login)}/permission`);
+    // 404: no such user, or not someone GitHub will say anything about.
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return "none";
     }
+    const answer = await this.read<{ permission?: string; role_name?: string }>(response);
+    // `permission` folds maintain into write and triage into read; `role_name` keeps them.
+    const role = answer.role_name ?? answer.permission ?? "none";
+    if (role === "admin" || answer.permission === "admin") return "admin";
+    if (role === "maintain") return "maintain";
+    if (role === "write" || answer.permission === "write") return "write";
+    if (role === "triage") return "triage";
+    return role === "read" || answer.permission === "read" ? "read" : "none";
   }
 
   async addAssignees(number: TaskNumber, logins: string[]): Promise<void> {
@@ -137,8 +151,26 @@ export class RestGitHub implements GitHub {
     if (response.status !== 404) await this.check(response);
   }
 
-  async addComment(number: TaskNumber, body: string): Promise<void> {
-    await this.write("POST", `/repos/${this.repo}/issues/${number}/comments`, { body });
+  async createComment(number: TaskNumber, body: string): Promise<number> {
+    const response = await this.request(`/repos/${this.repo}/issues/${number}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+    return (await this.read<{ id: number }>(response)).id;
+  }
+
+  async updateComment(id: number, body: string): Promise<boolean> {
+    const response = await this.request(`/repos/${this.repo}/issues/comments/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ body }),
+    });
+    // 404: the comment was deleted.
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return false;
+    }
+    await this.check(response);
+    return true;
   }
 
   async setBody(number: TaskNumber, body: string): Promise<void> {
@@ -237,19 +269,26 @@ export class RestGitHub implements GitHub {
     return items;
   }
 
-  private request(pathOrUrl: string, init: RequestInit = {}): Promise<Response> {
+  /** One call, retried once with a fresh token when GitHub refuses the cached one. */
+  private async request(pathOrUrl: string, init: RequestInit = {}): Promise<Response> {
     const url = /^https?:\/\//.test(pathOrUrl) ? pathOrUrl : `${this.api}${pathOrUrl}`;
-    return fetch(url, {
-      ...init,
-      redirect: "manual",
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
-        "User-Agent": "switchboard-channel",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
+    const send = async () =>
+      fetch(url, {
+        ...init,
+        redirect: "manual",
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${await this.tokens.token()}`,
+          "Content-Type": "application/json",
+          "User-Agent": "switchboard-channel",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      });
+    const response = await send();
+    if (response.status !== 401) return response;
+    await response.body?.cancel();
+    this.tokens.invalidate();
+    return send();
   }
 
   private async read<T>(response: Response): Promise<T> {

@@ -1,7 +1,7 @@
 // Stale Claims and Takeover (#11, ADR 0002), driven through the Channel API the way
 // the wrapper, its MCP tools and the Dashboard use it, with an in-memory GitHub.
 
-import { env, reset, runDurableObjectAlarm } from "cloudflare:test";
+import { reset, runDurableObjectAlarm } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -15,31 +15,25 @@ import type {
   TaskActionResponse,
   TaskResponse,
 } from "../../shared/src/index";
-import { AGENT_HEADER, agentPath, CLAIMED_LABEL, claimPath, stepPath, takeoverPath } from "../../shared/src/index";
+import { agentPath, CLAIMED_LABEL, claimPath, stepPath, takeoverPath } from "../../shared/src/index";
 import { installGitHub, sign } from "../src/github/index";
+import { type As, bearer, channelStub, forgetTokens, remember, url } from "./client";
 import { FakeGitHub, type WebhookDelivery } from "./fake-github";
 
-const BASE = "https://switchboard.test";
 const TEN_MINUTES = 10 * 60_000;
 
 let github: FakeGitHub;
 
-type As = { person: string; agent?: AgentId };
-type AgentAs = As & { agent: AgentId; sessionId: string };
-
-function call(path: string, as: As, init: RequestInit = {}): Promise<Response> {
-  const headers: Record<string, string> = {
-    Authorization: "Bearer test-join-secret",
-    "X-Switchboard-Person": as.person,
-    "Content-Type": "application/json",
-  };
-  if (as.agent !== undefined) headers[AGENT_HEADER] = as.agent;
-  return exports.default.fetch(new Request(`${BASE}${path}`, { ...init, headers }));
+async function call(path: string, as: As, init: RequestInit = {}): Promise<Response> {
+  const headers = { Authorization: await bearer(as), "Content-Type": "application/json" };
+  return exports.default.fetch(new Request(url(path), { ...init, headers }));
 }
 
 function post(path: string, as: As, body: unknown = {}): Promise<Response> {
   return call(path, as, { method: "POST", body: JSON.stringify(body) });
 }
+
+type AgentAs = As & { agent: AgentId; sessionId: string };
 
 let sessions = 0;
 
@@ -49,7 +43,7 @@ async function agent(person: string): Promise<AgentAs> {
   const sessionId = `${sessions.toString(16).padStart(4, "0")}bbbb-0000-4000-8000-000000000000`;
   const response = await post("/api/agents", { person }, { cli: "claude-code", sessionId, cwd: "/repo" });
   expect(response.status).toBe(200);
-  return { person, agent: (await response.json<AgentResponse>()).agent.id, sessionId };
+  return { person, agent: remember(await response.json<AgentResponse>()).agent.id, sessionId };
 }
 
 /** The wrapper registering the same session again, as `switchboard run claude --resume` does. */
@@ -60,7 +54,7 @@ async function resume(a: AgentAs): Promise<AgentResponse> {
     { cli: "claude-code", sessionId: a.sessionId, resumed: true, cwd: "/repo" },
   );
   expect(response.status).toBe(200);
-  return response.json<AgentResponse>();
+  return remember(await response.json<AgentResponse>());
 }
 
 /** The session ends: the Agent is Gone. */
@@ -109,14 +103,10 @@ function takeover(number: number, as: As, to: Holder): Promise<Response> {
   return post(takeoverPath(number), as, { to });
 }
 
-function channelStub() {
-  return env.CHANNEL.get(env.CHANNEL.idFromName("main"));
-}
-
 async function deliver(delivery: WebhookDelivery): Promise<void> {
   const body = JSON.stringify(delivery.payload);
   const response = await exports.default.fetch(
-    new Request(`${BASE}/api/github/webhook`, {
+    new Request(url("/api/github/webhook"), {
       method: "POST",
       body,
       headers: {
@@ -137,6 +127,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.useRealTimers();
   installGitHub(null);
+  forgetTokens();
   await reset();
 });
 
@@ -204,12 +195,14 @@ describe("a Claim held by a Gone Agent", () => {
     expect((await task(number)).claim).toMatchObject({ holder: byAgent(shlok.agent), stale: false });
     expect(await claimEvents(since)).toEqual([["claim.recovered", shlok.agent, { holder: byAgent(shlok.agent) }]]);
 
-    // A heartbeat bringing it back from silence does the same.
+    // Coming back from silence does the same. Going Gone revoked the Agent's token,
+    // so its heartbeat is refused and the wrapper registers again for a new one.
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + TEN_MINUTES + 1000);
     await runDurableObjectAlarm(channelStub());
     expect((await task(number)).claim?.stale).toBe(true);
-    expect((await post(`${agentPath(shlok.agent)}/heartbeat`, shlok, { presence: "idle" })).status).toBe(200);
+    expect((await post(`${agentPath(shlok.agent)}/heartbeat`, shlok, { presence: "idle" })).status).toBe(401);
+    await resume(shlok);
     expect((await task(number)).claim?.stale).toBe(false);
     expect((await claimEvents(since)).map(([type]) => type)).toEqual([
       "claim.recovered",
@@ -256,22 +249,23 @@ describe("Takeover", () => {
     const handOff = (await events()).find((e) => e.type === "takeover");
     expect(handOff).toMatchObject({ capture: null, task: number });
 
+    // On GitHub the Issue moves from shlok to dev, and its one status comment says so.
+    const [comment] = github.commentIds(number);
     expect(github.calls).toEqual([
-      ["addAssignees", number, [github.tokenLogin]],
+      ["removeAssignees", number, ["shlok"]],
+      ["addAssignees", number, ["dev"]],
       ["addLabels", number, [CLAIMED_LABEL]],
-      [
-        "addComment",
-        number,
-        [
-          "Taken over by Person `dev` for Person `dev` via Switchboard.",
-          "",
-          `Previous holder: Agent \`${shlok.agent}\` (Person shlok), Gone.`,
-          "Steps completed:\n- [x] schema\n- [x] claim",
-          "Last Update:\n> Claim works; release next, uncommitted in src/claims.ts",
-        ].join("\n"),
-      ],
+      ["updateComment", comment, expect.any(String)],
     ]);
-    expect(github.issue(number).assignees).toEqual([github.tokenLogin]);
+    expect(github.issue(number).assignees).toEqual(["dev"]);
+    expect(github.commentIds(number)).toEqual([comment]);
+    const status = github.issue(number).comments[0] ?? "";
+    expect(status).toContain("Held by Person `dev` since");
+    expect(status).toContain("Steps done: 2 of 3.");
+    expect(status).toContain("> Claim works; release next, uncommitted in src/claims.ts");
+    expect(status).toContain(
+      `Taken over by Person \`dev\` for Person \`dev\` from Agent \`${shlok.agent}\` of \`shlok\`, which was Gone.`,
+    );
 
     // The new holder carries on: the old Steps stay done, and it can finish the rest.
     expect((await post(stepPath(number, 2), { person: "dev" })).status).toBe(200);
@@ -307,14 +301,14 @@ describe("Takeover", () => {
       { from: byAgent(shlok.agent), to: byAgent(mine.agent), stepsCompleted: [] },
     ]);
     expect(github.issue(number).comments.at(-1)).toContain(
-      `Taken over by Person \`dev\` for Agent \`${mine.agent}\` (Person dev) via Switchboard.`,
+      `Taken over by Person \`dev\` for Agent \`${mine.agent}\` of \`dev\` from Agent \`${shlok.agent}\``,
     );
     // The new holder is an ordinary holder: if it goes Gone, its Claim is Stale in turn.
     await end(mine);
     expect((await task(number)).claim).toMatchObject({ holder: byAgent(mine.agent), stale: true });
   });
 
-  it("refuses an Agent, even one acting for a Person who could take it over", async () => {
+  it("refuses an Agent token, whoever its Person is", async () => {
     const number = github.open({ title: "Claims" }).number;
     const shlok = await agent("shlok");
     await post(claimPath(number), shlok);
@@ -325,9 +319,7 @@ describe("Takeover", () => {
     for (const to of [byAgent(sam.agent), byPerson("sam")]) {
       const refused = await takeover(number, sam, to);
       expect(refused.status).toBe(403);
-      expect((await refused.json<ClaimRefusal>()).reason).toBe(
-        "Only a Person can take over a Claim. An Agent never can.",
-      );
+      expect((await refused.json<ClaimRefusal>()).reason).toContain("An Agent token cannot do this.");
     }
     expect((await task(number)).claim).toMatchObject({ holder: byAgent(shlok.agent), stale: true });
     expect(await claimEvents(since)).toEqual([]);
@@ -371,14 +363,14 @@ describe("Takeover", () => {
     const shlok = await agent("shlok");
     await post(claimPath(number), shlok);
     await end(shlok);
-    github.failing.add("addComment");
+    github.failing.add("updateComment");
 
     expect((await takeover(number, { person: "dev" }, byPerson("dev"))).status).toBe(200);
     expect((await task(number)).claim?.holder).toEqual(byPerson("dev"));
     expect((await claimEvents()).at(-1)).toEqual([
       "mirror.failed",
       "dev",
-      { change: "takeover", call: "comment", reason: expect.stringContaining("500") },
+      { change: "takeover", call: "status comment", reason: expect.stringContaining("500") },
     ]);
   });
 });
@@ -409,7 +401,7 @@ describe("the Agent that lost its Claim", () => {
     expect((await claimEvents()).map(([type]) => type)).toEqual(["claim", "claim.stale", "takeover"]);
   });
 
-  it("is told on the heartbeat that brings it back from silence", async () => {
+  it("is told when it registers again after going Gone from silence", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const number = github.open({ title: "Claims" }).number;
     const shlok = await agent("shlok");
@@ -418,10 +410,8 @@ describe("the Agent that lost its Claim", () => {
     await runDurableObjectAlarm(channelStub());
     await takeover(number, { person: "shlok" }, byPerson("shlok"));
 
-    const beat = await post(`${agentPath(shlok.agent)}/heartbeat`, shlok, { presence: "live" });
-    expect((await beat.json<AgentResponse>()).lostClaims).toMatchObject([
-      { task: number, by: "shlok", to: byPerson("shlok") },
-    ]);
+    expect((await post(`${agentPath(shlok.agent)}/heartbeat`, shlok, { presence: "live" })).status).toBe(401);
+    expect((await resume(shlok)).lostClaims).toMatchObject([{ task: number, by: "shlok", to: byPerson("shlok") }]);
   });
 });
 
@@ -444,7 +434,7 @@ describe("a Task blocked after it was claimed", () => {
       ["claim.blocked", "github", { holder: byAgent(shlok.agent), blockedBy: [blocker] }],
     ]);
     // Nothing was released, on the Channel or on GitHub.
-    expect(github.issue(number).assignees).toEqual([github.tokenLogin]);
+    expect(github.issue(number).assignees).toEqual(["shlok"]);
 
     // A reconcile finds nothing new to flag.
     const quiet = await lastSeq();

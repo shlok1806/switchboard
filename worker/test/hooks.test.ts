@@ -18,12 +18,10 @@ import type {
   TouchedFilesResponse,
 } from "../../shared/src/index";
 import { agentPath, MAX_HOOK_ARG_LENGTH, MAX_HOOK_COMMAND_LENGTH } from "../../shared/src/index";
-
-const SECRET = "test-join-secret";
-const BASE = "https://switchboard.test";
+import { type As, bearer, forgetTokens, remember, streamQuery, url } from "./client";
 
 function call(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`${BASE}${path}`, init));
+  return exports.default.fetch(new Request(url(path), init));
 }
 
 let nextId = 0;
@@ -41,30 +39,40 @@ function edit(path: string, additions = 1, deletions = 0): HookEvent {
   return hook("file.edit", { path, additions, deletions });
 }
 
-/** A laptop wrapper for one Person, with its WebSocket to the Channel. */
+/**
+ * A laptop wrapper for one Person. Each of its Agents has its own WebSocket to the
+ * Channel, opened with that Agent's token, as `switchboard run` does.
+ */
 class FakeWrapper {
   private readonly replies: HookCaptureReply[] = [];
-  private socket: WebSocket | null = null;
+  private readonly sockets = new Map<string, WebSocket>();
+  private readonly mine = new Set<string>();
 
   constructor(readonly name: string) {}
 
-  private headers(): HeadersInit {
-    return { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": this.name };
+  private async headers(): Promise<HeadersInit> {
+    return { Authorization: await bearer(this.name) };
   }
 
   async register(sessionId: string): Promise<AgentId> {
     const response = await call("/api/agents", {
       method: "POST",
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify({ cli: "claude-code", sessionId, resumed: false, cwd: "/repo" }),
     });
     expect(response.status).toBe(200);
-    return (await response.json<AgentResponse>()).agent.id;
+    const { id } = remember(await response.json<AgentResponse>()).agent;
+    this.mine.add(id);
+    return id;
   }
 
-  async connect(): Promise<void> {
-    const query = new URLSearchParams({ secret: SECRET, person: this.name });
-    const response = await call(`/api/stream?${query}`, { headers: { Upgrade: "websocket" } });
+  /** Opens the WebSocket of `agent` with its token, or, for an Agent it has no token for, the Person's. */
+  private async connect(agent: string): Promise<WebSocket> {
+    const known = this.sockets.get(agent);
+    if (known) return known;
+    // For an Agent that is not one of its own, the wrapper speaks as the Person, and is refused.
+    const as: As = this.mine.has(agent) ? { person: this.name, agent: agent as AgentId } : { person: this.name };
+    const response = await call(`/api/stream?${await streamQuery(as)}`, { headers: { Upgrade: "websocket" } });
     const socket = response.webSocket;
     if (!socket) throw new Error("No WebSocket in the upgrade response");
     socket.accept();
@@ -72,14 +80,15 @@ class FakeWrapper {
       const frame = JSON.parse(message.data as string) as { type: string };
       if (frame.type === "hook.ack" || frame.type === "hook.refused") this.replies.push(frame as HookCaptureReply);
     });
-    this.socket = socket;
+    this.sockets.set(agent, socket);
+    return socket;
   }
 
   /** Sends one message over the WebSocket and waits for the Channel's reply to it. */
   async send(message: HookCaptureMessage | Record<string, unknown>): Promise<HookCaptureReply> {
-    if (!this.socket) await this.connect();
+    const socket = await this.connect(String(message.agent));
     const seen = this.replies.length;
-    this.socket?.send(JSON.stringify(message));
+    socket.send(JSON.stringify(message));
     const deadline = Date.now() + 2000;
     for (;;) {
       const reply = this.replies[seen];
@@ -94,7 +103,7 @@ class FakeWrapper {
   }
 
   async touchedFiles(agent: AgentId): Promise<Response> {
-    return call(`${agentPath(agent)}/touched-files`, { headers: this.headers() });
+    return call(`${agentPath(agent)}/touched-files`, { headers: await this.headers() });
   }
 
   async files(agent: AgentId): Promise<[string, number][]> {
@@ -106,12 +115,18 @@ class FakeWrapper {
   }
 
   async hookEvents(): Promise<ChannelEvent[]> {
-    const response = await call("/api/events", { headers: this.headers() });
+    const response = await call("/api/events", { headers: await this.headers() });
     return (await response.json<HistoryResponse>()).events.filter((e) => e.capture === "hook");
   }
 
   close(): void {
-    this.socket?.close();
+    for (const socket of this.sockets.values()) socket.close();
+  }
+
+  /** Drops every WebSocket, as a lost connection does; the next message reconnects. */
+  reconnect(): void {
+    this.close();
+    this.sockets.clear();
   }
 }
 
@@ -124,6 +139,7 @@ function wrapper(name: string): FakeWrapper {
 
 afterEach(async () => {
   for (const w of wrappers.splice(0)) w.close();
+  forgetTokens();
   await reset();
 });
 
@@ -155,9 +171,9 @@ describe("recording Hook Events", () => {
     const agent = await shlok.register("aaaa0000-0000-4000-8000-000000000000");
     const events = [edit("README.md"), hook("turn.end", { turn: 1 })];
     await shlok.hooks(agent, events);
-    shlok.close();
+    shlok.reconnect();
 
-    const again = wrapper("shlok");
+    const again = shlok;
     expect(await again.hooks(agent, events)).toEqual({ type: "hook.ack", recorded: events.map((e) => e.id) });
     expect(await again.hookEvents()).toHaveLength(2);
     expect(await again.files(agent)).toEqual([["README.md", 1]]);
@@ -180,12 +196,12 @@ describe("recording Hook Events", () => {
     const shlok = wrapper("shlok");
     const agent = await shlok.register("cccc0000-0000-4000-8000-000000000000");
     const before = await call("/api/agents", {
-      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "shlok" },
+      headers: { Authorization: await bearer("shlok") },
     }).then((r) => r.json<AgentsResponse>());
     await new Promise((resolve) => setTimeout(resolve, 5));
     await shlok.hooks(agent, [hook("turn.end", { turn: 1 })]);
     const after = await call("/api/agents", {
-      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "shlok" },
+      headers: { Authorization: await bearer("shlok") },
     }).then((r) => r.json<AgentsResponse>());
     expect(after.agents[0]?.presence).toBe("live");
     expect(Date.parse(after.agents[0]?.lastSeenAt ?? "")).toBeGreaterThan(
@@ -201,7 +217,7 @@ describe("recording Hook Events", () => {
 
     const theirs = await sam.hooks(agent, [event]);
     expect(theirs).toMatchObject({ type: "hook.refused", ids: [event.id] });
-    expect(theirs.type === "hook.refused" && theirs.reason).toContain("belongs to shlok");
+    expect(theirs.type === "hook.refused" && theirs.reason).toContain(`Only Agent ${agent}'s own token`);
 
     expect(await shlok.hooks("shlok/claude/ffff", [event])).toMatchObject({ type: "hook.refused" });
     expect(await shlok.hooks(agent, [])).toMatchObject({ type: "hook.refused" });

@@ -10,7 +10,6 @@ import type {
   ChannelSnapshot,
   ErrorResponse,
   HistoryResponse,
-  JoinCredentials,
   JoinResponse,
   Person,
   PersonAction,
@@ -53,37 +52,40 @@ const ACTION_NAME: Record<PersonAction["type"], string> = {
 };
 
 /**
- * The real Channel client, matching worker/src:
- * - every HTTP call sends `Authorization: Bearer <secret>` and `X-Switchboard-Person`;
- * - the WebSocket at `/api/stream` sends `?secret=`, `?person=` and `?after=`;
+ * The real Channel client, matching worker/src (ADR 0007):
+ * - the Channel of a repo lives at `/r/<owner>/<repo>/api/...`; `base` is that prefix;
+ * - every call carries the Person's session in the HttpOnly `sb_session` cookie, which
+ *   the browser sends by itself, the WebSocket's included;
+ * - the WebSocket at `/api/stream` sends `?after=`;
  * - the history is `GET /api/events`, Tasks `GET /api/tasks`, Agents `GET /api/agents`.
  * - the Relay's settings are `GET /api/relay`.
  * The Worker has no `/api/snapshot`, so the snapshot is assembled from the routes that
  * exist, and an action whose route is missing answers with a readable refusal.
  */
 export class HttpChannelSource implements ChannelSource {
+  /** The signed-in Person, their GitHub login, as the Channel answered `join` with. */
   readonly me: string;
   readonly capabilities = LIVE_CAPABILITIES;
   readonly isMock = false;
   private readonly base: string;
-  private readonly credentials: JoinCredentials;
 
-  constructor(base: string, credentials: JoinCredentials) {
+  constructor(
+    base: string,
+    /** The Channel's repo, `owner/name`. */
+    private readonly repo: string,
+    me: string,
+  ) {
     this.base = base.replace(/\/$/, "");
-    this.credentials = credentials;
-    this.me = credentials.person;
-  }
-
-  private headers(): HeadersInit {
-    return {
-      "content-type": "application/json",
-      authorization: `Bearer ${this.credentials.secret}`,
-      "x-switchboard-person": this.credentials.person,
-    };
+    this.me = me;
   }
 
   private async call<T>(path: string, init?: RequestInit): Promise<{ status: number; body: T | ErrorResponse | null }> {
-    const res = await fetch(`${this.base}${path}`, { ...init, headers: this.headers() });
+    // `include` also carries the cookie when VITE_CHANNEL_URL points at another origin.
+    const res = await fetch(`${this.base}${path}`, {
+      ...init,
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+    });
     let body: unknown = null;
     try {
       body = await res.json();
@@ -102,7 +104,33 @@ export class HttpChannelSource implements ChannelSource {
     return body as T;
   }
 
-  /** `POST /api/join`: checks the credentials and joins (or rejoins) the Channel. */
+  /**
+   * `POST /api/join` with the session cookie: joins (or rejoins) the Channel of `repo`.
+   * `status` tells a missing session (401) from a Person without write access (403)
+   * and a Worker without the GitHub App (503).
+   */
+  static async join(
+    base: string,
+    repo: string,
+  ): Promise<{ ok: true; source: HttpChannelSource } | { ok: false; status: number; reason: string }> {
+    try {
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const res = await fetch(`${base.replace(/\/$/, "")}/api/join`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ timeZone }),
+      });
+      const body = (await res.json().catch(() => null)) as JoinResponse | ErrorResponse | null;
+      if (res.ok && body && "person" in body) return { ok: true, source: new HttpChannelSource(base, repo, body.person.name) };
+      const reason = body && "reason" in body ? String(body.reason) : `HTTP ${res.status}`;
+      return { ok: false, status: res.status, reason };
+    } catch {
+      return { ok: false, status: 0, reason: "The Channel could not be reached." };
+    }
+  }
+
+  /** `POST /api/join`: joins (or rejoins) the Channel, answering with the Person. */
   async join(): Promise<{ ok: true; person: Person } | { ok: false; reason: string }> {
     try {
       const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -139,7 +167,7 @@ export class HttpChannelSource implements ChannelSource {
     ]);
 
     return {
-      channel: { id: "main", repo: repoFromTasks(tasks) ?? "Channel", mainBranch: "main" },
+      channel: { id: this.repo, repo: this.repo, mainBranch: "main" },
       persons: personsFrom(events, me),
       agents,
       verdicts,
@@ -179,8 +207,6 @@ export class HttpChannelSource implements ChannelSource {
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       // The Worker replays every Event after `after`, so a reconnect misses nothing.
       url.searchParams.set("after", String(last));
-      url.searchParams.set("person", this.credentials.person);
-      url.searchParams.set("secret", this.credentials.secret);
       socket = new WebSocket(url);
       socket.onopen = () => {
         retry = 0;
@@ -296,11 +322,6 @@ function splitVerdicts(all: ChannelEvent[]): { events: ChannelEvent[]; verdicts:
   return { events, verdicts };
 }
 
-/** `owner/name` from an Issue URL such as https://github.com/owner/name/issues/12. */
-function repoFromTasks(tasks: { url: string }[]): string | null {
-  const m = tasks[0]?.url.match(/github\.com\/([^/]+\/[^/]+)\//);
-  return m ? m[1] : null;
-}
 
 /** Persons come from `person.join` Events until the Worker lists them. */
 function personsFrom(events: ChannelEvent[], me: Person): Person[] {

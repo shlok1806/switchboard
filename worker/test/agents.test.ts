@@ -3,7 +3,7 @@
 // Durable Object running in memory.
 
 import { reset, runDurableObjectAlarm } from "cloudflare:test";
-import { env, exports } from "cloudflare:workers";
+import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   Agent,
@@ -20,14 +20,13 @@ import type {
 } from "../../shared/src/index";
 import { agentPath } from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
+import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
 
-const SECRET = "test-join-secret";
-const BASE = "https://switchboard.test";
 const TEN_MINUTES = 10 * 60_000;
 
 function call(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`${BASE}${path}`, init));
+  return exports.default.fetch(new Request(url(path), init));
 }
 
 /** Summarizes an Agent's Event as [type, Agent ID, detail] for readable assertions. */
@@ -52,10 +51,10 @@ class FakePerson {
 
   constructor(readonly name: string) {}
 
-  private post(path: string, body: unknown): Promise<Response> {
+  private async post(path: string, body: unknown): Promise<Response> {
     return call(path, {
       method: "POST",
-      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": this.name },
+      headers: { Authorization: await bearer(this.name) },
       body: JSON.stringify(body),
     });
   }
@@ -67,7 +66,7 @@ class FakePerson {
   async registered(sessionId: string, extra: Partial<RegisterAgentRequest> = {}): Promise<Agent> {
     const response = await this.register(sessionId, extra);
     expect(response.status).toBe(200);
-    return (await response.json<AgentResponse>()).agent;
+    return remember(await response.json<AgentResponse>()).agent;
   }
 
   heartbeat(id: AgentId, presence: ReportedPresence): Promise<Response> {
@@ -80,7 +79,7 @@ class FakePerson {
 
   async agents(): Promise<Agent[]> {
     const response = await call("/api/agents", {
-      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": this.name },
+      headers: { Authorization: await bearer(this.name) },
     });
     expect(response.status).toBe(200);
     return (await response.json<AgentsResponse>()).agents;
@@ -89,13 +88,13 @@ class FakePerson {
   /** The Channel's Events that name an Agent, oldest first. */
   async agentEvents(): Promise<ChannelEvent[]> {
     const response = await call("/api/events", {
-      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": this.name },
+      headers: { Authorization: await bearer(this.name) },
     });
     return (await response.json<HistoryResponse>()).events.filter((e) => e.actor.kind === "agent");
   }
 
   async subscribe(): Promise<void> {
-    const query = new URLSearchParams({ secret: SECRET, person: this.name });
+    const query = await streamQuery(this.name);
     const response = await call(`/api/stream?${query}`, { headers: { Upgrade: "websocket" } });
     expect(response.status).toBe(101);
     const socket = response.webSocket;
@@ -135,13 +134,10 @@ function advance(ms: number): void {
   vi.setSystemTime(Date.now() + ms);
 }
 
-function channelStub() {
-  return env.CHANNEL.get(env.CHANNEL.idFromName("main"));
-}
-
 afterEach(async () => {
   vi.useRealTimers();
   installGitHub(null);
+  forgetTokens();
   for (const p of people.splice(0)) p.close();
   await reset();
 });
@@ -171,7 +167,7 @@ describe("registering an Agent", () => {
     const sam = person("sam");
     await sam.registered("abcd0000-0000-4000-8000-000000000000");
     const response = await call("/api/events", {
-      headers: { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "sam" },
+      headers: { Authorization: await bearer("sam") },
     });
     const events = (await response.json<HistoryResponse>()).events;
     expect(events[0]).toMatchObject({ type: "person.join", actor: { kind: "person", person: "sam" } });
@@ -216,7 +212,7 @@ describe("registering an Agent", () => {
     expect([a.id, b.id]).toEqual(["shlok/claude/1234", "sam/claude/1234"]);
   });
 
-  it("refuses malformed registrations and wrong secrets", async () => {
+  it("refuses malformed registrations and a call without a valid session", async () => {
     const shlok = person("shlok");
     expect((await shlok.register("")).status).toBe(400);
     expect((await shlok.register("has spaces in it")).status).toBe(400);
@@ -224,7 +220,7 @@ describe("registering an Agent", () => {
     expect((await shlok.register("abcd-1234", { nickname: "x".repeat(41) })).status).toBe(400);
     const wrong = await call("/api/agents", {
       method: "POST",
-      headers: { Authorization: "Bearer nope", "X-Switchboard-Person": "shlok" },
+      headers: { Authorization: "Bearer v1.not.valid" },
       body: JSON.stringify({ cli: "claude-code", sessionId: "abcd-1234" }),
     });
     expect(wrong.status).toBe(401);
@@ -379,7 +375,7 @@ describe("sharing the Channel's one alarm with the Task reconcile", () => {
     const github = new FakeGitHub();
     installGitHub(github);
     const shlok = person("shlok");
-    const headers = { Authorization: `Bearer ${SECRET}`, "X-Switchboard-Person": "shlok" };
+    const headers = { Authorization: await bearer("shlok") };
     const titles = async () =>
       (await (await call("/api/tasks", { headers })).json<TaskListResponse>()).tasks.map((t) => t.title);
     const presence = async (id: AgentId) => (await shlok.agents()).find((a) => a.id === id)?.presence;
