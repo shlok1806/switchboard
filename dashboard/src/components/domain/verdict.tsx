@@ -20,7 +20,6 @@ export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict
   if (!p) {
     return (
       <div className={cn("flex flex-col gap-1", className)}>
-        <div className="h-2 rounded-full border border-dashed border-line-strong" />
         <span className="text-[11px] text-ink-3">
           {verdict.source === "fallback"
             ? "Jev gave no answer, so it was Queued."
@@ -35,16 +34,16 @@ export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict
       <Tooltip>
         <TooltipTrigger asChild>
           <div
-            className="relative flex h-2 w-full overflow-visible rounded-full bg-inset"
+            className="bevel-thin-in relative flex h-2.5 w-full overflow-visible bg-card"
             role="img"
             aria-label={ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(", ")}
           >
-            <div className="flex h-full w-full overflow-hidden rounded-full">
+            <div className="flex h-full w-full overflow-hidden">
               {ORDER.map((o) => (
                 <span
                   key={o}
-                  className={cn("h-full transition-[width] duration-300", FILL[o])}
-                  style={{ width: `${p[o] * 100}%`, boxShadow: "inset -1px 0 0 var(--surface)" }}
+                  className={cn("h-full", FILL[o])}
+                  style={{ width: `${p[o] * 100}%`, boxShadow: "inset -1px 0 0 hsl(var(--card))" }}
                 />
               ))}
             </div>
@@ -62,7 +61,7 @@ export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict
       <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 font-mono text-[11px] tabular-nums">
         {ORDER.map((o) => (
           <span key={o} className={cn("inline-flex items-center gap-1", o === top ? "text-ink" : "text-ink-3")}>
-            <span aria-hidden className={cn("size-1.5 rounded-full", FILL[o])} />
+            <span aria-hidden className={cn("size-1.5", FILL[o])} />
             {VERDICT_LABEL[o]} <b className={o === top ? "font-semibold" : "font-normal"}>{prob(p[o])}</b>
           </span>
         ))}
@@ -78,7 +77,7 @@ export function DowngradeNote({ verdict }: { verdict: Verdict }) {
       ? "Interrupt was below the threshold"
       : "this CLI cannot receive Interrupts";
   return (
-    <span className="inline-flex items-center gap-1 rounded-[4px] bg-orange-tint px-1.5 py-0.5 text-[11px] text-orange">
+    <span className="inline-flex items-center gap-1 border border-orange px-1.5 py-0.5 text-[11px] font-semibold text-orange">
       Downgraded from Interrupt: {why}
     </span>
   );
@@ -101,7 +100,7 @@ export function VerdictTable({
     (a, b) => ORDER.indexOf(a.option) - ORDER.indexOf(b.option) || (a.source === "jev" ? -1 : 1),
   );
   return (
-    <ul className="@container flex flex-col divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
+    <ul className="@container bevel-in flex flex-col divide-y divide-line overflow-hidden bg-card">
       {sorted.map((v) => (
         <li key={v.agent} className="grid gap-2 px-3 py-2.5 @xl:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] @xl:gap-4">
           <div className="flex min-w-0 flex-col gap-1">
@@ -119,10 +118,10 @@ export function VerdictTable({
               <div className="flex flex-wrap items-center gap-1 text-[11px] text-ink-3">
                 <span>Overlap</span>
                 {v.overlap.symbols.map((s) => (
-                  <code key={s} className="rounded-[4px] bg-orange-tint px-1 font-mono text-orange">{s}</code>
+                  <code key={s} className="bevel-thin-in bg-muted px-1 font-mono text-orange">{s}</code>
                 ))}
                 {v.overlap.files.map((f) => (
-                  <code key={f} className="rounded-[4px] bg-inset px-1 font-mono text-ink-2">{f}</code>
+                  <code key={f} className="bevel-thin-in bg-muted px-1 font-mono text-ink-2">{f}</code>
                 ))}
               </div>
             )}

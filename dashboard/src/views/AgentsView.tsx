@@ -18,7 +18,7 @@ const ORDER: Record<Presence, number> = { live: 0, idle: 1, gone: 2 };
 
 export function PresenceStatus({ presence }: { presence: Presence }) {
   return (
-    <Status status={KIBO_STATUS[presence]} className="h-5 gap-1.5 bg-inset px-2 text-[11.5px] font-medium text-ink-2 shadow-hairline">
+    <Status status={KIBO_STATUS[presence]} className="h-5 gap-1.5 border-0 bg-transparent px-0 text-[12px] font-semibold text-ink">
       <StatusIndicator />
       <StatusLabel>{PRESENCE_LABEL[presence]}</StatusLabel>
     </Status>
@@ -64,15 +64,15 @@ export function AgentsView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-6xl flex-col gap-4 p-3 sm:p-6">
-        <p className="text-[12.5px] text-ink-3">
+      <div className="flex flex-col gap-3 p-3 sm:p-4">
+        <p className="font-mono text-[12px] text-ink-2">
           {agents.filter((a) => a.presence === "live").length} Live, {agents.filter((a) => a.presence === "idle").length} Idle,{" "}
           {agents.filter((a) => a.presence === "gone").length} Gone across {persons.length} Persons. An Agent is Gone after about ten
           minutes of silence.
         </p>
 
-        {/* desktop: a table */}
-        <div className="hidden overflow-hidden rounded-card bg-surface shadow-card md:block">
+        {/* desktop: a process table, the way the site's `top` draws one */}
+        <div className="bevel-in hidden overflow-hidden bg-card md:block">
           <table className="w-full table-fixed border-collapse text-left">
             <colgroup>
               <col className="w-[30%]" />
@@ -83,9 +83,9 @@ export function AgentsView() {
               <col className="w-[28%]" />
             </colgroup>
             <thead>
-              <tr className="border-b border-line">
+              <tr className="bg-primary text-primary-foreground">
                 {["Agent", "Person", "CLI", "Presence", "Proxy mode", "Claims"].map((h) => (
-                  <th key={h} className="px-3 py-2 text-[11.5px] font-medium text-ink-3">
+                  <th key={h} className="px-3 py-1 font-mono text-[11.5px] font-normal">
                     {h}
                   </th>
                 ))}
@@ -98,26 +98,26 @@ export function AgentsView() {
                   <tr
                     key={a.id}
                     onClick={() => go({ view: "agent", id: a.id })}
-                    className="cursor-pointer border-b border-line-soft last:border-0 hover:bg-inset"
+                    className="cursor-pointer border-b border-line-soft last:border-0 hover:bg-hover"
                   >
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-1.5">
                       <div className="flex min-w-0 flex-col">
                         <AgentLink id={a.id} agent={agentById.get(a.id)} showNickname={false} />
                         <span className="truncate text-[12px] text-ink-3">{a.nickname ?? "No Nickname"}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-[13px] text-ink">{a.person}</td>
-                    <td className="px-3 py-2.5 text-[13px] text-ink-2">{CLI_LABEL[a.cli]}</td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-1.5 text-[13px] text-ink">{a.person}</td>
+                    <td className="px-3 py-1.5 text-[13px] text-ink-2">{CLI_LABEL[a.cli]}</td>
+                    <td className="px-3 py-1.5">
                       <div className="flex flex-col items-start gap-0.5">
                         <PresenceStatus presence={a.presence} />
                         <span className="font-mono text-[10.5px] text-ink-3">{ago(a.lastSeenAt)}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-1.5">
                       <ProxyMode agent={a} />
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-1.5">
                       <ClaimCell agent={a} tasks={held} />
                     </td>
                   </tr>
@@ -128,17 +128,17 @@ export function AgentsView() {
         </div>
 
         {/* phone: cards */}
-        <ul className="flex flex-col gap-2 md:hidden">
+        <ul className="bevel-in flex flex-col bg-card md:hidden">
           {sorted.map((a) => {
             const held = claimsOf.get(a.id) ?? [];
             return (
-              <li key={a.id}>
+              <li key={a.id} className="border-b border-line-soft last:border-0">
                 <div
                   role="link"
                   tabIndex={0}
                   onClick={() => go({ view: "agent", id: a.id })}
                   onKeyDown={(e) => e.key === "Enter" && go({ view: "agent", id: a.id })}
-                  className="flex cursor-pointer flex-col gap-2 rounded-card bg-surface p-3 shadow-card active:bg-inset"
+                  className="flex cursor-pointer flex-col gap-2 p-3 active:bg-hover"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex min-w-0 flex-col">
@@ -184,7 +184,7 @@ function ClaimCell({ agent, tasks }: { agent: Agent; tasks: Task[] }) {
             <button
               type="button"
               onClick={(e) => e.stopPropagation()}
-              className="shrink-0 rounded-[4px] bg-inset px-1.5 font-mono text-[11px] text-ink-2 shadow-hairline hover:bg-hover"
+              className="btn-motif h-5 shrink-0 px-1 font-mono text-[11px]"
               aria-label={`${tasks.length} Claims: ${tasks.map((t) => `#${t.number}`).join(", ")}`}
             >
               +{rest.length}

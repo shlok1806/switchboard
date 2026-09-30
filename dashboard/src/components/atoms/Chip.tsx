@@ -9,13 +9,13 @@ export function Chip({
   className?: string;
 }) {
   const tones = {
-    neutral: "bg-inset text-ink-2",
-    accent: "bg-accent-tint text-accent-ink",
-    orange: "bg-orange-tint text-orange",
+    neutral: "bg-muted text-muted-foreground",
+    accent: "bg-muted text-accent-ink",
+    orange: "bg-muted text-orange",
   };
   return (
     <code
-      className={`inline rounded-md px-1.5 py-0.5 font-mono text-[12px]
+      className={`bevel-thin-in inline px-1 py-[1px] font-mono text-[11px]
         leading-none align-[-1px] ${tones[tone]} ${className}`}
     >
       {children}

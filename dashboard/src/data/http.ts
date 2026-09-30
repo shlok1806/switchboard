@@ -13,30 +13,34 @@ import type {
   Person,
   PersonAction,
   StreamMessage,
+  TaskActionResponse,
   TaskListResponse,
+  TaskNumber,
+  ClaimRefusal,
   Verdict,
 } from "@shared/index";
-import { LIVE_PING, MAX_HISTORY_LIMIT } from "@shared/index";
-import type { Capabilities, ChannelSource, ConnectionState } from "./source";
+import { LIVE_PING, MAX_HISTORY_LIMIT, claimPath, releasePath } from "@shared/index";
+import type { Capabilities, ChannelSource, ClaimResult, ConnectionState } from "./source";
 
 /** Relay settings to show until the Worker exposes them. */
 const DEFAULT_RELAY = { interruptThreshold: 0.6, model: "typesafe/jev" };
 
 /**
  * What the Worker on main can do today: join, Events, Updates, the stream (#5),
- * Tasks (#8), Agents with Presence (#6), Hook Captures (#7), Claims held on
- * Tasks (#9) and the Relay's Verdicts (#12). Claiming from the Dashboard is a
- * follow-up. The rest arrives with later issues. `captures` stays off until Proxy
- * Capture (#15) makes a side-by-side comparison possible.
+ * Tasks (#8), Agents with Presence (#6), Hook Captures (#7), Claims (#9),
+ * which the Tasks board claims and releases through, and the Relay's Verdicts
+ * (#12), Takeover of a Stale Claim (#11), and Proxy Capture with each Agent's
+ * Proxy mode (#15), which also makes Captures comparable. Directives arrive
+ * with #14.
  */
 const LIVE_CAPABILITIES: Capabilities = {
   agents: true,
   verdicts: true,
-  captures: false,
+  captures: true,
   claims: true,
-  takeover: false,
+  takeover: true,
   directives: false,
-  proxyMode: false,
+  proxyMode: true,
   createTask: true,
 };
 
@@ -224,6 +228,29 @@ export class HttpChannelSource implements ChannelSource {
       if (status < 400 && body && "task" in body) return { ok: true, task: body.task };
       const reason = body && typeof body === "object" && "reason" in body ? String(body.reason) : `HTTP ${status}`;
       return { ok: false, reason };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
+  claim(task: TaskNumber): Promise<ClaimResult> {
+    return this.claimAction(claimPath(task));
+  }
+
+  release(task: TaskNumber): Promise<ClaimResult> {
+    return this.claimAction(releasePath(task));
+  }
+
+  /** Claim and release answer with the Task, or a refusal that names the holder in `heldBy`. */
+  private async claimAction(path: string): Promise<ClaimResult> {
+    try {
+      const { status, body } = await this.call<TaskActionResponse | ClaimRefusal>(path, { method: "POST", body: "{}" });
+      if (status < 400 && body && "task" in body) return { ok: true, task: body.task };
+      if (body && typeof body === "object" && "reason" in body) {
+        const refusal = body as ClaimRefusal;
+        return { ok: false, reason: String(refusal.reason), ...(refusal.heldBy ? { heldBy: refusal.heldBy } : {}) };
+      }
+      return { ok: false, reason: `HTTP ${status}` };
     } catch (e) {
       return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
     }
