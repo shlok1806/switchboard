@@ -10,7 +10,7 @@ import type {
   Verdict,
   VerdictProbabilities,
 } from "@shared/index";
-import { ALL_CAPABILITIES, type ChannelSource, type ConnectionState } from "../source";
+import { ALL_CAPABILITIES, type ChannelSource, type ClaimResult, type ConnectionState } from "../source";
 import { ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
 import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
@@ -198,6 +198,56 @@ export class MockChannelSource implements ChannelSource {
         return { ok: true };
       }
     }
+  }
+
+  /** Claim for the Person, refused the way the Worker refuses it (worker/src/claims.ts). */
+  async claim(number: number): Promise<ClaimResult> {
+    await new Promise((r) => setTimeout(r, 350));
+    const task = this.tasks.find((t) => t.number === number);
+    if (!task) return { ok: false, reason: `No Task #${number}.` };
+    if (task.status === "done") return { ok: false, reason: `Task #${number} is done.` };
+    const me = person(this.me);
+    if (task.claim) {
+      const h = task.claim.holder;
+      if (h.kind === "person" && h.person === this.me) return { ok: true, task: clone(task) };
+      const name = h.kind === "agent" ? h.agentId : h.person;
+      this.record(makeEvent("claim.refused", me, null, { heldBy: h }, { task: number }), undefined, true);
+      return { ok: false, reason: `Task #${number} is held by ${name}.`, heldBy: h };
+    }
+    if (task.blockedBy.length > 0) {
+      return { ok: false, reason: `Task #${number} is blocked by ${task.blockedBy.map((n) => `#${n}`).join(", ")}.` };
+    }
+    const at = new Date().toISOString();
+    const holder = { kind: "person" as const, person: this.me };
+    task.status = "claimed";
+    task.claim = { task: number, holder, claimedAt: at, stale: false };
+    task.updatedAt = at;
+    this.record(makeEvent("claim", me, null, { holder }, { at, task: number }), undefined, true);
+    this.emit({ type: "task", task });
+    return { ok: true, task: clone(task) };
+  }
+
+  /** Release, only by the holder or the holding Agent's Person. */
+  async release(number: number): Promise<ClaimResult> {
+    await new Promise((r) => setTimeout(r, 350));
+    const task = this.tasks.find((t) => t.number === number);
+    if (!task) return { ok: false, reason: `No Task #${number}.` };
+    if (task.status === "done") return { ok: false, reason: `Task #${number} is done.` };
+    if (!task.claim) return { ok: false, reason: `Task #${number} is not claimed.` };
+    const h = task.claim.holder;
+    const mine =
+      h.kind === "person" ? h.person === this.me : this.agents.find((a) => a.id === h.agentId)?.person === this.me;
+    if (!mine) {
+      const name = h.kind === "agent" ? h.agentId : h.person;
+      return { ok: false, reason: `Task #${number} is held by ${name}. Only its holder can release it.`, heldBy: h };
+    }
+    const at = new Date().toISOString();
+    delete task.claim;
+    task.status = "open";
+    task.updatedAt = at;
+    this.record(makeEvent("claim.release", person(this.me), null, { holder: h }, { at, task: number }), undefined, true);
+    this.emit({ type: "task", task });
+    return { ok: true, task: clone(task) };
   }
 
   async createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }> {

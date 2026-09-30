@@ -1,7 +1,7 @@
 "use client";
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
-import { type LucideIcon, XIcon } from "lucide-react";
+import { type LucideIcon, XIcon } from "@/components/pixel-icon";
 import {
   type ComponentProps,
   createContext,
@@ -75,7 +75,7 @@ export const BannerIcon = ({
 }: BannerIconProps) => (
   <div
     className={cn(
-      "rounded-full border border-background/20 bg-background/10 p-1 shadow-sm",
+      "border border-background/20 bg-background/10 p-1",
       className
     )}
     {...props}
@@ -136,7 +136,7 @@ export const BannerClose = ({
       variant={variant}
       {...props}
     >
-      <XIcon size={18} />
+      <XIcon />
     </Button>
   );
 };

@@ -1,12 +1,17 @@
 import type {
   ActionResult,
   ChannelSnapshot,
+  ClaimRefusal,
   CreateTaskRequest,
   PersonAction,
   PersonName,
   StreamMessage,
   Task,
+  TaskNumber,
 } from "@shared/index";
+
+/** A Claim or release answers with the Task as it is now, or a refusal naming the holder. */
+export type ClaimResult = { ok: true; task: Task } | ClaimRefusal;
 
 export type ConnectionState = "connecting" | "live" | "reconnecting";
 
@@ -76,4 +81,8 @@ export interface ChannelSource {
   act(action: PersonAction): Promise<ActionResult>;
   /** Create a Task. The Channel creates the GitHub Issue first. */
   createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }>;
+  /** `POST /api/tasks/:number/claim`: claim a Task for the Person using this Dashboard (#9). */
+  claim(task: TaskNumber): Promise<ClaimResult>;
+  /** `POST /api/tasks/:number/release`: release a Claim this Person holds (#9). */
+  release(task: TaskNumber): Promise<ClaimResult>;
 }

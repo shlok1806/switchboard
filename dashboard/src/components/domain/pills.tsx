@@ -40,7 +40,7 @@ export function RawBadge() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex h-4.5 items-center rounded-[4px] bg-orange-tint px-1.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-orange">
+        <span className="inline-flex h-4.5 items-center border border-orange px-1 font-mono text-[10px] font-bold tracking-[0.1em] text-orange">
           RAW
         </span>
       </TooltipTrigger>
@@ -125,5 +125,5 @@ export function VerdictTally({ verdicts }: { verdicts: Verdict[] }) {
 }
 
 function Dot({ className }: { className: string }) {
-  return <span aria-hidden className={cn("size-1.5 rounded-full", className)} />;
+  return <span aria-hidden className={cn("size-1.5", className)} />;
 }

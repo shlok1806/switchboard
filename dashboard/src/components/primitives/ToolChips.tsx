@@ -300,7 +300,7 @@ export default function ToolChips({
       </div>
       {preview && typeof document !== "undefined" && createPortal(
         <div
-          className="fixed z-50 w-72 overflow-hidden rounded-[10px] bg-surface shadow-overlay"
+          className="fixed z-50 w-72 overflow-hidden bg-surface shadow-overlay"
           style={{
             left: preview.x,
             top: preview.top,

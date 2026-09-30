@@ -3,7 +3,6 @@ import type { Capture, ChannelEvent } from "@shared/index";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import ToolChips, { type ToolStep } from "@/components/primitives/ToolChips";
-import { TextShimmer } from "@/components/ui/text-shimmer";
 import { AgentLink, RawBadge, TaskLink } from "@/components/domain/pills";
 import { toolSteps } from "@/components/domain/event";
 import { CAPTURE_LABEL, EVENT_TYPE_LABEL, ago, clock, compact, summarize } from "@/lib/format";
@@ -62,9 +61,9 @@ export function CompareView({ turn }: { turn?: string }) {
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <nav
         aria-label="Moments"
-        className="no-scrollbar flex shrink-0 gap-1.5 overflow-x-auto border-b border-line p-2 lg:w-72 lg:flex-col lg:overflow-y-auto lg:border-r lg:border-b-0"
+        className="no-scrollbar flex shrink-0 gap-[2px] overflow-x-auto border-b border-border bg-secondary p-1.5 lg:w-72 lg:flex-col lg:gap-0 lg:overflow-y-auto lg:border-r lg:border-b-0 lg:bg-card lg:p-0"
       >
-        <p className="hidden px-1.5 pt-1 pb-2 text-[12px] text-ink-3 lg:block">
+        <p className="hidden border-b border-border bg-secondary px-3 py-2 text-[12px] text-muted-foreground lg:block">
           A moment is one model turn by one Agent. Pick one to see what each Capture recorded.
         </p>
         {moments.map((m) => {
@@ -76,8 +75,11 @@ export function CompareView({ turn }: { turn?: string }) {
               href={href({ view: "compare", turn: m.turn })}
               aria-current={on ? "true" : undefined}
               className={cn(
-                "flex shrink-0 flex-col gap-1 rounded-control px-2.5 py-2 text-left transition-colors duration-100 lg:shrink",
-                on ? "bg-surface shadow-card" : "hover:bg-hover",
+                "flex shrink-0 flex-col gap-1 px-2.5 py-1.5 text-left lg:shrink lg:border-b lg:border-line-soft",
+                // Chosen the way the site's file manager chooses: the row inverts. On a phone each moment is a push button.
+                on
+                  ? "bevel-in bg-muted lg:border-x-0 lg:border-t-0 lg:bg-primary lg:text-primary-foreground lg:[&_*]:!text-primary-foreground"
+                  : "bevel-out bg-secondary hover:bg-hover lg:border-x-0 lg:border-t-0 lg:bg-transparent",
               )}
             >
               <span className="truncate font-mono text-[12px] text-ink">{m.agent}</span>
@@ -89,7 +91,7 @@ export function CompareView({ turn }: { turn?: string }) {
                     <span
                       key={c}
                       title={CAPTURE_LABEL[c]}
-                      className={cn("h-1.5 w-3 rounded-full", caps.has(c) ? "bg-accent" : "bg-line")}
+                      className={cn("h-1.5 w-3 border border-current", caps.has(c) ? "bg-current" : "bg-transparent opacity-40")}
                     />
                   ))}
                 </span>
@@ -102,7 +104,9 @@ export function CompareView({ turn }: { turn?: string }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!moment ? (
           <div className="flex h-full items-center justify-center p-6">
-            <TextShimmer className="text-[13px]">Waiting for the first model turn</TextShimmer>
+            <p className="font-mono text-[13px] text-ink-2">
+              Waiting for the first model turn<span aria-hidden className="caret-blink ml-0.5 inline-block h-[1em] w-[0.55em] translate-y-[2px] bg-accent-ink" />
+            </p>
           </div>
         ) : (
           <div className="flex flex-col gap-4 p-3 sm:p-5">
@@ -127,16 +131,17 @@ export function CompareView({ turn }: { turn?: string }) {
 
 function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelEvent[] }) {
   return (
-    <section className="flex min-w-0 flex-col overflow-hidden rounded-card bg-surface shadow-card">
-      <header className="flex flex-col gap-0.5 border-b border-line px-3 py-2.5">
-        <h2 className="flex items-center gap-2 text-[13px] font-semibold text-ink">
+    // Three document windows side by side, each with its own title bar.
+    <section className="bevel-out flex min-w-0 flex-col bg-secondary">
+      <header className="flex flex-col gap-0.5">
+        <h2 className="titlebar-active flex h-[22px] items-center gap-2 px-2 text-[12px] font-bold">
           {CAPTURE_LABEL[capture]}
-          <span className="font-mono text-[11px] font-normal text-ink-3">{events.length} {events.length === 1 ? "Event" : "Events"}</span>
+          <span className="font-mono text-[11px] font-normal">{events.length} {events.length === 1 ? "Event" : "Events"}</span>
           {events.some((e) => e.type === "proxy.raw") && <RawBadge />}
         </h2>
-        <p className="text-[11.5px] text-ink-3">{WHAT[capture]}</p>
+        <p className="px-2 pb-1 text-[11.5px] text-muted-foreground">{WHAT[capture]}</p>
       </header>
-      <div className="flex flex-col gap-3 p-3">
+      <div className="bevel-in m-[3px] mt-0 flex flex-1 flex-col gap-3 bg-card p-3 text-card-foreground">
         {events.length === 0 ? (
           <p className="text-[12.5px] text-ink-3">Nothing from this Capture for this moment.</p>
         ) : capture === "proxy" ? (
@@ -158,7 +163,7 @@ function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelE
                 <button
                   type="button"
                   onClick={() => go({ view: "feed", event: e.id })}
-                  className="flex w-full flex-col gap-0.5 rounded-control bg-inset px-2.5 py-2 text-left hover:bg-hover"
+                  className="bevel-out flex w-full flex-col gap-0.5 bg-secondary px-2.5 py-1.5 text-left text-secondary-foreground active:bevel-in"
                 >
                   <span className="label-mono !text-[10px]">{EVENT_TYPE_LABEL[e.type]}</span>
                   <span className="text-[12.5px] leading-snug text-ink">{summarize(e)}</span>
@@ -207,7 +212,7 @@ function ProxyCard({ event }: { event: ChannelEvent }) {
           {compact(p.inputTokens)} in · {compact(p.outputTokens)} out
         </span>
       </div>
-      <p className="text-[12.5px] leading-relaxed text-ink">{p.reply}</p>
+      <p className="font-mono text-[12px] leading-relaxed text-ink">{p.reply}</p>
       {p.toolCalls.length > 0 && (
         <ToolChips
           animate={false}
@@ -217,7 +222,7 @@ function ProxyCard({ event }: { event: ChannelEvent }) {
         />
       )}
       {event.type === "proxy.raw" && (
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-control bg-inset p-2 font-mono text-[11px] leading-relaxed text-ink-2">
+        <pre className="bevel-in max-h-40 overflow-auto bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-ink-2">
           {event.payload.context}
         </pre>
       )}

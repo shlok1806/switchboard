@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import NumberFlow from "@number-flow/react";
 import type { AgentId, ProxyMode } from "@shared/index";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
 import { IssueLink } from "@/components/domain/pending";
@@ -15,6 +14,8 @@ import { go, href } from "@/lib/router";
 
 const MODES = ["Digest", "Raw"] as const;
 const CAPTURES = ["All", "Proxy", "Hook", "Tool"] as const;
+
+import { GroupBox } from "@/components/shell/groupbox";
 
 export function AgentDetail({ id }: { id: string }) {
   const store = useStore();
@@ -71,7 +72,7 @@ export function AgentDetail({ id }: { id: string }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-6xl gap-6 p-4 sm:p-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="mx-auto grid max-w-6xl gap-5 p-3 sm:p-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="flex min-w-0 flex-col gap-5">
           <header className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2">
@@ -79,33 +80,33 @@ export function AgentDetail({ id }: { id: string }) {
               {agent.proxyMode === "raw" && <RawBadge />}
               <span className="text-[12px] text-ink-3">Last seen {ago(agent.lastSeenAt)}</span>
             </div>
-            <h1 className="font-mono text-[18px] font-medium text-ink [overflow-wrap:anywhere] sm:text-[22px]">{agent.id}</h1>
+            <h1 className="glow font-mono text-[18px] font-bold text-accent-ink [overflow-wrap:anywhere] sm:text-[22px]">{agent.id}</h1>
             <p className="text-[13px] text-ink-2">
               {agent.nickname ? <span className="font-medium text-ink">{agent.nickname}</span> : "No Nickname"} · {CLI_LABEL[agent.cli]} ·
               run by {agent.person}
             </p>
           </header>
 
-          <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-card bg-line shadow-card sm:grid-cols-4">
+          <dl className="bevel-in grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
             {[
-              { k: "Events", v: <NumberFlow value={events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === agent.id).length} /> },
-              { k: "Interrupts heard", v: can.verdicts ? <NumberFlow value={heard.i} /> : <span className="text-[13px] text-ink-3">Relay pending</span> },
-              { k: "Queued to it", v: can.verdicts ? <NumberFlow value={heard.q} /> : <span className="text-[13px] text-ink-3">Relay pending</span> },
+              { k: "Events", v: <span className="tabular-nums">{events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === agent.id).length}</span> },
+              { k: "Interrupts heard", v: can.verdicts ? <span className="tabular-nums">{heard.i}</span> : <span className="text-[13px] text-ink-3">Relay pending</span> },
+              { k: "Queued to it", v: can.verdicts ? <span className="tabular-nums">{heard.q}</span> : <span className="text-[13px] text-ink-3">Relay pending</span> },
               { k: "Session started", v: <span className="text-[13px]">{ago(agent.startedAt)}</span> },
             ].map((s) => (
-              <div key={s.k} className="flex flex-col gap-0.5 bg-surface px-3 py-2.5">
+              <div key={s.k} className="flex flex-col gap-0.5 bg-card px-3 py-2">
                 <dt className="label-mono">{s.k}</dt>
-                <dd className="font-display text-[20px] font-medium leading-tight text-ink tabular-nums">{s.v}</dd>
+                <dd className="font-mono text-[20px] leading-tight text-ink tabular-nums">{s.v}</dd>
               </div>
             ))}
           </dl>
 
           <section className="flex min-w-0 flex-col gap-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-[13px] font-semibold text-ink">History</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-1.5">
+              <h2 className="type-label !text-ink">History</h2>
               <SegmentedControl options={CAPTURES} value={capture} onChange={setCapture} />
             </div>
-            <ul className="overflow-hidden rounded-card bg-surface shadow-card">
+            <ul className="bevel-in overflow-hidden bg-card">
               {history.length === 0 ? (
                 <li className="px-4 py-6 text-center text-[12.5px] text-ink-3">No {capture === "All" ? "" : `${capture} `}Events yet.</li>
               ) : (
@@ -127,8 +128,7 @@ export function AgentDetail({ id }: { id: string }) {
         </div>
 
         <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-0 lg:self-start">
-          <section className="flex flex-col gap-2 rounded-card bg-surface p-3 shadow-card">
-            <h2 className="label-mono">{held.length > 1 ? `${held.length} Claims` : "Claim"}</h2>
+          <GroupBox title={held.length > 1 ? `${held.length} Claims` : "Claim"} bodyClassName="flex flex-col gap-2">
             {held.length ? (
               <ul className="flex flex-col gap-1.5">
                 {held.map((task) => (
@@ -143,10 +143,9 @@ export function AgentDetail({ id }: { id: string }) {
                 {can.claims ? "No Claim" : <>Claims arrive with <IssueLink capability="claims" />.</>}
               </p>
             )}
-          </section>
+          </GroupBox>
 
-          <section className="flex flex-col gap-2 rounded-card bg-surface p-3 shadow-card">
-            <h2 className="label-mono">Proxy mode</h2>
+          <GroupBox title="Proxy mode" bodyClassName="flex flex-col gap-2">
             <SegmentedControl
               options={MODES}
               value={agent.proxyMode === "raw" ? "Raw" : "Digest"}
@@ -163,31 +162,30 @@ export function AgentDetail({ id }: { id: string }) {
               )}
               {agent.secretMasking ? "" : " Secret masking is off."}
             </p>
-          </section>
+          </GroupBox>
 
           {person && (
-            <section className="flex flex-col gap-2 rounded-card bg-surface p-3 shadow-card">
-              <h2 className="label-mono">{agent.person}'s local time</h2>
+            <GroupBox title={`${agent.person}'s local time`} bodyClassName="flex flex-col gap-2">
               <RelativeTime className="flex flex-col gap-1 text-[12.5px]" dateFormatOptions={{ weekday: "short", day: "numeric", month: "short" }} timeFormatOptions={{ hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }}>
                 <RelativeTimeZone zone={person.timeZone} className="flex items-center justify-start gap-2 text-[12.5px]">
-                  <RelativeTimeZoneLabel className="h-5 rounded-[4px] bg-inset px-1.5 font-mono text-[11px] text-ink-2">
+                  <RelativeTimeZoneLabel className="bevel-thin-in h-5 bg-muted px-1.5 font-mono text-[11px] text-muted-foreground">
                     {person.timeZone.split("/").pop()?.replace("_", " ")}
                   </RelativeTimeZoneLabel>
                   <RelativeTimeZoneDisplay className="pl-0 font-mono tabular-nums text-ink" />
                   <span className="text-ink-3"><RelativeTimeZoneDate /></span>
                 </RelativeTimeZone>
               </RelativeTime>
-            </section>
+            </GroupBox>
           )}
 
           {!can.directives ? (
-            <p className="rounded-card bg-inset p-3 text-[12.5px] text-ink-3">
+            <p className="bevel-in bg-card p-3 text-[12.5px] text-ink-3">
               Directives to this Agent arrive with <IssueLink capability="directives" />.
             </p>
           ) : agent.presence !== "gone" ? (
-            <Composer defaultAgent={agent.id} />
+            <Composer defaultAgent={agent.id} className="bevel-out" />
           ) : (
-            <p className="rounded-card bg-inset p-3 text-[12.5px] text-ink-3">
+            <p className="bevel-in bg-card p-3 text-[12.5px] text-ink-3">
               This Agent is Gone, so a Directive would wait until it resumes.
             </p>
           )}

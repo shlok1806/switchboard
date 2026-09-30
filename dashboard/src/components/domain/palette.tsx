@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, Columns3, KanbanSquare, Moon, Sun, Users } from "lucide-react";
+import { Activity, Columns3, KanbanSquare, PixelIcon, Users } from "@/components/pixel-icon";
 import {
   CommandDialog,
   CommandEmpty,
@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/command";
 import { useChannel } from "@/data/store";
 import { go, type Route } from "@/lib/router";
-import { useTheme } from "@/lib/theme";
+import { PRESETS, useTheme } from "@/lib/theme";
 import { PRESENCE_LABEL } from "@/lib/format";
 
 /** ⌘K: jump to any view, Task or Agent. shadcn Command over cmdk. */
@@ -53,14 +53,21 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           <CommandItem onSelect={() => run({ view: "compare" })}>
             <Columns3 /> Compare Captures
           </CommandItem>
-          <CommandItem
-            onSelect={() => {
-              set(resolved === "dark" ? "light" : "dark");
-              onOpenChange(false);
-            }}
-          >
-            {resolved === "dark" ? <Sun /> : <Moon />} Switch to {resolved === "dark" ? "light" : "dark"} theme
-          </CommandItem>
+        </CommandGroup>
+        <CommandGroup heading="Desktop">
+          {PRESETS.map((p) => (
+            <CommandItem
+              key={p.id}
+              value={`Desktop ${p.name} ${p.code}`}
+              onSelect={() => {
+                set(p.id);
+                onOpenChange(false);
+              }}
+            >
+              <PixelIcon name={resolved === p.id ? "boxcheck" : "box"} /> {p.name}
+              <span className="ml-auto font-mono text-[11px] text-ink-3">{p.code}</span>
+            </CommandItem>
+          ))}
         </CommandGroup>
         <CommandGroup heading="Tasks">
           {[...tasks]

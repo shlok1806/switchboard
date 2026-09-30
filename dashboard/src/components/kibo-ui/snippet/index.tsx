@@ -1,6 +1,8 @@
 "use client";
 
-import { CheckIcon, CopyIcon } from "lucide-react";
+/* Switchboard: Kibo UI Snippet, re-skinned as an inset Motif field with a bevelled copy button. */
+
+import { CheckIcon, CopyIcon } from "@/components/pixel-icon";
 import {
   type ComponentProps,
   cloneElement,
@@ -17,7 +19,7 @@ export type SnippetProps = ComponentProps<typeof Tabs>;
 export const Snippet = ({ className, ...props }: SnippetProps) => (
   <Tabs
     className={cn(
-      "group w-full gap-0 overflow-hidden rounded-md border",
+      "group w-full gap-0 overflow-hidden bevel-in bg-card text-card-foreground",
       className
     )}
     {...props}
@@ -29,7 +31,7 @@ export type SnippetHeaderProps = HTMLAttributes<HTMLDivElement>;
 export const SnippetHeader = ({ className, ...props }: SnippetHeaderProps) => (
   <div
     className={cn(
-      "flex flex-row items-center justify-between border-b bg-secondary p-1",
+      "flex flex-row items-center justify-between border-b border-border bg-secondary py-0.5 pr-0.5 pl-2 text-secondary-foreground",
       className
     )}
     {...props}
@@ -78,14 +80,14 @@ export const SnippetCopyButton = ({
     });
   }
 
-  const icon = isCopied ? <CheckIcon size={14} /> : <CopyIcon size={14} />;
+  const icon = isCopied ? <CheckIcon /> : <CopyIcon />;
 
   return (
     <Button
-      className="opacity-0 transition-opacity group-hover:opacity-100"
+      className="btn-motif size-6 coarse:size-9"
       onClick={copyToClipboard}
       size="icon"
-      variant="ghost"
+      variant="outline"
       {...props}
     >
       {children ?? icon}
@@ -115,7 +117,7 @@ export const SnippetTabsContent = ({
 }: SnippetTabsContentProps) => (
   <TabsContent
     asChild
-    className={cn("mt-0 bg-background p-4 text-sm", className)}
+    className={cn("mt-0 bg-card px-2.5 py-2 font-mono text-[12px]", className)}
     {...props}
   >
     <pre className="truncate">{children}</pre>
