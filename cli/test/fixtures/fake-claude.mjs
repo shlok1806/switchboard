@@ -10,6 +10,9 @@
 //   call <tool> <json>
 //         -> calls a Switchboard MCP tool from the `--mcp-config` servers, starting
 //            the server the way Claude Code does (stdio), then its PostToolUse hook
+//   prompt <text>
+//         -> the Person submits a prompt: runs the UserPromptSubmit hooks, whose
+//            output Claude Code adds to the model's context
 //   model <prompt>
 //         -> one call to the Messages API through ANTHROPIC_BASE_URL, streaming; prints
 //            the status and a hash of the bytes it got back
@@ -163,6 +166,11 @@ async function answer(command) {
     runHooks("SessionEnd", { reason: "prompt_input_exit" });
     console.log("FAKE-CLAUDE bye");
     process.exit(0);
+  }
+  const prompt = /^prompt (.*)$/.exec(command);
+  if (prompt) {
+    runHooks("UserPromptSubmit", { prompt: prompt[1] });
+    console.log("FAKE-CLAUDE prompted");
   }
   if (command === "work") console.log("FAKE-CLAUDE working on it");
   const model = /^model (.*)$/.exec(command);

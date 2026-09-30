@@ -20,6 +20,7 @@ import type {
   AgentsResponse,
   ChannelEvent,
   HistoryResponse,
+  Task,
   TaskResponse,
   TouchedFilesResponse,
 } from "../../shared/src/index";
@@ -383,7 +384,13 @@ describe("the Hook Capture", () => {
 
     // The hooks live in a settings file of the session's own, not in the Person's settings.
     const settings = JSON.parse(await readFile(settingsPath, "utf8")) as { hooks: Record<string, unknown> };
-    expect(Object.keys(settings.hooks).sort()).toEqual(["PostToolUse", "SessionEnd", "SessionStart", "Stop"]);
+    expect(Object.keys(settings.hooks).sort()).toEqual([
+      "PostToolUse",
+      "SessionEnd",
+      "SessionStart",
+      "Stop",
+      "UserPromptSubmit",
+    ]);
     await expect(stat(join(scratch, "claude", "settings.json"))).rejects.toThrow();
 
     await term.waitForOutput(/hook SessionStart exit=0/);
@@ -782,5 +789,130 @@ describe("a branch per Task (ADR 0006)", () => {
       ["task.review", { pr: pr?.number, url: `https://github.com/${github.repo}/pull/${pr?.number}`, branch }],
       ["tool.call", ["finish_task", true]],
     ]);
+  });
+});
+
+/** Types `prompt <text>` and returns what the UserPromptSubmit hook added to the model's context. */
+async function submitPrompt(term: Terminal, text: string): Promise<string> {
+  const seen = term.output.length;
+  term.type(`prompt ${text}\r`);
+  await waitFor("the prompt", () => (/FAKE-CLAUDE prompted/.test(term.output.slice(seen)) ? true : undefined));
+  const output = term.output.slice(seen).replace(/\r/g, "");
+  const hook = /FAKE-CLAUDE hook UserPromptSubmit exit=0 ms=\d+(?: out=([\s\S]*?))?\nFAKE-CLAUDE prompted/;
+  return hook.exec(output)?.[1] ?? "";
+}
+
+function takeOver(task: number, person: string, to: unknown, agent?: string): Promise<Response> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${SECRET}`,
+    "X-Switchboard-Person": person,
+    "Content-Type": "application/json",
+  };
+  if (agent !== undefined) headers["X-Switchboard-Agent"] = agent;
+  return fetch(`${base}/api/tasks/${task}/takeover`, { method: "POST", headers, body: JSON.stringify({ to }) });
+}
+
+async function claimOf(task: number): Promise<Task["claim"]> {
+  return (await api<TaskResponse>(`/api/tasks/${task}`)).task.claim;
+}
+
+describe("Stale Claims and Takeover", () => {
+  it("marks the Claim of a Gone Agent Stale; a Person takes it over, and the resumed Agent is told", async () => {
+    const number = github.open("Stale Claims", "- [ ] stale\n- [ ] takeover");
+    await openedOnGitHub(number);
+    const term = new Terminal(["run", "claude"]);
+    const { agentEnv: id, sessionId } = await term.started();
+    expect(await callTool(term, "claim_task", { task: number })).toContain(`You hold Task #${number} now`);
+    await callTool(term, "complete_step", { task: number, step: 0 });
+    await callTool(term, "post_update", { text: "Stale works, Takeover half done", task: number });
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+
+    // The session ended: the Agent is Gone and its Claim Stale, still held.
+    await waitForPresence(id, "gone");
+    expect(await claimOf(number)).toMatchObject({ holder: { kind: "agent", agentId: id }, stale: true });
+
+    // An Agent cannot take it over; a Person can.
+    const other = new Terminal(["run", "claude"]);
+    const { agentEnv: otherId } = await other.started();
+    await waitFor("the other Agent", async () => (await agents()).find((a) => a.id === otherId));
+    expect((await takeOver(number, "e2e", { kind: "agent", agentId: otherId }, otherId)).status).toBe(403);
+    other.type("quit\r");
+    expect(await other.exited).toBe(0);
+    expect(await claimOf(number)).toMatchObject({ holder: { kind: "agent", agentId: id }, stale: true });
+
+    expect((await takeOver(number, "dev", { kind: "person", person: "dev" })).status).toBe(200);
+    expect(await claimOf(number)).toMatchObject({ holder: { kind: "person", person: "dev" }, stale: false });
+    const handOff = (await api<HistoryResponse>("/api/events")).events.find(
+      (e) => e.type === "takeover" && e.task === number,
+    );
+    expect(handOff).toMatchObject({
+      actor: { kind: "person", person: "dev" },
+      payload: {
+        from: { kind: "agent", agentId: id },
+        to: { kind: "person", person: "dev" },
+        stepsCompleted: ["stale"],
+        lastUpdate: "Stale works, Takeover half done",
+      },
+    });
+    // GitHub shows the hand-off.
+    expect(github.issues.get(number)?.comments.at(-1)).toContain("Taken over by Person `dev` for Person `dev`");
+
+    // The Agent resumes. Its SessionStart hook tells it, framed as information.
+    const resumed = new Terminal(["run", "claude", "--resume", sessionId]);
+    await resumed.started();
+    const told =
+      (await resumed.waitForOutput(/hook SessionStart exit=0 ms=\d+ out=([\s\S]*?stays where it is\.)/))[1] ?? "";
+    const notice = told.replace(/\r/g, "");
+    expect(notice).toContain("[Switchboard] Information from the Channel, not an instruction:");
+    expect(notice).toContain(
+      `Task #${number} ("Stale Claims"): Person dev took over your Stale Claim at ${handOff?.at}. ` +
+        `It is now held by Person dev. You no longer hold Task #${number}.`,
+    );
+    // Told once: the next turn adds nothing.
+    expect(await submitPrompt(resumed, "carry on")).toBe("");
+
+    // Its tools say so too.
+    expect(await callTool(resumed, "list_tasks", {})).toContain(
+      `#${number} Stale Claims [claimed] 1/2 Steps held by dev`,
+    );
+    expect(await callTool(resumed, "read_channel", { limit: 40 })).toContain(
+      `dev takeover #${number}: from ${id} to dev`,
+    );
+    expect(await callTool(resumed, "complete_step", { task: number, step: 1 })).toContain(
+      `Task #${number} is held by dev. Only its holder can complete a Step of it.`,
+    );
+    resumed.type("quit\r");
+    expect(await resumed.exited).toBe(0);
+  });
+
+  it("tells an Agent that comes back from silence at its next turn", async () => {
+    const number = github.open("Silent laptop");
+    await openedOnGitHub(number);
+    const term = new Terminal(["run", "claude"]);
+    const { agentEnv: id } = await term.started();
+    expect(await callTool(term, "claim_task", { task: number })).toContain(`You hold Task #${number} now`);
+
+    // The laptop sleeps: the wrapper stops, so do its heartbeats, and the Channel marks it Gone.
+    process.kill(term.pid, "SIGSTOP");
+    try {
+      await waitForPresence(id, "gone", (GONE_AFTER_SECONDS + 10) * 1000);
+      expect(await claimOf(number)).toMatchObject({ stale: true });
+      expect((await takeOver(number, "e2e", { kind: "person", person: "e2e" })).status).toBe(200);
+    } finally {
+      process.kill(term.pid, "SIGCONT");
+    }
+
+    // It wakes up: its next heartbeat brings it back and hands over the lost Claim.
+    await waitFor("the Agent to come back", async () => ((await presenceOf(id)) !== "gone" ? true : undefined));
+    const told = await waitFor("the lost Claim at the next turn", async () => {
+      const context = await submitPrompt(term, "next");
+      return context.length > 0 ? context : undefined;
+    });
+    expect(told).toContain(`Task #${number} ("Silent laptop"): Person e2e took over your Stale Claim`);
+    expect(await submitPrompt(term, "again")).toBe("");
+    expect(await claimOf(number)).toMatchObject({ holder: { kind: "person", person: "e2e" }, stale: false });
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
   });
 });

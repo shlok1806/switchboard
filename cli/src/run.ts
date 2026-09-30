@@ -14,6 +14,7 @@ import { ChannelClient, ChannelError } from "./channel-client";
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "./claude-session";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
+import { LostClaimNotices } from "./lost-claims";
 import { prepareSessionTools } from "./mcp-config";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
@@ -111,6 +112,8 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
   // and the next-turn cache will read it too.
   let hooks: HookCapture | null = null;
   let proxy: ProxyCapture | null = null;
+  // Claims the Agent lost to a Takeover while it was Gone, told at its next turn.
+  const lostClaims = new LostClaimNotices();
   const stream = client.follow(
     (message) => {
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
@@ -164,7 +167,13 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     try {
       // Private to the Person: it holds the socket and the settings file.
       hookDir = await mkdtemp(join(tmpdir(), "switchboard-"));
-      hooks = await HookCapture.start({ dir: hookDir, root: cwd, send: (frame) => stream.send(frame), log });
+      hooks = await HookCapture.start({
+        dir: hookDir,
+        root: cwd,
+        send: (frame) => stream.send(frame),
+        log,
+        context: (hook) => lostClaims.take(hook),
+      });
       // Claude Code settings can set ANTHROPIC_BASE_URL too, and they win over the
       // environment, so the session's own settings point it at the proxy as well.
       const proxySettings = proxy ? [{ env: { ANTHROPIC_BASE_URL: proxy.url } }] : [];
@@ -189,7 +198,9 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
 
   let link: AgentLink | null = null;
   if (plan.kind === "known") {
-    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered);
+    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered, (lost) =>
+      lostClaims.add(lost),
+    );
     const expected = agentIdFor(config.person, "claude-code", plan.sessionId);
     childEnv.SWITCHBOARD_AGENT_ID = expected;
     try {
@@ -235,7 +246,9 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     const launchedAt = Date.now();
     void waitForPickedSession(projectDir(claudeDir, cwd), launchedAt, picking.signal).then((sessionId) => {
       if (!sessionId) return;
-      link = new AgentLink(client, session(sessionId, true), heartbeatMs, log, onRegistered);
+      link = new AgentLink(client, session(sessionId, true), heartbeatMs, log, onRegistered, (lost) =>
+        lostClaims.add(lost),
+      );
       link.report(idle.current);
       link.start();
     });

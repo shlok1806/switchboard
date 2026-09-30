@@ -3,7 +3,7 @@
 // and ends the session on exit. Failures never stop the agent CLI; they are
 // logged and retried on the next heartbeat.
 
-import type { Agent, AgentId, Cli, ProxyMode, ReportedPresence } from "../../shared/src/index";
+import type { Agent, AgentId, Cli, LostClaim, ProxyMode, ReportedPresence } from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
 
 export interface AgentSession {
@@ -31,6 +31,8 @@ export class AgentLink {
     private readonly log: (line: string) => void,
     /** Called each time the Channel registers the Agent. */
     private readonly onRegistered: (agent: Agent) => void = () => {},
+    /** Called with the Claims the Agent lost to a Takeover while it was Gone, when the Channel hands them over. */
+    private readonly onLostClaims: (lost: LostClaim[]) => void = () => {},
   ) {}
 
   get id(): AgentId | null {
@@ -39,7 +41,7 @@ export class AgentLink {
 
   /** Registers the Agent. Throws on refusals and network failures; the caller decides. */
   async register(): Promise<Agent> {
-    const { agent } = await this.client.register({
+    const { agent, lostClaims } = await this.client.register({
       cli: this.session.cli,
       sessionId: this.session.sessionId,
       resumed: this.session.resumed,
@@ -51,6 +53,7 @@ export class AgentLink {
     this.agent = agent;
     this.log(`registered ${agent.id}`);
     this.onRegistered(agent);
+    this.lost(lostClaims);
     return agent;
   }
 
@@ -78,6 +81,12 @@ export class AgentLink {
     }
   }
 
+  private lost(lostClaims: LostClaim[] | undefined): void {
+    if (lostClaims === undefined || lostClaims.length === 0) return;
+    this.log(`lost Claims on ${lostClaims.map((lost) => `#${lost.task}`).join(", ")} to a Takeover`);
+    this.onLostClaims(lostClaims);
+  }
+
   private beat(): void {
     this.inFlight = this.inFlight.then(() => this.send());
   }
@@ -91,7 +100,7 @@ export class AgentLink {
       }
       const id = this.agent?.id;
       if (!id) return;
-      await this.client.heartbeat(id, this.presence);
+      this.lost((await this.client.heartbeat(id, this.presence)).lostClaims);
     } catch (error) {
       if (error instanceof ChannelError && error.status === 404) {
         // The Channel does not know this Agent (its state was reset): register again next beat.
