@@ -19,7 +19,7 @@ import type {
 } from "../../shared/src/index";
 import type { NewEvent } from "./channel";
 import type { GitHub, GitHubIssue, IssueRef, WebhookChange } from "./github/index";
-import { parseSteps } from "./github/index";
+import { APP_NOT_CONFIGURED, parseSteps } from "./github/index";
 
 /** How often the reconcile re-reads GitHub. */
 export const RECONCILE_INTERVAL_MS = 5 * 60 * 1000;
@@ -58,8 +58,6 @@ interface Mirror {
 }
 
 type TaskRow = { number: number; data: string };
-
-const NOT_CONFIGURED = "GitHub sync is not configured: set the GITHUB_TOKEN Worker secret.";
 
 /** A GitHub login, as the Person name an Event names (ADR 0001: a close on GitHub is done by a Person). */
 function personFromLogin(login: string): PersonName {
@@ -190,7 +188,7 @@ export class Tasks {
   /** Runs one sync against GitHub, serialized, and keeps the reconcile alarm scheduled. */
   private async withGitHub<T>(work: (gitHub: GitHub) => Promise<T>): Promise<TaskResult<T>> {
     const gitHub = this.host.gitHub();
-    if (gitHub === null) return { ok: false, status: 503, reason: NOT_CONFIGURED };
+    if (gitHub === null) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
     await this.schedule();
     try {
       return { ok: true, value: await this.exclusive(() => work(gitHub)) };

@@ -7,22 +7,25 @@
   "workers_dev": true,
   "preview_urls": false,
   "observability": { "enabled": true },
-  // The Dashboard at `/` (#17). `wrangler dev` and `wrangler deploy` run the build
-  // first: it builds dashboard/ into ./site, or copies the stopgap page in ./public
-  // there when the Dashboard cannot be built. Asset paths are served first;
-  // everything else, including /api, reaches the Worker.
+  // The Dashboard (#17), at `/<owner>/<repo>` for each Channel (ADR 0007).
+  // `wrangler dev` and `wrangler deploy` run the build first: it builds dashboard/
+  // into ./site, or copies the stopgap page in ./public there when the Dashboard
+  // cannot be built. Asset paths are served first; everything else, including
+  // /r/<owner>/<repo>/api and /auth, reaches the Worker.
   "build": {
     "command": "npx tsx ../scripts/build-site.ts",
     "watch_dir": ["../dashboard/src", "../shared/src"]
   },
-  "assets": { "directory": "./site" },
+  "assets": { "directory": "./site", "binding": "ASSETS" },
   "durable_objects": {
     "bindings": [{ "name": "CHANNEL", "class_name": "Channel" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Channel"] }],
   "vars": {
-    // The GitHub repo whose Issues are this Channel's Tasks (ADR 0001).
-    "GITHUB_REPO": "shlok1806/switchboard",
+    // One Channel per GitHub repo (ADR 0007). While testing, only these repos
+    // (comma-separated `owner/repo`) may have a Channel; empty allows any repo the
+    // GitHub App is installed on.
+    "ALLOWED_REPOS": "shlok1806/switchboard",
     // An Agent goes Gone after this many seconds without a heartbeat.
     "PRESENCE_GONE_AFTER_SECONDS": "600",
     // The Relay downgrades an Interrupt Jev gives less than this probability to a Queue.
@@ -30,10 +33,12 @@
     // At most one Interrupt per Agent this many seconds; extra Interrupts become Queue.
     "RELAY_INTERRUPT_INTERVAL_SECONDS": "20"
   },
-  // Set with `wrangler secret put`. JOIN_SECRET is the shared join secret
-  // (interim identity, issue #1). JEV_API_KEY calls Jev for the Relay's Verdicts
-  // (ADR 0003); for `wrangler dev`, put it in the gitignored .dev.vars.
-  // GITHUB_TOKEN reads and creates Issues in GITHUB_REPO. GITHUB_WEBHOOK_SECRET
-  // verifies deliveries to /api/github/webhook.
-  "secrets": { "required": ["JOIN_SECRET", "JEV_API_KEY", "GITHUB_TOKEN", "GITHUB_WEBHOOK_SECRET"] }
+  // Set with `wrangler secret put` (docs/github-app-setup.md). JEV_API_KEY calls Jev
+  // for the Relay's Verdicts (ADR 0003); GITHUB_WEBHOOK_SECRET verifies deliveries to
+  // /api/github/webhook. The GitHub App's secrets (GITHUB_APP_ID,
+  // GITHUB_APP_PRIVATE_KEY, GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET) and
+  // SESSION_SECRET are left out of this list on purpose: without them the Worker
+  // still deploys, and sign-in says "GitHub App not configured". For `wrangler dev`,
+  // put them in the gitignored .dev.vars (see .dev.vars.example).
+  "secrets": { "required": ["JEV_API_KEY", "GITHUB_WEBHOOK_SECRET"] }
 }

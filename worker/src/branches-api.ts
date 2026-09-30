@@ -6,11 +6,10 @@
 // And the `push` and `pull_request` GitHub webhook deliveries, which tasks-api.ts
 // hands here once their signature is verified.
 
-import type { PersonName } from "../../shared/src/index";
 import { MAX_FINISH_SUMMARY_LENGTH } from "../../shared/src/index";
 import type { Channel } from "./channel";
-import { callerOf } from "./claims-api";
-import { readCodeWebhook, repoOf } from "./github/index";
+import type { Caller } from "./claims";
+import { readCodeWebhook } from "./github/index";
 import { fail, json, readJson } from "./http";
 
 export type BranchRoute = { kind: "branch" | "finish"; task: number };
@@ -29,10 +28,8 @@ export async function handleBranchRoute(
   route: BranchRoute,
   request: Request,
   channel: DurableObjectStub<Channel>,
-  person: PersonName,
+  caller: Caller,
 ): Promise<Response> {
-  const caller = callerOf(request, person);
-  if ("error" in caller) return fail(400, caller.error);
   const body = await readJson(request);
   let result: Awaited<ReturnType<Channel["finishTask"]>>;
   if (route.kind === "branch") {
@@ -55,14 +52,14 @@ export async function handleBranchRoute(
 /** A verified `push` or `pull_request` delivery. Anything that does not become an Event is acknowledged. */
 export async function handleCodeWebhook(
   request: Request,
-  env: Env,
+  repo: string,
   channel: DurableObjectStub<Channel>,
   event: string,
   payload: unknown,
 ): Promise<Response> {
-  const change = readCodeWebhook(event, payload, repoOf(env));
+  const change = readCodeWebhook(event, payload, repo);
   if (change === null) return new Response(null, { status: 204 });
   const delivery = request.headers.get("X-GitHub-Delivery") || crypto.randomUUID();
-  const result = await channel.gitHubCodeWebhook(delivery, change);
+  const result = await channel.gitHubCodeWebhook(repo, delivery, change);
   return result.ok ? new Response(null, { status: 204 }) : fail(result.status, result.reason);
 }

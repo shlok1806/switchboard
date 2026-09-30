@@ -5,7 +5,7 @@
 
 /* ── Participants ─────────────────────────────────────────── */
 
-/** A Person's name is their identity on the Channel (interim auth, see issue #1). */
+/** A Person's name: their GitHub login, lowercased (ADR 0007). */
 export type PersonName = string;
 
 /** A human on the Channel. Every Agent belongs to exactly one Person. */
@@ -21,7 +21,7 @@ export type Cli = "claude-code" | "codex" | "gemini";
 
 /**
  * The permanent name of an Agent: `<person>/<cli>/<short session id>`,
- * for example `shlok/claude/7f3a`. The CLI segment uses the short CLI name.
+ * for example `shlok1806/claude/7f3a`. The CLI segment uses the short CLI name.
  */
 export type AgentId = `${string}/${string}/${string}`;
 
@@ -52,9 +52,7 @@ export interface Agent {
 }
 
 /** Who holds a Claim, or who a Takeover moves it to. */
-export type Holder =
-  | { kind: "agent"; agentId: AgentId }
-  | { kind: "person"; person: PersonName };
+export type Holder = { kind: "agent"; agentId: AgentId } | { kind: "person"; person: PersonName };
 
 /* ── Tasks ────────────────────────────────────────────────── */
 
@@ -198,13 +196,13 @@ export interface EventPayloads {
   "session.start": { cwd: string; resumed: boolean; source?: string };
   /** A session ended. `detail` is the agent CLI's own reason, when a Hook reported it. */
   "session.end": { reason: "exit" | "timeout"; detail?: string };
-  "presence": { presence: Presence };
+  presence: { presence: Presence };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */
   "file.edit": { path: string; additions: number; deletions: number };
   /** A shell command the Agent ran, truncated. `exitCode` when the CLI reports one. */
-  "command": { command: string; exitCode?: number };
+  command: { command: string; exitCode?: number };
   /** The Agent finished a turn. `turn` counts turns in this run of the wrapper, from 1. */
   "turn.end": { turn: number };
   /**
@@ -226,7 +224,7 @@ export interface EventPayloads {
     /** Which bodies were longer than `capBytes` and cut. */
     truncated: { context: boolean; response: boolean };
   };
-  "claim": { holder: Holder };
+  claim: { holder: Holder };
   "claim.refused": { heldBy: Holder };
   "claim.release": { holder: Holder };
   "step.complete": { step: number; text: string };
@@ -234,7 +232,11 @@ export interface EventPayloads {
    * Mirroring a Claim change to GitHub failed (ADR 0001). The Claim change itself
    * stands; GitHub is behind until the next change or a Person fixes it.
    */
-  "mirror.failed": { change: "claim" | "release" | "step.complete" | "finish" | "takeover"; call: string; reason: string };
+  "mirror.failed": {
+    change: "claim" | "release" | "step.complete" | "finish" | "takeover" | "update";
+    call: string;
+    reason: string;
+  };
   /** The holder of a Claim went Gone, so the Claim is Stale. It stays held until a Person takes it over (ADR 0002). */
   "claim.stale": { holder: Holder };
   /** The holder of a Stale Claim came back before any Takeover, so the Claim is no longer Stale. */
@@ -244,9 +246,9 @@ export interface EventPayloads {
   /** A claimed Task that was blocked after its Claim is no longer blocked. */
   "claim.unblocked": { holder: Holder };
   /** An Event written on purpose, in readable language. */
-  "update": { text: string };
+  update: { text: string };
   /** A message from a Person to an Agent. The only message with instruction weight. */
-  "directive": { to: AgentId; text: string };
+  directive: { to: AgentId; text: string };
   /**
    * How a Directive reached its Agent: typed into its running session right away
    * ("interrupt"), or held for its next turn ("queue"), with why it was not typed.
@@ -263,7 +265,7 @@ export interface EventPayloads {
    * A Person moving a Stale Claim to a new holder, with the hand-off: the previous
    * holder, the Steps it completed and its last Update on the Task.
    */
-  "takeover": {
+  takeover: {
     from: Holder;
     to: Holder;
     stepsCompleted: string[];
@@ -274,7 +276,7 @@ export interface EventPayloads {
    * `commit` and `message` are the newest commit's. Hunks are capped (see
    * `DIFF_LINES_PER_FILE`); `truncationNote` says so and how to get the rest.
    */
-  "push": {
+  push: {
     branch: string;
     commit: string;
     message: string;
@@ -283,7 +285,7 @@ export interface EventPayloads {
     truncationNote?: string;
   };
   /** A pull request merged into the main branch, from the GitHub webhook. Hunks capped as for `push`. */
-  "merge": {
+  merge: {
     into: string;
     pr: number;
     branch: string;
@@ -308,7 +310,7 @@ export interface EventPayloads {
    * The Relay's Verdict for one Event and one Agent, with Jev's probabilities and the
    * state Jev was sent. Recorded by the Relay (actor `relay`), never relayed itself.
    */
-  "verdict": Verdict;
+  verdict: Verdict;
 }
 
 /**

@@ -1,10 +1,11 @@
 // A Durable Object has exactly one alarm, but several parts of the Channel need to
-// wake up on their own schedule: the Task reconcile (every few minutes) and the
-// Presence check (when the quietest Agent would go Gone). Each keeps its own
+// wake up on their own schedule: the Task reconcile (every few minutes), the
+// Presence check (when the quietest Agent would go Gone) and, while streams are
+// open, the re-check of their Persons' access to the repo. Each keeps its own
 // deadline here, and the one real alarm is always set to the earliest of them.
 
 /** The parts of the Channel that wake up on a timer. */
-export type AlarmJob = "tasks" | "presence";
+export type AlarmJob = "tasks" | "presence" | "members";
 
 type DeadlineRow = { job: string; at: number };
 

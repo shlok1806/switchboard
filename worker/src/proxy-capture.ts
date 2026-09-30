@@ -2,8 +2,8 @@
 // per model turn over its WebSocket, already masked on the laptop; this module
 // checks it and records it labelled with the Proxy Capture.
 //
-// - Only an Agent's own Person may send its Events, and only on a socket that
-//   Person opened.
+// - Only an Agent's own wrapper may send its Events: on a socket opened with that
+//   Agent's token.
 // - A Raw Proxy Event is refused unless the Agent's Proxy mode is raw, so a Person
 //   switching back to digest stops raw content at once, even from a wrapper that
 //   has not heard yet.
@@ -137,14 +137,15 @@ function parseEvent(raw: unknown): Parsed<ProxyEvent> {
 export class ProxyCapture {
   constructor(private readonly host: ProxyCaptureHost) {}
 
-  /** Handles one message from a wrapper's WebSocket, sent by `person`. */
-  receive(person: PersonName, message: Record<string, unknown>): ProxyCaptureReply {
+  /** Handles one message from a wrapper's WebSocket, opened by `person` with Agent `socketAgent`'s token. */
+  receive(person: PersonName, socketAgent: AgentId | null, message: Record<string, unknown>): ProxyCaptureReply {
     const rawId = (message.event as { id?: unknown } | undefined)?.id;
     const id = typeof rawId === "string" ? rawId : "";
     const refuse = (reason: string): ProxyCaptureReply => ({ type: "proxy.refused", id, reason });
 
     const agent = message.agent;
     if (typeof agent !== "string" || agent.split("/").length !== 3) return refuse('"agent" must be an Agent ID.');
+    if (agent !== socketAgent) return refuse(`Only Agent ${agent}'s own token may send its Events.`);
     const parsed = parseEvent(message.event);
     if (!parsed.ok) return refuse(parsed.reason);
     const allowed = this.host.touchAgent(person, agent as AgentId);

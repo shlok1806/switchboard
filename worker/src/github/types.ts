@@ -68,6 +68,14 @@ export interface Comparison {
   files: ComparedFile[];
 }
 
+/** A collaborator's permission on the repo. Write or above is membership (ADR 0007). */
+export type Permission = "admin" | "maintain" | "write" | "triage" | "read" | "none";
+
+/** Whether a permission lets its Person into the Channel: write access to the repo. */
+export function canWrite(permission: Permission): boolean {
+  return permission === "admin" || permission === "maintain" || permission === "write";
+}
+
 export interface GitHub {
   /** `owner/name`. */
   readonly repo: string;
@@ -83,10 +91,12 @@ export interface GitHub {
   /** Issues in this repo that it blocks. */
   listBlocking(number: TaskNumber): Promise<IssueRef[]>;
 
+  /** A GitHub user's permission on the repo: the membership check (ADR 0007). */
+  permission(login: string): Promise<Permission>;
+
   /* Mirroring what Switchboard owns (ADR 0001): the Claim, status labels, Step checkmarks. */
 
-  /** The login of the user the token acts as. Every Agent acts through that one token. */
-  login(): Promise<string>;
+  /** Assignees are the holder's Person, so GitHub notifies the old and the new assignee. */
   addAssignees(number: TaskNumber, logins: string[]): Promise<void>;
   /** Removing someone who is not assigned is not an error. */
   removeAssignees(number: TaskNumber, logins: string[]): Promise<void>;
@@ -94,7 +104,10 @@ export interface GitHub {
   addLabels(number: TaskNumber, labels: string[]): Promise<void>;
   /** Removing a label the Issue does not carry is not an error. */
   removeLabel(number: TaskNumber, label: string): Promise<void>;
-  addComment(number: TaskNumber, body: string): Promise<void>;
+  /** Posts a comment and returns its ID. */
+  createComment(number: TaskNumber, body: string): Promise<number>;
+  /** Edits a comment. False when it no longer exists (someone deleted it). */
+  updateComment(id: number, body: string): Promise<boolean>;
   setBody(number: TaskNumber, body: string): Promise<void>;
 
   /* Branches and pull requests (ADR 0006). */

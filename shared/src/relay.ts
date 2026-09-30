@@ -117,7 +117,8 @@ function hunkText(file: FileChange): string[] {
   const lines = [`--- ${file.path}`];
   for (const hunk of file.hunks) {
     lines.push(hunk.header);
-    for (const line of hunk.lines) lines.push(`${line.type === "add" ? "+" : line.type === "del" ? "-" : " "}${line.text}`);
+    for (const line of hunk.lines)
+      lines.push(`${line.type === "add" ? "+" : line.type === "del" ? "-" : " "}${line.text}`);
   }
   return lines;
 }

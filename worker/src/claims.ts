@@ -12,9 +12,10 @@
 // - Only the holder releases a Claim or completes its Steps. An Agent's Person may
 //   act for it.
 //
-// After each change the Claim is mirrored to GitHub: assignee, `status:claimed`
-// label, a comment naming the holder, and ticked Step checkboxes. GitHub failures
-// never undo the change; each one is recorded as a `mirror.failed` Event.
+// After each change the Claim is mirrored to GitHub through the GitHub App: the
+// holder's Person as assignee, the `status:claimed` label, the Issue's one status
+// comment (status-comment.ts), and ticked Step checkboxes. GitHub failures never
+// undo the change; each one is recorded as a `mirror.failed` Event.
 
 import type {
   Actor,
@@ -31,12 +32,13 @@ import { CLAIMED_LABEL, holderName, REVIEW_LABEL } from "../../shared/src/index"
 import type { AgentRoster } from "./agents";
 import type { NewEvent } from "./channel";
 import { type GitHub, tickStep } from "./github/index";
+import { describeHolder, holderPerson, type StatusComments } from "./status-comment";
 import type { Tasks } from "./tasks";
 
-/** Who is calling: the authenticated Person, and the Agent they act through, if any. */
+/** Who is calling: the admitted Person, and the Agent when the call carries an Agent token. */
 export interface Caller {
   person: PersonName;
-  /** Set when an Agent calls through Switchboard's tools (the Tool Capture). */
+  /** Set when the call carries an Agent token: the Agent calls through Switchboard's tools (the Tool Capture). */
   agent?: AgentId;
 }
 
@@ -55,15 +57,19 @@ export type ClaimRefusal = {
 };
 export type ClaimResult = { ok: true; task: Task } | ClaimRefusal;
 
+/** One GitHub call of a mirrored change, named for its `mirror.failed` Event. */
+export type MirrorCall = [name: string, run: () => Promise<unknown>];
+
 /** What the Channel lends this module. */
 export interface ClaimHost {
   tasks: Tasks;
   agents: AgentRoster;
+  status: StatusComments;
   gitHub(): GitHub | null;
   append<K extends EventType>(event: NewEvent<K>): ChannelEvent;
 }
 
-export type Change = "claim" | "release" | "step.complete" | "finish" | "takeover";
+export type Change = "claim" | "release" | "step.complete" | "finish" | "takeover" | "update";
 
 function sameHolder(a: Holder, b: Holder): boolean {
   return a.kind === "agent"
@@ -71,15 +77,13 @@ function sameHolder(a: Holder, b: Holder): boolean {
     : b.kind === "person" && a.person === b.person;
 }
 
-/** How a holder reads on GitHub. */
-export function describeHolder(holder: Holder, owner?: PersonName): string {
-  return holder.kind === "agent"
-    ? `Agent \`${holder.agentId}\`${owner === undefined ? "" : ` (Person ${owner})`}`
-    : `Person \`${holder.person}\``;
-}
-
 export class Claims {
   constructor(private readonly host: ClaimHost) {}
+
+  /** The Issues' status comments, which every mirrored change keeps current. */
+  get status(): StatusComments {
+    return this.host.status;
+  }
 
   /**
    * Works out who is acting. An Agent must be on the Channel and belong to the
@@ -138,9 +142,11 @@ export class Claims {
       updatedAt: now,
     });
     this.record(acting, "claim", number, { holder });
+    this.host.status.note(number, `Claimed by ${this.describe(holder)}.`, now);
+    const assignee = holderPerson(this.host.agents, holder);
 
     await this.mirror(acting, "claim", number, async (gitHub) => [
-      ["assign", async () => gitHub.addAssignees(number, [await gitHub.login()])],
+      ...this.assign(gitHub, number, assignee),
       [
         "label",
         async () => {
@@ -148,7 +154,7 @@ export class Claims {
           this.keepLabels(number, (labels) => (labels.includes(CLAIMED_LABEL) ? labels : [...labels, CLAIMED_LABEL]));
         },
       ],
-      ["comment", () => gitHub.addComment(number, `Claimed by ${this.describe(holder)} via Switchboard.`)],
+      this.statusCall(gitHub, number),
     ]);
     return this.current(number);
   }
@@ -167,9 +173,11 @@ export class Claims {
     const { claim: _released, ...rest } = task;
     this.host.tasks.write({ ...rest, status: "open", updatedAt: new Date().toISOString() });
     this.record(acting, "claim.release", number, { holder });
+    this.host.status.note(number, `Released by ${this.describe(holder)}.`);
+    const assignee = holderPerson(this.host.agents, holder);
 
     await this.mirror(acting, "release", number, async (gitHub) => [
-      ["unassign", async () => gitHub.removeAssignees(number, [await gitHub.login()])],
+      ...(assignee === undefined ? [] : [["unassign", () => gitHub.removeAssignees(number, [assignee])] as MirrorCall]),
       [
         "unlabel",
         async () => {
@@ -180,7 +188,7 @@ export class Claims {
           );
         },
       ],
-      ["comment", () => gitHub.addComment(number, `Released by ${this.describe(holder)} via Switchboard.`)],
+      this.statusCall(gitHub, number),
     ]);
     return this.current(number);
   }
@@ -223,6 +231,7 @@ export class Claims {
           this.keepBody(number, issue.body, body);
         },
       ],
+      this.statusCall(gitHub, number),
     ]);
     return this.current(number);
   }
@@ -300,6 +309,32 @@ export class Claims {
     return describeHolder(holder, holder.kind === "agent" ? this.host.agents.find(holder.agentId)?.person : undefined);
   }
 
+  /** Assigns the Issue to `person` (the holder's Person), so GitHub notifies them. */
+  assign(gitHub: GitHub, number: TaskNumber, person: PersonName | undefined): MirrorCall[] {
+    return person === undefined ? [] : [["assign", () => gitHub.addAssignees(number, [person])]];
+  }
+
+  /** Brings the Issue's one status comment up to date. */
+  statusCall(gitHub: GitHub, number: TaskNumber): MirrorCall {
+    return ["status comment", () => this.host.status.sync(gitHub, number)];
+  }
+
+  /**
+   * After an Update about a claimed Task by its holder (or the holding Agent's
+   * Person), the status comment shows it as the last Update.
+   */
+  async updated(acting: Acting, number: TaskNumber): Promise<void> {
+    const task = this.host.tasks.read(number);
+    const holder = task?.claim?.holder;
+    if (task === null || holder === undefined || task.status === "done") return;
+    const byHolder =
+      acting.actor.kind === "agent"
+        ? holder.kind === "agent" && holder.agentId === acting.actor.agentId
+        : holderPerson(this.host.agents, holder) === acting.person;
+    if (!byHolder) return;
+    await this.mirror(acting, "update", number, async (gitHub) => [this.statusCall(gitHub, number)]);
+  }
+
   current(number: TaskNumber): ClaimResult {
     const task = this.host.tasks.read(number);
     return task === null ? { ok: false, status: 404, reason: `No Task #${number}.` } : { ok: true, task };
@@ -313,7 +348,7 @@ export class Claims {
     acting: Acting,
     change: Change,
     number: TaskNumber,
-    calls: (gitHub: GitHub) => Promise<[name: string, run: () => Promise<void>][]>,
+    calls: (gitHub: GitHub) => Promise<MirrorCall[]>,
   ): Promise<void> {
     const gitHub = this.host.gitHub();
     if (gitHub === null) return;

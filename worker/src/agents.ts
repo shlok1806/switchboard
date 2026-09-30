@@ -83,7 +83,15 @@ export type Refusal = { ok: false; status: 403 | 404 | 409; reason: string };
  * Claims the Agent lost to a Takeover, Queued Events and Directives for its next turn.
  */
 export type RosterResult =
-  | { ok: true; agent: Agent; lostClaims?: LostClaim[]; deliveries?: Delivery[]; directives?: DirectiveDelivery[] }
+  | {
+      ok: true;
+      agent: Agent;
+      lostClaims?: LostClaim[];
+      deliveries?: Delivery[];
+      directives?: DirectiveDelivery[];
+      /** A new Agent token, set only by registration (ADR 0007). */
+      token?: string;
+    }
   | Refusal;
 
 function rowToAgent(row: AgentRow): Agent {

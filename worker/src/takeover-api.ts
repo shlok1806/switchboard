@@ -2,12 +2,12 @@
 //
 //   POST /api/tasks/:number/takeover   a Person moves a Stale Claim to { to: Holder }
 //
-// A call made through an Agent's tools (`X-Switchboard-Agent`) is refused: only a
-// Person can take over.
+// A call made with an Agent token is refused: only a Person can take over.
 
-import type { Holder, PersonName } from "../../shared/src/index";
+import type { Holder } from "../../shared/src/index";
 import type { Channel } from "./channel";
-import { answer, callerOf, isAgentId } from "./claims-api";
+import type { Caller } from "./claims";
+import { answer, isAgentId } from "./claims-api";
 import { fail, readJson } from "./http";
 
 const TAKEOVER = /^\/api\/tasks\/([1-9]\d{0,9})\/takeover$/;
@@ -34,10 +34,8 @@ export async function handleTakeoverRoute(
   task: number,
   request: Request,
   channel: DurableObjectStub<Channel>,
-  person: PersonName,
+  caller: Caller,
 ): Promise<Response> {
-  const caller = callerOf(request, person);
-  if ("error" in caller) return fail(400, caller.error);
   const to = readHolder((await readJson(request)).to);
   if (to === null) {
     return fail(

@@ -8,7 +8,6 @@ import type {
   ChannelEvent,
   Holder,
   Person,
-  PersonName,
   ProxyMode,
   RelayConfig,
   Task,
@@ -56,35 +55,12 @@ export type PersonAction =
   /** `POST /api/agents/:id/proxy-mode`. Only the Agent's own Person may change it. */
   | { type: "proxy-mode"; agent: AgentId; mode: ProxyMode };
 
-export type ActionResult =
-  | { ok: true }
-  | { ok: false; reason: string };
+export type ActionResult = { ok: true } | { ok: false; reason: string };
 
 /**
- * How a client authenticates (interim, issue #1): shared join secret plus a Person name.
- * Every HTTP call sends `Authorization: Bearer <secret>` and `X-Switchboard-Person: <person>`.
- * The WebSocket, which cannot carry headers from a browser, sends `?secret=` and `?person=`.
- * The first authenticated call from a new name joins that Person to the Channel.
+ * `POST /api/join`: join (or rejoin) the Channel as the signed-in Person (see auth.ts
+ * for how a call is authenticated). A Person joins with their first call anyway.
  */
-export interface JoinCredentials {
-  secret: string;
-  person: PersonName;
-}
-
-/**
- * A Person name, picked by the Person (interim, issue #1): lowercase letters, digits,
- * "-" and "_", 1 to 32 characters. It never contains "/", because it is the first
- * part of an Agent ID. The Worker lowercases and trims names before checking them.
- */
-export const PERSON_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
-
-/** Trims and lowercases a name, or returns null if it is not a valid PersonName. */
-export function normalizePersonName(raw: string): PersonName | null {
-  const name = raw.trim().toLowerCase();
-  return PERSON_NAME_PATTERN.test(name) ? name : null;
-}
-
-/** `POST /api/join`: join (or rejoin) the Channel. Credentials go in the headers. */
 export interface JoinRequest {
   /** IANA time zone of the Person's laptop. Defaults to "UTC". */
   timeZone?: string;

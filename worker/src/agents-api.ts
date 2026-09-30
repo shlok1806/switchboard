@@ -14,7 +14,6 @@ import type {
   AgentResponse,
   AgentsResponse,
   Cli,
-  PersonName,
   ProxyMode,
   RegisterAgentRequest,
   TouchedFilesResponse,
@@ -22,6 +21,7 @@ import type {
 import { CLIS, MAX_NICKNAME_LENGTH, PROXY_MODES, SESSION_ID_PATTERN } from "../../shared/src/index";
 import type { RosterResult } from "./agents";
 import type { Channel } from "./channel";
+import type { Caller } from "./claims";
 import { fail, json, readJson } from "./http";
 
 export type AgentRoute =
@@ -114,6 +114,7 @@ function answer(result: RosterResult, status = 200): Response {
           ...(result.lostClaims && result.lostClaims.length > 0 ? { lostClaims: result.lostClaims } : {}),
           ...(result.deliveries && result.deliveries.length > 0 ? { deliveries: result.deliveries } : {}),
           ...(result.directives && result.directives.length > 0 ? { directives: result.directives } : {}),
+          ...(result.token === undefined ? {} : { token: result.token }),
         },
         status,
       )
@@ -124,7 +125,7 @@ export async function handleAgentRoute(
   route: AgentRoute,
   request: Request,
   channel: DurableObjectStub<Channel>,
-  person: PersonName,
+  { person }: Caller,
 ): Promise<Response> {
   switch (route.kind) {
     case "list":

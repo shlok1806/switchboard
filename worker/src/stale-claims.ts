@@ -8,7 +8,8 @@
 //   (`claim.recovered`).
 // - A Person's Takeover moves a Stale Claim to themselves or to one of their own
 //   Agents, and records a `takeover` Event with the hand-off: the previous holder,
-//   the Steps completed and the last Update. GitHub gets the assignee and a comment.
+//   the Steps completed and the last Update. On GitHub the Issue moves from the old
+//   holder's Person to the new one, and its status comment records the Takeover.
 //   An Agent can never take over, and a Claim that is not Stale cannot be taken over.
 // - The Agent that lost the Claim is told when it comes back: each Takeover waits
 //   here as a Lost Claim until the Agent's wrapper next registers or heartbeats,
@@ -32,7 +33,8 @@ import type {
 import { CLAIMED_LABEL, holderName } from "../../shared/src/index";
 import type { AgentRoster } from "./agents";
 import type { NewEvent } from "./channel";
-import { type Caller, type ClaimResult, type Claims, describeHolder } from "./claims";
+import type { Caller, ClaimResult, Claims } from "./claims";
+import { holderPerson, lastUpdate } from "./status-comment";
 import type { Tasks } from "./tasks";
 
 export const STALE_CLAIMS_SCHEMA = `
@@ -54,7 +56,6 @@ export interface StaleClaimHost {
 }
 
 type LostRow = { event: string; agent: string; seq: number; data: string };
-type PayloadRow = { payload: string };
 
 function sameList(a: readonly number[], b: readonly number[]): boolean {
   return a.length === b.length && a.every((n, i) => n === b[i]);
@@ -155,13 +156,13 @@ export class StaleClaims {
       updatedAt: now,
     });
     const stepsCompleted = task.steps.filter((step) => step.done).map((step) => step.text);
-    const lastUpdate = this.lastUpdate(from, number, claim.claimedAt);
+    const last = lastUpdate(this.host.sql, from, number, claim.claimedAt)?.text;
     const event = this.host.append({
       type: "takeover",
       actor: { kind: "person", person },
       capture: null,
       task: number,
-      payload: { from, to, stepsCompleted, ...(lastUpdate === undefined ? {} : { lastUpdate }) },
+      payload: { from, to, stepsCompleted, ...(last === undefined ? {} : { lastUpdate: last }) },
     });
     if (from.kind === "agent") {
       const lost: LostClaim = { task: number, title: task.title, by: person, to, at: event.at, event: event.id };
@@ -174,11 +175,22 @@ export class StaleClaims {
       );
     }
 
+    const { claims, agents } = this.host;
+    claims.status.note(
+      number,
+      `Taken over by Person \`${person}\` for ${claims.describe(to)} from ${claims.describe(from)}, which was Gone.`,
+      now,
+    );
+    const fromPerson = holderPerson(agents, from);
+    const toPerson = holderPerson(agents, to);
     const acting = { actor: { kind: "person" as const, person }, capture: null, person };
-    await this.host.claims.mirror(acting, "takeover", number, async (gitHub) => [
-      ["assign", async () => gitHub.addAssignees(number, [await gitHub.login()])],
+    await claims.mirror(acting, "takeover", number, async (gitHub) => [
+      ...(fromPerson === undefined || fromPerson === toPerson
+        ? []
+        : [["unassign", () => gitHub.removeAssignees(number, [fromPerson])] as [string, () => Promise<unknown>]]),
+      ...claims.assign(gitHub, number, toPerson),
       ["label", () => gitHub.addLabels(number, [CLAIMED_LABEL])],
-      ["comment", () => gitHub.addComment(number, this.comment(person, from, to, stepsCompleted, lastUpdate))],
+      claims.statusCall(gitHub, number),
     ]);
     const after = this.host.tasks.read(number);
     return after === null ? { ok: false, status: 404, reason: `No Task #${number}.` } : { ok: true, task: after };
@@ -215,47 +227,5 @@ export class StaleClaims {
       return { ok: false, status: 409, reason: `Agent ${agent.id} is Gone: its Claim would be Stale at once.` };
     }
     return null;
-  }
-
-  /**
-   * The previous holder's last Update: its latest one about this Task, or failing
-   * that its latest one since it claimed the Task.
-   */
-  private lastUpdate(holder: Holder, task: TaskNumber, since: string): string | undefined {
-    const [field, value] = holder.kind === "agent" ? ["$.agentId", holder.agentId] : ["$.person", holder.person];
-    const who = `type = 'update' AND json_extract(actor, '$.kind') = ? AND json_extract(actor, '${field}') = ?`;
-    const aboutTask = this.host.sql
-      .exec<PayloadRow>(
-        `SELECT payload FROM events WHERE ${who} AND task = ? ORDER BY seq DESC LIMIT 1`,
-        holder.kind,
-        value,
-        task,
-      )
-      .toArray()[0];
-    const row =
-      aboutTask ??
-      this.host.sql
-        .exec<PayloadRow>(
-          `SELECT payload FROM events WHERE ${who} AND at >= ? ORDER BY seq DESC LIMIT 1`,
-          holder.kind,
-          value,
-          since,
-        )
-        .toArray()[0];
-    return row === undefined ? undefined : (JSON.parse(row.payload) as { text: string }).text;
-  }
-
-  /** The hand-off, as the Issue comment reads it. */
-  private comment(person: string, from: Holder, to: Holder, steps: string[], lastUpdate: string | undefined): string {
-    const owner = (holder: Holder) =>
-      holder.kind === "agent" ? this.host.agents.find(holder.agentId)?.person : undefined;
-    const lines = [
-      `Taken over by Person \`${person}\` for ${describeHolder(to, owner(to))} via Switchboard.`,
-      "",
-      `Previous holder: ${describeHolder(from, owner(from))}, Gone.`,
-      steps.length === 0 ? "Steps completed: none." : `Steps completed:\n${steps.map((s) => `- [x] ${s}`).join("\n")}`,
-    ];
-    if (lastUpdate !== undefined) lines.push(`Last Update:\n> ${lastUpdate.replace(/\n/g, "\n> ")}`);
-    return lines.join("\n");
   }
 }
