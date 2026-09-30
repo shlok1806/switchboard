@@ -14,6 +14,8 @@ import type {
   EventType,
   Holder,
   HookCaptureReply,
+  InterruptMessage,
+  InterruptResult,
   Person,
   PersonName,
   ProxyCaptureReply,
@@ -34,7 +36,7 @@ import { type CodeChange, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
-import { interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
+import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
 import { StaleClaims } from "./stale-claims";
 import { type NewTask, type TaskResult, Tasks } from "./tasks";
 
@@ -191,10 +193,16 @@ export class Channel extends DurableObject<Env> {
       touchedFiles: (id) => this.hooks.touchedFiles(id),
       jev: () => jevFor(env),
       threshold: interruptThreshold(env.RELAY_INTERRUPT_THRESHOLD),
-      append: (event) => this.append(event),
+      interruptIntervalMs: interruptIntervalMs(env.RELAY_INTERRUPT_INTERVAL_SECONDS),
+      append: (id, event) => {
+        const stored = this.insert(id, event);
+        if (!stored) throw new Error("Event ID collision");
+        return stored;
+      },
       sendTo: (person, message) => {
         for (const ws of this.ctx.getWebSockets(person)) send(ws, message);
       },
+      interruptTo: (agent, message) => this.interruptTo(agent, message),
       waitUntil: (work) => this.ctx.waitUntil(work),
     });
   }
@@ -433,10 +441,32 @@ export class Channel extends DurableObject<Env> {
     }
     if (typeof frame !== "object" || frame === null) return;
     const type = (frame as { type?: unknown }).type;
-    if (type !== "hook" && type !== "proxy" && type !== "delivery.ack") return;
+    if (
+      type !== "hook" &&
+      type !== "proxy" &&
+      type !== "delivery.ack" &&
+      type !== "interrupt.attach" &&
+      type !== "interrupt.result"
+    ) {
+      return;
+    }
     const person = this.ctx.getTags(ws)[0];
     if (person === undefined) return;
     const body = frame as Record<string, unknown>;
+    if (type === "interrupt.attach" || type === "interrupt.result") {
+      // Only the Agent's own Person's wrapper may speak for it.
+      const agent = body.agent;
+      if (typeof agent !== "string" || this.agents.find(agent as AgentId)?.person !== person) return;
+      if (type === "interrupt.attach") {
+        // Kept on the socket itself, so it survives hibernation and goes when the socket does.
+        const attached: WrapperAttachment = { agent: agent as AgentId, at: Date.now() };
+        ws.serializeAttachment(attached);
+        return;
+      }
+      const result = parseInterruptResult(body);
+      if (result !== null) this.relay.interruptAnswered(result);
+      return;
+    }
     if (type === "delivery.ack") {
       // The wrapper holds these Deliveries for its Agent's next turn. Only the Agent's own Person may say so.
       const agent = body.agent;
@@ -449,6 +479,23 @@ export class Channel extends DurableObject<Env> {
       return;
     }
     send(ws, type === "hook" ? this.hooks.receive(person, body) : this.proxy.receive(person, body));
+  }
+
+  /**
+   * Sends an Interrupt to the wrapper of Agent `id`: the socket that most recently
+   * said it belongs to that wrapper. False when there is none.
+   */
+  private interruptTo(id: AgentId, message: InterruptMessage): boolean {
+    const person = this.agents.find(id)?.person;
+    if (person === undefined) return false;
+    let target: { ws: WebSocket; at: number } | null = null;
+    for (const ws of this.ctx.getWebSockets(person)) {
+      if (ws.readyState !== WebSocket.READY_STATE_OPEN) continue;
+      const attached = ws.deserializeAttachment() as WrapperAttachment | null;
+      if (attached?.agent !== id) continue;
+      if (target === null || attached.at > target.at) target = { ws, at: attached.at };
+    }
+    return target !== null && send(target.ws, message);
   }
 
   /** The files Agent `id` has edited, most recently first, or null when the Channel has no such Agent. */
@@ -499,10 +546,41 @@ export class Channel extends DurableObject<Env> {
   }
 }
 
-function send(ws: WebSocket, message: StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage): void {
+/** What a wrapper's socket carries: the Agent whose Interrupts it types, and since when. */
+interface WrapperAttachment {
+  agent: AgentId;
+  at: number;
+}
+
+const WRAPPER_DOWNGRADES: ReadonlySet<string> = new Set(["person-typing", "dialog-open", "session-not-ready"]);
+
+/** A wrapper's `interrupt.result`, or null when it is not one. */
+function parseInterruptResult(body: Record<string, unknown>): InterruptResult | null {
+  const { agent, id, typed, reason } = body;
+  if (typeof agent !== "string" || typeof id !== "string") return null;
+  if (typed === true) return { type: "interrupt.result", agent: agent as AgentId, id, typed: true };
+  if (typed === false && typeof reason === "string" && WRAPPER_DOWNGRADES.has(reason)) {
+    return {
+      type: "interrupt.result",
+      agent: agent as AgentId,
+      id,
+      typed: false,
+      reason: reason as Extract<InterruptResult, { typed: false }>["reason"],
+    };
+  }
+  return null;
+}
+
+/** Sends `message` on `ws`. False when the socket is closing. */
+function send(
+  ws: WebSocket,
+  message: StreamMessage | HookCaptureReply | ProxyCaptureReply | DeliveryMessage | InterruptMessage,
+): boolean {
   try {
     ws.send(JSON.stringify(message));
+    return true;
   } catch {
     // The socket is closing; its close handler cleans up.
+    return false;
   }
 }

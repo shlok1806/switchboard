@@ -42,7 +42,10 @@ export interface Agent {
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */
   secretMasking: boolean;
-  /** False when the CLI cannot receive Interrupts; they become Queue, labelled as downgraded. */
+  /**
+   * Whether the Agent's wrapper can type Interrupts into its CLI, as the wrapper said
+   * when it registered. When false, Interrupts become Queue, labelled as downgraded.
+   */
   canReceiveInterrupts: boolean;
   lastSeenAt: string;
   startedAt: string;
@@ -388,6 +391,27 @@ export interface RelayState {
   };
 }
 
+/**
+ * Why an Interrupt reached the Agent as a Queue.
+ * - `below-threshold`: Jev was less sure than the threshold, so the Verdict's `option` is "queue".
+ * - `cli-cannot-interrupt`: the Agent's CLI cannot receive Interrupts.
+ * - `wrapper-offline`: the Agent's wrapper was not connected to the Channel.
+ * - `rate-limited`: the Agent had an Interrupt too recently.
+ * - `person-typing`: the Agent's Person kept typing, and the wrapper never types over them.
+ * - `dialog-open`: the session was showing a permission prompt or a question, which typing would answer.
+ * - `session-not-ready`: the session was not ready for typed input yet.
+ * - `no-answer`: the wrapper did not say in time whether it typed the Interrupt.
+ */
+export type DowngradeReason =
+  | "below-threshold"
+  | "cli-cannot-interrupt"
+  | "wrapper-offline"
+  | "rate-limited"
+  | "person-typing"
+  | "dialog-open"
+  | "session-not-ready"
+  | "no-answer";
+
 /** The Relay's decision for one Event and one Agent. */
 export interface Verdict {
   event: string;
@@ -396,8 +420,9 @@ export interface Verdict {
   /** The Relay's decision, after the confidence threshold. */
   option: VerdictOption;
   /**
-   * How the Event reached the Agent. Interrupt delivery is its own ticket (#13):
-   * until then an Interrupt is delivered as a Queue, and `option` stays "interrupt".
+   * How the Event reached the Agent. An Interrupt is typed into the Agent's running
+   * session ("interrupt"). When something stops that on the way it reaches the Agent
+   * as a Queue instead: `option` stays "interrupt" and `downgraded` says why.
    */
   delivered: VerdictOption;
   source: VerdictSource;
@@ -408,7 +433,7 @@ export interface Verdict {
   /** Set when an Interrupt became a Queue. */
   downgraded?: {
     from: "interrupt";
-    reason: "below-threshold" | "cli-cannot-interrupt";
+    reason: DowngradeReason;
   };
   overlap: Overlap;
   /** Why the Event is addressed to the Agent, when it is. */

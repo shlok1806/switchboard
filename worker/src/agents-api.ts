@@ -64,7 +64,7 @@ export function matchAgentRoute(method: string, pathname: string): AgentRoute | 
 type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentRequest> {
-  const { cli, sessionId, resumed, cwd, nickname, proxyMode, secretMasking } = body;
+  const { cli, sessionId, resumed, cwd, nickname, proxyMode, secretMasking, interrupts } = body;
   if (typeof cli !== "string" || !CLIS.includes(cli as Cli)) {
     return { ok: false, reason: `"cli" must be one of ${CLIS.join(", ")}.` };
   }
@@ -87,6 +87,9 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
   if (secretMasking !== undefined && typeof secretMasking !== "boolean") {
     return { ok: false, reason: '"secretMasking" must be true or false.' };
   }
+  if (interrupts !== undefined && typeof interrupts !== "boolean") {
+    return { ok: false, reason: '"interrupts" must be true or false.' };
+  }
   return {
     ok: true,
     value: {
@@ -97,6 +100,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
       ...(cleanNickname === undefined ? {} : { nickname: cleanNickname }),
       ...(proxyMode === undefined ? {} : { proxyMode }),
       ...(secretMasking === undefined ? {} : { secretMasking }),
+      ...(interrupts === undefined ? {} : { interrupts }),
     },
   };
 }

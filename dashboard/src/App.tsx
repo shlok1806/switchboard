@@ -29,7 +29,7 @@ function ViewFallback() {
   );
 }
 
-import { prob } from "@/lib/format";
+import { DOWNGRADE_LABEL, prob } from "@/lib/format";
 import { leaveChannel } from "@/lib/session";
 
 function title(route: Route, taskTitle?: string): { title: string; crumb?: string } {
@@ -67,7 +67,7 @@ function useInterruptToasts() {
             description:
               v.downgraded.reason === "below-threshold"
                 ? `Interrupt ${prob(v.probabilities.interrupt)} was below the threshold`
-                : "This CLI cannot receive Interrupts",
+                : DOWNGRADE_LABEL[v.downgraded.reason].replace(/^./, (c) => c.toUpperCase()),
             action: { label: "View", onClick: () => go({ view: "feed", event: v.event }) },
           });
         }

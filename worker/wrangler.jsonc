@@ -26,7 +26,9 @@
     // An Agent goes Gone after this many seconds without a heartbeat.
     "PRESENCE_GONE_AFTER_SECONDS": "600",
     // The Relay downgrades an Interrupt Jev gives less than this probability to a Queue.
-    "RELAY_INTERRUPT_THRESHOLD": "0.6"
+    "RELAY_INTERRUPT_THRESHOLD": "0.6",
+    // At most one Interrupt per Agent this many seconds; extra Interrupts become Queue.
+    "RELAY_INTERRUPT_INTERVAL_SECONDS": "20"
   },
   // Set with `wrangler secret put`. JOIN_SECRET is the shared join secret
   // (interim identity, issue #1). JEV_API_KEY calls Jev for the Relay's Verdicts

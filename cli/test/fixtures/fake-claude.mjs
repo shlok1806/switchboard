@@ -16,7 +16,17 @@
 //   model <prompt>
 //         -> one call to the Messages API through ANTHROPIC_BASE_URL, streaming; prints
 //            the status and a hash of the bytes it got back
+//   busy <seconds>
+//         -> works for a while, printing as it goes, like a long model turn
+//   permission <tool>
+//         -> opens a permission dialog for <tool>: runs the PermissionRequest hook;
+//            the next line answers it
 //   quit  -> exits 0, after the SessionEnd hook
+//
+// Like Claude Code, it turns bracketed paste on. A pasted text (between the paste
+// markers) followed by Enter is one prompt however many lines it has: it prints
+// `FAKE-CLAUDE pasted prompt=<json> during=<what it was doing>` when the prompt
+// arrives, and runs the UserPromptSubmit hooks when it gets to it.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -149,12 +159,47 @@ console.log(`FAKE-CLAUDE mcp=${mcpConfig ?? ""}`);
 console.log(`FAKE-CLAUDE agent=${process.env.SWITCHBOARD_AGENT_ID ?? ""}`);
 console.log(`FAKE-CLAUDE session=${sessionId}`);
 runHooks("SessionStart", { source: flagValue("--resume") ? "resume" : "startup" });
+// Bracketed paste on, as Claude Code does once its prompt is up.
+process.stdout.write("\x1b[?2004h");
 
 const cwd = process.cwd();
 const lines = createInterface({ input: process.stdin });
 // Lines run one at a time, in order, like turns.
 let queue = Promise.resolve();
+/** What the fake is doing, for `pasted ... during=`. */
+let doing = "nothing";
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+/** Lines of a paste still arriving; null when none is. */
+let pasted = null;
+/** Takes the line that answers an open dialog; null when none is open. */
+let dialogAnswer = null;
 lines.on("line", (line) => {
+  if (dialogAnswer !== null) {
+    const answerDialog = dialogAnswer;
+    dialogAnswer = null;
+    answerDialog(line);
+    return;
+  }
+  if (pasted === null && line.includes(PASTE_START)) pasted = [];
+  if (pasted !== null) {
+    pasted.push(line);
+    if (!line.includes(PASTE_END)) return;
+    // The terminal turned the paste's line breaks into line ends; put them back.
+    const text = pasted.join("\n");
+    pasted = null;
+    const before = text.slice(0, text.indexOf(PASTE_START));
+    const prompt = text.slice(text.indexOf(PASTE_START) + PASTE_START.length, text.lastIndexOf(PASTE_END));
+    const after = text.slice(text.lastIndexOf(PASTE_END) + PASTE_END.length);
+    console.log(
+      `FAKE-CLAUDE pasted prompt=${JSON.stringify(prompt)} before=${JSON.stringify(before)} after=${JSON.stringify(after)} during=${doing}`,
+    );
+    queue = queue.then(() => {
+      runHooks("UserPromptSubmit", { prompt });
+      console.log("FAKE-CLAUDE prompted");
+    });
+    return;
+  }
   queue = queue.then(() => answer(line.trim()));
 });
 
@@ -173,6 +218,30 @@ async function answer(command) {
     console.log("FAKE-CLAUDE prompted");
   }
   if (command === "work") console.log("FAKE-CLAUDE working on it");
+  const busy = /^busy (\d+(?:\.\d+)?)$/.exec(command);
+  if (busy) {
+    doing = "busy";
+    const until = Date.now() + Number(busy[1]) * 1000;
+    while (Date.now() < until) {
+      console.log("FAKE-CLAUDE busy");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    doing = "nothing";
+    console.log("FAKE-CLAUDE busy done");
+  }
+  const permission = /^permission (\w+)$/.exec(command);
+  if (permission) {
+    runHooks("PermissionRequest", { tool_name: permission[1], tool_input: {} });
+    console.log(`FAKE-CLAUDE asking permission for ${permission[1]}`);
+    doing = "dialog";
+    // The next line answers it, whatever it is.
+    const reply = await new Promise((resolve) => {
+      dialogAnswer = resolve;
+    });
+    doing = "nothing";
+    toolUse(permission[1], {}, {});
+    console.log(`FAKE-CLAUDE permission answered ${JSON.stringify(reply.trim())}`);
+  }
   const model = /^model (.*)$/.exec(command);
   if (model) await modelTurn(model[1]);
   if (command === "turn") {
