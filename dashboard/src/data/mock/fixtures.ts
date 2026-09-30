@@ -283,7 +283,7 @@ const seedTasks: SeedTask[] = [
     subtasks: [],
     steps: steps(0, "Empty state copy", "Invite button"),
     status: "claimed",
-    claim: { task: 20, holder: { kind: "agent", agentId: A.mayaClaude }, claimedAt: ago(60 * 20), stale: false },
+    claim: { task: 20, holder: { kind: "agent", agentId: A.mayaClaude }, claimedAt: ago(60 * 20), stale: false, blockedBy: [12] },
     branch: "task/20-users-empty-state",
     updatedAt: ago(60 * 20),
   },

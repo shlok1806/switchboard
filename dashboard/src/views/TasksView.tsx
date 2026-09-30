@@ -277,7 +277,7 @@ function Empty({ column, filtered }: { column: Column; filtered: boolean }) {
     stale: "No Stale Claims.",
     open: "Nothing unclaimed.",
     claimed: "Nobody holds a Task.",
-    review: "No Claim has a PR open.",
+    review: "Nothing waiting on review.",
     done: "Nothing closed yet.",
   };
   return <p className="px-2 py-6 text-center text-[12px] text-faint">{text[column]}</p>;
