@@ -1,0 +1,71 @@
+# Checks every PR and every push to main. A push to main that passes is
+# deployed to Cloudflare with `wrangler deploy`, which also builds the
+# Dashboard into worker/site (see worker/wrangler.jsonc).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            worker/package-lock.json
+            cli/package-lock.json
+            dashboard/package-lock.json
+      - run: npm ci
+        working-directory: worker
+      - run: npm ci
+        working-directory: cli
+      - run: npm ci
+        working-directory: dashboard
+      - name: Worker
+        working-directory: worker
+        run: npm run typecheck && npm run lint && npm test
+      - name: CLI
+        working-directory: cli
+        run: npm run typecheck && npm run lint && npm test
+      - name: Dashboard
+        working-directory: dashboard
+        run: npm run build
+
+  deploy:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # One deploy at a time; a newer push to main waits for the running one.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://switchboard.switchboard-worker.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            worker/package-lock.json
+            dashboard/package-lock.json
+      - run: npm ci
+        working-directory: worker
+      - run: npm ci
+        working-directory: dashboard
+      - name: Deploy
+        working-directory: worker
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
