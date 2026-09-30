@@ -18,19 +18,28 @@
 //   call <tool> <json>-> calls a Switchboard MCP tool (stdio), then the after-tool hook
 //   prompt <text>     -> the Person submits a prompt: runs the prompt-submit hook
 //   busy <seconds>    -> works for a while, printing as it goes
+//   model <prompt>    -> one model turn, the way the CLI calls its model API:
+//                        codex: a `response.create` on a WebSocket at
+//                        `<openai_base_url>/responses`, falling back to `POST
+//                        /responses` (SSE) when the upgrade is refused, as Codex does;
+//                        gemini: `:streamGenerateContent?alt=sse` at Code Assist
+//                        (CODE_ASSIST_ENDPOINT) or the Gemini API
+//                        (GOOGLE_GEMINI_BASE_URL), by auth type, as Gemini CLI does.
+//                        Prints where it went and a hash of what it got back.
 //   permission <tool> -> an approval dialog: the next line answers it
 //   quit              -> exits 0, after the SessionEnd hook
 // Like Codex, it turns bracketed paste on; a paste then Enter is one prompt, printed as
 // `<TAG> pasted prompt=<json> during=<what it was doing>`.
 
 import { spawnSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { connect } from "./ws-client.mjs";
 
 /** A TOML value from a `-c` override: strings, arrays and inline tables of them, as Switchboard writes them. */
 function tomlValue(text) {
@@ -47,6 +56,8 @@ export async function runFake(dialect) {
   // Where this CLI's session hooks and MCP servers come from.
   const hooks = {};
   const mcpServers = {};
+  /** Codex's other `-c` overrides; Gemini CLI's settings. */
+  const config = {};
   let rest = args;
   if (dialect === "codex") {
     rest = [];
@@ -63,12 +74,14 @@ export async function runFake(dialect) {
       if (hook) hooks[hook[1]] = value;
       const mcp = /^mcp_servers\.(\w+)\.(\w+)$/.exec(key);
       if (mcp) mcpServers[mcp[1]] = { ...mcpServers[mcp[1]], [mcp[2]]: value };
+      if (!hook && !mcp) config[key] = value;
     }
   } else {
     const path = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
     const settings = path ? JSON.parse(readFileSync(path, "utf8")) : {};
     Object.assign(hooks, settings.hooks ?? {});
     Object.assign(mcpServers, settings.mcpServers ?? {});
+    Object.assign(config, settings);
   }
   const trusted = dialect !== "codex" || process.env.FAKE_CODEX_TRUSTED === "1";
 
@@ -216,6 +229,68 @@ export async function runFake(dialect) {
     queue = queue.then(() => answer(line.trim()));
   });
 
+  /** One model turn, the way the real CLI makes it. */
+  async function modelTurn(prompt) {
+    if (dialect === "codex") {
+      const base = config.openai_base_url ?? "https://api.openai.com/v1";
+      const headers = { authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ""}` };
+      const create = { type: "response.create", model: "gpt-6-sol", input: [{ role: "user", content: prompt }] };
+      try {
+        const ws = await connect(`${base.replace(/^http/, "ws")}/responses`, headers);
+        const done = new Promise((resolve) => {
+          ws.onMessage = (text) => {
+            if (JSON.parse(text).type === "response.completed") resolve();
+          };
+        });
+        await ws.send(JSON.stringify(create));
+        await done;
+        const sha = createHash("sha256").update(ws.messages.join("\n")).digest("hex");
+        say(`model base=${base} via=websocket events=${ws.messages.length} sha=${sha}`);
+        ws.close();
+        return;
+      } catch (error) {
+        say(`model websocket refused (${error.message}); falling back to HTTPS`);
+      }
+      const response = await fetch(`${base}/responses`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ ...create, type: undefined, stream: true }),
+      });
+      const body = Buffer.from(await response.arrayBuffer());
+      const sha = createHash("sha256").update(body).digest("hex");
+      say(`model base=${base} via=https status=${response.status} sha=${sha}`);
+      return;
+    }
+    // Gemini CLI: its auth type from its settings, else from the environment.
+    const env = process.env;
+    const auth =
+      config.security?.auth?.selectedType ??
+      (env.GOOGLE_GENAI_USE_GCA === "true"
+        ? "oauth-personal"
+        : env.GOOGLE_GEMINI_BASE_URL
+          ? "gateway"
+          : env.GEMINI_API_KEY
+            ? "gemini-api-key"
+            : undefined);
+    const google = auth === "oauth-personal";
+    const base = google
+      ? (env.CODE_ASSIST_ENDPOINT ?? "https://cloudcode-pa.googleapis.com")
+      : (env.GOOGLE_GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com");
+    const path = google
+      ? "/v1internal:streamGenerateContent?alt=sse"
+      : "/v1beta/models/gemini-3-pro:streamGenerateContent?alt=sse";
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: google
+        ? { authorization: "Bearer ya29.fake-oauth-token", "content-type": "application/json" }
+        : { "x-goog-api-key": env.GEMINI_API_KEY ?? "", "content-type": "application/json" },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }),
+    });
+    const body = Buffer.from(await response.arrayBuffer());
+    const sha = createHash("sha256").update(body).digest("hex");
+    say(`model base=${base} auth=${auth} status=${response.status} sha=${sha}`);
+  }
+
   async function answer(command) {
     if (command !== "work" && command !== "quit") writeSessionFile();
     const call = /^call (\w+) (.*)$/.exec(command);
@@ -225,6 +300,14 @@ export async function runFake(dialect) {
       runHooks(EVENTS.end, { reason: dialect === "codex" ? "exit" : "exit" });
       say("bye");
       process.exit(0);
+    }
+    const model = /^model (.*)$/.exec(command);
+    if (model) {
+      try {
+        await modelTurn(model[1]);
+      } catch (error) {
+        say(`model FAILED: ${error.message}`);
+      }
     }
     const prompt = /^prompt (.*)$/.exec(command);
     if (prompt) {

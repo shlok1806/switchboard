@@ -13,6 +13,7 @@ import {
   truncate,
 } from "../../../shared/src/index";
 import { toolArg } from "../hooks/summarize";
+import type { TurnParser } from "./api";
 import { maskSecrets } from "./mask";
 
 type Usage = {
@@ -228,7 +229,7 @@ export function cutToBytes(text: string, cap: number): string {
 }
 
 export interface TurnInput {
-  reader: TurnReader;
+  reader: TurnParser;
   request: CappedBody;
   response: CappedBody;
   /** Raw request and response bodies as text; only read in raw mode. */
@@ -263,7 +264,7 @@ export function buildProxyEvent(turn: TurnInput, options: BuildOptions): ProxyEv
   const { reader } = turn;
   const toolCalls: ToolCall[] = reader.toolUses.slice(0, MAX_PROXY_TOOL_CALLS).map((use) => ({
     name: truncate(use.name, 100),
-    arg: clean(toolArg(use.name, use.input, shortPath)),
+    arg: clean(toolArg(use.as ?? use.name, use.input, shortPath)),
   }));
   const base: Omit<ProxyTurn, "maskedSecrets"> = {
     model: truncate(reader.model, MAX_PROXY_MODEL_LENGTH),

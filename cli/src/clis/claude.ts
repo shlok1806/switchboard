@@ -11,6 +11,7 @@
 
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "../claude-session";
 import { withMcpConfig, writeClaudeMcpConfig } from "../mcp-config";
+import { anthropicMessages } from "../proxy/anthropic";
 import { originalBaseUrl } from "../proxy/options";
 import { applySessionSettings } from "../session-settings";
 import type { CliAdapter } from "./adapter";
@@ -25,7 +26,10 @@ export const claude: CliAdapter = {
   // Claude Code's picker: its first hooks may run before the Person picks a session.
   sessionFromHooks: false,
 
-  proxyUpstream: ({ env }) => originalBaseUrl(env, claudeConfigDir(env)),
+  proxyRoute: async ({ env }) => ({
+    api: anthropicMessages,
+    upstream: (await originalBaseUrl(env, claudeConfigDir(env))) ?? anthropicMessages.defaultUpstream,
+  }),
 
   async plan(args, { cwd, env }) {
     const plan = await planSession(args, { cwd, claudeConfigDir: claudeConfigDir(env) });
