@@ -18,7 +18,9 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
   const can = useCapabilities();
   const [mode, setMode] = useState<Mode>(defaultAgent && can.directives ? "Directive" : "Update");
   const reachable = agents.filter((a) => a.presence !== "gone");
-  const [to, setTo] = useState<AgentId | "">(defaultAgent ?? reachable[0]?.id ?? "");
+  const [picked, setTo] = useState<AgentId | "">(defaultAgent ?? "");
+  // Agents arrive after the first render, so an unpicked target follows the first reachable one.
+  const to = picked && reachable.some((a) => a.id === picked) ? picked : (reachable[0]?.id ?? "");
 
   const send = async (text: string) => {
     const result =
@@ -26,7 +28,7 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
         ? await store.source.act({ type: "update", text, task })
         : to
           ? await store.source.act({ type: "directive", to, text })
-          : { ok: false as const, reason: "Pick an Agent first." };
+          : { ok: false as const, reason: "No Agent is on the Channel to send a Directive to." };
     if (!result.ok) {
       toast.error(result.reason);
       return false;

@@ -30,8 +30,8 @@ const DEFAULT_RELAY = { interruptThreshold: 0.6, model: "typesafe/jev" };
  * Tasks (#8), Agents with Presence (#6), Hook Captures (#7), Claims (#9),
  * which the Tasks board claims and releases through, and the Relay's Verdicts
  * (#12), Takeover of a Stale Claim (#11), and Proxy Capture with each Agent's
- * Proxy mode (#15), which also makes Captures comparable. Directives arrive
- * with #14.
+ * Proxy mode (#15), which also makes Captures comparable, and Directives from a
+ * Person to one Agent (#14).
  */
 const LIVE_CAPABILITIES: Capabilities = {
   agents: true,
@@ -39,7 +39,7 @@ const LIVE_CAPABILITIES: Capabilities = {
   captures: true,
   claims: true,
   takeover: true,
-  directives: false,
+  directives: true,
   proxyMode: true,
   createTask: true,
 };
@@ -58,8 +58,7 @@ const ACTION_NAME: Record<PersonAction["type"], string> = {
  * - every HTTP call sends `Authorization: Bearer <secret>` and `X-Switchboard-Person`;
  * - the WebSocket at `/api/stream` sends `?secret=`, `?person=` and `?after=`;
  * - the history is `GET /api/events`, Tasks `GET /api/tasks`, Agents `GET /api/agents`.
- * Routes the Worker does not have yet (`/api/snapshot`, Directives, Takeover,
- * Proxy mode, Nicknames) degrade: the snapshot is assembled from the routes that
+ * Routes the Worker does not have yet (`/api/snapshot`, Nicknames) degrade: the snapshot is assembled from the routes that
  * exist, and the actions answer with a readable refusal.
  */
 export class HttpChannelSource implements ChannelSource {

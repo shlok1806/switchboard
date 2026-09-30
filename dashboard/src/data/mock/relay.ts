@@ -64,12 +64,13 @@ export function relay(
   scripted: Record<string, VerdictProbabilities> = {},
 ): Verdict[] {
   const verdicts: Verdict[] = [];
+  // A Directive is addressed and always delivered; the Relay never gives a Verdict on it.
+  if (event.type === "directive") return verdicts;
   const senderAgent = event.actor.kind === "agent" ? event.actor.agentId : null;
 
   for (const agent of agents) {
     if (agent.presence === "gone" || agent.id === senderAgent) continue;
     const overlap = overlapFor(event, agent);
-    const addressed = event.type === "directive" && event.payload.to === agent.id;
     const heldTask = tasks.find((t) => t.claim?.holder.kind === "agent" && t.claim.holder.agentId === agent.id);
     const sameTask =
       event.task !== undefined &&
@@ -79,8 +80,7 @@ export function relay(
 
     let probabilities = scripted[agent.id];
     if (!probabilities) {
-      if (addressed) probabilities = { drop: 0.01, queue: 0.05, interrupt: 0.94 };
-      else if (hasOverlap && event.type === "push") probabilities = { drop: 0.06, queue: 0.61, interrupt: 0.33 };
+      if (hasOverlap && event.type === "push") probabilities = { drop: 0.06, queue: 0.61, interrupt: 0.33 };
       else if (hasOverlap) probabilities = { drop: 0.35, queue: 0.58, interrupt: 0.07 };
       else if (sameTask && (event.type === "update" || event.type === "takeover" || event.type === "merge"))
         probabilities = { drop: 0.22, queue: 0.74, interrupt: 0.04 };
