@@ -332,7 +332,6 @@ export const KanbanProvider = <
         return `Put ${card} back.`;
       },
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [data, columns],
   );
 
