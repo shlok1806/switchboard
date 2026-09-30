@@ -38,21 +38,19 @@ const PATTERNS: Record<string, { delays: (number | null)[]; dur: number; round: 
 function LoaderGrid({
   delays,
   dur,
-  round,
 }: {
   delays: (number | null)[];
   dur: number;
-  round: boolean;
 }) {
   return (
     <span aria-hidden className="grid shrink-0 grid-cols-[repeat(3,4px)] gap-[1.5px]">
       {delays.map((delay, index) => (
         <span
           key={index}
-          className={`size-[4px] bg-ink ${round ? "rounded-full" : "rounded-[1px]"}`}
+          className="size-[4px] bg-ink"
           style={{
             opacity: delay === null ? 0.07 : 0.15,
-            animation: delay === null ? "none" : `pixel-on ${dur}ms ease-in-out ${delay}ms infinite`,
+            animation: delay === null ? "none" : `pixel-on ${dur}ms steps(2, end) ${delay}ms infinite`,
           }}
         />
       ))}
@@ -88,19 +86,13 @@ export default function LoadingState({
   const surfer = variant === "Surfer";
   const resolvedLabel = label ?? (surfer ? "Subway surfing" : "Churning");
   const [videoOk, setVideoOk] = useState(true);
-  const { delays, dur, round } = PATTERNS[variant] ?? PATTERNS.Drive;
+  const { delays, dur } = PATTERNS[variant] ?? PATTERNS.Drive;
 
+  // Switchboard: no shimmer gradient. The label is plain text with a terminal caret, as on the site's xterm.
   const labelEl = (
-    <span
-      className="bg-clip-text text-[13px] font-medium text-transparent"
-      style={{
-        backgroundImage:
-          "linear-gradient(90deg, var(--ink-3) 35%, var(--ink) 50%, var(--ink-3) 65%)",
-        backgroundSize: "200% 100%",
-        animation: "shimmer-text 1.4s linear infinite",
-      }}
-    >
+    <span className="font-mono text-[13px] text-ink">
       {resolvedLabel}
+      <span aria-hidden className="caret-blink ml-0.5 inline-block h-[1em] w-[0.55em] translate-y-[2px] bg-accent-ink" />
     </span>
   );
   const elapsedEl = <span className="font-mono text-[12px] text-ink-3 tabular-nums">{elapsed}</span>;
@@ -116,7 +108,7 @@ export default function LoadingState({
 
         {/* the context card follows the status text it is illustrating */}
         <div
-          className="mt-2 w-56 overflow-hidden rounded-[10px] shadow-overlay"
+          className="mt-2 w-56 overflow-hidden shadow-overlay"
           style={{ animation: "pop-in 200ms cubic-bezier(0.16,1,0.3,1) both", transformOrigin: "top left" }}
         >
           <div className="relative aspect-video w-full" style={{ background: "var(--tooltip-bg)" }}>
@@ -146,7 +138,7 @@ export default function LoadingState({
 
   return (
     <div role="status" className="flex w-fit items-center gap-2.5">
-      <LoaderGrid delays={delays} dur={dur} round={round} />
+      <LoaderGrid delays={delays} dur={dur} />
       {labelEl}
       {elapsedEl}
     </div>

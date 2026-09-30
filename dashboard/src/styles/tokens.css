@@ -300,4 +300,10 @@
   --ease-out-strong: steps(2, end);
   --ease-in-out-strong: steps(3, end);
   --ease-link: steps(2, end);
+  /* Every transition in a vendored component steps instead of easing, as on the site */
+  --default-transition-duration: 100ms;
+  --default-transition-timing-function: steps(2, end);
+  --ease-in-out: steps(3, end);
+  --ease-out: steps(2, end);
+  --ease-in: steps(2, end);
 }

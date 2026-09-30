@@ -59,7 +59,7 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
               value={to}
               onChange={(e) => setTo(e.target.value as AgentId)}
               aria-label="Directive target Agent"
-              className="h-7 min-w-0 max-w-[12rem] truncate rounded-[6px] border border-line bg-field px-1.5 font-mono text-[12px] text-ink"
+              className="bevel-in h-[26px] max-w-[12rem] min-w-0 truncate bg-card px-1 font-mono text-[12px] text-card-foreground coarse:h-9"
             >
               {reachable.map((a) => (
                 <option key={a.id} value={a.id}>

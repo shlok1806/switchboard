@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Radio } from "@/components/pixel-icon";
+import { PixelIcon } from "@/components/pixel-icon";
 import { normalizePersonName, type JoinCredentials } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 
@@ -38,23 +38,23 @@ export function JoinScreen({
     setProblem(reason ?? undefined);
   };
 
+  // The X login box: one Motif dialog in the middle of the stippled root window.
+  const field =
+    "bevel-in h-8 bg-card px-2 font-mono text-[13px] text-card-foreground outline-none placeholder:text-faint focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[hsl(var(--ring))] coarse:h-11 coarse:text-[16px]";
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-page px-4 py-10">
-      <form onSubmit={submit} className="flex w-full max-w-sm flex-col gap-5" noValidate>
-        <header className="flex flex-col gap-3">
-          <span className="flex size-10 items-center justify-center rounded-[10px] bg-accent text-on-accent">
-            <Radio className="size-5" />
-          </span>
-          <h1 className="font-display text-[24px] font-semibold leading-tight text-ink">Join the Channel</h1>
-          <p className="text-[13.5px] leading-relaxed text-ink-2">
+    <main className="stipple flex min-h-dvh items-center justify-center px-3 py-10">
+      <form onSubmit={submit} className="bevel-out w-full max-w-md bg-secondary text-secondary-foreground" noValidate>
+        <header className="titlebar-active flex h-[26px] items-center gap-1.5 px-1.5 coarse:h-11">
+          <PixelIcon name="terminal" />
+          <h1 className="text-[13px] leading-none font-bold tracking-tight">Switchboard: Join the Channel</h1>
+        </header>
+        <div className="bevel-in m-[3px] mt-0 flex flex-col gap-4 bg-card px-4 py-4 text-card-foreground">
+          <p className="text-[13px] leading-relaxed text-ink-2">
             Everyone on the Channel sees every Event, Task and Claim. Use the join secret your group shares and the name
             your Agents run under.
           </p>
-        </header>
-
-        <div className="flex flex-col gap-4 rounded-card bg-surface p-4 shadow-card">
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="join-person" className="text-[12.5px] font-medium text-ink">
+          <div className="grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center">
+            <label htmlFor="join-person" className="text-[13px] font-semibold">
               Your name
             </label>
             <input
@@ -67,33 +67,37 @@ export function JoinScreen({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. maya"
-              className="h-9 rounded-[6px] border border-line bg-field px-2.5 font-mono text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-accent"
+              className={field}
             />
-            <span id="join-person-hint" className="text-[11.5px] text-ink-3">
+            <span id="join-person-hint" className="text-[11.5px] text-ink-3 sm:col-start-2">
               Lowercase letters, digits, "-" and "_". It starts every Agent ID you run.
             </span>
-          </div>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[12.5px] font-medium text-ink">Join secret</span>
+            <label htmlFor="join-secret" className="mt-2 text-[13px] font-semibold sm:mt-0">
+              Join secret
+            </label>
             <input
+              id="join-secret"
               name="secret"
               type="password"
               autoComplete="current-password"
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
-              className="h-9 rounded-[6px] border border-line bg-field px-2.5 font-mono text-[13px] text-ink outline-none focus:border-accent"
+              className={field}
             />
-          </label>
+          </div>
           {problem && (
-            <p role="alert" className="rounded-[6px] bg-red-tint px-2.5 py-2 text-[12.5px] text-red">
+            <p role="alert" className="flex items-start gap-2 text-[12.5px] font-semibold text-red">
+              <PixelIcon name="alert" className="mt-px" />
               {problem}
             </p>
           )}
-          <Button type="submit" variant="accent" size="md" disabled={busy} className="w-full">
+        </div>
+        <footer className="flex items-center justify-between gap-3 px-2 pt-1 pb-2">
+          <p className="text-[11.5px] text-muted-foreground">This browser remembers both until you leave the Channel.</p>
+          <Button type="submit" variant="accent" size="sm" disabled={busy} className="shrink-0 px-5 coarse:h-11">
             {busy ? "Joining" : "Join"}
           </Button>
-        </div>
-        <p className="text-center text-[12px] text-ink-3">This browser remembers both until you leave the Channel.</p>
+        </footer>
       </form>
     </main>
   );

@@ -58,12 +58,12 @@ function SourceChip({ source }: { source?: StreamingSource }) {
       href={source.href}
       target="_blank"
       rel="noreferrer"
-      className="ml-0 mr-1 inline-flex h-4.5 translate-y-[-1px] items-center gap-1 rounded-[5px]
+      className="ml-0 mr-1 inline-flex h-4.5 translate-y-[-1px] items-center gap-1
         bg-inset pr-[3px] pl-[3px] align-middle font-mono text-[10.5px] text-ink-2 shadow-hairline
         transition-colors duration-150 hover:bg-hover hover:text-ink"
       style={{ animation: "pop-in 250ms cubic-bezier(0.23,1,0.32,1) both" }}
     >
-      <img src={sourceImage(source)} alt="" className="source-avatar size-3 rounded-[3px]" />
+      <img src={sourceImage(source)} alt="" className="source-avatar size-3" />
       <span>{source.domain}</span>
     </a>
   );
@@ -147,7 +147,7 @@ export default function StreamingText({
         )}
         {!done && (
           <span
-            className="ml-0.5 inline-block h-3 w-0.5 translate-y-0.5 rounded-full bg-ink"
+            className="ml-0.5 inline-block h-3 w-0.5 translate-y-0.5 bg-ink"
             style={{ animation: "fade-in 150ms ease-out both" }}
           />
         )}
@@ -163,7 +163,7 @@ export default function StreamingText({
             key={i}
             type="button"
             aria-label="Action"
-            className="flex size-6 items-center justify-center rounded-[6px] text-ink-3
+            className="flex size-6 items-center justify-center text-ink-3
               transition-colors duration-100 hover:bg-hover-2 hover:text-ink-2"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -175,7 +175,7 @@ export default function StreamingText({
           type="button"
           aria-expanded={sourcesOpen}
           onClick={() => setSourcesOpen((current) => !current)}
-          className="ml-1.5 flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 text-left transition-colors duration-150 hover:bg-hover"
+          className="ml-1.5 flex items-center gap-1.5 px-1 py-0.5 text-left transition-colors duration-150 hover:bg-hover"
         >
           <span className="flex -space-x-1">
             {sources.map((source) => (
@@ -183,7 +183,7 @@ export default function StreamingText({
                 key={source.domain}
                 src={sourceImage(source)}
                 alt=""
-                className="source-avatar size-3.5 rounded-full bg-surface shadow-[0_0_0_1.5px_var(--canvas)]"
+                className="source-avatar size-3.5 bg-surface shadow-[0_0_0_1.5px_var(--canvas)]"
               />
             ))}
           </span>
@@ -200,16 +200,16 @@ export default function StreamingText({
         }}
       >
         <div className="overflow-hidden">
-          <div className="mt-1.5 flex flex-col rounded-[10px] bg-inset p-1 shadow-hairline">
+          <div className="mt-1.5 flex flex-col bg-inset p-1 shadow-hairline">
             {sources.map((source) => (
               <a
                 key={source.domain}
                 href={source.href}
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center gap-2 rounded-[6px] px-1.5 py-1 text-[12px] text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink"
+                className="flex items-center gap-2 px-1.5 py-1 text-[12px] text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink"
               >
-                <img src={sourceImage(source)} alt="" className="source-avatar size-4 rounded-[4px]" />
+                <img src={sourceImage(source)} alt="" className="source-avatar size-4" />
                 <span className="animated-underline">{source.name}</span>
                 <span className="ml-auto font-mono text-[10.5px] text-ink-3">{source.domain}</span>
               </a>
@@ -229,7 +229,7 @@ export default function StreamingText({
             <button
               key={text}
               onClick={() => onFollowUp?.(text, i)}
-              className="-mx-1.5 flex items-center gap-2 rounded-[7px] border-b border-line
+              className="-mx-1.5 flex items-center gap-2 border-b border-line
                 px-1.5 py-1.5 text-left text-[12.5px] text-ink transition-colors
                 duration-100 hover:bg-hover-2"
               style={

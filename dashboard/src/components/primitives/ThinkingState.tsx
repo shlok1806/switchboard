@@ -79,7 +79,7 @@ const VARIANTS: Record<
 
 function Dot({ tone }: { tone: string }) {
   return (
-    <span className={`flex size-3.5 shrink-0 items-center justify-center rounded-full text-white ${tone}`}>
+    <span className={`flex size-3.5 shrink-0 items-center justify-center text-white ${tone}`}>
       <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
         <circle cx="12" cy="12" r="9" />
         <path d="M3.5 12h17M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
@@ -228,7 +228,7 @@ export default function ThinkingState({
                       <path d="M20 6L9 17l-5-5" />
                     </svg>
                   ) : (
-                    <span className="size-3 shrink-0 rounded-full border-[1.5px] border-line-strong border-t-ink-2" style={{ animation: "spin 700ms linear infinite" }} />
+                    <span className="size-3 shrink-0 border-[1.5px] border-line-strong border-t-ink-2" style={{ animation: "spin 700ms linear infinite" }} />
                   )
                 )}
                 <span className={`min-w-0 truncate text-[12.5px] ${variant === "Reasoning" ? "whitespace-normal leading-relaxed text-ink-2" : "font-medium text-ink"} ${variant === "Search" ? "animated-underline" : ""}`}>
@@ -247,7 +247,7 @@ export default function ThinkingState({
                 )}
                 </>
               );
-              const rowClass = "flex min-h-7 w-full items-center gap-2 rounded-[6px] px-1.5 py-0.5 text-left";
+              const rowClass = "flex min-h-7 w-full items-center gap-2 px-1.5 py-0.5 text-left";
               const animation = { animation: `fade-up 320ms cubic-bezier(0.23,1,0.32,1) ${i * 120}ms both` };
 
               if (variant === "Search") {

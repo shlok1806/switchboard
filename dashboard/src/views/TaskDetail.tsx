@@ -11,8 +11,6 @@ import {
   SnippetCopyButton,
   SnippetHeader,
   SnippetTabsContent,
-  SnippetTabsList,
-  SnippetTabsTrigger,
 } from "@/components/kibo-ui/snippet";
 import { AgentLink, CaptureChip, PresencePill, StalePill, TaskLink, VerdictTally } from "@/components/domain/pills";
 import { COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from "@/components/domain/task";
@@ -237,16 +235,14 @@ export function TaskDetail({ number }: { number: number }) {
           {(task.branch || task.pr) && (
             <section className="flex flex-col gap-2">
               {task.branch && (
-                <Snippet defaultValue="switch" className="bevel-in border-0 bg-card">
-                  <SnippetHeader className="border-b border-border bg-secondary">
-                    <SnippetTabsList className="h-7 bg-transparent p-0">
-                      <SnippetTabsTrigger value="switch" className="h-6 border-0 bg-transparent text-[12px] shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                        <GitBranch /> Branch
-                      </SnippetTabsTrigger>
-                    </SnippetTabsList>
-                    <SnippetCopyButton value={`git fetch && git switch ${task.branch}`} className="btn-motif size-6 opacity-100" aria-label="Copy command" />
+                <Snippet defaultValue="switch">
+                  <SnippetHeader>
+                    <span className="flex items-center gap-1.5 text-[12px] font-bold">
+                      <GitBranch /> Branch
+                    </span>
+                    <SnippetCopyButton value={`git fetch && git switch ${task.branch}`} aria-label="Copy command" />
                   </SnippetHeader>
-                  <SnippetTabsContent value="switch" className="bg-card px-3 py-2.5 font-mono text-[12px] text-ink">
+                  <SnippetTabsContent value="switch">
                     git switch {task.branch}
                   </SnippetTabsContent>
                 </Snippet>
@@ -259,7 +255,7 @@ export function TaskDetail({ number }: { number: number }) {
             </section>
           )}
 
-          {task.status !== "done" && <Composer task={task.number} />}
+          {task.status !== "done" && <Composer task={task.number} className="bevel-out" />}
         </aside>
       </div>
     </div>

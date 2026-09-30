@@ -206,7 +206,7 @@ export default function App() {
         <Panel route={route} />
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />
-      <Toaster position="bottom-right" offset={{ bottom: "calc(var(--panel-h) + 16px)" }} mobileOffset={{ bottom: "calc(var(--panel-h) + 12px)" }} closeButton />
+      <Toaster position="bottom-right" offset={{ bottom: "calc(var(--panel-h) + 40px)", right: "20px" }} mobileOffset={{ bottom: "calc(var(--panel-h) + 28px)" }} closeButton />
     </TooltipProvider>
   );
 }

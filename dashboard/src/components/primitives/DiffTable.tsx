@@ -46,7 +46,7 @@ function IncludedMark({ included, tone }: { included: boolean; tone: "red" | "gr
   return (
     <span
       aria-hidden
-      className={`flex size-4.5 shrink-0 items-center justify-center rounded-[5px] transition-[background-color,color,transform] duration-150 ${
+      className={`flex size-4.5 shrink-0 items-center justify-center transition-[background-color,color,transform] duration-150 ${
         included
           ? tone === "red" ? "bg-red text-white" : "bg-green text-white"
           : "bg-inset text-ink-3 shadow-hairline"
@@ -131,10 +131,10 @@ export default function DiffTable({
                   </td>
                   <td className="primitive-table-cell">
                     <span
-                      className="inline-flex h-5.5 items-center gap-1.5 rounded-full bg-inset px-2 text-[11.5px] font-medium shadow-hairline transition-opacity duration-200"
+                      className="inline-flex h-5.5 items-center gap-1.5 bg-inset px-2 text-[11.5px] font-medium shadow-hairline transition-opacity duration-200"
                       style={{ opacity: out ? 0.55 : 1 }}
                     >
-                      <span className={`size-1.5 rounded-full ${DOT[row.dept]}`} />
+                      <span className={`size-1.5 ${DOT[row.dept]}`} />
                       <span className="text-ink-2">{row.dept}</span>
                     </span>
                   </td>
@@ -187,8 +187,8 @@ export default function DiffTable({
                         Pistachio
                       </span>
                       <span className="primitive-table-cell">
-                        <span className="inline-flex h-5.5 items-center gap-1.5 rounded-full bg-surface px-2 text-[11.5px] font-medium shadow-hairline">
-                          <span className="size-1.5 rounded-full bg-green" />
+                        <span className="inline-flex h-5.5 items-center gap-1.5 bg-surface px-2 text-[11.5px] font-medium shadow-hairline">
+                          <span className="size-1.5 bg-green" />
                           <span className="text-ink-2">Seasonal</span>
                         </span>
                       </span>
@@ -214,10 +214,10 @@ export default function DiffTable({
           >
             {accepted ? (
               <span
-                className="inline-flex items-center gap-1.5 rounded-full bg-green-tint py-1 pr-2.5 pl-1 text-[12.5px] font-medium text-green"
+                className="inline-flex items-center gap-1.5 bg-green-tint py-1 pr-2.5 pl-1 text-[12.5px] font-medium text-green"
                 style={{ animation: "pop-in 180ms cubic-bezier(0.23,1,0.32,1) both" }}
               >
-                <span className="flex size-4.5 items-center justify-center rounded-full bg-green text-white">
+                <span className="flex size-4.5 items-center justify-center bg-green text-white">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
                 </span>
                 {removals + additions} {removals + additions === 1 ? "edit" : "edits"} applied

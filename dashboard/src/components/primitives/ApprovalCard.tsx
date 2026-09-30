@@ -269,8 +269,8 @@ export default function ApprovalCard({
   if (sent) {
     return (
       <div className="flex w-full max-w-80 items-center gap-3" style={{ animation: "pop-in 260ms cubic-bezier(0.23,1,0.32,1) both" }}>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-green-tint py-1 pr-2.5 pl-1 text-[12.5px] font-medium text-green">
-          <span className="flex size-4.5 items-center justify-center rounded-full bg-green text-white">
+        <span className="inline-flex items-center gap-1.5 bg-green-tint py-1 pr-2.5 pl-1 text-[12.5px] font-medium text-green">
+          <span className="flex size-4.5 items-center justify-center bg-green text-white">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
           </span>
           {t.sentMessage}
@@ -345,12 +345,12 @@ export default function ApprovalCard({
                             className="relative z-10 flex items-center gap-1.5 rounded-control pl-1 pr-2 py-1 text-left transition-colors duration-100"
                           >
                             <span
-                              className={`flex size-4 shrink-0 items-center justify-center transition-colors duration-200
-                                ${question.type === "radio" ? "rounded-full" : "rounded-[5px]"}
-                                ${on ? "bg-ink text-canvas" : "shadow-[inset_0_0_0_1.5px_var(--line-strong)] text-transparent"}`}
+                              className={`flex size-3.5 shrink-0 items-center justify-center
+                                ${question.type === "radio" ? "rotate-45 [&>*]:-rotate-45" : ""}
+                                ${on ? "bevel-thin-in bg-primary text-primary-foreground" : "bevel-thin-in bg-card text-transparent"}`}
                             >
                               {question.type === "radio" ? (
-                                <span className="size-1.5 rounded-full bg-canvas transition-transform duration-200" style={{ transform: on ? "scale(1)" : "scale(0)" }} />
+                                <span className="size-1.5 bg-canvas transition-transform duration-200" style={{ transform: on ? "scale(1)" : "scale(0)" }} />
                               ) : (
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
                               )}
@@ -397,7 +397,7 @@ export default function ApprovalCard({
               aria-label="Previous question"
               disabled={qi <= 0}
               onClick={() => goTo(qi - 1)}
-              className="flex size-[18px] items-center justify-center rounded-[5px] transition-colors duration-100 enabled:hover:text-ink disabled:opacity-30"
+              className="flex size-[18px] items-center justify-center transition-colors duration-100 enabled:hover:text-ink disabled:opacity-30"
             >
               <Ico size={14} path={<path d="M18 15l-6-6-6 6" />} />
             </button>
@@ -409,7 +409,7 @@ export default function ApprovalCard({
               aria-label="Next question"
               disabled={last}
               onClick={() => goTo(qi + 1)}
-              className="flex size-[18px] items-center justify-center rounded-[5px] transition-colors duration-100 enabled:hover:text-ink disabled:opacity-30"
+              className="flex size-[18px] items-center justify-center transition-colors duration-100 enabled:hover:text-ink disabled:opacity-30"
             >
               <Ico size={14} path={<path d="M6 9l6 6 6-6" />} />
             </button>

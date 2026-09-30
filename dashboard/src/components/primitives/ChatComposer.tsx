@@ -62,19 +62,21 @@ export default function ChatComposer<T extends string>({
     inputRef.current?.focus();
   };
 
+  // Switchboard: re-skinned as a Motif form. The tabs are a radio box of push
+  // buttons, the field is inset, and Send is a default push button.
   return (
-    <div className={`flex w-full flex-col overflow-hidden rounded-[10px] bg-surface shadow-card ${className}`}>
-      {/* header - tabs + actions */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line p-1.5">
-        <div className="flex items-center" role="tablist">
+    <div className={`flex w-full flex-col bg-secondary text-secondary-foreground ${className}`}>
+      <div className="flex shrink-0 items-center justify-between gap-2 px-1 pt-1 pb-1.5">
+        <div className="flex items-center gap-[2px]" role="tablist">
           {tabs.map((item) => (
             <button
               key={item}
               type="button"
               role="tab"
               aria-selected={tab === item}
+              aria-pressed={tab === item}
               onClick={() => onTabChange(item)}
-              className={`rounded-[6px] px-2 py-[3px] text-[13px] text-ink transition-[background-color,opacity] duration-100 ${tab === item ? "bg-field" : "opacity-60 hover:opacity-85"}`}
+              className={`btn-motif h-[24px] px-2.5 text-[12px] coarse:h-9 ${tab === item ? "bg-muted font-bold" : ""}`}
             >
               {item}
             </button>
@@ -83,48 +85,38 @@ export default function ChatComposer<T extends string>({
         <div className="flex min-w-0 items-center gap-1">{aside}</div>
       </div>
 
-      {/* composer */}
-      <div className="shrink-0 p-1.5">
-        <div
-          role="presentation"
-          onClick={() => inputRef.current?.focus()}
-          className="flex cursor-text flex-col gap-2 rounded-control border border-line bg-field p-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.035)] transition-[border-color,box-shadow] duration-150 focus-within:border-line-strong focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.025)]"
+      <div
+        role="presentation"
+        onClick={() => inputRef.current?.focus()}
+        className="bevel-in mx-1 flex cursor-text flex-col gap-1 bg-card px-2 py-1.5 text-card-foreground"
+      >
+        <textarea
+          ref={inputRef}
+          value={draft}
+          rows={2}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              void send();
+            }
+          }}
+          placeholder={l.placeholder}
+          aria-label={l.inputLabel}
+          className="min-h-9 resize-none bg-transparent font-mono text-[13px] leading-[1.45] outline-none placeholder:text-faint coarse:text-[16px]"
+        />
+      </div>
+      <div className="flex items-center justify-between gap-3 px-1 pt-1.5 pb-1">
+        <div className="min-w-0 text-[11.5px] leading-snug text-muted-foreground">{footer}</div>
+        <button
+          type="button"
+          aria-label="Send"
+          disabled={!canSend}
+          onClick={() => void send()}
+          className="btn-motif h-[26px] shrink-0 px-3 font-semibold outline outline-1 outline-[hsl(var(--foreground))] disabled:outline-[hsl(var(--faint))] coarse:h-10"
         >
-          <textarea
-            ref={inputRef}
-            value={draft}
-            rows={2}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-            placeholder={l.placeholder}
-            aria-label={l.inputLabel}
-            className="min-h-9 resize-none bg-transparent text-[13px] leading-[1.4] text-ink outline-none placeholder:text-ink-3"
-          />
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0 text-[11.5px] text-ink-3">{footer}</div>
-            <button
-              type="button"
-              aria-label="Send"
-              disabled={!canSend}
-              onClick={() => void send()}
-              className="flex size-7 shrink-0 items-center justify-center rounded-[8px]
-                transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.96]"
-              style={{
-                background: canSend ? "var(--ink)" : "var(--line-strong)",
-                color: canSend ? "var(--surface)" : "var(--ink-2)",
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 19V5M5 12l7-7 7 7" />
-              </svg>
-            </button>
-          </div>
-        </div>
+          Send
+        </button>
       </div>
     </div>
   );
