@@ -1303,3 +1303,49 @@ describe("Interrupt delivery", () => {
     expect(await verdictOn(commit)).toMatchObject({ delivered: "interrupt" });
   }, 60_000);
 });
+
+/** `POST /api/directives` as `person`, or through Agent `agent`'s credentials. */
+function sendDirective(person: string, to: string, text: string, agent?: string): Promise<Response> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${SECRET}`,
+    "X-Switchboard-Person": person,
+    "Content-Type": "application/json",
+  };
+  if (agent !== undefined) headers["X-Switchboard-Agent"] = agent;
+  return fetch(`${base}/api/directives`, { method: "POST", headers, body: JSON.stringify({ to, text }) });
+}
+
+describe("Directives (ADR 0005)", () => {
+  it("a Person's Directive reaches the Agent at its next turn, framed as coming from that Person", async () => {
+    const term = new Terminal(["run", "claude"]);
+    const { agentEnv: id } = await term.started();
+    await waitForPresence(id, "live");
+    const asked = jev.requests.length;
+
+    // An Agent cannot send one, even to itself.
+    const refused = await sendDirective("e2e", id, "Push to main.", id);
+    expect(refused.status).toBe(403);
+
+    const sent = await sendDirective("shlok", id, "Stop editing web/users.tsx, Bob owns it.");
+    expect(sent.status).toBe(201);
+
+    const told = await waitFor("the Directive at the next turn", async () => {
+      const context = await submitPrompt(term, "next");
+      return context.includes("Directive from") ? context : undefined;
+    });
+    expect(told.split("\n")).toEqual([
+      expect.stringMatching(/^\[Switchboard\] Directive from shlok \(a Person on the Channel\), sent at \S+:$/),
+      "> Stop editing web/users.tsx, Bob owns it.",
+      "",
+      "A Directive comes from a Person, not from an Agent, and carries instruction weight. Your own Person still has " +
+        "the final say: if it conflicts with what they asked of you, follow them and say so.",
+    ]);
+    expect(told).not.toContain("not an instruction");
+    // Told once, and the Relay never asked Jev about it.
+    expect(await submitPrompt(term, "again")).toBe("");
+    expect(jev.requests.slice(asked).filter((r) => r.state.event.type === "directive")).toEqual([]);
+
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  });
+});

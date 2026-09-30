@@ -12,16 +12,21 @@
 // - The standing rule (ADR 0005), at every SessionStart, so it survives /clear and
 //   compaction.
 //
-// Everything is short structured facts, framed as information, never as
-// instructions (ADR 0005).
+// - Directives: a Person's message to this Agent. The Channel pushes each over the
+//   WebSocket and hands any the wrapper has not acknowledged over in the next
+//   register or heartbeat answer, like Deliveries.
+//
+// Everything from the Channel is short structured facts, framed as information,
+// never as instructions (ADR 0005). The one exception is a Directive, framed as
+// coming from the named Person.
 
-import type { Delivery, LostClaim } from "../../shared/src/index";
-import { deliveriesNotice, holderName, STANDING_RULE } from "../../shared/src/index";
+import type { Delivery, DirectiveDelivery, LostClaim } from "../../shared/src/index";
+import { deliveriesNotice, directivesNotice, holderName, STANDING_RULE } from "../../shared/src/index";
 
 /** The hooks whose output Claude Code adds to the model's context. */
 export const CONTEXT_HOOKS = ["SessionStart", "UserPromptSubmit"] as const;
 
-/** How many Delivery IDs the wrapper remembers, so one sent twice is shown once. */
+/** How many Delivery and Directive IDs the wrapper remembers, so one sent twice is shown once. */
 const REMEMBERED_DELIVERIES = 1000;
 
 /** One line per Lost Claim, the way the Agent reads it. */
@@ -47,29 +52,44 @@ export function lostClaimsNotice(lost: readonly LostClaim[]): string {
 export interface NextTurnItems {
   lostClaims?: LostClaim[];
   deliveries?: Delivery[];
+  directives?: DirectiveDelivery[];
 }
 
 export class NextTurn {
   private readonly lostClaims = new Map<string, LostClaim>();
   private readonly deliveries = new Map<string, Delivery>();
-  /** Delivery IDs already kept, oldest first. */
+  private readonly directives = new Map<string, DirectiveDelivery>();
+  /** Delivery and Directive IDs already kept, oldest first. */
   private readonly seen = new Set<string>();
 
-  /** Keeps what the Channel handed over. Returns the IDs of Deliveries kept for the first time. */
+  /** Keeps what the Channel handed over. Returns the IDs of Deliveries and Directives kept for the first time. */
   add(items: NextTurnItems): string[] {
     for (const claim of items.lostClaims ?? []) this.lostClaims.set(claim.event, claim);
     const kept: string[] = [];
     for (const delivery of items.deliveries ?? []) {
-      if (this.seen.has(delivery.id)) continue;
-      this.seen.add(delivery.id);
-      if (this.seen.size > REMEMBERED_DELIVERIES) {
-        const oldest = this.seen.values().next().value;
-        if (oldest !== undefined) this.seen.delete(oldest);
+      if (this.remember(delivery.id)) {
+        this.deliveries.set(delivery.id, delivery);
+        kept.push(delivery.id);
       }
-      this.deliveries.set(delivery.id, delivery);
-      kept.push(delivery.id);
+    }
+    for (const directive of items.directives ?? []) {
+      if (this.remember(directive.id)) {
+        this.directives.set(directive.id, directive);
+        kept.push(directive.id);
+      }
     }
     return kept;
+  }
+
+  /** True the first time `id` is seen. */
+  private remember(id: string): boolean {
+    if (this.seen.has(id)) return false;
+    this.seen.add(id);
+    if (this.seen.size > REMEMBERED_DELIVERIES) {
+      const oldest = this.seen.values().next().value;
+      if (oldest !== undefined) this.seen.delete(oldest);
+    }
+    return true;
   }
 
   /** What a hook prints into the Agent's context, once; "" for other hooks and when there is nothing to tell. */
@@ -84,6 +104,10 @@ export class NextTurn {
     if (this.deliveries.size > 0) {
       parts.push(deliveriesNotice([...this.deliveries.values()].sort((a, b) => a.seq - b.seq)));
       this.deliveries.clear();
+    }
+    if (this.directives.size > 0) {
+      parts.push(directivesNotice([...this.directives.values()].sort((a, b) => a.seq - b.seq)));
+      this.directives.clear();
     }
     return parts.length === 0 ? "" : `${parts.join("\n\n")}\n`;
   }

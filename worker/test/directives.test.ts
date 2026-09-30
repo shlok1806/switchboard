@@ -158,18 +158,23 @@ describe("Sending a Directive", () => {
     });
   });
 
-  it("hands an unacknowledged Directive over in heartbeat answers until the wrapper acknowledges it", async () => {
+  it("hands a Directive the wrapper has not acknowledged over in the next heartbeat answer, once", async () => {
     const agent = await FakeAgent.start("alice", false);
     const { event } = await (await direct("shlok", agent.id, "Rebase onto main first.")).json<SendDirectiveResponse>();
 
     const first = await agent.heartbeat();
     expect(first.directives).toEqual([expect.objectContaining({ id: event.id, from: "shlok", to: agent.id })]);
-    // Still unacknowledged, so it is handed over again (the wrapper keeps each once).
-    expect((await agent.heartbeat()).directives?.map((d) => d.id)).toEqual([event.id]);
+    expect((await agent.heartbeat()).directives).toBeUndefined();
+  });
 
-    await agent.connect();
+  it("stops handing a Directive over once the wrapper acknowledges it over the WebSocket", async () => {
+    const agent = await FakeAgent.start("alice");
+    const { event } = await (await direct("shlok", agent.id, "Rebase onto main first.")).json<SendDirectiveResponse>();
+    await waitFor(() => (agent.directives.length > 0 ? true : undefined));
     agent.ack([event.id]);
-    await waitFor(async () => ((await agent.heartbeat()).directives === undefined ? true : undefined));
+    // The ack travels on the socket; a heartbeat after it hands nothing over.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await agent.heartbeat()).directives).toBeUndefined();
   });
 
   it("reaches a Gone Agent when its session resumes", async () => {

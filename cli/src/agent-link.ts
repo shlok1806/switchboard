@@ -89,14 +89,15 @@ export class AgentLink {
     }
   }
 
-  private handOver({ lostClaims, deliveries }: NextTurnItems): void {
+  private handOver({ lostClaims, deliveries, directives }: NextTurnItems): void {
     if (lostClaims !== undefined && lostClaims.length > 0) {
       this.log(`lost Claims on ${lostClaims.map((lost) => `#${lost.task}`).join(", ")} to a Takeover`);
     }
-    if ((lostClaims?.length ?? 0) + (deliveries?.length ?? 0) === 0) return;
+    if ((lostClaims?.length ?? 0) + (deliveries?.length ?? 0) + (directives?.length ?? 0) === 0) return;
     this.onNextTurn({
       ...(lostClaims === undefined ? {} : { lostClaims }),
       ...(deliveries === undefined ? {} : { deliveries }),
+      ...(directives === undefined ? {} : { directives }),
     });
   }
 

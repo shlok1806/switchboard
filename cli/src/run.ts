@@ -11,11 +11,20 @@ import type {
   Agent,
   AgentId,
   DeliveryAck,
+  DirectiveAck,
+  DirectiveInterruptMessage,
+  DirectiveTypedResult,
   InterruptAttach,
   InterruptMessage,
   InterruptResult,
 } from "../../shared/src/index";
-import { agentIdFor, DEFAULT_IDLE_AFTER_MS, HEARTBEAT_INTERVAL_MS, interruptNotice } from "../../shared/src/index";
+import {
+  agentIdFor,
+  DEFAULT_IDLE_AFTER_MS,
+  directivesNotice,
+  HEARTBEAT_INTERVAL_MS,
+  interruptNotice,
+} from "../../shared/src/index";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { ChannelClient, ChannelError } from "./channel-client";
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "./claude-session";
@@ -132,7 +141,7 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     waitMs: seconds(env.SWITCHBOARD_INTERRUPT_WAIT_SECONDS, DEFAULT_WAIT_MS),
     log,
   });
-  // Tells the Channel this socket is the Agent's wrapper, so its Interrupts come here.
+  // Tells the Channel this socket is the Agent's wrapper, so its Interrupts and Directives come here.
   const attach = () => {
     if (agentId === null) return;
     const frame: InterruptAttach = { type: "interrupt.attach", agent: agentId };
@@ -154,8 +163,27 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
     };
     stream.send(JSON.stringify(result));
   };
+  // A Person's Directive, typed right away through the same guards as an Interrupt.
+  // When it cannot be typed, the Channel holds it for the next turn instead.
+  const directed = async (message: DirectiveInterruptMessage) => {
+    const { directive } = message;
+    log(`Directive ${directive.id} from ${directive.from}`);
+    const outcome = await typer.type(directivesNotice([directive]));
+    log(
+      outcome.typed
+        ? `typed Directive ${directive.id}`
+        : `Directive ${directive.id} left for the next turn: ${outcome.reason}`,
+    );
+    const result: DirectiveTypedResult = {
+      type: "directive.result",
+      agent: message.agent,
+      id: directive.id,
+      ...outcome,
+    };
+    stream.send(JSON.stringify(result));
+  };
   // What the Agent is told at its next turn: Claims it lost to a Takeover while it
-  // was Gone, Queued Events, and the standing rule at SessionStart.
+  // was Gone, Queued Events, Directives, and the standing rule at SessionStart.
   const nextTurn = new NextTurn();
   const stream = client.follow(
     (message) => {
@@ -174,6 +202,17 @@ export async function runClaude(rawArgs: string[]): Promise<number> {
         stream.send(JSON.stringify(ack));
       }
       if (message.type === "interrupt" && message.agent === agentId) void interrupted(message);
+      if (message.type === "directives" && message.agent === agentId) {
+        const kept = nextTurn.add({ directives: message.directives });
+        if (kept.length > 0) log(`queued for the next turn: ${kept.length} Directive(s)`);
+        const ack: DirectiveAck = {
+          type: "directive.ack",
+          agent: message.agent,
+          ids: message.directives.map((d) => d.id),
+        };
+        stream.send(JSON.stringify(ack));
+      }
+      if (message.type === "directive.interrupt" && message.agent === agentId) void directed(message);
     },
     (connected) => {
       log(connected ? "stream connected" : "stream disconnected");
