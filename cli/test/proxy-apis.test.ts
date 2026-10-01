@@ -297,6 +297,52 @@ describe("the Proxy Capture in front of the Responses API (Codex)", () => {
         await new Promise((resolve) => early.close(resolve));
       }
     });
+
+    it(`finishes a ${encoding} turn at once when the CLI gives up mid-request after the API answered`, async () => {
+      const early = createServer((req, res) => {
+        req.resume();
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(RESPONSES_SSE);
+      });
+      await new Promise<void>((resolve) => early.listen(0, "127.0.0.1", resolve));
+      try {
+        const proxy = await startCapture(
+          openaiResponses,
+          "raw",
+          `http://127.0.0.1:${(early.address() as AddressInfo).port}`,
+        );
+        const body = compress(Buffer.from(JSON.stringify({ model: "gpt-6-sol", stream: true, input: "hi" })));
+        // Half the request, the whole answer, then the CLI goes away without the rest.
+        await new Promise<void>((resolve, reject) => {
+          const req = request(
+            new URL("/responses", proxy.url),
+            {
+              method: "POST",
+              headers: { "content-type": "application/json", "content-encoding": encoding },
+            },
+            (res) => {
+              res.resume();
+              res.on("end", () => {
+                req.destroy();
+                resolve();
+              });
+            },
+          );
+          req.on("error", () => {});
+          req.on("close", () => {});
+          req.write(body.subarray(0, Math.floor(body.length / 2)), (error) => error && reject(error));
+        });
+        const gaveUp = Date.now();
+        // What was read is all there will be: the turn is sent now, not after the 10 s guard
+        // (which also holds the wrapper's session end, as it drains turns in flight).
+        const [event] = await waitForFrames(1);
+        expect(event?.type).toBe("proxy.raw");
+        expect(Date.now() - gaveUp).toBeLessThan(2000);
+      } finally {
+        early.closeAllConnections();
+        await new Promise((resolve) => early.close(resolve));
+      }
+    });
   }
 
   it("keeps the upstream's path prefix (the ChatGPT backend's /backend-api/codex)", async () => {

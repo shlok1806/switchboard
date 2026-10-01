@@ -174,10 +174,15 @@ export class ProxyServer {
     const send = target.protocol === "https:" ? httpsRequest : httpRequest;
 
     const mode = this.api.isTurn(req.method, path) ? this.safe(() => this.options.capturing()) : undefined;
+    // Resolved once the request is all in, the CLI gave up on it, or the guard ran out.
     let read: () => void = () => {};
     const requestRead = new Promise<void>((resolve) => {
-      read = resolve;
-      setTimeout(resolve, REQUEST_READ_TIMEOUT_MS).unref();
+      const guard = setTimeout(resolve, REQUEST_READ_TIMEOUT_MS);
+      guard.unref();
+      read = () => {
+        clearTimeout(guard);
+        resolve();
+      };
     });
     const capture: Capture | null = mode?.capture
       ? {
@@ -259,15 +264,26 @@ export class ProxyServer {
       if (requestDecoder) requestDecoder.end();
       else read();
     });
-    req.on("error", () => upstreamReq.destroy());
-    // The CLI went away mid-request: what was read is all there will be.
+    // The CLI went away mid-request: what was read is all there will be, and the turn
+    // need not wait for more.
+    req.on("error", () => {
+      upstreamReq.destroy();
+      read();
+    });
+    // Once the answer is done, Node detaches the request from its connection, so the request
+    // no longer hears that the CLI left: the connection's close says so instead.
+    const connection = req.socket;
+    connection.once("close", read);
+    void requestRead.then(() => connection.off("close", read));
     req.on("close", () => {
-      if (!requestDecoder) read();
+      if (!requestDecoder || !req.complete) read();
       else if (!requestDecoder.writableEnded) requestDecoder.end();
     });
     res.on("close", () => {
+      if (res.writableFinished) return;
       // The CLI gave up (Escape, or a timeout): stop the upstream call too, as without the proxy.
-      if (!res.writableFinished) upstreamReq.destroy();
+      upstreamReq.destroy();
+      read();
     });
   }
 
