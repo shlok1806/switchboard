@@ -15,6 +15,13 @@ const PEM = [
   "aFDrBz9vFqU4yT0h3u8f1FfJk2cpHtHgk9hUQJcoVoZsAuHPR4c9hK9FzNnPaS8Z",
   "-----END RSA PRIVATE KEY-----",
 ].join("\n");
+// Switchboard's own credentials, shaped the way worker/src/session.ts mints them: a
+// Person session `v1.<base64url JSON payload>.<base64url HMAC-SHA256>`, and an Agent
+// token `sba_` and 32 random bytes in base64url.
+const SESSION = `v1.${Buffer.from(
+  JSON.stringify({ kind: "session", sub: "octocat", iat: 1790000000, exp: 1792592000 }),
+).toString("base64url")}.${Buffer.alloc(32, 7).toString("base64url")}`;
+const AGENT_TOKEN = `sba_${Buffer.alloc(32, 9).toString("base64url")}`;
 
 const cases: { name: string; input: string; output: string; count: number }[] = [
   { name: "Anthropic key", input: `key ${ANTHROPIC} here`, output: "key sk-ant-**** here", count: 1 },
@@ -82,7 +89,46 @@ const cases: { name: string; input: string; output: string; count: number }[] = 
     output: "OPENAI_API_KEY=sk-****\nAWS=AKIA****\nPORT=8080",
     count: 2,
   },
+  {
+    name: "Switchboard Person session in the CLI's config file",
+    input: JSON.stringify({ url: "https://sb.example", repo: "o/r", session: SESSION, person: "octocat" }),
+    output: JSON.stringify({ url: "https://sb.example", repo: "o/r", session: "v1.****", person: "octocat" }),
+    count: 1,
+  },
+  { name: "Switchboard Agent token", input: `Bearer ${AGENT_TOKEN}`, output: "Bearer sba_****", count: 1 },
+  {
+    name: "Switchboard tokens after JSON-escaped newlines",
+    input: JSON.stringify(`token:\n${AGENT_TOKEN}\n${SESSION}`).slice(1, -1),
+    output: "token:\\nsba_****\\nv1.****",
+    count: 2,
+  },
+  {
+    name: "keys alone on their lines in a JSON-escaped file",
+    input: JSON.stringify("cat keys\nghp_1234567890abcdefghijABCDEFGHIJ123456\n\tAKIAIOSFODNN7EXAMPLE").slice(1, -1),
+    output: "cat keys\\nghp_****\\n\\tAKIA****",
+    count: 2,
+  },
   // Left alone.
+  {
+    name: "a key-like word inside another word",
+    input: "xghp_1234567890abcdefghijABCDEFGHIJ",
+    output: "xghp_1234567890abcdefghijABCDEFGHIJ",
+    count: 0,
+  },
+  { name: "version numbers", input: "upgrade from v1.2.3 to v1.10", output: "upgrade from v1.2.3 to v1.10", count: 0 },
+  {
+    name: "v1. paths and hosts",
+    input: "GET /api/v1.json via v1.example.com",
+    output: "GET /api/v1.json via v1.example.com",
+    count: 0,
+  },
+  {
+    name: "a v1. string that is not a whole session",
+    input: "v1.eyJhbGciOiJIUzI1NiJ9.short and v1.eyJ.x",
+    output: "v1.eyJhbGciOiJIUzI1NiJ9.short and v1.eyJ.x",
+    count: 0,
+  },
+  { name: "an sba_ word", input: "sba_config and sba_tooShort123", output: "sba_config and sba_tooShort123", count: 0 },
   {
     name: "plain prose",
     input: "The key idea is to keep tokens small.",

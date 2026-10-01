@@ -3,6 +3,8 @@
 // common key formats and env-style assignments, keeps the part that says what kind
 // of secret it is (`sk-ant-`, `AKIA`, `GITHUB_TOKEN=`) and masks the rest.
 
+import { AGENT_TOKEN_PREFIX } from "../../../shared/src/index";
+
 /** What every masked value is replaced with. */
 export const MASK = "****";
 
@@ -53,6 +55,15 @@ function secretName(name: string): boolean {
   return words.some((word) => SECRET_WORDS.has(word));
 }
 
+/**
+ * `pattern`, matched only where it starts a word. A JSON-escaped newline, tab or
+ * carriage return (`\n`) counts as a word break too: a raw request body holds the
+ * files an Agent read that way, so a key alone on its line follows an `n`.
+ */
+function token(pattern: RegExp): RegExp {
+  return new RegExp(`(?:(?<![A-Za-z0-9_])|(?<=\\\\[nrt]))${pattern.source}`, "g");
+}
+
 const RULES: Rule[] = [
   // PEM private key blocks, whatever the key type. Newlines may be real or JSON-escaped.
   {
@@ -60,23 +71,44 @@ const RULES: Rule[] = [
     replace: (_match, kind = "") => `-----BEGIN ${kind}PRIVATE KEY-----${MASK}-----END ${kind}PRIVATE KEY-----`,
   },
   // Anthropic, before OpenAI: both start with `sk-`.
-  { pattern: /\bsk-ant-[A-Za-z0-9_-]{8,}/g, replace: keepPrefix("sk-ant-") },
+  { pattern: token(/sk-ant-[A-Za-z0-9_-]{8,}/), replace: keepPrefix("sk-ant-") },
   // OpenAI, including project, service account and admin keys.
   {
-    pattern: /\bsk-((?:proj|svcacct|admin)-)?[A-Za-z0-9_-]{20,}/g,
+    pattern: token(/sk-((?:proj|svcacct|admin)-)?[A-Za-z0-9_-]{20,}/),
     replace: (_match, kind = "") => `sk-${kind}${MASK}`,
   },
   // Stripe secret and restricted keys.
-  { pattern: /\b([sr]k_(?:live|test)_)[A-Za-z0-9]{10,}/g, replace: (_match, prefix = "") => `${prefix}${MASK}` },
+  {
+    pattern: token(/([sr]k_(?:live|test)_)[A-Za-z0-9]{10,}/),
+    replace: (_match, prefix = "") => `${prefix}${MASK}`,
+  },
   // GitHub tokens: personal, OAuth, user-to-server, server-to-server, refresh, fine-grained.
-  { pattern: /\b(gh[pousr]_)[A-Za-z0-9]{20,}/g, replace: (_match, prefix = "") => `${prefix}${MASK}` },
-  { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}/g, replace: keepPrefix("github_pat_") },
+  { pattern: token(/(gh[pousr]_)[A-Za-z0-9]{20,}/), replace: (_match, prefix = "") => `${prefix}${MASK}` },
+  { pattern: token(/github_pat_[A-Za-z0-9_]{20,}/), replace: keepPrefix("github_pat_") },
   // AWS access key IDs (long-term and temporary).
-  { pattern: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, replace: (_match, prefix = "") => `${prefix}${MASK}` },
+  { pattern: token(/(AKIA|ASIA)[0-9A-Z]{16}\b/), replace: (_match, prefix = "") => `${prefix}${MASK}` },
   // Slack tokens: bot, user, app-level, refresh, legacy.
-  { pattern: /\b(xox[abeposr]-)[A-Za-z0-9-]{10,}/g, replace: (_match, prefix = "") => `${prefix}${MASK}` },
+  {
+    pattern: token(/(xox[abeposr]-)[A-Za-z0-9-]{10,}/),
+    replace: (_match, prefix = "") => `${prefix}${MASK}`,
+  },
+  // Switchboard's own credentials (worker/src/session.ts), which an Agent can read from
+  // its Person's config or its own session files. A Person session is `v1.`, a
+  // base64url JSON payload and a base64url HMAC-SHA256 (43 characters); an Agent token
+  // is the Agent token prefix and 32 random bytes in base64url (43 characters).
+  {
+    pattern: token(/v1\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/),
+    replace: keepPrefix("v1."),
+  },
+  {
+    pattern: token(new RegExp(`${AGENT_TOKEN_PREFIX}[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])`)),
+    replace: keepPrefix(AGENT_TOKEN_PREFIX),
+  },
   // JWTs: three base64url parts, the first two JSON objects.
-  { pattern: /\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, replace: keepPrefix("eyJ") },
+  {
+    pattern: token(/eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/),
+    replace: keepPrefix("eyJ"),
+  },
 ];
 
 /**
