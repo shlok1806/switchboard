@@ -102,19 +102,11 @@ export class HookSummarizer {
   /** The Hook Events for one hook call. Unknown hooks give none. */
   summarize(input: ClaudeHookInput): HookEventDraft[] {
     switch (input.hook_event_name) {
-      case "SessionStart": {
-        const source = str(input.source) ?? "startup";
-        return [
-          {
-            type: "session.start",
-            payload: { cwd: truncate(input.cwd ?? "", MAX_HOOK_TEXT_LENGTH), resumed: source === "resume", source },
-          },
-        ];
-      }
+      // The session's start and end are recorded once each, by the wrapper's registration
+      // and its end of the session, with the CLI's source and reason (#54).
+      case "SessionStart":
       case "SessionEnd":
-        return [
-          { type: "session.end", payload: { reason: "exit", detail: truncate(str(input.reason) ?? "other", 40) } },
-        ];
+        return [];
       case "Stop":
         this.turns += 1;
         return [{ type: "turn.end", payload: { turn: this.turns } }];

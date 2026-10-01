@@ -14,6 +14,8 @@ export interface AgentSession {
   sessionId: string;
   resumed: boolean;
   cwd: string;
+  /** How the agent CLI started the session ("startup", "resume"). */
+  source?: string;
   nickname?: string;
   /** The starting Proxy mode (`--proxy`), when the Person gave one. */
   proxyMode?: ProxyMode;
@@ -25,6 +27,8 @@ export interface AgentSession {
 
 export class AgentLink {
   private agent: Agent | null = null;
+  /** Whether the Channel registered the Agent once already, in this session. */
+  private registered = false;
   private presence: ReportedPresence = "live";
   private timer: ReturnType<typeof setInterval> | undefined;
   private inFlight: Promise<void> = Promise.resolve();
@@ -54,13 +58,17 @@ export class AgentLink {
       sessionId: this.session.sessionId,
       resumed: this.session.resumed,
       cwd: this.session.cwd,
+      ...(this.session.source === undefined ? {} : { source: this.session.source }),
       ...(this.session.nickname === undefined ? {} : { nickname: this.session.nickname }),
       ...(this.session.proxyMode === undefined ? {} : { proxyMode: this.session.proxyMode }),
       ...(this.session.secretMasking === undefined ? {} : { secretMasking: this.session.secretMasking }),
       ...(this.session.interrupts === undefined ? {} : { interrupts: this.session.interrupts }),
+      // Registered before in this session: the session goes on, it does not start again.
+      ...(this.registered ? { rejoin: true } : {}),
     });
     const { agent } = answer;
     this.agent = agent;
+    this.registered = true;
     this.log(`registered ${agent.id}`);
     this.onRegistered(agent, answer.token);
     this.handOver(answer);
@@ -78,13 +86,16 @@ export class AgentLink {
     this.beat();
   }
 
-  /** The session ended. Waits at most `timeoutMs` for the Channel to hear it. */
-  async end(timeoutMs: number): Promise<void> {
+  /**
+   * The session ended, for `detail` (the agent CLI's own reason, when it gave one).
+   * Waits at most `timeoutMs` for the Channel to hear it.
+   */
+  async end(timeoutMs: number, detail?: string): Promise<void> {
     clearInterval(this.timer);
     await this.inFlight;
     if (!this.agent) return;
     try {
-      await this.client.end(this.agent.id, timeoutMs);
+      await this.client.end(this.agent.id, timeoutMs, detail);
       this.log(`ended ${this.agent.id}`);
     } catch (error) {
       this.log(`could not end ${this.agent.id}: ${(error as Error).message}`);

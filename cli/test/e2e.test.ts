@@ -145,6 +145,15 @@ async function wrapperEvents(id: string): Promise<ChannelEvent[]> {
   return (await agentEvents(id)).filter((e) => e.capture !== "hook");
 }
 
+/** How many session.start and session.end Events an Agent has, whatever recorded them. */
+async function sessionEvents(id: string): Promise<{ starts: number; ends: number }> {
+  const all = await agentEvents(id);
+  return {
+    starts: all.filter((e) => e.type === "session.start").length,
+    ends: all.filter((e) => e.type === "session.end").length,
+  };
+}
+
 /** An Agent's Hook Capture Events. */
 async function hookEvents(id: string): Promise<ChannelEvent[]> {
   return (await agentEvents(id)).filter((e) => e.capture === "hook");
@@ -400,16 +409,18 @@ describe("switchboard run claude", () => {
     await waitForPresence(firstId, "gone");
 
     expect((await wrapperEvents(firstId)).map((e) => [e.type, e.payload])).toEqual([
-      ["session.start", { cwd, resumed: false }],
+      ["session.start", { cwd, resumed: false, source: "startup" }],
       ["presence", { presence: "live" }],
       ["presence", { presence: "idle" }],
       ["presence", { presence: "live" }],
       ["presence", { presence: "idle" }],
       // Typing "quit" is output too (the echo and the goodbye).
       ["presence", { presence: "live" }],
-      ["session.end", { reason: "exit" }],
+      ["session.end", { reason: "exit", detail: "prompt_input_exit" }],
       ["presence", { presence: "gone" }],
     ]);
+    // Once per session, whatever reports it: the hooks report no second one.
+    expect(await sessionEvents(firstId)).toEqual({ starts: 1, ends: 1 });
   });
 
   it("keeps the Agent ID when the session resumes, and brings it back Live", async () => {
@@ -427,9 +438,10 @@ describe("switchboard run claude", () => {
 
     const starts = (await wrapperEvents(firstId)).filter((e) => e.type === "session.start");
     expect(starts.map((e) => e.payload)).toEqual([
-      { cwd, resumed: false },
-      { cwd, resumed: true },
+      { cwd, resumed: false, source: "startup" },
+      { cwd, resumed: true, source: "resume" },
     ]);
+    expect(await sessionEvents(firstId)).toEqual({ starts: 2, ends: 2 });
   });
 
   it("resumes the latest session in this directory with --continue", async () => {
@@ -510,15 +522,15 @@ describe("the Hook Capture", () => {
       else expect(run[4]).toBeUndefined();
     }
 
-    // Every hook type reached the Channel, labelled with the Hook Capture, in order.
-    const events = await waitFor("the SessionEnd hook on the Channel", async () => {
-      const all = await hookEvents(id);
-      return all.at(-1)?.type === "session.end" ? all : undefined;
-    });
+    // Every hook type reached the Channel, labelled with the Hook Capture, in order. The
+    // session's start and end are the wrapper's, once each, with what the hooks said (#54).
+    await waitFor("the session's end on the Channel", async () =>
+      (await wrapperEvents(id)).some((e) => e.type === "session.end") ? true : undefined,
+    );
+    const events = await hookEvents(id);
     for (const event of events) expect(event.capture).toBe("hook");
     const longCommand = `echo ${"a".repeat(2000)}`;
     expect(events.map((e) => [e.type, e.payload])).toEqual([
-      ["session.start", { cwd, resumed: false, source: "startup" }],
       ["tool.call", { tool: "Bash", arg: "npm test", ok: true }],
       ["command", { command: "npm test" }],
       ["tool.call", { tool: "Bash", arg: `${longCommand.slice(0, 199)}…`, ok: true }],
@@ -532,15 +544,19 @@ describe("the Hook Capture", () => {
       ["tool.call", { tool: "Read", arg: "README.md", ok: true }],
       ["tool.call", { tool: "mcp__switchboard__claim", arg: "task=7 note=taking it", ok: true }],
       ["turn.end", { turn: 1 }],
-      ["session.end", { reason: "exit", detail: "prompt_input_exit" }],
     ]);
     // File contents never leave the laptop.
     expect(JSON.stringify(events)).not.toContain("SECRET_CONTENT");
 
-    // The hook Events reached the Channel before the wrapper ended the session.
+    // One start and one end, the end with Claude Code's own reason, after every hook Event.
     const all = await agentEvents(id);
-    const ended = all.findIndex((e) => e.type === "session.end" && e.capture === null);
-    expect(all.findIndex((e) => e.capture === "hook" && e.type === "session.end")).toBeLessThan(ended);
+    const sessions = all.filter((e) => e.type === "session.start" || e.type === "session.end");
+    expect(sessions.map((e) => [e.type, e.capture, e.payload])).toEqual([
+      ["session.start", null, { cwd, resumed: false, source: "startup" }],
+      ["session.end", null, { reason: "exit", detail: "prompt_input_exit" }],
+    ]);
+    const ended = all.findIndex((e) => e.type === "session.end");
+    expect(all.findIndex((e) => e.capture === "hook" && e.type === "turn.end")).toBeLessThan(ended);
 
     // The Agent's touched files, from its file edits, most recently edited first.
     const touched = await api<TouchedFilesResponse>(`${agentPath(id as AgentId)}/touched-files`);
@@ -1848,7 +1864,6 @@ describe("switchboard run codex and gemini", () => {
       return events.some((e) => e.type === "turn.end") ? events : undefined;
     });
     expect(hooked.map((e) => [e.type, e.payload])).toEqual([
-      ["session.start", { cwd, resumed: false, source: "startup" }],
       ["tool.call", { tool: "Bash", arg: "npm test", ok: true }],
       ["command", { command: "npm test", exitCode: 0 }],
       ["tool.call", { tool: "Edit", arg: "src/app.ts", ok: true }],
@@ -1866,6 +1881,9 @@ describe("switchboard run codex and gemini", () => {
     term.type("quit\r");
     expect(await term.exited).toBe(0);
     await waitForPresence(id, "gone");
+    expect(await sessionEvents(id)).toEqual({ starts: 1, ends: 1 });
+    const ends = (await agentEvents(id)).filter((e) => e.type === "session.end");
+    expect(ends.map((e) => e.payload)).toEqual([{ reason: "exit", detail: "exit" }]);
 
     // `codex resume <id>` is the same Agent.
     const again = new Terminal(["run", "codex", "resume", sessionId], { ...fakeEnv, FAKE_CODEX_TRUSTED: "1" });
@@ -1876,6 +1894,8 @@ describe("switchboard run codex and gemini", () => {
     again.type("quit\r");
     expect(await again.exited).toBe(0);
     expect((await agents()).filter((a) => a.id === id)).toHaveLength(1);
+    await waitForPresence(id, "gone");
+    expect(await sessionEvents(id)).toEqual({ starts: 2, ends: 2 });
   }, 90_000);
 
   it("types a Directive into Codex mid-turn, and holds one for the next turn while an approval dialog is open", async () => {
@@ -1960,7 +1980,6 @@ describe("switchboard run codex and gemini", () => {
       return events.some((e) => e.type === "turn.end") ? events : undefined;
     });
     expect(hooked.map((e) => e.type)).toEqual([
-      "session.start",
       "tool.call",
       "command",
       "tool.call",
@@ -1984,6 +2003,7 @@ describe("switchboard run codex and gemini", () => {
     term.type("quit\r");
     expect(await term.exited).toBe(0);
     await waitForPresence(id, "gone");
+    expect(await sessionEvents(id)).toEqual({ starts: 1, ends: 1 });
   }, 90_000);
 
   describe("the Proxy Capture", () => {

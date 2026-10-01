@@ -159,8 +159,10 @@ describe("recording Hook Events", () => {
 
     expect(await shlok.hooks(agent, events)).toEqual({ type: "hook.ack", recorded: events.map((e) => e.id) });
 
+    // A session's start and end are the wrapper's, once each (#54): an older wrapper's are acknowledged only.
     const recorded = await shlok.hookEvents();
-    expect(recorded.map((e) => [e.id, e.type, e.payload])).toEqual(events.map((e) => [e.id, e.type, e.payload]));
+    const kept = events.filter((e) => e.type !== "session.start" && e.type !== "session.end");
+    expect(recorded.map((e) => [e.id, e.type, e.payload])).toEqual(kept.map((e) => [e.id, e.type, e.payload]));
     for (const event of recorded) {
       expect(event).toMatchObject({ capture: "hook", actor: { kind: "agent", agentId: agent } });
     }

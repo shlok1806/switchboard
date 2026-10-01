@@ -71,6 +71,14 @@ export interface RegisterAgentRequest {
   sessionId: string;
   /** True when the session was resumed rather than started fresh. */
   resumed: boolean;
+  /** How the agent CLI started the session ("startup", "resume"), recorded on `session.start`. */
+  source?: string;
+  /**
+   * True when the wrapper registers again within the same session, because the
+   * Channel revoked its token (it went Gone) or forgot it. No new `session.start`
+   * is recorded for a Channel that still knows the Agent: the session goes on.
+   */
+  rejoin?: boolean;
   /** Working directory of the session. */
   cwd: string;
   /** Sets the Nickname. Omit to keep the current one; null clears it. */
@@ -125,7 +133,10 @@ export interface HeartbeatRequest {
 }
 
 /** `POST /api/agents/:id/end`: the session ended. The Agent goes Gone until it resumes. */
-export type EndSessionRequest = Record<string, never>;
+export interface EndSessionRequest {
+  /** The agent CLI's own reason (its SessionEnd hook's), recorded on `session.end`. */
+  detail?: string;
+}
 
 /** `GET /api/agents`: every Agent the Channel has seen, newest first. */
 export interface AgentsResponse {

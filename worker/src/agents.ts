@@ -177,10 +177,15 @@ export class AgentRoster {
     }
 
     const agent = this.agent(id);
-    this.record(id, "session.start", {
-      cwd: request.cwd,
-      resumed: request.resumed || existing !== undefined,
-    });
+    // Once per session: a wrapper registering again within its session (it went Gone) starts none.
+    if (!request.rejoin || existing === undefined) {
+      const source = request.source === undefined ? undefined : request.source.slice(0, 40);
+      this.record(id, "session.start", {
+        cwd: request.cwd,
+        resumed: request.resumed || existing !== undefined,
+        ...(source === undefined ? {} : { source }),
+      });
+    }
     if (existing?.presence !== "live") this.changed(id, "live");
     this.host.broadcast({ type: "agent", agent });
     await this.watch();
@@ -203,13 +208,13 @@ export class AgentRoster {
   }
 
   /** The session ended: the Agent is Gone until it resumes. Ending a Gone Agent changes nothing. */
-  async endSession(person: PersonName, id: AgentId): Promise<RosterResult> {
+  async endSession(person: PersonName, id: AgentId, detail?: string): Promise<RosterResult> {
     const found = this.owned(person, id);
     if (!found.ok) return found;
     if (found.row.presence === "gone") return { ok: true, agent: rowToAgent(found.row) };
     this.host.sql.exec("UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?", Date.now(), id);
     const agent = this.agent(id);
-    this.record(id, "session.end", { reason: "exit" });
+    this.record(id, "session.end", { reason: "exit", ...(detail ? { detail: detail.slice(0, 40) } : {}) });
     this.changed(id, "gone");
     this.host.broadcast({ type: "agent", agent });
     await this.watch();

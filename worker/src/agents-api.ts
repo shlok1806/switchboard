@@ -64,7 +64,11 @@ export function matchAgentRoute(method: string, pathname: string): AgentRoute | 
 type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentRequest> {
-  const { cli, sessionId, resumed, cwd, nickname, proxyMode, secretMasking, interrupts } = body;
+  const { cli, sessionId, resumed, cwd, nickname, proxyMode, secretMasking, interrupts, source, rejoin } = body;
+  if (source !== undefined && typeof source !== "string") return { ok: false, reason: '"source" must be text.' };
+  if (rejoin !== undefined && typeof rejoin !== "boolean") {
+    return { ok: false, reason: '"rejoin" must be true or false.' };
+  }
   if (typeof cli !== "string" || !CLIS.includes(cli as Cli)) {
     return { ok: false, reason: `"cli" must be one of ${CLIS.join(", ")}.` };
   }
@@ -101,6 +105,8 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
       ...(proxyMode === undefined ? {} : { proxyMode }),
       ...(secretMasking === undefined ? {} : { secretMasking }),
       ...(interrupts === undefined ? {} : { interrupts }),
+      ...(source === undefined ? {} : { source: source.slice(0, 40) }),
+      ...(rejoin === undefined ? {} : { rejoin }),
     },
   };
 }
@@ -140,8 +146,10 @@ export async function handleAgentRoute(
       if (presence !== "live" && presence !== "idle") return fail(400, '"presence" must be "live" or "idle".');
       return answer(await channel.heartbeat(person, route.id, presence));
     }
-    case "end":
-      return answer(await channel.endSession(person, route.id));
+    case "end": {
+      const { detail } = await readJson(request);
+      return answer(await channel.endSession(person, route.id, typeof detail === "string" ? detail : undefined));
+    }
     case "touched-files": {
       const files = await channel.touchedFiles(route.id);
       if (files === null) return fail(404, `No Agent ${route.id} on this Channel.`);

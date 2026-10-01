@@ -142,6 +142,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     sessionId,
     resumed,
     cwd,
+    source: resumed ? "resume" : "startup",
     ...(nickname === undefined ? {} : { nickname }),
     ...(proxySetting === "off" ? {} : { proxyMode: proxySetting }),
     ...(proxyFlags.mask ? {} : { secretMasking: false }),
@@ -326,6 +327,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   };
 
   let sawSessionStart = false;
+  let endDetail: string | undefined;
   if (plan.kind !== "none") {
     try {
       // Private to the Person: it holds the socket and the session's config files.
@@ -339,6 +341,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         context: (hook) => nextTurn.take(hook),
         onHook: (input) => {
           if (input.hook_event_name === "SessionStart") sawSessionStart = true;
+          // The CLI's own reason the session ended, for the session's one `session.end` (#54).
+          if (input.hook_event_name === "SessionEnd") {
+            endDetail = (typeof input.reason === "string" ? input.reason : "other").slice(0, 40);
+          }
           if (!hooksRunning) {
             hooksRunning = true;
             log("the CLI's hooks are running");
@@ -481,7 +487,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   stdin.pause();
   // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
   await Promise.all([hooks?.drain(END_TIMEOUT_MS), proxy?.drain(END_TIMEOUT_MS)]);
-  await (link as AgentLink | null)?.end(END_TIMEOUT_MS);
+  await (link as AgentLink | null)?.end(END_TIMEOUT_MS, endDetail);
   await stopHooks();
   sessionTools?.dispose();
   log(`exited ${exitCode}`);

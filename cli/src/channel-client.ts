@@ -124,8 +124,10 @@ export class ChannelClient {
     });
   }
 
-  end(id: AgentId, timeoutMs: number): Promise<AgentResponse> {
-    return this.request<AgentResponse>(`${agentPath(id)}/end`, { method: "POST", body: "{}" }, timeoutMs);
+  /** The session ended; `detail` is the agent CLI's own reason, when its SessionEnd hook gave one. */
+  end(id: AgentId, timeoutMs: number, detail?: string): Promise<AgentResponse> {
+    const body = JSON.stringify(detail === undefined ? {} : { detail });
+    return this.request<AgentResponse>(`${agentPath(id)}/end`, { method: "POST", body }, timeoutMs);
   }
 
   /**
