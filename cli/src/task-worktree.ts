@@ -55,16 +55,15 @@ async function succeeds(cwd: string, args: string[]): Promise<boolean> {
   }
 }
 
-/**
- * The GitHub `owner/repo` a remote URL points at, lowercased, or null when it names
- * none (a local path, say). Takes every form git accepts for GitHub: https, ssh,
- * scp-like (`git@github.com:owner/repo.git`), with or without `.git` or a trailing
- * slash. The host is not checked, so an SSH host alias from ~/.ssh/config works.
- */
-export function remoteRepo(url: string): string | null {
+/** GitHub's own hosts, for https, ssh and git URLs. */
+const GITHUB_HOSTS = new Set(["github.com", "www.github.com", "ssh.github.com"]);
+/** URL schemes that reach a git host over SSH, where a host can be an alias from ~/.ssh/config. */
+const SSH_SCHEMES = new Set(["ssh:", "git+ssh:", "ssh+git:"]);
+const NETWORK_SCHEMES = new Set(["https:", "http:", "git:", ...SSH_SCHEMES]);
+
+/** A remote URL's host and path, and whether it is reached over SSH; null for a local path. */
+function parseRemote(url: string): { host: string; path: string; ssh: boolean } | null {
   const trimmed = url.trim();
-  let path: string;
-  const scp = /^(?:[^@/\s]+@)?[^:/\s]+:(?!\/\/)(.+)$/.exec(trimmed);
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
     let parsed: URL;
     try {
@@ -72,21 +71,40 @@ export function remoteRepo(url: string): string | null {
     } catch {
       return null;
     }
-    if (parsed.protocol === "file:") return null;
-    path = parsed.pathname;
-  } else if (scp) {
-    path = scp[1] ?? "";
-  } else {
-    return null;
+    if (!NETWORK_SCHEMES.has(parsed.protocol)) return null;
+    return { host: parsed.hostname, path: parsed.pathname, ssh: SSH_SCHEMES.has(parsed.protocol) };
   }
-  const parts = path
+  // scp-like: `[user@]host:path`, always SSH.
+  const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.*)$/.exec(trimmed);
+  return scp ? { host: scp[1] ?? "", path: scp[2] ?? "", ssh: true } : null;
+}
+
+/**
+ * The GitHub `owner/repo` a remote URL points at, lowercased, or null when it names
+ * none. Takes every form git accepts for GitHub: https, ssh and scp-like
+ * (`git@github.com:owner/repo.git`), with or without `.git` or a trailing slash.
+ * The host must be GitHub's, or for SSH a name without dots: a host alias from
+ * ~/.ssh/config, or an insteadOf shorthand like `gh:owner/repo`. The path must be
+ * exactly `owner/repo`, as every GitHub repo's is.
+ */
+export function remoteRepo(url: string): string | null {
+  const remote = parseRemote(url);
+  if (remote === null) return null;
+  const host = remote.host.toLowerCase();
+  if (!GITHUB_HOSTS.has(host) && !(remote.ssh && host !== "" && !host.includes("."))) return null;
+  const parts = remote.path
+    .replace(/^\/+/, "")
     .replace(/\/+$/, "")
     .replace(/\.git$/i, "")
-    .split("/")
-    .filter(Boolean);
-  if (parts.length < 2) return null;
-  const key = parts.slice(-2).join("/").toLowerCase();
+    .split("/");
+  if (parts.length !== 2) return null;
+  const key = parts.join("/").toLowerCase();
   return /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(key) ? key : null;
+}
+
+/** `url` safe to print: without the user and password a URL can carry. */
+function printable(url: string): string {
+  return url.trim().replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/?#]*@/i, "$1");
 }
 
 /** What to tell a Person who is not in a clone of `repo`. */
@@ -101,6 +119,12 @@ export interface ChannelCheckout {
   gitDir: string;
 }
 
+/** Every value of a git config key, or none. */
+async function configValues(cwd: string, key: string): Promise<string[]> {
+  const values = await git(cwd, ["config", "--get-all", key]).catch(() => "");
+  return values.split("\n").filter((value) => value.trim() !== "");
+}
+
 /**
  * The clone of the Channel's `repo` that `cwd` is in (its main checkout, from
  * anywhere inside it or one of its worktrees), or a GitError saying what is wrong
@@ -111,16 +135,29 @@ export async function channelCheckout(cwd: string, repo: string): Promise<Channe
   const gitDir = await git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => {
     throw new GitError(`${cwd} is not inside a git repository. ${cloneGuide(repo)}`);
   });
-  if (basename(gitDir) !== ".git") {
-    throw new GitError(`${gitDir} is a bare repository, with no checkout to work in. ${cloneGuide(repo)}`);
-  }
+  // A plain clone: its git directory is `.git` inside its main checkout, where Task worktrees go.
   const root = dirname(gitDir);
-  // The URL as configured: an insteadOf rewrite may point fetches elsewhere, but this names the repo.
-  const url = await git(root, ["config", "--get", "remote.origin.url"]).catch(() => "");
-  if (url === "") throw new GitError(`${root} has no origin remote. ${cloneGuide(repo)}`);
-  const found = remoteRepo(url);
-  if (found !== repo.toLowerCase()) {
-    throw new GitError(`${root} is a clone of ${found ?? url}, not of ${repo}. ${cloneGuide(repo)}`);
+  const top = basename(gitDir) === ".git" ? await git(root, ["rev-parse", "--show-toplevel"]).catch(() => null) : null;
+  if (top === null || !(await same(top, root))) {
+    const checkout = await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => null);
+    if (checkout === null) {
+      throw new GitError(`${gitDir} is a bare repository, with no checkout to work in. ${cloneGuide(repo)}`);
+    }
+    throw new GitError(
+      `${checkout} is a checkout whose git directory is not inside it (${gitDir}): a worktree of a bare ` +
+        "repository, a clone made with --separate-git-dir, or a submodule. Switchboard works only in a plain " +
+        `clone, with its .git directory inside it. ${cloneGuide(repo)}`,
+    );
+  }
+  // The URLs as configured: an insteadOf rewrite may point fetches elsewhere, but these name the repo.
+  // Fetches use the first URL and pushes use every push URL (or every URL), so all must be the repo's.
+  const urls = await configValues(root, "remote.origin.url");
+  if (urls.length === 0) throw new GitError(`${root} has no origin remote. ${cloneGuide(repo)}`);
+  for (const url of [...urls, ...(await configValues(root, "remote.origin.pushurl"))]) {
+    const found = remoteRepo(url);
+    if (found !== repo.toLowerCase()) {
+      throw new GitError(`${root} is a clone of ${found ?? printable(url)}, not of ${repo}. ${cloneGuide(repo)}`);
+    }
   }
   return { repo, root, gitDir };
 }

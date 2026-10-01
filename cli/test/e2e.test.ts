@@ -239,10 +239,14 @@ async function callTool(term: Terminal, tool: string, input: unknown): Promise<s
 
 beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "switchboard-e2e-"));
+  await isolateGit();
+  // By default the Person runs the wrapper in a clone of the Channel's repo, whose origin is a local stand-in.
   cwd = await realpath(await mkdtemp(join(tmpdir(), "switchboard-repo-")));
-  // The Person runs the wrapper in a clone of the Channel's repo (no Task branches here, so no fetches).
-  await git(cwd, "init", "--quiet", "-b", "main");
-  await git(cwd, "remote", "add", "origin", CHANNEL_URL);
+  const origin = join(scratch, "default-origin.git");
+  await git(scratch, "init", "--quiet", "--bare", "-b", "main", origin);
+  await cloneChannel(origin, cwd);
+  await git(cwd, "commit", "--quiet", "--allow-empty", "-m", "First commit");
+  await git(cwd, "push", "--quiet", "origin", "HEAD:refs/heads/main");
   const githubUrl = await github.start(await freePort());
   const jevUrl = await jev.start(await freePort());
   const port = await freePort();
@@ -327,6 +331,10 @@ afterAll(async () => {
     }
   }
   wrangler?.kill();
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   github.stop();
   jev.stop();
   // Retries: a terminal a failed test left behind may still be writing its config.
@@ -592,6 +600,8 @@ describe("Switchboard's tools (the Tool Capture)", () => {
       ["claim.refused", held, null],
       ["tool.call", held, ["claim_task", false]],
       ["claim", claims, null],
+      // The Claim set the Task branch up in the Person's clone.
+      ["task.branch", claims, null],
       ["tool.call", claims, ["claim_task", true]],
       ["step.complete", claims, null],
       ["tool.call", claims, ["complete_step", true]],
@@ -761,15 +771,56 @@ describe("the Proxy Capture", () => {
   });
 });
 
-// Git as a Person's laptop runs it, without their global config (hooks, signing).
-const gitEnv = {
+// Git as a Person's laptop runs it, but without their global config (hooks, signing,
+// insteadOf rewrites, credentials): isolateGit() points it at the suite's own.
+const gitEnv: Record<string, string> = {
   GIT_AUTHOR_NAME: "E2E",
   GIT_AUTHOR_EMAIL: "e2e@example.com",
   GIT_COMMITTER_NAME: "E2E",
   GIT_COMMITTER_EMAIL: "e2e@example.com",
-  GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_NOSYSTEM: "1",
 };
+
+/** Where git logs every command it runs in the suite, the wrapper's included. */
+let gitTrace = "";
+/** Where a network URL lands instead of the network: nothing is there, and the trace shows it. */
+let tripwire = "";
+const savedEnv: Record<string, string | undefined> = {};
+
+/**
+ * Keeps every git call in the suite off the network: the test process's, and through
+ * its environment every wrapper's and agent CLI's. Each clone sends its own origin
+ * to a local stand-in (cloneChannel); anything else that would leave the machine is
+ * sent to the tripwire, and git refuses the network protocols outright as well.
+ */
+async function isolateGit(): Promise<void> {
+  const config = join(scratch, "gitconfig");
+  gitTrace = join(scratch, "git-trace.log");
+  tripwire = join(scratch, "NETWORK-TRIPWIRE");
+  const lines = ["[user]", "\tname = E2E", "\temail = e2e@example.com"];
+  for (const scheme of ["https", "http", "ssh", "git", "ext"]) lines.push(`[protocol "${scheme}"]`, "\tallow = never");
+  for (const [name, prefix] of [
+    ["https", "https://"],
+    ["http", "http://"],
+    ["ssh", "ssh://"],
+    ["git", "git://"],
+    ["scp", "git@"],
+  ]) {
+    lines.push(`[url "${tripwire}/${name}/"]`, `\tinsteadOf = ${prefix}`);
+  }
+  await writeFile(config, `${lines.join("\n")}\n`);
+  const isolated = {
+    GIT_CONFIG_GLOBAL: config,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TRACE: gitTrace,
+    GIT_TRACE_CURL: join(scratch, "git-trace-curl.log"),
+  };
+  Object.assign(gitEnv, isolated);
+  for (const [key, value] of Object.entries(isolated)) {
+    savedEnv[key] = process.env[key];
+    process.env[key] = value;
+  }
+}
 
 async function git(dir: string, ...args: string[]): Promise<string> {
   const { stdout } = await promisify(execFile)("git", args, { cwd: dir, env: { ...process.env, ...gitEnv } });
@@ -2162,7 +2213,7 @@ describe("the wrapper runs only in a clone of the Channel's repo", () => {
   });
 
   it("starts in a clone however its origin URL is written, and in a worktree of one", async () => {
-    const clone = await realpath(await mkdtemp(join(scratch, "ssh-clone-")));
+    const clone = await realpath(await mkdtemp(join(scratch, "alias-clone-")));
     await git(clone, "init", "--quiet", "-b", "main");
     // The SSH form, in another case, without .git.
     await git(clone, "remote", "add", "origin", `git@github.com:${github.repo.toUpperCase()}`);
@@ -2175,5 +2226,19 @@ describe("the wrapper runs only in a clone of the Channel's repo", () => {
       term.type("quit\r");
       expect(await term.exited).toBe(0);
     }
+  });
+});
+
+// Last, so it sees every git command the suite ran.
+describe("the suite", () => {
+  it("never let git reach for the network", async () => {
+    const trace = await readFile(gitTrace, "utf8");
+    // git ran: the trace is on, and it covers the wrappers' Task branches too.
+    expect(trace).toContain("trace: built-in: git worktree add");
+    const reached = trace
+      .split("\n")
+      .filter((line) => line.includes(tripwire) || /git-remote-|run_command: .*\bssh\b/.test(line));
+    expect(reached).toEqual([]);
+    await expect(stat(join(scratch, "git-trace-curl.log"))).rejects.toThrow();
   });
 });
