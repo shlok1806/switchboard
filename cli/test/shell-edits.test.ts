@@ -43,9 +43,9 @@ async function repo(): Promise<string> {
   return dir;
 }
 
-/** Every object file in the repo's own object store. */
-async function objects(dir: string): Promise<string[]> {
-  const root = join(dir, ".git", "objects");
+/** Every object file in the repo's own object store; in `gitDir` when it is not `<dir>/.git`. */
+async function objects(dir: string, gitDir = join(dir, ".git")): Promise<string[]> {
+  const root = join(gitDir, "objects");
   const found: string[] = [];
   for (const sub of await readdir(root)) {
     if (sub === "info" || sub === "pack") continue;
@@ -178,6 +178,83 @@ describe("ShellEdits", () => {
     });
     expect(many).toHaveLength(MAX_SHELL_EDITS);
     expect(logs.join("\n")).toContain(`${MAX_SHELL_EDITS + 5} files changed`);
+  });
+
+  it("counts each change once when two shell calls run at the same time in one worktree (#91)", async () => {
+    for (const firstDone of ["first", "second"] as const) {
+      const dir = await repo();
+      const edits = new ShellEdits(() => {});
+      await edits.start("one", dir);
+      await appendFile(join(dir, "src", "a.ts"), "one\n");
+      await edits.start("two", dir);
+      await appendFile(join(dir, "src", "b.ts"), "two\n");
+      const early = await edits.finish(firstDone === "first" ? "one" : "two");
+      await writeFile(join(dir, "late.txt"), "late\n");
+      const late = await edits.finish(firstDone === "first" ? "two" : "one");
+      // Together, every change once: not twice, and none missed.
+      expect(
+        [...early, ...late].sort((x, y) => x.path.localeCompare(y.path)),
+        firstDone,
+      ).toEqual([
+        { path: "late.txt", additions: 1, deletions: 0 },
+        { path: "src/a.ts", additions: 1, deletions: 0 },
+        { path: "src/b.ts", additions: 1, deletions: 0 },
+      ]);
+    }
+  });
+
+  it("still counts only a call's own window once the calls that overlapped it are done", async () => {
+    const dir = await repo();
+    const edits = new ShellEdits(() => {});
+    await edits.start("one", dir);
+    await edits.start("two", dir);
+    await appendFile(join(dir, "src", "a.ts"), "both\n");
+    await edits.finish("one");
+    await edits.finish("two");
+    // An Edit tool's change between calls is its own, not the next shell call's.
+    await appendFile(join(dir, "src", "b.ts"), "edit tool\n");
+    expect(await around(edits, dir, () => writeFile(join(dir, "next.txt"), "x\n"))).toEqual([
+      { path: "next.txt", additions: 1, deletions: 0 },
+    ]);
+  });
+
+  it("pairs calls of the same key in order, for a CLI whose hooks name no call (Gemini CLI)", async () => {
+    const dir = await repo();
+    const edits = new ShellEdits(() => {});
+    await edits.start("same", dir);
+    await appendFile(join(dir, "src", "a.ts"), "first\n");
+    await edits.start("same", dir);
+    await appendFile(join(dir, "src", "b.ts"), "second\n");
+    const changes = [...(await edits.finish("same")), ...(await edits.finish("same"))];
+    expect(changes.sort((x, y) => x.path.localeCompare(y.path))).toEqual([
+      { path: "src/a.ts", additions: 1, deletions: 0 },
+      { path: "src/b.ts", additions: 1, deletions: 0 },
+    ]);
+    expect(await edits.finish("same")).toEqual([]);
+  });
+
+  it("reports files changed inside a submodule by their path in the worktree (#91)", async () => {
+    const lib = await repo();
+    const dir = await repo();
+    await git(dir, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", lib, "vendor/lib");
+    await git(dir, "commit", "--quiet", "-m", "Add lib");
+    const sub = join(dir, "vendor", "lib");
+    const stored = await objects(dir);
+    const subGit = join(dir, ".git", "modules", "vendor", "lib");
+    const subStored = await objects(sub, subGit);
+    const changes = await around(new ShellEdits(() => {}), dir, async () => {
+      await appendFile(join(sub, "src", "a.ts"), "3\n");
+      await writeFile(join(sub, "new.ts"), "n\n");
+      await appendFile(join(dir, "src", "b.ts"), "w\n");
+    });
+    expect(changes).toEqual([
+      { path: "src/b.ts", additions: 1, deletions: 0 },
+      { path: "vendor/lib/new.ts", additions: 1, deletions: 0 },
+      { path: "vendor/lib/src/a.ts", additions: 1, deletions: 0 },
+    ]);
+    // Nothing left behind in either repo's objects.
+    expect(await objects(dir)).toEqual(stored);
+    expect(await objects(sub, subGit)).toEqual(subStored);
   });
 
   it("reports nothing outside a git repository, and says why", async () => {

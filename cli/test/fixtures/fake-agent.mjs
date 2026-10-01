@@ -15,9 +15,9 @@
 // Then it answers typed lines:
 //   work              -> prints some output
 //   turn              -> one model turn: a shell command and a file edit, then the turn ends
-//   shell <command>   -> codex: one shell tool call, the command run for real in the
+//   shell <command>   -> one shell tool call, the command run for real in the
 //                        current directory (`\n` is a line break), between its
-//                        PreToolUse and PostToolUse hooks
+//                        PreToolUse and PostToolUse hooks (Gemini CLI: BeforeTool and AfterTool)
 //   call <tool> <json>-> calls a Switchboard MCP tool (stdio), then the after-tool hook
 //   prompt <text>     -> the Person submits a prompt: runs the prompt-submit hook
 //   busy <seconds>    -> works for a while, printing as it goes
@@ -330,6 +330,19 @@ export async function runFake(dialect) {
         EVENTS.after,
         { tool_name: "shell", tool_input, tool_use_id, tool_response: `Exit code: ${result.status}\nOutput:\n` },
         "shell",
+      );
+      say(`shell done exit=${result.status}`);
+    }
+    if (shell && dialect === "gemini") {
+      // A shell tool call the way Gemini CLI makes one: BeforeTool, the command for real, AfterTool.
+      // Its hooks name no call.
+      const tool_input = { command: shell[1].replaceAll("\\n", "\n") };
+      runHooks("BeforeTool", { tool_name: "run_shell_command", tool_input }, "run_shell_command");
+      const result = spawnSync("/bin/sh", ["-c", tool_input.command], { cwd });
+      runHooks(
+        EVENTS.after,
+        { tool_name: "run_shell_command", tool_input, tool_response: { llmContent: `Exit Code: ${result.status}` } },
+        "run_shell_command",
       );
       say(`shell done exit=${result.status}`);
     }
