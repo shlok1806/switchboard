@@ -53,6 +53,7 @@ import {
   UNRELAYED_EVENT_TYPES,
 } from "../../../shared/src/index";
 import type { NewEvent } from "../channel";
+import { workingTasks } from "../tasks";
 import { buildDelivery, diffText, summarizeEvent } from "./delivery";
 import { JEV_MODEL, type Jev, type JevAnswer, jevFor } from "./jev";
 import { corpusOf, eventFiles, overlapOf } from "./overlap";
@@ -472,11 +473,7 @@ export class Relay {
       ]);
       const overlap = overlapOf(event, { touched, taskFiles, corpus });
       const addressed = addressedTo(event, agent.id, heldNumbers);
-      // What it works on now: a finished Task (in review) keeps its Claim until the PR merges, but is done.
-      const working = held
-        .filter((t) => t.status === "claimed")
-        .sort((a, b) => (b.claim?.claimedAt ?? "").localeCompare(a.claim?.claimedAt ?? "") || b.number - a.number)
-        .slice(0, MAX_HELD_TASKS);
+      const working = workingTasks(held, agent.id).slice(0, MAX_HELD_TASKS);
       const state: RelayState = {
         agent: {
           id: agent.id,
