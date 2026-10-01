@@ -1451,6 +1451,8 @@ describe("Interrupt delivery", () => {
       const { files } = await api<TouchedFilesResponse>(`${agentPath(aId as AgentId)}/touched-files`);
       return files.some((f) => f.path === "src/app.ts") ? true : undefined;
     });
+    // Interrupts reach A's wrapper only once it has attached.
+    await a.attached(aId);
     // Agent B holds the Task and pushes changes to src/app.ts.
     b = new Terminal(["run", "claude"], gitEnv, repoB);
     bId = (await b.started()).agentEnv;
@@ -1644,6 +1646,8 @@ describe("Directives (ADR 0005)", () => {
     term = new Terminal(["run", "claude"], INTERRUPT_ENV);
     id = (await term.started()).agentEnv;
     await waitForPresence(id, "live");
+    // Directives reach the wrapper only once it has attached, after it registered.
+    await term.attached(id);
   }, 30_000);
 
   afterAll(async () => {
@@ -1898,6 +1902,7 @@ describe("switchboard run codex and gemini", () => {
     await term.waitForOutput(/FAKE-CODEX mcp=/);
     await promptContext(term, "FAKE-CODEX", "UserPromptSubmit", "hello");
     await waitForPresence(id, "live");
+    await term.attached(id);
 
     term.type("busy 6\r");
     await term.waitForOutput(/FAKE-CODEX busy/);
