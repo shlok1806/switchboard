@@ -154,17 +154,23 @@ export default function App() {
     <TooltipProvider delayDuration={500}>
       <div className="flex h-dvh flex-col bg-page">
         <header className="flex h-[var(--header-h)] shrink-0 items-stretch gap-4 border-b border-line bg-surface px-4 sm:px-6">
-          <a href={href({ view: "feed" })} className="flex min-w-0 items-center gap-2.5" title={repo}>
+          <a
+            href={href({ view: "feed" })}
+            aria-label={`Switchboard ${repo}`}
+            className="flex min-w-0 items-center gap-2.5"
+            title={repo}
+          >
             <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-accent text-on-accent">
               <Radio className="size-4" aria-hidden />
             </span>
-            <span className="flex min-w-0 flex-col leading-tight">
+            {/* Between a phone and a wide desk the tabs need the room: the mark alone stays. */}
+            <span className="flex min-w-0 flex-col leading-tight md:hidden lg:flex">
               <span className="text-[14px] font-semibold tracking-tight">Switchboard</span>
               <span className="truncate font-mono text-[11px] text-ink-3">{repo}</span>
             </span>
           </a>
           {!mobile && (
-            <div className="ml-4">
+            <div className="ml-4 shrink-0">
               <ViewTabs route={route} />
             </div>
           )}

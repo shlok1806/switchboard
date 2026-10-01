@@ -130,22 +130,31 @@ export function TabBar({ route }: { route: Route }) {
 }
 
 export function SearchButton({ onClick, compact }: { onClick: () => void; compact?: boolean }) {
-  if (compact)
-    return (
-      <button type="button" onClick={onClick} aria-label="Search" className="grid size-9 place-items-center rounded-md text-ink-2 hover:bg-hover">
-        <Search className="size-[18px]" aria-hidden />
-      </button>
-    );
-  return (
+  const icon = (className = "") => (
     <button
       type="button"
       onClick={onClick}
-      className="flex h-8 w-56 items-center gap-2 rounded-md border border-line bg-inset px-2.5 text-[13px] text-ink-3 transition-colors hover:border-line-strong hover:text-ink-2"
+      aria-label="Search"
+      className={cn("grid size-9 place-items-center rounded-md text-ink-2 hover:bg-hover", className)}
     >
-      <Search className="size-3.5" aria-hidden />
-      Search
-      <kbd className="ml-auto rounded border border-line bg-surface px-1 font-mono text-[11px] leading-4">⌘K</kbd>
+      <Search className="size-[18px]" aria-hidden />
     </button>
+  );
+  if (compact) return icon();
+  // The full field only where the top bar has room for it beside the tabs.
+  return (
+    <>
+      {icon("lg:hidden")}
+      <button
+        type="button"
+        onClick={onClick}
+        className="hidden h-8 w-56 items-center gap-2 rounded-md border border-line bg-inset px-2.5 text-[13px] text-ink-3 transition-colors hover:border-line-strong hover:text-ink-2 lg:flex"
+      >
+        <Search className="size-3.5" aria-hidden />
+        Search
+        <kbd className="ml-auto rounded border border-line bg-surface px-1 font-mono text-[11px] leading-4">⌘K</kbd>
+      </button>
+    </>
   );
 }
 

@@ -131,7 +131,8 @@ export function toolSteps(calls: ToolCall[]): ToolStep[] {
     chip: c.arg,
     mono: true,
     detailMono: true,
-    detail: [{ text: `${c.name}(${c.arg})` }],
+    // Nothing more than the row says: the row does not open, and a chip cut short shows its full text itself.
+    detail: [],
   }));
 }
 

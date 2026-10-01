@@ -224,7 +224,8 @@ function hookStep(e: ChannelEvent): ToolStep {
       detailMono: true,
       detail: e.payload.exitCode === undefined ? [] : [{ text: `exit ${e.payload.exitCode}` }],
     };
-  return { icon: "think", label: EVENT_TYPE_LABEL[e.type], chip: summarize(e), mono: false, detailMono: false, detail: [{ text: summarize(e) }] };
+  // The chip already says it all: the row does not open (a cut chip shows its full text itself).
+  return { icon: "think", label: EVENT_TYPE_LABEL[e.type], chip: summarize(e), mono: false, detailMono: false, detail: [] };
 }
 
 function ProxyCard({ event }: { event: ChannelEvent }) {
