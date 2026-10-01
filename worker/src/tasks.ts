@@ -8,6 +8,7 @@
 // Object alarm) that re-reads every open Issue to repair missed webhooks.
 
 import type {
+  AgentId,
   ChannelEvent,
   EventType,
   PersonName,
@@ -20,6 +21,17 @@ import type {
 import type { NewEvent } from "./channel";
 import type { GitHub, GitHubIssue, IssueRef, WebhookChange } from "./github/index";
 import { APP_NOT_CONFIGURED, parseSteps } from "./github/index";
+
+/**
+ * The Tasks Agent `agent` works on now: claimed by it and not finished, newest
+ * Claim first. A finished Task (in review) keeps its Claim until its pull request
+ * merges (ADR 0006), but its work is done.
+ */
+export function workingTasks(tasks: readonly Task[], agent: AgentId): Task[] {
+  return tasks
+    .filter((t) => t.status === "claimed" && t.claim?.holder.kind === "agent" && t.claim.holder.agentId === agent)
+    .sort((a, b) => (b.claim?.claimedAt ?? "").localeCompare(a.claim?.claimedAt ?? "") || b.number - a.number);
+}
 
 /** How often the reconcile re-reads GitHub. */
 export const RECONCILE_INTERVAL_MS = 5 * 60 * 1000;

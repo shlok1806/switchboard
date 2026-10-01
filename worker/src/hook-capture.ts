@@ -18,6 +18,7 @@ import type {
   HookEvent,
   HookEventType,
   PersonName,
+  TaskNumber,
   TouchedFile,
 } from "../../shared/src/index";
 import {
@@ -59,10 +60,18 @@ export interface HookCaptureHost {
    * life for Presence.
    */
   touchAgent(person: PersonName, id: AgentId): { ok: true } | Refusal;
+  /** The Task Agent `id` works on now (its newest Claim not yet finished), or null. */
+  currentTask(id: AgentId): TaskNumber | null;
   /** Records an Event with the given ID, or returns null when the Channel already has it. */
   appendOnce<K extends HookEventType>(
     id: string,
-    event: { type: K; actor: { kind: "agent"; agentId: AgentId }; capture: "hook"; payload: EventPayloads[K] },
+    event: {
+      type: K;
+      actor: { kind: "agent"; agentId: AgentId };
+      capture: "hook";
+      task?: TaskNumber;
+      payload: EventPayloads[K];
+    },
   ): ChannelEvent | null;
 }
 
@@ -171,12 +180,15 @@ export class HookCapture {
     const allowed = this.host.touchAgent(person, agent as AgentId);
     if (!allowed.ok) return refuse(allowed.reason);
 
+    // What the Agent did is about the Task it works on as the Events arrive (#56).
+    const task = this.host.currentTask(agent as AgentId);
     const recorded: string[] = [];
     for (const event of parsed.value) {
       const stored = this.host.appendOnce(event.id, {
         type: event.type,
         actor: { kind: "agent", agentId: agent as AgentId },
         capture: "hook",
+        ...(task === null ? {} : { task }),
         payload: event.payload,
       } as Parameters<HookCaptureHost["appendOnce"]>[1]);
       if (stored?.type === "file.edit") this.touch(stored.actor, stored);

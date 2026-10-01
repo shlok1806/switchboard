@@ -4,7 +4,7 @@
 
 import { reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   AgentId,
   AgentResponse,
@@ -17,8 +17,19 @@ import type {
   HookEvent,
   TouchedFilesResponse,
 } from "../../shared/src/index";
-import { agentPath, MAX_HOOK_ARG_LENGTH, MAX_HOOK_COMMAND_LENGTH } from "../../shared/src/index";
+import {
+  agentPath,
+  branchPath,
+  claimPath,
+  finishPath,
+  MAX_HOOK_ARG_LENGTH,
+  MAX_HOOK_COMMAND_LENGTH,
+  releasePath,
+  taskBranch,
+} from "../../shared/src/index";
+import { installGitHub } from "../src/github/index";
 import { type As, bearer, forgetTokens, remember, streamQuery, url } from "./client";
+import { FakeGitHub } from "./fake-github";
 
 function call(path: string, init?: RequestInit): Promise<Response> {
   return exports.default.fetch(new Request(url(path), init));
@@ -277,5 +288,64 @@ describe("an Agent's touched files", () => {
     const response = await shlok.touchedFiles("shlok/claude/0000");
     expect(response.status).toBe(404);
     expect((await response.json<ErrorResponse>()).reason).toContain("shlok/claude/0000");
+  });
+});
+
+describe("the Task a Hook Event is about (#56)", () => {
+  let github: FakeGitHub;
+  beforeEach(() => {
+    github = new FakeGitHub();
+    installGitHub(github);
+  });
+  afterEach(() => installGitHub(null));
+
+  /** A Task action as the Agent, the way its wrapper's tools call them. */
+  async function act(path: string, agent: AgentId, body: unknown = {}): Promise<void> {
+    const response = await call(path, {
+      method: "POST",
+      headers: { Authorization: await bearer({ person: "shlok", agent }), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+  }
+
+  it("tags each Hook Event with the Task the Agent works on, following its Claims without a restart", async () => {
+    github.open({ title: "Users page" });
+    github.open({ title: "Settings page" });
+    const shlok = wrapper("shlok");
+    const agent = await shlok.register("5555eeee-0000-4000-8000-000000000000");
+    const taskOf = async (event: HookEvent) => {
+      await shlok.hooks(agent, [event]);
+      return (await shlok.hookEvents()).find((e) => e.id === event.id)?.task ?? null;
+    };
+
+    // Holding no Task: none.
+    expect(await taskOf(edit("README.md"))).toBeNull();
+    // A Claim: its Task, on every kind of Hook Event.
+    await act(claimPath(1), agent);
+    expect(await taskOf(edit("src/users.ts"))).toBe(1);
+    expect(await taskOf(hook("command", { command: "npm test" }))).toBe(1);
+    expect(await taskOf(hook("turn.end", { turn: 1 }))).toBe(1);
+    // A second Claim: the newest is the one it works on.
+    await act(claimPath(2), agent);
+    expect(await taskOf(edit("src/settings.ts"))).toBe(2);
+    // Released: back to the one it still holds.
+    await act(releasePath(2), agent);
+    expect(await taskOf(edit("src/users.ts"))).toBe(1);
+    // Finished: in review, the Claim stands until the PR merges, but the work is done.
+    await act(branchPath(1), agent, { branch: taskBranch(1, "Users page") });
+    await act(finishPath(1), agent);
+    expect(await taskOf(edit("notes.md"))).toBeNull();
+  });
+
+  it("tags another Agent's Events with its own Task, not this one's", async () => {
+    github.open({ title: "Users page" });
+    const shlok = wrapper("shlok");
+    const mine = await shlok.register("6666ffff-0000-4000-8000-000000000000");
+    const other = await shlok.register("7777aaaa-0000-4000-8000-000000000000");
+    await act(claimPath(1), mine);
+    const event = edit("src/other.ts");
+    await shlok.hooks(other, [event]);
+    expect((await shlok.hookEvents()).find((e) => e.id === event.id)?.task).toBeUndefined();
   });
 });

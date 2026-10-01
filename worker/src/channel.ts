@@ -47,7 +47,7 @@ import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
-import { type NewTask, type TaskResult, Tasks } from "./tasks";
+import { type NewTask, type TaskResult, Tasks, workingTasks } from "./tasks";
 
 type EventRow = {
   seq: number;
@@ -186,6 +186,7 @@ export class Channel extends DurableObject<Env> {
     this.hooks = new HookCapture({
       sql: ctx.storage.sql,
       touchAgent: (person, id) => this.agents.touch(person, id),
+      currentTask: (id) => workingTasks(this.tasks.stored(), id)[0]?.number ?? null,
       appendOnce: (id, event) => this.insert(id, event),
     });
     this.proxy = new ProxyCapture({
