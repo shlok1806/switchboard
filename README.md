@@ -120,11 +120,25 @@ the clock. A resumed session (`claude --resume <id>`, `codex resume <id>`,
 
 | | Claude Code | Codex | Gemini CLI (unverified, see below) |
 |---|---|---|---|
-| Hook Capture | SessionStart, PostToolUse, Stop, SessionEnd | SessionStart, PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, AfterTool, AfterAgent, SessionEnd |
+| Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, AfterTool, AfterAgent, SessionEnd |
+| Files changed through the shell | yes | yes | no |
 | Switchboard MCP tools | yes | yes (approved for the session) | yes |
 | Proxy Capture (digest and raw) | yes | yes | yes, unverified |
 | Next-turn delivery | SessionStart / UserPromptSubmit hooks | SessionStart / UserPromptSubmit `additionalContext`; `read_channel` fallback | SessionStart / BeforeAgent `additionalContext` |
 | Interrupts and Directives | typed mid-turn | typed mid-turn | downgraded to Queue, labelled `cli-cannot-interrupt` |
+
+Edit tools report the files they change. A shell command (a heredoc, `sed`, a script)
+does not, so the wrapper snapshots every worktree of the repo with git just before
+and just after each shell call. It then sends one `file.edit` per file that differs,
+with lines added and removed.
+- **What counts:** tracked and untracked files do; ignored files don't. A rename is a
+  delete and an add, and a binary file has no line counts.
+- **What it can't tell apart:** a change the Person makes in the same worktree while the
+  command runs.
+- **When it is skipped:** if a snapshot takes over 1.5 s (a very large repo), that call
+  is logged and not counted.
+- **Limits:** a command still running in the background after its call ends is not
+  followed, and at most 200 files are reported per call.
 
 The Proxy Capture reads Anthropic's Messages API, OpenAI's Responses API and
 Gemini's generateContent API. Digest is the default; `--proxy raw` shares the

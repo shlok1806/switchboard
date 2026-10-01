@@ -15,6 +15,9 @@
 // Then it answers typed lines:
 //   work              -> prints some output
 //   turn              -> one model turn: a shell command and a file edit, then the turn ends
+//   shell <command>   -> codex: one shell tool call, the command run for real in the
+//                        current directory (`\n` is a line break), between its
+//                        PreToolUse and PostToolUse hooks
 //   call <tool> <json>-> calls a Switchboard MCP tool (stdio), then the after-tool hook
 //   prompt <text>     -> the Person submits a prompt: runs the prompt-submit hook
 //   busy <seconds>    -> works for a while, printing as it goes
@@ -315,6 +318,21 @@ export async function runFake(dialect) {
       say("prompted");
     }
     if (command === "work") say("working on it");
+    const shell = /^shell (.+)$/.exec(command);
+    if (shell && dialect === "codex") {
+      // A shell tool call the way Codex makes one: PreToolUse, the command for real, PostToolUse.
+      const script = shell[1].replaceAll("\\n", "\n");
+      const tool_input = { command: ["bash", "-lc", script] };
+      const tool_use_id = `call_${randomBytes(6).toString("hex")}`;
+      runHooks("PreToolUse", { tool_name: "shell", tool_input, tool_use_id }, "shell");
+      const result = spawnSync("/bin/sh", ["-c", script], { cwd });
+      runHooks(
+        EVENTS.after,
+        { tool_name: "shell", tool_input, tool_use_id, tool_response: `Exit code: ${result.status}\nOutput:\n` },
+        "shell",
+      );
+      say(`shell done exit=${result.status}`);
+    }
     const busy = /^busy (\d+(?:\.\d+)?)$/.exec(command);
     if (busy) {
       doing = "busy";

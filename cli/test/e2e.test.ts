@@ -19,6 +19,7 @@ import type {
   AgentId,
   AgentsResponse,
   ChannelEvent,
+  EventOf,
   HistoryResponse,
   Task,
   TaskResponse,
@@ -2225,6 +2226,105 @@ describe("the wrapper runs only in a clone of the Channel's repo", () => {
       term.type("quit\r");
       expect(await term.exited).toBe(0);
     }
+  });
+});
+
+describe("file changes made through the shell (#57)", () => {
+  let origin = "";
+
+  beforeAll(async () => {
+    // greet.ts and old.ts committed; build/ ignored.
+    origin = join(scratch, "shell-origin.git");
+    await git(scratch, "init", "--quiet", "--bare", "-b", "main", origin);
+    const seed = join(scratch, "shell-seed");
+    await git(scratch, "clone", "--quiet", origin, seed);
+    await mkdir(join(seed, "src"), { recursive: true });
+    await writeFile(join(seed, "src", "greet.ts"), 'export const greeting = "hello";\nexport const name = "world";\n');
+    await writeFile(join(seed, "src", "old.ts"), "one\ntwo\nthree\n");
+    await writeFile(join(seed, ".gitignore"), "build/\n");
+    await git(seed, "add", ".");
+    await git(seed, "commit", "--quiet", "-m", "Start");
+    await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+  });
+
+  /** Runs `command` as one shell tool call of the fake CLI tagged `tag`, and waits for it. */
+  async function shell(term: Terminal, tag: string, command: string): Promise<void> {
+    const seen = term.output.length;
+    term.type(`shell ${command}\r`);
+    const done = new RegExp(`${tag} shell done exit=0`);
+    await waitFor(`the shell call ${command}`, () => (done.test(term.output.slice(seen)) ? true : undefined));
+  }
+
+  /** The Agent's file.edit Events as [path, additions, deletions], once there are `count` of them. */
+  async function fileEdits(id: string, count: number): Promise<[string, number, number][]> {
+    const edits = async () =>
+      (await hookEvents(id))
+        .filter((e) => e.type === "file.edit")
+        .map((e) => {
+          const { path, additions, deletions } = (e as EventOf<"file.edit">).payload;
+          return [path, additions, deletions] as [string, number, number];
+        });
+    await waitFor(`${count} file edits`, async () => ((await edits()).length >= count ? true : undefined));
+    // Nothing more trickles in.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return edits();
+  }
+
+  /** The shell calls: a heredoc append, a scripted rewrite, then a delete, a new file and an ignored one. */
+  const CALLS = [
+    "cat >> src/greet.ts <<'EOF'\\nexport const extra = 1;\\nexport const more = 2;\\nEOF",
+    `node -e "const fs = require('fs'); fs.writeFileSync('src/greet.ts', fs.readFileSync('src/greet.ts', 'utf8').replace('hello', 'hi'))"`,
+    "rm src/old.ts && echo a > notes.txt && echo b >> notes.txt && mkdir -p build && echo x > build/out.js",
+    // Changes nothing.
+    "ls src",
+  ];
+  const EXPECTED: [string, number, number][] = [
+    ["src/greet.ts", 2, 0],
+    ["src/greet.ts", 1, 1],
+    ["notes.txt", 2, 0],
+    ["src/old.ts", 0, 3],
+  ];
+
+  it("Claude Code: one file.edit per file a shell command changes, and Edit-tool edits once", async () => {
+    await cloneChannel(origin, join(scratch, "shell-claude"));
+    const repo = await realpath(join(scratch, "shell-claude"));
+    const term = new Terminal(["run", "claude"], gitEnv, repo);
+    const { agentEnv: id } = await term.started();
+    for (const command of CALLS) await shell(term, "FAKE-CLAUDE", command);
+
+    // The Edit tool changes a file and reports it itself; the next shell call does not count it again.
+    await writeFile(join(repo, "src", "greet.ts"), "// edited\n", { flag: "a" });
+    term.type(`edit ${join(repo, "src", "greet.ts")}\r`);
+    await term.waitForOutput(/FAKE-CLAUDE edited/);
+    await shell(term, "FAKE-CLAUDE", "true");
+
+    expect(await fileEdits(id, EXPECTED.length + 1)).toEqual([...EXPECTED, ["src/greet.ts", 1, 0]]);
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  });
+
+  it("Codex: one file.edit per file a shell command changes", async () => {
+    const repo = join(scratch, "shell-codex");
+    await cloneChannel(origin, repo);
+    await mkdir(join(scratch, "codex-home"), { recursive: true });
+    const term = new Terminal(
+      ["run", "codex"],
+      {
+        ...gitEnv,
+        SWITCHBOARD_CODEX_BIN: join(here, "fixtures", "fake-codex.mjs"),
+        CODEX_HOME: join(scratch, "codex-home"),
+        FAKE_CODEX_TRUSTED: "1",
+      },
+      await realpath(repo),
+    );
+    const sessionId = (await term.waitForOutput(/FAKE-CODEX session=([\w-]+)/))[1] ?? "";
+    const id = `e2e/codex/${sessionId.slice(-4)}`;
+    term.type("prompt hello\r");
+    await term.waitForOutput(/FAKE-CODEX prompted/);
+    for (const command of CALLS) await shell(term, "FAKE-CODEX", command);
+    expect(await fileEdits(id, EXPECTED.length)).toEqual(EXPECTED);
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
   });
 });
 
