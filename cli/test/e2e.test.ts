@@ -155,6 +155,20 @@ async function sessionEvents(id: string): Promise<{ starts: number; ends: number
   };
 }
 
+/**
+ * An Agent's `tool.call` Events for tool `name`, under whatever name a capture gave it,
+ * as [capture, tool], once there is one and nothing more has come in for a moment.
+ */
+async function toolCallsOf(id: string, name: string): Promise<[string | null, string][]> {
+  const calls = async () =>
+    (await agentEvents(id))
+      .filter((e): e is EventOf<"tool.call"> => e.type === "tool.call" && e.payload.tool.includes(name))
+      .map((e): [string | null, string] => [e.capture, e.payload.tool]);
+  await waitFor(`a ${name} call`, async () => ((await calls()).length > 0 ? true : undefined));
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  return calls();
+}
+
 /** An Agent's Hook Capture Events. */
 async function hookEvents(id: string): Promise<ChannelEvent[]> {
   return (await agentEvents(id)).filter((e) => e.capture === "hook");
@@ -545,9 +559,8 @@ describe("the Hook Capture", () => {
     for (const event of events) expect(event.capture).toBe("hook");
     const longCommand = `echo ${"a".repeat(2000)}`;
     expect(events.map((e) => [e.type, e.payload])).toEqual([
-      ["tool.call", { tool: "Bash", arg: "npm test", ok: true }],
+      // One Event per tool call (#55): a shell call is its command.
       ["command", { command: "npm test" }],
-      ["tool.call", { tool: "Bash", arg: `${longCommand.slice(0, 199)}…`, ok: true }],
       ["command", { command: `${longCommand.slice(0, 499)}…` }],
       ["tool.call", { tool: "Write", arg: "src/new.ts", ok: true }],
       ["file.edit", { path: "src/new.ts", additions: 2, deletions: 0 }],
@@ -556,7 +569,7 @@ describe("the Hook Capture", () => {
       ["tool.call", { tool: "MultiEdit", arg: "src/app.ts", ok: true }],
       ["file.edit", { path: "src/app.ts", additions: 1, deletions: 1 }],
       ["tool.call", { tool: "Read", arg: "README.md", ok: true }],
-      ["tool.call", { tool: "mcp__switchboard__claim", arg: "task=7 note=taking it", ok: true }],
+      // Switchboard's own tools are the Tool Capture's, not the hooks'.
       ["turn.end", { turn: 1 }],
     ]);
     // File contents never leave the laptop.
@@ -641,6 +654,11 @@ describe("Switchboard's tools (the Tool Capture)", () => {
       ["claim.release", claims, null],
       ["tool.call", claims, ["release_task", true]],
     ]);
+    // Each call is one Event (#55): the hooks report none of Switchboard's own tools again.
+    const calls = (await agentEvents(id)).filter((e) => e.type === "tool.call");
+    expect(calls.map((e) => [e.capture, e.payload.tool])).toEqual(
+      tool.filter((e) => e.type === "tool.call").map((e) => ["tool", e.payload.tool]),
+    );
 
     // GitHub shows the Claim while it was held, then its release, in one status
     // comment the GitHub App edits in place.
@@ -1882,7 +1900,6 @@ describe("switchboard run codex and gemini", () => {
       return events.some((e) => e.type === "turn.end") ? events : undefined;
     });
     expect(hooked.map((e) => [e.type, e.payload])).toEqual([
-      ["tool.call", { tool: "Bash", arg: "npm test", ok: true }],
       ["command", { command: "npm test", exitCode: 0 }],
       ["tool.call", { tool: "Edit", arg: "src/app.ts", ok: true }],
       ["file.edit", { path: "src/app.ts", additions: 2, deletions: 1 }],
@@ -1894,6 +1911,8 @@ describe("switchboard run codex and gemini", () => {
 
     // Switchboard's MCP tools, listed and called through Codex's own MCP config.
     expect(await callFakeTool(term, "FAKE-CODEX", "list_tasks", {})).toContain("#");
+    // One Event for the call, the Tool Capture's, whatever Codex's hook reports.
+    expect(await toolCallsOf(id, "list_tasks")).toEqual([["tool", "list_tasks"]]);
     expect(term.output).toMatch(/FAKE-CODEX tools=\[.*"read_channel".*\]/);
 
     term.type("quit\r");
@@ -2001,7 +2020,6 @@ describe("switchboard run codex and gemini", () => {
       return events.some((e) => e.type === "turn.end") ? events : undefined;
     });
     expect(hooked.map((e) => e.type)).toEqual([
-      "tool.call",
       "command",
       "tool.call",
       "file.edit",
@@ -2010,6 +2028,7 @@ describe("switchboard run codex and gemini", () => {
       "turn.end",
     ]);
     expect(await callFakeTool(term, "FAKE-GEMINI", "list_tasks", {})).toContain("#");
+    expect(await toolCallsOf(id, "list_tasks")).toEqual([["tool", "list_tasks"]]);
 
     // Never typed into Gemini CLI: held, labelled, and told at the next turn (BeforeAgent).
     const seen = term.output.length;
