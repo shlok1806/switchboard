@@ -22,7 +22,7 @@ import { MAX_HOOK_EVENTS_PER_MESSAGE, MAX_HOOK_TEXT_LENGTH, truncate } from "../
 import { DIALOG_HOOKS, DIALOG_TOOLS } from "../interrupts";
 import { CONTEXT_HOOKS } from "../next-turn";
 import type { SessionSettings } from "../session-settings";
-import { ShellEdits, shellDir } from "./shell-edits";
+import { ShellEdits, shellCallKey, shellDir } from "./shell-edits";
 import { CAPTURED_HOOKS, type ClaudeHookInput, type HookEventDraft, HookSummarizer } from "./summarize";
 
 /** The most unacknowledged messages kept while the Channel cannot be reached. Oldest go first. */
@@ -227,11 +227,10 @@ export class HookCapture {
     // (PostToolUse) is taken, so the snapshots hold the command's changes and nothing else.
     for (const each of inputs) {
       if (each.tool_name !== "Bash") continue;
-      const callId = each.tool_use_id ?? "";
-      if (each.hook_event_name === "PreToolUse") {
-        await this.shellEdits.start(callId, shellDir(each.cwd, each.tool_input, this.options.root));
-      }
-      if (each.hook_event_name === "PostToolUse") await this.shellChanges(callId);
+      const dir = shellDir(each.cwd, each.tool_input, this.options.root);
+      const key = shellCallKey(each.tool_use_id, dir, each.tool_input);
+      if (each.hook_event_name === "PreToolUse") await this.shellEdits.start(key, dir);
+      if (each.hook_event_name === "PostToolUse") await this.shellChanges(key);
     }
     const context = this.options.context?.(input.hook_event_name) ?? "";
     return this.options.answer ? this.options.answer(input.hook_event_name, context) : context;
@@ -245,10 +244,10 @@ export class HookCapture {
     else this.unsent.push(...events);
   }
 
-  /** Records one `file.edit` per file shell call `callId` changed. */
-  private async shellChanges(callId: string): Promise<void> {
+  /** Records one `file.edit` per file shell call `key` changed. */
+  private async shellChanges(key: string): Promise<void> {
     try {
-      const changes = await this.shellEdits.finish(callId);
+      const changes = await this.shellEdits.finish(key);
       this.record(
         changes.map((change) => ({
           type: "file.edit",

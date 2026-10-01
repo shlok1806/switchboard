@@ -148,6 +148,21 @@ describe("Gemini CLI", () => {
       hook_event_name: "UserPromptSubmit",
     });
     expect(translateGeminiHook({ hook_event_name: "AfterAgent" })).toMatchObject({ hook_event_name: "Stop" });
+    // Its shell tool, before and after it runs, in the directory it names (#91).
+    for (const field of ["dir_path", "directory"]) {
+      expect(
+        translateGeminiHook({
+          hook_event_name: "BeforeTool",
+          tool_name: "run_shell_command",
+          tool_input: { command: "npm test", [field]: "web" },
+        }),
+        field,
+      ).toMatchObject({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "npm test", workdir: "web" },
+      });
+    }
     expect(
       translateGeminiHook({
         hook_event_name: "Notification",

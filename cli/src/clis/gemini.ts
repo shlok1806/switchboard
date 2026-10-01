@@ -10,8 +10,9 @@
 //
 // - Session: Gemini CLI picks the session ID; it is learnt from the first hook
 //   (every hook's input carries `session_id`). `--resume <uuid>` names it up front.
-// - Hooks: SessionStart, BeforeAgent (a prompt is submitted), AfterTool,
-//   AfterAgent (the turn ends), Notification, SessionEnd. Gemini CLI runs hooks
+// - Hooks: SessionStart, BeforeAgent (a prompt is submitted), BeforeTool (for its
+//   shell tool only, whose changes are worked out around it), AfterTool, AfterAgent
+//   (the turn ends), Notification, SessionEnd. Gemini CLI runs hooks
 //   with a sanitized environment, so the socket path is in the hook's command.
 //   Only project hooks need the Person's trust; these are system-level.
 // - Next turn: SessionStart and BeforeAgent answer with
@@ -43,11 +44,15 @@ const DEFAULT_SYSTEM_SETTINGS = "/etc/gemini-cli/settings.json";
 export const GEMINI_HOOKS: Record<string, string> = {
   SessionStart: "SessionStart",
   BeforeAgent: "UserPromptSubmit",
+  BeforeTool: "PreToolUse",
   AfterTool: "PostToolUse",
   AfterAgent: "Stop",
   Notification: "Notification",
   SessionEnd: "SessionEnd",
 };
+
+/** The tools each tool hook runs for: every tool after it runs; before it, only the shell. */
+const MATCHERS: Record<string, string> = { AfterTool: "*", BeforeTool: "run_shell_command" };
 
 /** Works out a Gemini CLI session from the Person's arguments. */
 export function planGeminiSession(args: string[]): SessionPlan {
@@ -130,7 +135,7 @@ export const gemini: CliAdapter = {
         ...Object.fromEntries(
           Object.keys(GEMINI_HOOKS).map((name) => [
             name,
-            [...(ownHooks[name] ?? []), { ...(name === "AfterTool" ? { matcher: "*" } : {}), hooks: [hook] }],
+            [...(ownHooks[name] ?? []), { ...(MATCHERS[name] ? { matcher: MATCHERS[name] } : {}), hooks: [hook] }],
           ]),
         ),
       },
