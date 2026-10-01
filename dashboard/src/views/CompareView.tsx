@@ -158,7 +158,7 @@ function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelE
               e.type === "file.edit" ? [{ file: e.payload.path.split("/").pop()!, add: e.payload.additions, del: e.payload.deletions }] : [],
             )}
             diffLines={{}}
-            labels={{ header: `${events.length} Hook Events`, more: "" }}
+            labels={{ header: `${events.length} Hook ${events.length === 1 ? "Event" : "Events"}`, more: "" }}
           />
         ) : (
           <ul className="flex flex-col gap-2">
