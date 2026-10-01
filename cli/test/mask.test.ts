@@ -171,7 +171,7 @@ describe("secret masking, right after escapes and encodings", () => {
     [AGENT_TOKEN, "sba_****"],
   ];
   // What can sit right before a token in what the proxy reads: JSON escapes, an ANSI
-  // color from terminal output (raw or JSON-escaped), URL encoding, an identifier's `_`.
+  // color from terminal output (raw or JSON-escaped), URL encoding.
   const before = [
     "\\f",
     "\\b",
@@ -184,7 +184,6 @@ describe("secret masking, right after escapes and encodings", () => {
     "%3D",
     "%20",
     "%0A",
-    "MY_",
   ];
   for (const prefix of before) {
     it(`masks a token right after ${JSON.stringify(prefix)}`, () => {
@@ -196,6 +195,49 @@ describe("secret masking, right after escapes and encodings", () => {
       }
     });
   }
+
+  // An identifier's `_` (`MY_ghp_...`, a leak case from #71 and #80) is a break before a
+  // token whose own prefix names it. Not before a bare `sk-` (#93): `sk-` and any 20
+  // characters is all an OpenAI key is, so `foo_sk-` there is more likely a name.
+  it("masks a token right after an identifier's _, but for a bare sk- key", () => {
+    const named: [string, string][] = [
+      [ANTHROPIC, "sk-ant-****"],
+      ["ghp_1234567890abcdefghijABCDEFGHIJ123456", "ghp_****"],
+      ["github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz0123456789", "github_pat_****"],
+      ["AKIAIOSFODNN7EXAMPLE", "AKIA****"],
+      ["xoxb-123456789012-1234567890123-AbCdEfGhIjKl", "xoxb-****"],
+      ["sk_live_51H8abcdefghijklmnopqrstuv", "sk_live_****"],
+      [JWT, "eyJ****"],
+      [SESSION, "v1.****"],
+      [AGENT_TOKEN, "sba_****"],
+    ];
+    for (const [token, masked] of named) {
+      expect(maskSecrets(`x MY_${token} y`), token.slice(0, 8)).toEqual({ text: `x MY_${masked} y`, count: 1 });
+    }
+    for (const text of [`x MY_${OPENAI} y`, `x MY_${OPENAI_PROJECT} y`]) {
+      expect(maskSecrets(text)).toEqual({ text, count: 0 });
+    }
+  });
+
+  it("leaves names and slugs with sk- and 20 characters after them", () => {
+    for (const text of [
+      "foo_sk-abcdefghijklmnopqrstuvwxyz",
+      "const task_sk-learning-path-module = 1;",
+      "the user-sk-onboarding-flow-experiment-v2 flag",
+      "import styles from './panel-sk-dashboard-layout-grid.css'",
+    ]) {
+      expect(maskSecrets(text)).toEqual({ text, count: 0 });
+    }
+    // Still masked wherever a key stands on its own, or after = : " and escapes.
+    for (const [text, masked] of [
+      [`key=${OPENAI}`, "key=sk-****"],
+      [`"${OPENAI}"`, '"sk-****"'],
+      [`Bearer ${OPENAI}`, "Bearer sk-****"],
+      [`\n${OPENAI}`, "\nsk-****"],
+    ]) {
+      expect(maskSecrets(text ?? "").text).toBe(masked);
+    }
+  });
 
   it("leaves a key-like word that is part of another word", () => {
     for (const text of [

@@ -62,12 +62,15 @@ function secretName(name: string): boolean {
  *   `\r`, `\f`, `\b`, `"`;
  * - an ANSI color from terminal output, raw (`ESC[31m`) or JSON-escaped (`\u001b[31m`);
  * - URL encoding: `%22`, `%3D`, `%20`.
- * An identifier's `_` counts as a break too (`MY_ghp_...`).
+ *
+ * An identifier's `_` and a slug's `-` count as a break too (`MY_ghp_...`), unless
+ * `inName` is false: for a token whose prefix says little (`sk-` and 20 characters is
+ * all an OpenAI key is), `foo_sk-...` or `user-sk-...` is more likely a name (#93).
  */
-function token(pattern: RegExp): RegExp {
+function token(pattern: RegExp, { inName = true }: { inName?: boolean } = {}): RegExp {
+  const word = inName ? "(?<![A-Za-z0-9])" : "(?<![A-Za-z0-9_-])";
   return new RegExp(
-    "(?:(?<![A-Za-z0-9])|(?<=\\\\[nrtfb])|(?<=\\\\u00[0-9a-fA-F]{2})|(?<=\\x1b\\[[0-9;]*m)|(?<=\\\\u001[bB]\\[[0-9;]*m)|(?<=%[0-9A-Fa-f]{2}))" +
-      pattern.source,
+    `(?:${word}|(?<=\\\\[nrtfb])|(?<=\\\\u00[0-9a-fA-F]{2})|(?<=\\x1b\\[[0-9;]*m)|(?<=\\\\u001[bB]\\[[0-9;]*m)|(?<=%[0-9A-Fa-f]{2}))${pattern.source}`,
     "g",
   );
 }
@@ -83,9 +86,10 @@ const RULES: Rule[] = [
   },
   // Anthropic, before OpenAI: both start with `sk-`.
   { pattern: token(/sk-ant-[A-Za-z0-9_-]{8,}/), replace: keepPrefix("sk-ant-") },
-  // OpenAI, including project, service account and admin keys.
+  // OpenAI, including project, service account and admin keys. Not inside a name or a
+  // slug: `sk-` alone says too little (#93), and a real key there follows `=`, `:`, a quote or a space.
   {
-    pattern: token(/sk-((?:proj|svcacct|admin)-)?[A-Za-z0-9_-]{20,}/),
+    pattern: token(/sk-((?:proj|svcacct|admin)-)?[A-Za-z0-9_-]{20,}/, { inName: false }),
     replace: (_match, kind = "") => `sk-${kind}${MASK}`,
   },
   // Stripe secret and restricted keys.
