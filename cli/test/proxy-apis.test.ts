@@ -5,7 +5,7 @@
 
 import { createServer, type IncomingHttpHeaders, request, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { zstdCompressSync } from "node:zlib";
+import { brotliCompressSync, deflateSync, gzipSync, zstdCompressSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Agent, ProxyCaptureMessage, ProxyEvent } from "../../shared/src/index";
 import type { ApiFormat } from "../src/proxy/api";
@@ -247,6 +247,57 @@ describe("the Proxy Capture in front of the Responses API (Codex)", () => {
     expect(event.payload.context).toContain('"model":"gpt-6-sol"');
     expect(event.payload.context).toContain("ghp_****");
   });
+
+  // The turn finishes only once its request is read: an upstream that answers before the
+  // request body arrives, or before it is decoded, still leaves the body in the Event.
+  for (const [encoding, compress] of [
+    ["zstd", zstdCompressSync],
+    ["gzip", gzipSync],
+    ["deflate", deflateSync],
+    ["br", brotliCompressSync],
+    ["identity", (b: Buffer) => b],
+  ] as const) {
+    it(`reads a ${encoding} request whole even when the API answers before it arrives`, async () => {
+      const early = createServer((req, res) => {
+        req.resume();
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(RESPONSES_SSE);
+      });
+      await new Promise<void>((resolve) => early.listen(0, "127.0.0.1", resolve));
+      try {
+        const proxy = await startCapture(
+          openaiResponses,
+          "raw",
+          `http://127.0.0.1:${(early.address() as AddressInfo).port}`,
+        );
+        const body = compress(Buffer.from(JSON.stringify({ model: "gpt-6-sol", stream: true, input: "hi" })));
+        await new Promise<void>((resolve, reject) => {
+          const req = request(
+            new URL("/responses", proxy.url),
+            {
+              method: "POST",
+              headers: { "content-type": "application/json", "content-encoding": encoding },
+            },
+            (res) => {
+              res.resume();
+              res.on("end", () => resolve());
+            },
+          );
+          req.on("error", reject);
+          // The first bytes reach the API, which answers at once; the rest comes after the answer has.
+          const half = Math.floor(body.length / 2);
+          req.write(body.subarray(0, half));
+          setTimeout(() => req.end(body.subarray(half)), 300);
+        });
+        const [event] = await waitForFrames(1);
+        if (event?.type !== "proxy.raw") throw new Error("expected a Raw Proxy Event");
+        expect(event.payload.context).toBe(JSON.stringify({ model: "gpt-6-sol", stream: true, input: "hi" }));
+      } finally {
+        early.closeAllConnections();
+        await new Promise((resolve) => early.close(resolve));
+      }
+    });
+  }
 
   it("keeps the upstream's path prefix (the ChatGPT backend's /backend-api/codex)", async () => {
     respond = (_req, res) => {

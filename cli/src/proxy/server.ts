@@ -62,7 +62,12 @@ interface Capture {
   request: CappedBody;
   /** The whole request, for the API format's `background` check. */
   whole: CappedBody | null;
+  /** Resolves once the request has all been read (and decoded), or given up on. */
+  requestRead: Promise<void>;
 }
+
+/** How long a finished answer waits for the rest of its request before the turn goes on without it. */
+const REQUEST_READ_TIMEOUT_MS = 10_000;
 
 /** A decoder for the response's Content-Encoding, for the capture's copy only. */
 function decoderFor(encoding: string | undefined): Transform | null {
@@ -169,6 +174,11 @@ export class ProxyServer {
     const send = target.protocol === "https:" ? httpsRequest : httpRequest;
 
     const mode = this.api.isTurn(req.method, path) ? this.safe(() => this.options.capturing()) : undefined;
+    let read: () => void = () => {};
+    const requestRead = new Promise<void>((resolve) => {
+      read = resolve;
+      setTimeout(resolve, REQUEST_READ_TIMEOUT_MS).unref();
+    });
     const capture: Capture | null = mode?.capture
       ? {
           raw: mode.raw,
@@ -176,6 +186,7 @@ export class ProxyServer {
           request: new CappedBody(RAW_PROXY_CAP_BYTES),
           // The whole request, in either mode, when the API can tell the CLI's own calls from it.
           whole: this.api.background ? new CappedBody(MAX_REQUEST_READ_BYTES) : null,
+          requestRead,
         }
       : null;
     const reading = capture !== null && (capture.raw || capture.whole !== null);
@@ -191,7 +202,13 @@ export class ProxyServer {
       reading && requestEncoding !== "" && requestEncoding !== "identity" ? decoderFor(requestEncoding) : null;
     if (requestDecoder) {
       requestDecoder.on("data", (chunk: Buffer) => this.safe(() => keep(chunk)));
-      requestDecoder.on("error", (error) => this.options.log(`proxy: could not decode a request: ${error.message}`));
+      // Read once the decoder has handed over its last bytes, or failed.
+      requestDecoder.on("end", read);
+      requestDecoder.on("close", read);
+      requestDecoder.on("error", (error) => {
+        this.options.log(`proxy: could not decode a request: ${error.message}`);
+        read();
+      });
     }
 
     const upstreamReq = send(target, {
@@ -239,9 +256,15 @@ export class ProxyServer {
     });
     req.on("end", () => {
       upstreamReq.end();
-      requestDecoder?.end();
+      if (requestDecoder) requestDecoder.end();
+      else read();
     });
     req.on("error", () => upstreamReq.destroy());
+    // The CLI went away mid-request: what was read is all there will be.
+    req.on("close", () => {
+      if (!requestDecoder) read();
+      else if (!requestDecoder.writableEnded) requestDecoder.end();
+    });
     res.on("close", () => {
       // The CLI gave up (Escape, or a timeout): stop the upstream call too, as without the proxy.
       if (!res.writableFinished) upstreamReq.destroy();
@@ -287,22 +310,26 @@ export class ProxyServer {
       finish();
     });
     decoder.on("end", () => {
-      this.inFlight.delete(done);
-      this.safe(() => {
-        reader.end();
-        const own = !failed && reader.seen ? this.backgroundCall(capture) : null;
-        if (own !== null) this.options.log(`proxy: not captured: ${own}`);
-        else if (!failed && reader.seen) {
-          this.options.onTurn({
-            reader,
-            request: capture.request,
-            response,
-            requestText: () => capture.request.text(),
-            responseText: () => response.text(),
-          });
-        }
+      // The answer can end before the request is in, or decoded (an API may answer early,
+      // and a compressed request decodes on its own time): the turn needs both.
+      void capture.requestRead.then(() => {
+        this.inFlight.delete(done);
+        this.safe(() => {
+          reader.end();
+          const own = !failed && reader.seen ? this.backgroundCall(capture) : null;
+          if (own !== null) this.options.log(`proxy: not captured: ${own}`);
+          else if (!failed && reader.seen) {
+            this.options.onTurn({
+              reader,
+              request: capture.request,
+              response,
+              requestText: () => capture.request.text(),
+              responseText: () => response.text(),
+            });
+          }
+        });
+        finish();
       });
-      finish();
     });
     return {
       push: (chunk) => decoder.write(chunk),
