@@ -15,6 +15,7 @@ import type {
   DirectiveMessage,
   ErrorResponse,
   HookCaptureReply,
+  InterruptAttached,
   InterruptMessage,
   JoinResponse,
   ProxyCaptureReply,
@@ -45,6 +46,7 @@ export type ChannelMessage =
   | HookCaptureReply
   | ProxyCaptureReply
   | DeliveryMessage
+  | InterruptAttached
   | InterruptMessage
   | DirectiveMessage
   | DirectiveInterruptMessage;

@@ -18,6 +18,7 @@ import type {
   EventType,
   Holder,
   HookCaptureReply,
+  InterruptAttached,
   InterruptMessage,
   InterruptResult,
   Person,
@@ -570,6 +571,8 @@ export class Channel extends DurableObject<Env> {
         // Kept on the socket itself, so it survives hibernation and goes when the socket does.
         const attached: WrapperAttachment = { agent: agent as AgentId, at: Date.now() };
         ws.serializeAttachment(attached);
+        // Tells the wrapper its Agent's Interrupts and Directives come here from now on.
+        send(ws, { type: "interrupt.attached", agent: agent as AgentId });
         return;
       }
       const result = parseInterruptResult(body);
@@ -699,6 +702,7 @@ function send(
     | HookCaptureReply
     | ProxyCaptureReply
     | DeliveryMessage
+    | InterruptAttached
     | InterruptMessage
     | DirectiveMessage
     | DirectiveInterruptMessage,

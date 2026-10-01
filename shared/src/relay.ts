@@ -183,6 +183,16 @@ export interface InterruptAttach {
   agent: AgentId;
 }
 
+/**
+ * Channel to wrapper: the attach was taken. From now on, until the socket closes,
+ * Agent `agent`'s Interrupts and Directives are sent to this socket; before it, the
+ * Channel treats the wrapper as offline (`wrapper-offline`).
+ */
+export interface InterruptAttached {
+  type: "interrupt.attached";
+  agent: AgentId;
+}
+
 /** Channel to wrapper: type this Interrupt into Agent `agent`'s session now. */
 export interface InterruptMessage {
   type: "interrupt";

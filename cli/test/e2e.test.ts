@@ -182,6 +182,19 @@ class Terminal {
     return this.term.pid;
   }
 
+  /**
+   * Waits until the Channel has taken this wrapper's attach for Agent `id`, which the
+   * wrapper logs. Before it, the Channel holds the Agent's Directives and Interrupts
+   * for its next turn (`wrapper-offline`), even though the Agent is registered.
+   */
+  attached(id: string): Promise<true> {
+    const line = `[${this.pid}] attached: ${id}'s`;
+    return waitFor(`${id}'s wrapper to attach`, async () => {
+      const log = await readFile(join(scratch, "config", "wrapper.log"), "utf8").catch(() => "");
+      return log.includes(line) ? true : undefined;
+    });
+  }
+
   type(text: string): void {
     this.term.write(text);
   }
@@ -1438,6 +1451,8 @@ describe("Interrupt delivery", () => {
       const { files } = await api<TouchedFilesResponse>(`${agentPath(aId as AgentId)}/touched-files`);
       return files.some((f) => f.path === "src/app.ts") ? true : undefined;
     });
+    // Interrupts reach A's wrapper only once it has attached.
+    await a.attached(aId);
     // Agent B holds the Task and pushes changes to src/app.ts.
     b = new Terminal(["run", "claude"], gitEnv, repoB);
     bId = (await b.started()).agentEnv;
@@ -1631,6 +1646,8 @@ describe("Directives (ADR 0005)", () => {
     term = new Terminal(["run", "claude"], INTERRUPT_ENV);
     id = (await term.started()).agentEnv;
     await waitForPresence(id, "live");
+    // Directives reach the wrapper only once it has attached, after it registered.
+    await term.attached(id);
   }, 30_000);
 
   afterAll(async () => {
@@ -1885,6 +1902,7 @@ describe("switchboard run codex and gemini", () => {
     await term.waitForOutput(/FAKE-CODEX mcp=/);
     await promptContext(term, "FAKE-CODEX", "UserPromptSubmit", "hello");
     await waitForPresence(id, "live");
+    await term.attached(id);
 
     term.type("busy 6\r");
     await term.waitForOutput(/FAKE-CODEX busy/);
@@ -1925,6 +1943,8 @@ describe("switchboard run codex and gemini", () => {
     await waitFor("the untrusted Codex Agent", async () => (await agents()).find((a) => a.id === id));
     await term.waitForOutput(/Open \/hooks in Codex and trust the switchboard hooks/);
     expect(await hookEvents(id)).toEqual([]);
+    // Registered is not yet reachable: the wrapper's socket reconnects with the Agent's token first.
+    await term.attached(id);
 
     // Without hooks the wrapper cannot tell when typing is safe, so the Directive is held.
     const held = await direct(id, "Pick up #7 next.");
