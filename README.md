@@ -43,8 +43,10 @@ cd <repo>
 clone. When an Agent claims a Task, Switchboard creates the Task's branch from
 `main` on `origin`, pushes it, and checks it out in a worktree of its own under
 `.switchboard/worktrees/` in the clone (ADR 0006). Finishing the Task pushes the
-branch again and opens its pull request. Started outside a git repo, claims fail;
-started in a clone of a different repo, the branches go to that repo's `origin`.
+branch again and opens its pull request. So `switchboard run` starts only inside a
+clone of the Channel's repo (or a worktree of one): anywhere else, it stops before
+starting the agent CLI and says which repo to clone. It reads the repo from
+`origin`'s URL, in any form GitHub gives (https or SSH, with or without `.git`).
 
 git runs these commands without a terminal, so it cannot ask for a password. Make
 sure you can push from the clone without a prompt: use an SSH remote, or a

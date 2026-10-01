@@ -40,6 +40,7 @@ import { NextTurn, type NextTurnItems } from "./next-turn";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
+import { channelCheckout, GitError } from "./task-worktree";
 
 /** How long the wrapper waits for the Channel to hear that the session ended. */
 const END_TIMEOUT_MS = 3000;
@@ -118,6 +119,17 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   } catch (error) {
     console.error(`switchboard: ${(error as Error).message}`);
     return 1;
+  }
+  // An Agent's Tasks are branches pushed through origin, so a session starts only in
+  // a clone of the Channel's repo. A command that starts no session runs anywhere.
+  if (plan.kind !== "none") {
+    try {
+      await channelCheckout(cwd, config.repo);
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      console.error(`switchboard: ${error.message}`);
+      return 1;
+    }
   }
 
   // Registering trades the Person's session for the Agent's token; the client then
