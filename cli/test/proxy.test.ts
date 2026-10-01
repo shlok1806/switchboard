@@ -283,6 +283,77 @@ describe("the Proxy Capture's local proxy", () => {
     expect(p.toolCalls.map((c) => c.name)).toEqual(["Bash", "Read"]);
   });
 
+  it("masks Switchboard's own session and Agent token in tool results and replies, in either mode", async () => {
+    // Shaped the way worker/src/session.ts mints them.
+    const session = `v1.${Buffer.from(JSON.stringify({ kind: "session", sub: "e2e", exp: 1792592000 })).toString(
+      "base64url",
+    )}.${Buffer.alloc(32, 1).toString("base64url")}`;
+    const agentToken = `sba_${Buffer.alloc(32, 2).toString("base64url")}`;
+    // The Agent read its Person's config and its own token in an earlier tool call...
+    const body = JSON.stringify({
+      stream: true,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "t0",
+              content: `${JSON.stringify({ url: "https://sb.example", session, person: "e2e" })}\n${agentToken}`,
+            },
+          ],
+        },
+      ],
+    });
+    // ...and repeats them in its reply and in its next tool call.
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      for (const chunk of sse([
+        { type: "message_start", message: { id: "m", model: "claude-opus-5-5", usage: { input_tokens: 1 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `Your session is ${session}` } },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "tool_use", id: "t1", name: "Bash", input: {} },
+        },
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "input_json_delta", partial_json: JSON.stringify({ command: `curl -H "x: ${agentToken}"` }) },
+        },
+        { type: "content_block_stop", index: 1 },
+        { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 2 } },
+        { type: "message_stop" },
+      ]))
+        res.write(chunk);
+      res.end();
+    };
+
+    for (const mode of ["digest", "raw"] as const) {
+      const proxy = await startCapture({ mode });
+      await call(proxy.url, "/v1/messages", { headers: MODEL_HEADERS, body });
+      const [event] = await waitForFrames(1);
+      const sent = JSON.stringify(frames);
+      expect(sent).not.toContain(session.split(".")[2]);
+      expect(sent).not.toContain(agentToken);
+      expect(event?.payload.reply).toBe("Your session is v1.****");
+      expect(event?.payload.toolCalls).toEqual([{ name: "Bash", arg: 'curl -H "x: sba_****"' }]);
+      if (event?.type === "proxy.raw") {
+        expect(event.payload.context).toContain('\\"session\\":\\"v1.****\\"');
+        expect(event.payload.context).toContain("\\nsba_****");
+        // Reply and tool call, plus both tokens in the context and both in the response.
+        expect(event.payload.maskedSecrets).toBe(6);
+      } else {
+        expect(event?.type).toBe("proxy.digest");
+        expect(event?.payload.maskedSecrets).toBe(2);
+      }
+      await capture?.close();
+      capture = null;
+    }
+  });
+
   it("never captures auth headers, in either mode", async () => {
     for (const mode of ["digest", "raw"] as const) {
       const proxy = await startCapture({ mode });
