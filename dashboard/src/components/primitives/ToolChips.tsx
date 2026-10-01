@@ -233,24 +233,26 @@ export default function ToolChips({
                 </span>
               </button>
 
-              {/* expanded detail */}
-              <div
-                className="grid transition-[grid-template-rows,opacity] duration-300"
-                style={{ gridTemplateRows: rowOpen ? "1fr" : "0fr", opacity: rowOpen ? 1 : 0, transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
-              >
-                <div className="min-h-0 overflow-hidden">
-                  <div className="mt-0.5 mb-1 ml-2 flex flex-col gap-0.5 border-l border-line py-0.5 pl-3.5">
-                    {row.detail.map((line) => (
-                      <span
-                        key={line.text}
-                        className={`truncate text-[11.5px] leading-[1.6] ${row.detailMono ? "font-mono" : ""} ${line.tone === "add" ? "text-green" : "text-ink-2"}`}
-                      >
-                        {line.text}
-                      </span>
-                    ))}
+              {/* expanded detail, when there is any (a Claude Code command has no exit code to show) */}
+              {row.detail.length > 0 && (
+                <div
+                  className="grid transition-[grid-template-rows,opacity] duration-300"
+                  style={{ gridTemplateRows: rowOpen ? "1fr" : "0fr", opacity: rowOpen ? 1 : 0, transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
+                >
+                  <div className="min-h-0 overflow-hidden">
+                    <div className="mt-0.5 mb-1 ml-2 flex flex-col gap-0.5 border-l border-line py-0.5 pl-3.5">
+                      {row.detail.map((line) => (
+                        <span
+                          key={line.text}
+                          className={`truncate text-[11.5px] leading-[1.6] ${row.detailMono ? "font-mono" : ""} ${line.tone === "add" ? "text-green" : "text-ink-2"}`}
+                        >
+                          {line.text}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
             );
           })}
