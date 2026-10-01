@@ -28,6 +28,8 @@ export type NotTyped = "person-typing" | "dialog-open" | "session-not-ready";
 export const DIALOG_HOOKS = ["PermissionRequest", "PreToolUse"] as const;
 /** The tools whose PreToolUse means a dialog opens: they ask the Person something. */
 export const DIALOG_TOOLS = ["AskUserQuestion", "ExitPlanMode"] as const;
+/** SessionStart sources that leave the CLI at its prompt. Not "compact", which can come mid-turn. */
+const IDLE_SOURCES = new Set(["startup", "resume", "clear"]);
 
 /** The Person must have been this quiet before an Interrupt is typed, unless configured otherwise. */
 export const DEFAULT_QUIET_MS = 2000;
@@ -58,105 +60,343 @@ export function pasteText(text: string): string {
 }
 
 /**
+ * At its idle prompt, Claude Code clears its input on a second Escape within 800 ms
+ * of the first (its double-press window). The wrapper reads the keys at other
+ * moments than Claude Code does, so it only counts a second Escape well inside that.
+ */
+export const DOUBLE_ESCAPE_MS = 600;
+/**
+ * Two Escapes this close may be a double press to Claude Code or Codex, so on an
+ * empty line they may open its picker of earlier prompts. Well past their windows.
+ */
+const PICKER_ESCAPE_MS = 1500;
+
+/** What one key does to the input line, as far as the wrapper can tell. */
+type Key =
+  | { kind: "text"; text: string }
+  /** Enter: submits, unless something else takes it (a line ending in `\`, a suggestion). */
+  | { kind: "enter" }
+  /** Shift/Alt+Enter, Ctrl+J: a line break in the prompt. */
+  | { kind: "newline" }
+  | { kind: "escape" }
+  /** Ctrl+C: clears the line at the idle prompt; cancels the turn while one runs. */
+  | { kind: "interrupt" }
+  | { kind: "backspace" }
+  | { kind: "delete-word" }
+  /** Ctrl+U: deletes back to the start of the line the cursor is on. */
+  | { kind: "delete-to-line-start" }
+  /** Moves the cursor: deletes are no longer at the end of the line. */
+  | { kind: "move" }
+  /** Puts text on the line the wrapper cannot see: a yank, recalled history, anything unknown. */
+  | { kind: "unknown" }
+  /** Changes nothing the wrapper needs to know: focus reports, modifier keys, forward deletes. */
+  | { kind: "none" };
+
+const TEXT_KEYS = new Map<string, Key>([
+  ["\r", { kind: "enter" }],
+  ["\n", { kind: "newline" }],
+  ["\x03", { kind: "interrupt" }],
+  ["\x15", { kind: "delete-to-line-start" }],
+  ["\x17", { kind: "delete-word" }],
+  ["\x7f", { kind: "backspace" }],
+  ["\b", { kind: "backspace" }],
+  // Ctrl+A, B, E, F: start and end of line, back and forward a character.
+  ["\x01", { kind: "move" }],
+  ["\x02", { kind: "move" }],
+  ["\x05", { kind: "move" }],
+  ["\x06", { kind: "move" }],
+  // Ctrl+P and Ctrl+N: history, like Up and Down.
+  ["\x10", { kind: "unknown" }],
+  ["\x0e", { kind: "unknown" }],
+  // Ctrl+Y: yanks back what a delete took.
+  ["\x19", { kind: "unknown" }],
+  // Ctrl+D and Ctrl+K delete forward, which never empties a line the wrapper thinks has text.
+  ["\x04", { kind: "none" }],
+  ["\x0b", { kind: "none" }],
+]);
+
+/** Alt+key, sent as Escape and the key. */
+const ALT_KEYS = new Map<string, Key>([
+  ["\x7f", { kind: "delete-word" }],
+  ["\b", { kind: "delete-word" }],
+  ["\r", { kind: "newline" }],
+  ["b", { kind: "move" }],
+  ["f", { kind: "move" }],
+  ["y", { kind: "unknown" }],
+  ["d", { kind: "none" }],
+]);
+
+/** Kitty keyboard protocol modifier bits, after subtracting 1 from the field. */
+const SHIFT = 1;
+const ALT = 2;
+const CTRL = 4;
+/** Super, hyper and meta. Caps Lock (64) and Num Lock (128) do not make text a command. */
+const COMMAND = 8 | 16 | 32;
+
+/** Kitty key codes for keys that only modify others, or lock: Caps, Scroll and Num Lock, Shift, Ctrl... */
+function modifierKey(code: number): boolean {
+  return (code >= 57358 && code <= 57360) || (code >= 57441 && code <= 57452);
+}
+
+/**
+ * `text` without its last word, the way Ctrl+W and Alt+Backspace delete one at the
+ * end of the line: spaces, then a run of word characters or a run of punctuation.
+ * Where Claude Code's keys could delete more (Ctrl+W takes `src/app.ts` whole), this
+ * takes the least, and it never crosses a line break.
+ */
+function withoutLastWord(text: string): string {
+  if (text.endsWith("\n")) return text.slice(0, -1);
+  const trimmed = text.replace(/[^\S\n]+$/u, "");
+  if (trimmed.endsWith("\n")) return trimmed;
+  const word = /(?:[\p{L}\p{N}_]+|[^\p{L}\p{N}_\s]+)$/u.exec(trimmed);
+  return word ? trimmed.slice(0, word.index) : trimmed;
+}
+
+/** Whether Claude Code may be showing suggestions, where Escape and Enter act on them. */
+function suggesting(text: string, moved: boolean): boolean {
+  if (text.startsWith("/")) return true;
+  // An @ mention at the cursor; with the cursor somewhere unknown, any @ mention.
+  return moved ? /(^|\s)@/.test(text) : /(^|\s)@\S*$/.test(text);
+}
+
+/**
  * What the Person's keystrokes say about their input line. Only a guess: the
- * wrapper sees keys, not Claude Code's screen, so it errs towards "not empty".
+ * wrapper sees keys, not Claude Code's screen. It may wrongly think the line has
+ * text, which only delays an Interrupt, but never wrongly thinks it is empty,
+ * which would type the Interrupt onto the Person's prompt and submit both. So it
+ * treats a key as clearing only when Claude Code certainly clears on it.
  */
 export class InputLine {
-  private chars = 0;
+  /** The text the wrapper knows is on the line. */
+  private text = "";
+  /** The cursor may not be at the end of the line, so deletes are no longer followed. */
+  private moved = false;
+  /** The line may hold text the wrapper cannot see. Only a submitted or cleared prompt resets it. */
+  private unknown = false;
   private pasting = false;
-  /** Bytes of an escape sequence split across reads. */
+  /** Claude Code is at its prompt with no turn running, where Escape and Ctrl+C clear the line. */
+  private idle = false;
+  /** When the last key was an Escape, the time it was pressed. */
+  private escapeAt: number | null = null;
+  /** Bytes of an escape sequence, or of a paste end, split across reads. */
   private partial = "";
 
-  get empty(): boolean {
-    return this.chars === 0 && !this.pasting;
+  private readonly now: () => number;
+  /** The prompt clears on double Escape and Ctrl+C at its idle prompt, as Claude Code's does. */
+  private readonly idleClears: boolean;
+
+  constructor({ now = Date.now, idleClears = false }: { now?: () => number; idleClears?: boolean } = {}) {
+    this.now = now;
+    this.idleClears = idleClears;
   }
 
-  /** The line was sent or cleared elsewhere (Claude Code reported a submitted prompt). */
+  get empty(): boolean {
+    return this.text === "" && !this.unknown && !this.pasting;
+  }
+
+  /** The line was sent elsewhere (Claude Code reported a submitted prompt). */
   clear(): void {
-    this.chars = 0;
+    this.reset();
+  }
+
+  /** Whether Claude Code is at its prompt, from its hooks: a turn ended, or one started. */
+  setIdle(idle: boolean): void {
+    this.idle = idle;
   }
 
   /** Reads keystrokes the Person typed. Returns whether they included Enter or Escape. */
   keys(data: string): { enter: boolean; cancel: boolean } {
-    const text = this.partial + data;
-    this.partial = "";
     let enter = false;
     let cancel = false;
-    let i = 0;
-    while (i < text.length) {
-      const ch = text[i] ?? "";
-      if (ch === "\x1b") {
-        const rest = text.slice(i);
-        if (rest.length === 1) {
-          // A lone Escape at the end of a read: a key press, most likely.
-          cancel = true;
-          i += 1;
-          continue;
-        }
-        if (rest[1] !== "[" && rest[1] !== "O") {
-          // Alt+key, or Escape followed by something else.
-          cancel ||= rest[1] === "\x1b";
-          i += 2;
-          continue;
-        }
-        // After the Escape: "[" or "O", parameters, intermediates, and the final byte.
-        const csi = /^[[O]([0-9;:?<>=]*)([ -/]*)([@-~])/.exec(rest.slice(1));
-        if (!csi) {
-          // Incomplete: wait for the rest.
-          this.partial = rest;
-          break;
-        }
-        this.sequence(csi[1] ?? "", csi[3] ?? "", (key) => {
-          if (key === "enter") enter = true;
-          if (key === "escape") cancel = true;
-        });
-        i += 1 + csi[0].length;
-        continue;
-      }
-      if (this.pasting) {
-        this.chars += 1;
-      } else if (ch === "\r" || ch === "\n") {
-        this.chars = 0;
-        enter = true;
-      } else if (ch === "\x03" || ch === "\x15") {
-        // Ctrl+C and Ctrl+U clear Claude Code's input.
-        this.chars = 0;
-      } else if (ch === "\x7f" || ch === "\b") {
-        this.chars = Math.max(0, this.chars - 1);
-      } else if (ch >= " ") {
-        this.chars += 1;
-      }
-      i += 1;
+    for (const key of this.read(data)) {
+      if (key.kind === "enter") enter = true;
+      if (key.kind === "escape") cancel = true;
+      this.press(key);
     }
     return { enter, cancel };
   }
 
-  /** One escape sequence: paste markers, and keys sent as `CSI <code> ; <mods> u` (the kitty keyboard protocol). */
-  private sequence(params: string, final: string, key: (key: "enter" | "escape") => void): void {
-    if (final === "~" && params === "200") {
-      this.pasting = true;
-      return;
-    }
-    if (final === "~" && params === "201") {
-      this.pasting = false;
-      return;
-    }
-    if (final !== "u") return;
-    const [code, mods] = params.split(";").map((p) => Number(p.split(":")[0]));
-    const ctrl = mods !== undefined && ((mods - 1) & 4) !== 0;
-    if (code === 13) {
-      this.chars = 0;
-      key("enter");
-    } else if (code === 27) {
-      key("escape");
-    } else if (ctrl && (code === 99 || code === 117)) {
-      this.chars = 0;
-    } else if (code === 127 || code === 8) {
-      this.chars = Math.max(0, this.chars - 1);
-    } else if (code !== undefined && code >= 32 && !ctrl) {
-      this.chars += 1;
+  private reset(): void {
+    this.text = "";
+    this.moved = false;
+    this.unknown = false;
+  }
+
+  /** What one key does to the line. */
+  private press(key: Key): void {
+    const escapeAt = this.escapeAt;
+    this.escapeAt = null;
+    switch (key.kind) {
+      case "text":
+        this.text += key.text;
+        return;
+      case "newline":
+        this.text += "\n";
+        return;
+      case "enter": {
+        // `\` then Enter starts a new line; Enter on a suggestion takes the suggestion.
+        const backslash = this.moved ? this.text.includes("\\") : this.text.endsWith("\\");
+        if (this.unknown || backslash || suggesting(this.text, this.moved)) {
+          if (!this.moved && backslash) this.text = `${this.text.slice(0, -1)}\n`;
+          return;
+        }
+        this.reset();
+        // A submitted prompt starts a turn.
+        this.idle = false;
+        return;
+      }
+      case "escape": {
+        const now = this.now();
+        const gap = escapeAt === null ? Number.POSITIVE_INFINITY : now - escapeAt;
+        if (gap >= PICKER_ESCAPE_MS) {
+          this.escapeAt = now;
+          return;
+        }
+        // On an empty line a double Escape opens Claude Code's rewind picker (Codex's
+        // "edit previous message"), where Enter puts an earlier prompt back on the line.
+        if (this.text === "") {
+          this.unknown = true;
+          return;
+        }
+        if (gap >= DOUBLE_ESCAPE_MS) {
+          this.escapeAt = now;
+          return;
+        }
+        // While a turn runs, Escape cancels it; with suggestions up, it closes them.
+        if (this.idleClears && this.idle && !this.unknown && !suggesting(this.text, this.moved)) this.reset();
+        return;
+      }
+      case "interrupt":
+        if (this.idleClears && this.idle) this.reset();
+        return;
+      case "backspace":
+        if (!this.moved) this.text = [...this.text].slice(0, -1).join("");
+        return;
+      case "delete-word":
+        if (!this.moved) this.text = withoutLastWord(this.text);
+        return;
+      case "delete-to-line-start":
+        if (!this.moved) this.text = this.text.slice(0, this.text.lastIndexOf("\n") + 1);
+        return;
+      case "move":
+        this.moved = true;
+        return;
+      case "unknown":
+        this.unknown = true;
+        return;
+      case "none":
+        return;
     }
   }
+
+  /** The keys in `data`, keeping a sequence split across reads for the next one. */
+  private *read(data: string): Generator<Key> {
+    const text = this.partial + data;
+    this.partial = "";
+    let i = 0;
+    while (i < text.length) {
+      if (this.pasting) {
+        // Inside a paste everything is text, up to the paste-end marker.
+        const end = text.indexOf(PASTE_END, i);
+        if (end === -1) {
+          const tail = splitPrefix(text.slice(i), PASTE_END);
+          if (text.length - tail > i) yield { kind: "text", text: text.slice(i, text.length - tail) };
+          this.partial = text.slice(text.length - tail);
+          return;
+        }
+        if (end > i) yield { kind: "text", text: text.slice(i, end) };
+        this.pasting = false;
+        i = end + PASTE_END.length;
+        continue;
+      }
+      const ch = text[i] ?? "";
+      if (ch !== "\x1b") {
+        i += 1;
+        yield TEXT_KEYS.get(ch) ?? (ch >= " " ? { kind: "text", text: ch } : { kind: "unknown" });
+        continue;
+      }
+      const rest = text.slice(i);
+      if (rest.length === 1 || rest[1] === "\x1b") {
+        // A lone Escape at the end of a read, or one followed by another: a key press, most likely.
+        yield { kind: "escape" };
+        i += 1;
+        continue;
+      }
+      if (rest[1] !== "[" && rest[1] !== "O") {
+        yield ALT_KEYS.get(rest[1] ?? "") ?? { kind: "unknown" };
+        i += 2;
+        continue;
+      }
+      // After the Escape: "[" or "O", parameters, intermediates, and the final byte.
+      const csi = /^([[O])([0-9;:?<>=]*)([ -/]*)([@-~])/.exec(rest.slice(1));
+      if (!csi) {
+        // Incomplete: wait for the rest.
+        this.partial = rest;
+        return;
+      }
+      i += 1 + csi[0].length;
+      if (csi[1] === "[" && csi[2] === "200" && csi[4] === "~") {
+        this.pasting = true;
+        continue;
+      }
+      const key = this.sequence(csi[1] ?? "", csi[2] ?? "", csi[4] ?? "");
+      if (key !== null) yield key;
+    }
+  }
+
+  /**
+   * One escape sequence: cursor and history keys, and keys sent as
+   * `CSI <code>[:<alternates>] ; <mods>[:<event>] u` (the kitty keyboard protocol).
+   * A key release is no key press, so it gives null.
+   */
+  private sequence(intro: string, params: string, final: string): Key | null {
+    // Up and Down recall history (or move between the lines of a long prompt).
+    if (final === "A" || final === "B") return { kind: "unknown" };
+    // Left, Right, End and Home.
+    if (final === "C" || final === "D" || final === "F" || final === "H") return { kind: "move" };
+    // Focus reports.
+    if (intro === "[" && params === "" && (final === "I" || final === "O")) return { kind: "none" };
+    if (final === "~") {
+      const code = params.split(";")[0];
+      if (code === "1" || code === "4" || code === "7" || code === "8") return { kind: "move" };
+      // Delete, and the end of a paste that never started.
+      if (code === "3" || code === "201") return { kind: "none" };
+      return { kind: "unknown" };
+    }
+    if (final !== "u") return { kind: "unknown" };
+    const [codeField = "", modsField = ""] = params.split(";");
+    const [mods, event] = modsField.split(":");
+    if (event === "3") return null;
+    const code = Number(codeField.split(":")[0]);
+    const flags = Math.max(0, Number(mods || "1") - 1);
+    const ctrl = (flags & CTRL) !== 0;
+    const alt = (flags & ALT) !== 0;
+    const command = (flags & COMMAND) !== 0;
+    if (modifierKey(code)) return { kind: "none" };
+    if (code === 13) {
+      if (ctrl || command) return { kind: "unknown" };
+      return (flags & (SHIFT | ALT)) !== 0 ? { kind: "newline" } : { kind: "enter" };
+    }
+    if (code === 27) return ctrl || alt || command ? { kind: "unknown" } : { kind: "escape" };
+    if (code === 127 || code === 8) return alt ? { kind: "delete-word" } : { kind: "backspace" };
+    if (ctrl && !alt && !command) {
+      const legacy = TEXT_KEYS.get(String.fromCharCode(code & 0x1f));
+      return code >= 97 && code <= 122 && legacy !== undefined ? legacy : { kind: "unknown" };
+    }
+    if (alt && !ctrl && !command) return ALT_KEYS.get(String.fromCodePoint(code)) ?? { kind: "unknown" };
+    // Codes in Unicode's private use area are keys with no text: arrows, F-keys, the keypad.
+    const printable = code >= 32 && !(code >= 0xe000 && code <= 0xf8ff);
+    if (printable && !ctrl && !alt && !command) return { kind: "text", text: String.fromCodePoint(code) };
+    return { kind: "unknown" };
+  }
+}
+
+/** How many characters at the end of `text` could start `marker`. */
+function splitPrefix(text: string, marker: string): number {
+  for (let n = Math.min(text.length, marker.length - 1); n > 0; n--) {
+    if (marker.startsWith(text.slice(-n))) return n;
+  }
+  return 0;
 }
 
 export interface InterruptTyperOptions {
@@ -166,10 +406,15 @@ export interface InterruptTyperOptions {
   waitMs?: number;
   log: (line: string) => void;
   now?: () => number;
+  /**
+   * Whether the CLI's prompt clears on double Escape and Ctrl+C at its idle prompt,
+   * as Claude Code's does. Off, the wrapper never reads those keys as clearing.
+   */
+  idleClears?: boolean;
 }
 
 export class InterruptTyper {
-  private readonly line = new InputLine();
+  private readonly line: InputLine;
   private lastKey = 0;
   private started = false;
   private pasteMode = false;
@@ -186,6 +431,7 @@ export class InterruptTyper {
     this.quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
     this.waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
     this.now = options.now ?? Date.now;
+    this.line = new InputLine({ now: this.now, idleClears: options.idleClears ?? false });
   }
 
   /** The Person typed `data`: passes it to the agent CLI, or holds it while an Interrupt is being typed. */
@@ -206,9 +452,18 @@ export class InterruptTyper {
     else if (off > on) this.pasteMode = false;
   }
 
-  /** A hook the agent CLI ran: when the session is ready, and when a dialog opens or closes. */
+  /**
+   * A hook the agent CLI ran: when the session is ready, when a dialog opens or
+   * closes, and whether a turn is running (the input line reads some keys differently then).
+   */
   hook(input: ClaudeHookInput): void {
-    switch (input.hook_event_name) {
+    const event = input.hook_event_name;
+    // At its prompt only after a turn ended, or a session started afresh. Any other
+    // hook may come from a turn: one the Person started, one the CLI started by itself
+    // (a background task finishing), or one that compacted its context mid-turn.
+    const idle = event === "Stop" || (event === "SessionStart" && IDLE_SOURCES.has(input.source ?? ""));
+    if (event !== "SessionEnd") this.line.setIdle(idle);
+    switch (event) {
       case "SessionStart":
         this.started = true;
         this.dialog = null;
@@ -261,6 +516,8 @@ export class InterruptTyper {
       reason = this.blocked();
     }
     this.held = [];
+    // The typed prompt starts a turn, if none is running.
+    this.line.setIdle(false);
     try {
       this.options.write(`${PASTE_START}${pasteText(text)}${PASTE_END}`);
       await sleep(SUBMIT_DELAY_MS);

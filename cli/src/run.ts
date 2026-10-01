@@ -165,6 +165,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     write: (data) => child?.write(data),
     quietMs: seconds(env.SWITCHBOARD_INTERRUPT_QUIET_SECONDS, DEFAULT_QUIET_MS),
     waitMs: seconds(env.SWITCHBOARD_INTERRUPT_WAIT_SECONDS, DEFAULT_WAIT_MS),
+    idleClears: adapter.idleClears,
     log,
   });
   // Tells the Channel this socket is the Agent's wrapper, so its Interrupts and Directives come here.

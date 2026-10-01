@@ -316,6 +316,8 @@ export const codex: CliAdapter = {
   command: "codex",
   binEnv: "SWITCHBOARD_CODEX_BIN",
   interrupts: true,
+  // Not known to clear its composer on double Escape or Ctrl+C, so neither reads as clearing.
+  idleClears: false,
   proxy: true,
   sessionFromHooks: true,
 

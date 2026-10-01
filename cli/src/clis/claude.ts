@@ -22,6 +22,7 @@ export const claude: CliAdapter = {
   command: "claude",
   binEnv: "SWITCHBOARD_CLAUDE_BIN",
   interrupts: true,
+  idleClears: true,
   proxy: true,
   // Claude Code's picker: its first hooks may run before the Person picks a session.
   sessionFromHooks: false,
