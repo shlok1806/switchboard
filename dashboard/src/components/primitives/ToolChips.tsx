@@ -110,6 +110,22 @@ const DIFF_LINES: Record<string, ToolDiffLine[]> = {
 };
 
 /**
+ * `text` with a line-break opportunity after each path separator, so a long path wraps
+ * between its parts (`web/src/components/` then `Pager.tsx`), not mid-name. A part too
+ * long for the line still breaks where it must (`overflow-wrap: anywhere`).
+ */
+function breakable(text: string): React.ReactNode {
+  const parts = text.split(/(?<=[/\\])(?=[^/\\])/);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) => (
+    <span key={i}>
+      {part}
+      {i < parts.length - 1 && <wbr />}
+    </span>
+  ));
+}
+
+/**
  * A row's chip, cut short with an ellipsis when it does not fit. `onCut` says whether
  * it is. On a row that opens, the row's detail then shows the full text. On a row that
  * does not, the chip takes keyboard focus and shows the full text in a tooltip, on
@@ -170,7 +186,7 @@ function Chip({
     <Tooltip open={cut && open} onOpenChange={setOpen}>
       <TooltipTrigger asChild>{body}</TooltipTrigger>
       <TooltipContent aria-hidden className={`max-w-[min(32rem,90vw)] [overflow-wrap:anywhere] whitespace-pre-wrap ${mono ? "font-mono" : ""}`}>
-        {text}
+        {breakable(text)}
       </TooltipContent>
     </Tooltip>
   );
@@ -353,7 +369,7 @@ export default function ToolChips({
                             "full" in line ? (row.mono ? "font-mono" : "") : row.detailMono ? "font-mono" : ""
                           } ${"tone" in line && line.tone === "add" ? "text-green" : "text-ink-2"}`}
                         >
-                          {line.text}
+                          {breakable(line.text)}
                         </span>
                       ))}
                     </div>
