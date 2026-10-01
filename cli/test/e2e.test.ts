@@ -182,6 +182,19 @@ class Terminal {
     return this.term.pid;
   }
 
+  /**
+   * Waits until the Channel has taken this wrapper's attach for Agent `id`, which the
+   * wrapper logs. Before it, the Channel holds the Agent's Directives and Interrupts
+   * for its next turn (`wrapper-offline`), even though the Agent is registered.
+   */
+  attached(id: string): Promise<true> {
+    const line = `[${this.pid}] attached: ${id}'s`;
+    return waitFor(`${id}'s wrapper to attach`, async () => {
+      const log = await readFile(join(scratch, "config", "wrapper.log"), "utf8").catch(() => "");
+      return log.includes(line) ? true : undefined;
+    });
+  }
+
   type(text: string): void {
     this.term.write(text);
   }
@@ -1925,6 +1938,8 @@ describe("switchboard run codex and gemini", () => {
     await waitFor("the untrusted Codex Agent", async () => (await agents()).find((a) => a.id === id));
     await term.waitForOutput(/Open \/hooks in Codex and trust the switchboard hooks/);
     expect(await hookEvents(id)).toEqual([]);
+    // Registered is not yet reachable: the wrapper's socket reconnects with the Agent's token first.
+    await term.attached(id);
 
     // Without hooks the wrapper cannot tell when typing is safe, so the Directive is held.
     const held = await direct(id, "Pick up #7 next.");

@@ -116,9 +116,14 @@ class FakeAgent {
     const socket = response.webSocket;
     if (!socket) throw new Error("No WebSocket");
     socket.accept();
+    let attached: () => void = () => {};
+    const answered = new Promise<void>((resolve) => {
+      attached = resolve;
+    });
     socket.addEventListener("message", (message) => {
       const frame = JSON.parse(message.data as string) as { type: string; agent?: string };
       if (frame.agent !== this.id) return;
+      if (frame.type === "interrupt.attached") attached();
       if (frame.type === "directives") this.directives.push(...(frame as DirectiveMessage).directives);
       if (frame.type === "delivery") this.deliveries.push(...(frame as DeliveryMessage).deliveries);
       if (frame.type === "directive.interrupt" && this.typing !== undefined) {
@@ -130,8 +135,8 @@ class FakeAgent {
     this.socket = socket;
     if (this.typing !== undefined) {
       socket.send(JSON.stringify({ type: "interrupt.attach", agent: this.id }));
-      // The attach travels on the socket; give the Channel a moment to read it.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The Channel says when it has the attach: Directives come to this socket from then on.
+      await answered;
     }
   }
 

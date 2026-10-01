@@ -244,6 +244,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         };
         stream.send(JSON.stringify(ack));
       }
+      if (message.type === "interrupt.attached" && message.agent === agentId) {
+        log(`attached: ${agentId}'s Interrupts and Directives come to this wrapper`);
+      }
       if (message.type === "interrupt" && message.agent === agentId) void interrupted(message);
       if (message.type === "directives" && message.agent === agentId) {
         const kept = addForNextTurn({ directives: message.directives });
