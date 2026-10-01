@@ -248,6 +248,34 @@ describe("resuming a session", () => {
     ]);
   });
 
+  it("records one session.start and one session.end per session, with the CLI's source and reason (#54)", async () => {
+    const shlok = person("shlok");
+    const session = "54545454-0000-4000-8000-000000000000";
+    const agent = await shlok.registered(session, { source: "startup" });
+    // Gone after silence, the wrapper registers again within the same session: it goes on.
+    const rejoined = await shlok.registered(session, { source: "startup", rejoin: true });
+    expect(rejoined.presence).toBe("live");
+    const ended = await call(`${agentPath(agent.id)}/end`, {
+      method: "POST",
+      headers: { Authorization: await bearer("shlok") },
+      body: JSON.stringify({ detail: "prompt_input_exit" }),
+    });
+    expect(ended.status).toBe(200);
+    const sessions = (await shlok.agentEvents()).filter((e) => e.type === "session.start" || e.type === "session.end");
+    expect(sessions.map((e) => [e.type, e.payload])).toEqual([
+      ["session.start", { cwd: "/repo", resumed: false, source: "startup" }],
+      ["session.end", { reason: "exit", detail: "prompt_input_exit" }],
+    ]);
+    // A Channel that forgot the Agent hears a rejoin as a start: the session has none there.
+    const other = await shlok.registered("abcd5454-0000-4000-8000-000000000000", { rejoin: true });
+    expect(
+      (await shlok.agentEvents())
+        .filter((e) => e.type === "session.start")
+        .map(brief)
+        .at(-1),
+    ).toEqual(["session.start", other.id, "new"]);
+  });
+
   it("lets a resume change or clear the Nickname", async () => {
     const shlok = person("shlok");
     const session = "a1b2c3d4-0000-4000-8000-000000000000";

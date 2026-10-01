@@ -184,6 +184,12 @@ export class HookCapture {
     const task = this.host.currentTask(agent as AgentId);
     const recorded: string[] = [];
     for (const event of parsed.value) {
+      // A session starts and ends once (#54): the wrapper records both, with what these said.
+      // An older wrapper still sends them: acknowledged, not recorded twice.
+      if (event.type === "session.start" || event.type === "session.end") {
+        recorded.push(event.id);
+        continue;
+      }
       const stored = this.host.appendOnce(event.id, {
         type: event.type,
         actor: { kind: "agent", agentId: agent as AgentId },

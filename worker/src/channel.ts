@@ -422,8 +422,8 @@ export class Channel extends DurableObject<Env> {
     };
   }
 
-  endSession(person: PersonName, id: AgentId): Promise<RosterResult> {
-    return this.agents.endSession(person, id);
+  endSession(person: PersonName, id: AgentId, detail?: string): Promise<RosterResult> {
+    return this.agents.endSession(person, id, detail);
   }
 
   /** A Person sending a Directive to one Agent. Refused through an Agent's credentials. */
