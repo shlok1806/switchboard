@@ -186,11 +186,12 @@ export class Channel extends DurableObject<Env> {
     this.hooks = new HookCapture({
       sql: ctx.storage.sql,
       touchAgent: (person, id) => this.agents.touch(person, id),
-      currentTask: (id) => workingTasks(this.tasks.stored(), id)[0]?.number ?? null,
+      currentTask: (id) => this.currentTask(id),
       appendOnce: (id, event) => this.insert(id, event),
     });
     this.proxy = new ProxyCapture({
       touchAgent: (person, id) => this.agents.touch(person, id),
+      currentTask: (id) => this.currentTask(id),
       appendOnce: (id, event) => this.insert(id, event),
     });
     this.status = new StatusComments({ sql: ctx.storage.sql, tasks: this.tasks, agents: this.agents });
@@ -613,6 +614,14 @@ export class Channel extends DurableObject<Env> {
       if (target === null || attached.at > target.at) target = { ws, at: attached.at };
     }
     return target !== null && send(target.ws, message);
+  }
+
+  /**
+   * The Task Agent `id` works on now: its newest Claim not yet finished (#56), or null.
+   * Its Hook and Proxy Events are about this Task as they arrive.
+   */
+  private currentTask(id: AgentId): TaskNumber | null {
+    return workingTasks(this.tasks.stored(), id)[0]?.number ?? null;
   }
 
   /** The files Agent `id` has edited, most recently first, or null when the Channel has no such Agent. */

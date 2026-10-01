@@ -10,6 +10,8 @@
 // - Each Event carries an ID the wrapper picked, so one sent again after a
 //   reconnect is recorded once.
 // - Sizes stay bounded here too, whatever the wrapper did.
+// - Each is about the Task the Agent works on as it arrives (its newest Claim not yet
+//   finished), as Hook Events are (#56, #88).
 //
 // Raw Proxy Events are for the Dashboard only: nothing may deliver one into an
 // Agent. Every path into an Agent goes through `agentDeliverable` (shared/src/proxy.ts).
@@ -24,6 +26,7 @@ import type {
   ProxyEvent,
   ProxyEventType,
   ProxyTurn,
+  TaskNumber,
   ToolCall,
 } from "../../shared/src/index";
 import {
@@ -41,10 +44,18 @@ import type { Refusal } from "./agents";
 export interface ProxyCaptureHost {
   /** Checks that `person` may act for Agent `id` and counts it as heard from; gives the Agent. */
   touchAgent(person: PersonName, id: AgentId): { ok: true; agent: Agent } | Refusal;
+  /** The Task Agent `id` works on now (its newest Claim not yet finished), or null. */
+  currentTask(id: AgentId): TaskNumber | null;
   /** Records an Event with the given ID, or returns null when the Channel already has it. */
   appendOnce<K extends ProxyEventType>(
     id: string,
-    event: { type: K; actor: { kind: "agent"; agentId: AgentId }; capture: "proxy"; payload: EventPayloads[K] },
+    event: {
+      type: K;
+      actor: { kind: "agent"; agentId: AgentId };
+      capture: "proxy";
+      task?: TaskNumber;
+      payload: EventPayloads[K];
+    },
   ): ChannelEvent | null;
 }
 
@@ -156,10 +167,19 @@ export class ProxyCapture {
 
     const event = parsed.value;
     const actor = { kind: "agent", agentId: agent as AgentId } as const;
+    // The model turn is about the Task the Agent works on as it arrives.
+    const task = this.host.currentTask(agent as AgentId);
+    const about = task === null ? {} : { task };
     if (event.type === "proxy.raw") {
-      this.host.appendOnce(event.id, { type: "proxy.raw", actor, capture: "proxy", payload: event.payload });
+      this.host.appendOnce(event.id, { type: "proxy.raw", actor, capture: "proxy", ...about, payload: event.payload });
     } else {
-      this.host.appendOnce(event.id, { type: "proxy.digest", actor, capture: "proxy", payload: event.payload });
+      this.host.appendOnce(event.id, {
+        type: "proxy.digest",
+        actor,
+        capture: "proxy",
+        ...about,
+        payload: event.payload,
+      });
     }
     return { type: "proxy.ack", id: event.id };
   }
