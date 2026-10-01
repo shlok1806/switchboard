@@ -106,6 +106,7 @@ export const gemini: CliAdapter = {
   command: "gemini",
   binEnv: "SWITCHBOARD_GEMINI_BIN",
   interrupts: false,
+  idleClears: false,
   proxy: true,
   sessionFromHooks: true,
 

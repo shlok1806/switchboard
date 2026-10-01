@@ -28,6 +28,8 @@ export type NotTyped = "person-typing" | "dialog-open" | "session-not-ready";
 export const DIALOG_HOOKS = ["PermissionRequest", "PreToolUse"] as const;
 /** The tools whose PreToolUse means a dialog opens: they ask the Person something. */
 export const DIALOG_TOOLS = ["AskUserQuestion", "ExitPlanMode"] as const;
+/** SessionStart sources that leave the CLI at its prompt. Not "compact", which can come mid-turn. */
+const IDLE_SOURCES = new Set(["startup", "resume", "clear"]);
 
 /** The Person must have been this quiet before an Interrupt is typed, unless configured otherwise. */
 export const DEFAULT_QUIET_MS = 2000;
@@ -63,6 +65,11 @@ export function pasteText(text: string): string {
  * moments than Claude Code does, so it only counts a second Escape well inside that.
  */
 export const DOUBLE_ESCAPE_MS = 600;
+/**
+ * Two Escapes this close may be a double press to Claude Code or Codex, so on an
+ * empty line they may open its picker of earlier prompts. Well past their windows.
+ */
+const PICKER_ESCAPE_MS = 1500;
 
 /** What one key does to the input line, as far as the wrapper can tell. */
 type Key =
@@ -174,7 +181,14 @@ export class InputLine {
   /** Bytes of an escape sequence, or of a paste end, split across reads. */
   private partial = "";
 
-  constructor(private readonly now: () => number = Date.now) {}
+  private readonly now: () => number;
+  /** The prompt clears on double Escape and Ctrl+C at its idle prompt, as Claude Code's does. */
+  private readonly idleClears: boolean;
+
+  constructor({ now = Date.now, idleClears = false }: { now?: () => number; idleClears?: boolean } = {}) {
+    this.now = now;
+    this.idleClears = idleClears;
+  }
 
   get empty(): boolean {
     return this.text === "" && !this.unknown && !this.pasting;
@@ -233,16 +247,27 @@ export class InputLine {
       }
       case "escape": {
         const now = this.now();
-        if (escapeAt === null || now - escapeAt >= DOUBLE_ESCAPE_MS) {
+        const gap = escapeAt === null ? Number.POSITIVE_INFINITY : now - escapeAt;
+        if (gap >= PICKER_ESCAPE_MS) {
+          this.escapeAt = now;
+          return;
+        }
+        // On an empty line a double Escape opens Claude Code's rewind picker (Codex's
+        // "edit previous message"), where Enter puts an earlier prompt back on the line.
+        if (this.text === "") {
+          this.unknown = true;
+          return;
+        }
+        if (gap >= DOUBLE_ESCAPE_MS) {
           this.escapeAt = now;
           return;
         }
         // While a turn runs, Escape cancels it; with suggestions up, it closes them.
-        if (this.idle && !this.unknown && !suggesting(this.text, this.moved)) this.reset();
+        if (this.idleClears && this.idle && !this.unknown && !suggesting(this.text, this.moved)) this.reset();
         return;
       }
       case "interrupt":
-        if (this.idle) this.reset();
+        if (this.idleClears && this.idle) this.reset();
         return;
       case "backspace":
         if (!this.moved) this.text = [...this.text].slice(0, -1).join("");
@@ -381,6 +406,11 @@ export interface InterruptTyperOptions {
   waitMs?: number;
   log: (line: string) => void;
   now?: () => number;
+  /**
+   * Whether the CLI's prompt clears on double Escape and Ctrl+C at its idle prompt,
+   * as Claude Code's does. Off, the wrapper never reads those keys as clearing.
+   */
+  idleClears?: boolean;
 }
 
 export class InterruptTyper {
@@ -401,7 +431,7 @@ export class InterruptTyper {
     this.quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
     this.waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
     this.now = options.now ?? Date.now;
-    this.line = new InputLine(this.now);
+    this.line = new InputLine({ now: this.now, idleClears: options.idleClears ?? false });
   }
 
   /** The Person typed `data`: passes it to the agent CLI, or holds it while an Interrupt is being typed. */
@@ -427,34 +457,32 @@ export class InterruptTyper {
    * closes, and whether a turn is running (the input line reads some keys differently then).
    */
   hook(input: ClaudeHookInput): void {
-    switch (input.hook_event_name) {
+    const event = input.hook_event_name;
+    // At its prompt only after a turn ended, or a session started afresh. Any other
+    // hook may come from a turn: one the Person started, one the CLI started by itself
+    // (a background task finishing), or one that compacted its context mid-turn.
+    const idle = event === "Stop" || (event === "SessionStart" && IDLE_SOURCES.has(input.source ?? ""));
+    if (event !== "SessionEnd") this.line.setIdle(idle);
+    switch (event) {
       case "SessionStart":
         this.started = true;
         this.dialog = null;
-        this.line.setIdle(true);
         return;
       case "PermissionRequest":
         this.dialog = `permission for ${input.tool_name ?? "a tool"}`;
-        this.line.setIdle(false);
         return;
       case "PreToolUse":
         if ((DIALOG_TOOLS as readonly (string | undefined)[]).includes(input.tool_name)) {
           this.dialog = input.tool_name ?? "a question";
         }
-        this.line.setIdle(false);
         return;
       case "UserPromptSubmit":
         this.line.clear();
-        this.line.setIdle(false);
         this.dialog = null;
         return;
       case "PostToolUse":
-        this.dialog = null;
-        this.line.setIdle(false);
-        return;
       case "Stop":
         this.dialog = null;
-        this.line.setIdle(true);
         return;
       default:
         return;

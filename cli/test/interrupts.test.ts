@@ -15,10 +15,10 @@ describe("pasteText", () => {
   });
 });
 
-/** A line with a clock the test moves, at Claude Code's idle prompt unless `idle` is false. */
+/** A line in Claude Code's prompt, with a clock the test moves, at its idle prompt unless `idle` is false. */
 function lineAt({ idle = true } = {}) {
   const clock = { now: 0 };
-  const line = new InputLine(() => clock.now);
+  const line = new InputLine({ now: () => clock.now, idleClears: true });
   line.setIdle(idle);
   return { line, clock };
 }
@@ -302,13 +302,22 @@ describe("InputLine, Ctrl+C", () => {
 });
 
 describe("InterruptTyper after the Person clears their line", () => {
-  function typer() {
+  /** A typer for Claude Code (or, with `idleClears` false, a CLI whose prompt keeps its text), at its prompt. */
+  function typer({ idleClears = true } = {}) {
     const written: string[] = [];
-    const t = new InterruptTyper({ write: (d) => written.push(d), quietMs: 0, waitMs: 300, log: () => {} });
-    t.hook({ hook_event_name: "SessionStart" } as ClaudeHookInput);
+    const t = new InterruptTyper({
+      write: (d) => written.push(d),
+      quietMs: 0,
+      waitMs: 300,
+      log: () => {},
+      idleClears,
+    });
+    t.hook({ hook_event_name: "SessionStart", source: "startup" });
     t.output("\x1b[?2004h");
     return { typer: t, written };
   }
+  const DIRECTIVE = "[Switchboard] Directive from octocat";
+  const personTyping = { typed: false, reason: "person-typing" };
 
   for (const [name, keys] of [
     ["double Escape", "\x1b\x1b"],
@@ -337,5 +346,64 @@ describe("InterruptTyper after the Person clears their line", () => {
     t.hook({ hook_event_name: "Stop" } as ClaudeHookInput);
     t.personTyped("\x1b\x1b");
     expect(await t.type("[Switchboard] Directive from octocat")).toEqual({ typed: true });
+  });
+
+  it("is idle again after a SessionStart for a new, resumed or cleared session, but not after a compaction", async () => {
+    for (const source of ["startup", "resume", "clear"]) {
+      const { typer: t } = typer();
+      t.hook({ hook_event_name: "UserPromptSubmit" });
+      t.hook({ hook_event_name: "SessionStart", source });
+      t.personTyped("fixit\x1b\x1b");
+      expect(await t.type(DIRECTIVE), source).toEqual({ typed: true });
+    }
+    // Claude Code compacts mid-turn, and the turn carries on.
+    const { typer: t } = typer();
+    t.hook({ hook_event_name: "UserPromptSubmit" });
+    t.hook({ hook_event_name: "SessionStart", source: "compact" });
+    t.personTyped("fixit\x1b\x1b");
+    expect(await t.type(DIRECTIVE)).toEqual(personTyping);
+  });
+
+  it("is not idle after any hook but Stop, such as a turn Claude Code starts by itself", async () => {
+    for (const hook of ["Notification", "SubagentStop", "PreCompact", "PostToolUse"]) {
+      const { typer: t } = typer();
+      t.hook({ hook_event_name: "Stop" });
+      t.hook({ hook_event_name: hook });
+      t.personTyped("fixit\x1b\x1b");
+      expect(await t.type(DIRECTIVE), hook).toEqual(personTyping);
+      t.personTyped("\x03");
+      expect(await t.type(DIRECTIVE), hook).toEqual(personTyping);
+    }
+  });
+
+  it("does not take double Escape or Ctrl+C as clearing in a CLI whose prompt keeps its text (Codex)", async () => {
+    for (const keys of ["\x1b\x1b", "\x1b[27u\x1b[27u", "\x03", "\x1b[99;5u"]) {
+      const { typer: t } = typer({ idleClears: false });
+      t.personTyped(`fixit${keys}`);
+      expect(await t.type(DIRECTIVE), JSON.stringify(keys)).toEqual(personTyping);
+    }
+    // The keys every prompt reads the same way still clear.
+    const { typer: t } = typer({ idleClears: false });
+    t.personTyped("fixit\x17");
+    expect(await t.type(DIRECTIVE)).toEqual({ typed: true });
+  });
+});
+
+describe("InputLine, the rewind picker", () => {
+  it("is not empty after a double Escape on an empty line opens it and Enter puts an old prompt back", () => {
+    for (const idle of [true, false]) {
+      const { line } = lineAt({ idle });
+      line.keys("\x1b\x1b");
+      expect(line.empty).toBe(false);
+      line.keys("\r");
+      expect(line.empty).toBe(false);
+    }
+    // After a double Escape cleared the line, a second one opens the picker.
+    const { line, clock } = lineAt();
+    line.keys("half a thought\x1b\x1b");
+    expect(line.empty).toBe(true);
+    clock.now += 1000;
+    line.keys("\x1b\x1b\r");
+    expect(line.empty).toBe(false);
   });
 });

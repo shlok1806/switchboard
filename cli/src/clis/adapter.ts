@@ -74,6 +74,13 @@ export interface CliAdapter {
    * CLI. When false, the Relay delivers them as Queue, labelled downgraded.
    */
   interrupts: boolean;
+  /**
+   * Whether this CLI's prompt clears its text on double Escape and on Ctrl+C at its
+   * idle prompt, as Claude Code's does (seen in its source). The wrapper reads those
+   * keys as clearing the Person's line only where this is true; elsewhere they leave
+   * the line "not empty", so an Interrupt is never typed onto text still there.
+   */
+  idleClears: boolean;
   /** Whether the Proxy Capture can read this CLI's model traffic. */
   proxy: boolean;
   /**
