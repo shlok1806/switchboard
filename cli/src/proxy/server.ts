@@ -51,6 +51,19 @@ export interface ProxyServerOptions {
   log: (line: string) => void;
 }
 
+/** The most of a request read to tell a CLI's own calls from turns; past it, a request counts as a turn. */
+const MAX_REQUEST_READ_BYTES = 32 * 1024 * 1024;
+
+/** What the capture keeps of one turn request. */
+interface Capture {
+  raw: boolean;
+  path: string;
+  /** The request as a Raw Proxy Event shows it: raw mode only, cut to the cap. */
+  request: CappedBody;
+  /** The whole request, for the API format's `background` check. */
+  whole: CappedBody | null;
+}
+
 /** A decoder for the response's Content-Encoding, for the capture's copy only. */
 function decoderFor(encoding: string | undefined): Transform | null {
   const name = (encoding ?? "").trim().toLowerCase();
@@ -156,15 +169,28 @@ export class ProxyServer {
     const send = target.protocol === "https:" ? httpsRequest : httpRequest;
 
     const mode = this.api.isTurn(req.method, path) ? this.safe(() => this.options.capturing()) : undefined;
-    const capture = mode?.capture ? { raw: mode.raw, path, request: new CappedBody(RAW_PROXY_CAP_BYTES) } : null;
+    const capture: Capture | null = mode?.capture
+      ? {
+          raw: mode.raw,
+          path,
+          request: new CappedBody(RAW_PROXY_CAP_BYTES),
+          // The whole request, in either mode, when the API can tell the CLI's own calls from it.
+          whole: this.api.background ? new CappedBody(MAX_REQUEST_READ_BYTES) : null,
+        }
+      : null;
+    const reading = capture !== null && (capture.raw || capture.whole !== null);
+    const keep = (chunk: Buffer) => {
+      if (capture?.raw) capture.request.push(chunk);
+      capture?.whole?.push(chunk);
+    };
     // A compressed request body (Codex sends zstd) is read decoded, for the capture's copy only.
     const requestEncoding = String(req.headers["content-encoding"] ?? "")
       .trim()
       .toLowerCase();
     const requestDecoder =
-      capture?.raw && requestEncoding !== "" && requestEncoding !== "identity" ? decoderFor(requestEncoding) : null;
+      reading && requestEncoding !== "" && requestEncoding !== "identity" ? decoderFor(requestEncoding) : null;
     if (requestDecoder) {
-      requestDecoder.on("data", (chunk: Buffer) => this.safe(() => capture?.request.push(chunk)));
+      requestDecoder.on("data", (chunk: Buffer) => this.safe(() => keep(chunk)));
       requestDecoder.on("error", (error) => this.options.log(`proxy: could not decode a request: ${error.message}`));
     }
 
@@ -209,7 +235,7 @@ export class ProxyServer {
     req.on("data", (chunk: Buffer) => {
       upstreamReq.write(chunk);
       if (requestDecoder) this.safe(() => requestDecoder.write(chunk));
-      else if (capture?.raw) this.safe(() => capture.request.push(chunk));
+      else if (reading) this.safe(() => keep(chunk));
     });
     req.on("end", () => {
       upstreamReq.end();
@@ -222,10 +248,17 @@ export class ProxyServer {
     });
   }
 
+  /** What a request is when the CLI made it for itself, from the whole request; null for a turn or when unreadable. */
+  private backgroundCall(capture: Capture): string | null {
+    if (!this.api.background || !capture.whole || capture.whole.truncated) return null;
+    const body = safeParse(capture.whole.text());
+    return typeof body === "object" && body !== null && !Array.isArray(body) ? this.api.background(record(body)) : null;
+  }
+
   /** Starts reading one model turn's response. */
   private startTurn(
     upstreamRes: IncomingMessage,
-    capture: { raw: boolean; path: string; request: CappedBody },
+    capture: Capture,
   ): { push: (chunk: Buffer) => void; end: () => void; abort: () => void } | null {
     const decoder = decoderFor(upstreamRes.headers["content-encoding"]);
     if (!decoder) {
@@ -257,7 +290,9 @@ export class ProxyServer {
       this.inFlight.delete(done);
       this.safe(() => {
         reader.end();
-        if (!failed && reader.seen) {
+        const own = !failed && reader.seen ? this.backgroundCall(capture) : null;
+        if (own !== null) this.options.log(`proxy: not captured: ${own}`);
+        else if (!failed && reader.seen) {
           this.options.onTurn({
             reader,
             request: capture.request,

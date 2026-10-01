@@ -450,3 +450,138 @@ describe("the Proxy Capture's local proxy", () => {
     expect(sent).toHaveLength(2);
   });
 });
+
+describe("Claude Code's calls for itself (#58)", () => {
+  /** Claude Code's tools, as every request for the Agent's work carries them (cut down). */
+  const TOOLS = [{ name: "Bash", input_schema: { type: "object" } }];
+  /** The turn the Agent's request answers: one short text reply. */
+  const reply = (text: string) =>
+    sse([
+      { type: "message_start", message: { id: "m", model: "claude-opus-5-5", usage: { input_tokens: 3 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
+      { type: "message_stop" },
+    ]);
+  const conversation = [
+    { role: "user", content: "pick an open issue and fix it" },
+    { role: "assistant", content: [{ type: "text", text: "Fixed #12. Want me to finish it?" }] },
+  ];
+  // Claude Code 2.1.286 sends these as below: the title from its tool-free helper
+  // (no tools, JSON output with a schema), the suggestion as a fork of the
+  // conversation whose last user message is its fixed "[SUGGESTION MODE: ...]" prompt.
+  const TITLE_SCHEMA = {
+    type: "json_schema",
+    schema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
+  };
+  const backgroundCalls = {
+    "the session title (output_config)": {
+      request: {
+        model: "claude-haiku-5",
+        stream: true,
+        tools: [],
+        system: [{ type: "text", text: "Generate a concise title for this session." }],
+        messages: [{ role: "user", content: "<session>\npick an open issue and fix it\n</session>" }],
+        output_config: { format: TITLE_SCHEMA },
+      },
+      reply: '{"title":"Open issue selection"}',
+    },
+    "the session title (output_format, no tools field)": {
+      request: {
+        model: "claude-haiku-5",
+        stream: true,
+        messages: [{ role: "user", content: "<session>\nhi\n</session>" }],
+        output_format: TITLE_SCHEMA,
+      },
+      reply: '{"title":"Greeting"}',
+    },
+    "a prompt suggestion": {
+      request: {
+        model: "claude-opus-5-5",
+        stream: true,
+        tools: TOOLS,
+        messages: [
+          ...conversation,
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]\nFIRST: Look at the user's recent messages.",
+              },
+            ],
+          },
+        ],
+      },
+      reply: "yes finish it",
+    },
+  };
+
+  for (const mode of ["digest", "raw"] as const) {
+    for (const [name, call_] of Object.entries(backgroundCalls)) {
+      it(`sends no Event for ${name} (${mode} mode), and passes it through unchanged`, async () => {
+        respond = (_req, res) => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          for (const chunk of reply(call_.reply)) res.write(chunk);
+          res.end();
+        };
+        const proxy = await startCapture({ mode });
+        const body = JSON.stringify(call_.request);
+        const answer = await call(proxy.url, "/v1/messages?beta=true", { headers: MODEL_HEADERS, body });
+        expect(answer.body.toString("utf8")).toBe(reply(call_.reply).join(""));
+        expect(seen.at(-1)?.body.toString("utf8")).toBe(body);
+        // A real turn after it is captured, so the first one was seen and skipped.
+        respond = (_req, res) => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          for (const chunk of reply("Done.")) res.write(chunk);
+          res.end();
+        };
+        const turn = { model: "claude-opus-5-5", stream: true, tools: TOOLS, messages: conversation };
+        await call(proxy.url, "/v1/messages", { headers: MODEL_HEADERS, body: JSON.stringify(turn) });
+        const events = await waitForFrames(1);
+        await new Promise((r) => setTimeout(r, 100));
+        expect(frames.map((f) => f.event.payload.reply)).toEqual(["Done."]);
+        expect(events).toHaveLength(1);
+        expect(logs.join("\n")).toContain("not captured: Claude Code's");
+      });
+    }
+
+    it(`captures the Agent's real turns, however short (${mode} mode)`, async () => {
+      const turns = [
+        // One word, with tools, as every Claude Code turn for the Agent's work.
+        { stream: true, tools: TOOLS, messages: [{ role: "user", content: "hi" }] },
+        // The marker earlier in the conversation, not as its last message.
+        {
+          stream: true,
+          tools: TOOLS,
+          messages: [
+            { role: "user", content: "[SUGGESTION MODE: an old prompt pasted by the Person]" },
+            { role: "assistant", content: "ok" },
+            { role: "user", content: "go" },
+          ],
+        },
+        // JSON output, but with tools: not the tool-free helper.
+        {
+          stream: true,
+          tools: TOOLS,
+          messages: [{ role: "user", content: "x" }],
+          output_config: { format: TITLE_SCHEMA },
+        },
+        // A request the proxy cannot read is a turn, as before.
+        "not json",
+      ];
+      respond = (_req, res) => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        for (const chunk of reply("ok")) res.write(chunk);
+        res.end();
+      };
+      const proxy = await startCapture({ mode });
+      for (const turn of turns) {
+        const body = typeof turn === "string" ? turn : JSON.stringify(turn);
+        await call(proxy.url, "/v1/messages", { headers: MODEL_HEADERS, body });
+      }
+      expect(await waitForFrames(turns.length)).toHaveLength(turns.length);
+    });
+  }
+});

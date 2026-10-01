@@ -131,6 +131,17 @@ Gemini's generateContent API. Digest is the default; `--proxy raw` shares the
 turn's context too, and `--proxy off` leaves model traffic unrouted. Detected
 secrets are masked before either mode sends an Event to the Channel.
 
+Calls Claude Code makes for itself, not for the Agent's work, send no Event. They
+are told apart by their requests:
+- Its tool-free helper calls (the session title, for example) send no tools and
+  ask for JSON output with a schema.
+- Its prompt suggestions end the conversation with its fixed `[SUGGESTION MODE: ...]`
+  prompt.
+
+Every request for the Agent's work carries Claude Code's tools, so a real turn,
+however short, is never taken for one of these. The rule is in
+`cli/src/proxy/anthropic.ts`.
+
 Codex's built-in `openai` provider is supported with ChatGPT sign-in or an API
 key, over WebSocket or HTTP. Its upstream is selected from the session's
 `openai_base_url` override, config and sign-in type; Switchboard replaces that
