@@ -450,3 +450,276 @@ describe("the Proxy Capture's local proxy", () => {
     expect(sent).toHaveLength(2);
   });
 });
+
+describe("Claude Code's calls for itself (#58)", () => {
+  /** Claude Code's tools, as every request for the Agent's work carries them (cut down). */
+  const TOOLS = [{ name: "Bash", input_schema: { type: "object" } }];
+  /** The turn the Agent's request answers: one short text reply. */
+  const reply = (text: string) =>
+    sse([
+      { type: "message_start", message: { id: "m", model: "claude-opus-5-5", usage: { input_tokens: 3 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
+      { type: "message_stop" },
+    ]);
+  const conversation = [
+    { role: "user", content: "pick an open issue and fix it" },
+    { role: "assistant", content: [{ type: "text", text: "Fixed #12. Want me to finish it?" }] },
+  ];
+  // The system prompts, as Claude Code 2.1.286 sends them (cut down): every call
+  // starts with the same prefix; the title call then has its own instruction, and
+  // every turn for the Agent's work, even with no tools, the main agent prompt.
+  const PREFIX = [
+    { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.286.de7; cc_entrypoint=claude-vscode;" },
+    { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+  ];
+  const TITLE_SYSTEM = [
+    ...PREFIX,
+    {
+      type: "text",
+      text: "You are naming a coding session so the user can pick it out of a long list of sessions. The title is a name for what the session is about.",
+    },
+  ];
+  const AGENT_SYSTEM = [
+    ...PREFIX,
+    { type: "text", text: "\nYou are an interactive agent that helps users with software engineering tasks." },
+  ];
+  const TITLE_SCHEMA = {
+    type: "json_schema",
+    schema: {
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+      additionalProperties: false,
+    },
+  };
+  /** Claude Code's prompt-suggestion prompt, as 2.1.286 builds it (its middle cut down). */
+  const SUGGESTION_PROMPT = [
+    "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]",
+    "FIRST: Look at the user's recent messages and original request.",
+    "Format: 2-12 words, match the user's style. Or nothing.",
+    "Reply with ONLY the suggestion, no quotes or explanation.",
+  ].join("\n");
+  const backgroundCalls = {
+    // As recorded from Claude Code 2.1.286.
+    "the session title (output_config)": {
+      request: {
+        model: "claude-haiku-5",
+        stream: true,
+        tools: [],
+        system: TITLE_SYSTEM,
+        messages: [{ role: "user", content: [{ type: "text", text: "<session>\npick an issue\n</session>" }] }],
+        output_config: { format: TITLE_SCHEMA },
+      },
+      reply: '{"title":"Open issue selection"}',
+    },
+    "the session title (output_format, no tools field)": {
+      request: {
+        model: "claude-haiku-5",
+        stream: true,
+        system: TITLE_SYSTEM,
+        messages: [{ role: "user", content: "<session>\nhi\n</session>" }],
+        output_format: TITLE_SCHEMA,
+      },
+      reply: '{"title":"Greeting"}',
+    },
+    "a prompt suggestion": {
+      request: {
+        model: "claude-opus-5-5",
+        stream: true,
+        tools: TOOLS,
+        system: AGENT_SYSTEM,
+        messages: [...conversation, { role: "user", content: [{ type: "text", text: SUGGESTION_PROMPT }] }],
+      },
+      reply: "yes finish it",
+    },
+    "a prompt suggestion as a string, with a system reminder": {
+      request: {
+        model: "claude-opus-5-5",
+        stream: true,
+        tools: TOOLS,
+        system: AGENT_SYSTEM,
+        messages: [
+          ...conversation,
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "<system-reminder>\nToday's date is 2026-10-01.\n</system-reminder>" },
+              { type: "text", text: SUGGESTION_PROMPT },
+            ],
+          },
+        ],
+      },
+      reply: "run the tests",
+    },
+  };
+
+  for (const mode of ["digest", "raw"] as const) {
+    for (const [name, call_] of Object.entries(backgroundCalls)) {
+      it(`sends no Event for ${name} (${mode} mode), and passes it through unchanged`, async () => {
+        respond = (_req, res) => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          for (const chunk of reply(call_.reply)) res.write(chunk);
+          res.end();
+        };
+        const proxy = await startCapture({ mode });
+        const body = JSON.stringify(call_.request);
+        const answer = await call(proxy.url, "/v1/messages?beta=true", { headers: MODEL_HEADERS, body });
+        expect(answer.body.toString("utf8")).toBe(reply(call_.reply).join(""));
+        expect(seen.at(-1)?.body.toString("utf8")).toBe(body);
+        // A real turn after it is captured, so the first one was seen and skipped.
+        respond = (_req, res) => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          for (const chunk of reply("Done.")) res.write(chunk);
+          res.end();
+        };
+        const turn = { model: "claude-opus-5-5", stream: true, tools: TOOLS, messages: conversation };
+        await call(proxy.url, "/v1/messages", { headers: MODEL_HEADERS, body: JSON.stringify(turn) });
+        const events = await waitForFrames(1);
+        await new Promise((r) => setTimeout(r, 100));
+        expect(frames.map((f) => f.event.payload.reply)).toEqual(["Done."]);
+        expect(events).toHaveLength(1);
+        expect(logs.join("\n")).toContain("not captured: Claude Code's");
+      });
+    }
+  }
+
+  /** Real turns for the Agent's work that look like a background call in some way. */
+  const realTurns: Record<string, unknown> = {
+    "one word, with tools": {
+      stream: true,
+      tools: TOOLS,
+      system: AGENT_SYSTEM,
+      messages: [{ role: "user", content: "hi" }],
+    },
+    "the marker earlier in the conversation": {
+      stream: true,
+      tools: TOOLS,
+      system: AGENT_SYSTEM,
+      messages: [
+        { role: "user", content: SUGGESTION_PROMPT },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: "go" },
+      ],
+    },
+    "a Person's string prompt starting with the marker": {
+      stream: true,
+      tools: TOOLS,
+      system: AGENT_SYSTEM,
+      messages: [{ role: "user", content: "[SUGGESTION MODE: is this hidden?" }],
+    },
+    "a Person's prompt starting with the marker, after a system reminder": {
+      stream: true,
+      tools: TOOLS,
+      system: AGENT_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "<system-reminder>\nreminder\n</system-reminder>" },
+            { type: "text", text: "[SUGGESTION MODE: is this hidden?" },
+          ],
+        },
+      ],
+    },
+    "a Person's prompt starting with the marker's whole first line": {
+      stream: true,
+      tools: TOOLS,
+      system: AGENT_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content:
+            "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]\nwhy does this not show up?",
+        },
+      ],
+    },
+    "the whole prompt pasted next to the Person's own words": {
+      stream: true,
+      tools: TOOLS,
+      system: AGENT_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: SUGGESTION_PROMPT },
+            { type: "text", text: "what does this prompt do?" },
+          ],
+        },
+      ],
+    },
+    "a queued mid-turn message starting with the marker, next to a tool result": {
+      stream: true,
+      tools: TOOLS,
+      system: AGENT_SYSTEM,
+      messages: [
+        { role: "user", content: "go" },
+        { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "t1", content: "a.ts" },
+            { type: "text", text: SUGGESTION_PROMPT },
+          ],
+        },
+      ],
+    },
+    "JSON output with tools": {
+      stream: true,
+      tools: TOOLS,
+      system: AGENT_SYSTEM,
+      messages: [{ role: "user", content: "x" }],
+      output_config: { format: TITLE_SCHEMA },
+    },
+    // `claude -p --tools "" --json-schema ...`: no tools, JSON output, the main agent prompt.
+    "a tool-free turn asking for JSON output": {
+      stream: true,
+      tools: [],
+      system: AGENT_SYSTEM,
+      messages: [{ role: "user", content: "name this" }],
+      output_config: { format: { type: "json_schema", schema: { type: "object", properties: { name: {} } } } },
+    },
+    "a tool-free turn asking for JSON with only a title": {
+      stream: true,
+      system: AGENT_SYSTEM,
+      messages: [{ role: "user", content: "title this" }],
+      output_config: { format: TITLE_SCHEMA },
+    },
+    "the title instruction, but tools set to null": {
+      stream: true,
+      tools: null,
+      system: TITLE_SYSTEM,
+      messages: [{ role: "user", content: "x" }],
+      output_config: { format: TITLE_SCHEMA },
+    },
+    "the title instruction, but another schema": {
+      stream: true,
+      tools: [],
+      system: TITLE_SYSTEM,
+      messages: [{ role: "user", content: "x" }],
+      output_config: {
+        format: { type: "json_schema", schema: { type: "object", properties: { title: {}, body: {} } } },
+      },
+    },
+    "a body the proxy cannot read": "not json",
+  };
+
+  for (const mode of ["digest", "raw"] as const) {
+    for (const [name, turn] of Object.entries(realTurns)) {
+      it(`captures the Agent's turn: ${name} (${mode} mode)`, async () => {
+        respond = (_req, res) => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          for (const chunk of reply("ok")) res.write(chunk);
+          res.end();
+        };
+        const proxy = await startCapture({ mode });
+        const body = typeof turn === "string" ? turn : JSON.stringify(turn);
+        await call(proxy.url, "/v1/messages", { headers: MODEL_HEADERS, body });
+        expect(await waitForFrames(1)).toHaveLength(1);
+        expect(logs.join("\n")).not.toContain("not captured");
+      });
+    }
+  }
+});

@@ -61,6 +61,13 @@ export interface ApiFormat {
   /** A parser for one model turn's response. */
   reader(response: ResponseInfo): TurnParser;
   /**
+   * Whether a turn request is a call the agent CLI makes for itself rather than for
+   * the Agent's work (naming the session, suggesting the Person's next prompt): a
+   * short description of it, or null for one of the Agent's turns. Told from the
+   * request, never the reply. Such calls produce no Event.
+   */
+  background?(request: Record<string, unknown>): string | null;
+  /**
    * For APIs that also run turns over a WebSocket: which upgrade paths carry turns,
    * whether a client message starts one, and a parser for its events.
    */
