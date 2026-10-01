@@ -264,6 +264,13 @@ export interface EventPayloads {
     reason?: DirectiveQueueReason;
   };
   /**
+   * The Agent's wrapper woke it while it was idle: it typed what was Queued for the
+   * Agent's next turn as one prompt, starting a turn (see wakes.ts). Names the Queue
+   * Verdicts it delivered that way and the Events they were on (in the same order),
+   * and the Directives. The actor is the Agent.
+   */
+  wake: { verdicts: string[]; events: string[]; directives: string[] };
+  /**
    * A Person moving a Stale Claim to a new holder, with the hand-off: the previous
    * holder, the Steps it completed and its last Update on the Task.
    */

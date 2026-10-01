@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, X } from "lucide-react";
-import type { ChannelEvent } from "@shared/index";
+import type { AgentId, ChannelEvent } from "@shared/index";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { EventDetail, EventRow } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
@@ -157,6 +157,7 @@ export function FeedView({ selected }: { selected?: string }) {
     <EventDetail
       event={selectedEvent}
       verdicts={verdictsByEvent.get(selectedEvent.id) ?? []}
+      woken={wokenFor(events, selectedEvent.id)}
       agentById={agentById}
       taskByNumber={taskByNumber}
       threshold={threshold}
@@ -224,4 +225,13 @@ export function FeedView({ selected }: { selected?: string }) {
       )}
     </ResizablePanelGroup>
   );
+}
+
+/** The Agents a Wake delivered Event `id` to: their Queue on it did not wait for their next turn. */
+function wokenFor(events: readonly ChannelEvent[], id: string): Set<AgentId> {
+  const woken = new Set<AgentId>();
+  for (const e of events) {
+    if (e.type === "wake" && e.actor.kind === "agent" && e.payload.events.includes(id)) woken.add(e.actor.agentId);
+  }
+  return woken;
 }

@@ -38,6 +38,7 @@ import {
   interruptNotice,
   releasePath,
   taskBranch,
+  wakeCappedText,
 } from "../../shared/src/index";
 import type { ComparedFile } from "../src/github/index";
 import { installGitHub, sign } from "../src/github/index";
@@ -911,5 +912,93 @@ describe("Relay settings", () => {
         model: JEV_MODEL,
       },
     );
+  });
+});
+
+// Idle wake (#62): the wrapper wakes its own idle Agent; the Channel records why.
+describe("Idle wake", () => {
+  async function wakes(): Promise<EventOf<"wake">[]> {
+    return (await events()).filter((e): e is EventOf<"wake"> => e.type === "wake");
+  }
+
+  /** Alice, with a Delivery Queued for her: Bob pushed a change to a file she touched. */
+  async function queuedForAlice(): Promise<{ alice: FakeAgent; bob: FakeAgent; delivery: Delivery; push: string }> {
+    const { alice, bob, bobBranch } = await twoAgents();
+    await alice.edited("src/shared.ts");
+    const push = await pushed(bobBranch, "Rename formatName", [RENAME]);
+    const [delivery] = await waitFor(async () => (alice.deliveries.length > 0 ? alice.deliveries : undefined));
+    if (!delivery) throw new Error("No Delivery");
+    return { alice, bob, delivery, push: push.id };
+  }
+
+  it("records a Wake naming the Queue Verdicts the wrapper typed, and nothing it was not Queued", async () => {
+    const { alice, delivery, push } = await queuedForAlice();
+    alice.send({ type: "wake", agent: alice.id, deliveries: [delivery.id, push, "no-such-event"], directives: [push] });
+    const [wake] = await waitFor(async () => {
+      const found = await wakes();
+      return found.length > 0 ? found : undefined;
+    });
+    expect(wake).toMatchObject({
+      actor: { kind: "agent", agentId: alice.id },
+      capture: null,
+      payload: { verdicts: [delivery.id], events: [push], directives: [] },
+    });
+    // A Wake is never relayed: no Verdict on it, and Jev is not asked.
+    const asked = jev.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await verdictEvents()).filter((v) => v.payload.event === wake?.id)).toEqual([]);
+    expect(jev.calls.length).toBe(asked);
+  });
+
+  it("records the Directives a Wake typed, when they were for that Agent", async () => {
+    // Carol's and Dave's CLIs take no typed input, so a Directive to them waits for their next turn.
+    const carol = await FakeAgent.start("carol", { interrupts: false, attach: false });
+    const dave = await FakeAgent.start("dave", { interrupts: false, attach: false });
+    const send = async (to: AgentId) => {
+      const response = await post("/api/directives", "shlok", { to, text: "Rebase onto main." });
+      return (await response.json<{ event: ChannelEvent }>()).event.id;
+    };
+    const forCarol = await send(carol.id);
+    const forDave = await send(dave.id);
+    carol.send({ type: "wake", agent: carol.id, deliveries: [], directives: [forCarol, forDave] });
+    const [wake] = await waitFor(async () => {
+      const found = await wakes();
+      return found.length > 0 ? found : undefined;
+    });
+    expect(wake?.payload).toEqual({ verdicts: [], events: [], directives: [forCarol] });
+  });
+
+  it("takes a Wake only from the Agent's own wrapper, and only for what was Queued for that Agent", async () => {
+    const { alice, bob, delivery } = await queuedForAlice();
+    // Bob's wrapper cannot speak for Alice, nor name her Delivery as his.
+    bob.send({ type: "wake", agent: alice.id, deliveries: [delivery.id], directives: [] });
+    bob.send({ type: "wake", agent: bob.id, deliveries: [delivery.id], directives: [] });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await wakes()).toEqual([]);
+    // Alice's own wrapper can.
+    alice.send({ type: "wake", agent: alice.id, deliveries: [delivery.id], directives: [] });
+    await waitFor(async () => ((await wakes()).length === 1 ? true : undefined));
+  });
+
+  it("posts an Update for an Agent whose wrapper stopped waking it, once, on no Task", async () => {
+    const { alice, bob } = await queuedForAlice();
+    const asked = jev.calls.length;
+    alice.send({ type: "wake.capped", agent: alice.id });
+    alice.send({ type: "wake.capped", agent: alice.id });
+    bob.send({ type: "wake.capped", agent: alice.id });
+    const capped = await waitFor(async () =>
+      (await events()).find((e): e is EventOf<"update"> => e.type === "update" && e.actor.kind === "agent"),
+    );
+    expect(capped).toMatchObject({
+      actor: { kind: "agent", agentId: alice.id },
+      capture: null,
+      payload: { text: wakeCappedText(alice.id) },
+    });
+    expect(capped.task).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect((await events()).filter((e) => e.type === "update")).toHaveLength(1);
+    // On no Task and naming no file, it is addressed to no one: it wakes no other Agent.
+    expect((await verdictsOn(capped.id, 1)).map((v) => v.option)).toEqual(["drop"]);
+    expect(jev.calls.length).toBe(asked);
   });
 });

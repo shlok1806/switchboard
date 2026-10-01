@@ -48,6 +48,7 @@ import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
 import { type NewTask, type TaskResult, Tasks, workingTasks } from "./tasks";
+import { Wakes } from "./wakes";
 
 type EventRow = {
   seq: number;
@@ -121,6 +122,8 @@ export class Channel extends DurableObject<Env> {
   private readonly relay: Relay;
   /** Directives from Persons to Agents, delivered without the Relay (ADR 0005). */
   private readonly directives: Directives;
+  /** Records the wrappers' idle wakes. */
+  private readonly wakes: Wakes;
   /** Who may use the Channel: membership of the repo, and Agent tokens (ADR 0007). */
   private readonly access: Access;
   /** Each Issue's one status comment (issue #2). */
@@ -245,6 +248,7 @@ export class Channel extends DurableObject<Env> {
       interruptTo: (agent, message) => this.interruptTo(agent, message),
       waitUntil: (work) => this.ctx.waitUntil(work),
     });
+    this.wakes = new Wakes({ sql: ctx.storage.sql, append: (event) => this.append(event) });
   }
 
   /**
@@ -534,9 +538,10 @@ export class Channel extends DurableObject<Env> {
   }
 
   /**
-   * The stream is receive-only except for the Hook and Proxy Captures: a wrapper sends its
-   * Agent's Hook and Proxy Events here and gets the reply on the same socket. Clients do
-   * everything else over HTTP.
+   * The stream is receive-only except for what a wrapper says about its own Agent: its Hook
+   * and Proxy Events (with the reply on the same socket), what it holds for the next turn,
+   * whether it typed an Interrupt or Directive, and its Wakes. Clients do everything else
+   * over HTTP.
    */
   override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     if (typeof message !== "string") return;
@@ -555,7 +560,9 @@ export class Channel extends DurableObject<Env> {
       type !== "directive.ack" &&
       type !== "interrupt.attach" &&
       type !== "interrupt.result" &&
-      type !== "directive.result"
+      type !== "directive.result" &&
+      type !== "wake" &&
+      type !== "wake.capped"
     ) {
       return;
     }
@@ -580,6 +587,19 @@ export class Channel extends DurableObject<Env> {
       if (result === null) return;
       if (type === "interrupt.result") this.relay.interruptAnswered(result);
       else this.directives.answered(result.agent, result.id, result.typed ? "typed" : result.reason);
+      return;
+    }
+    if (type === "wake" || type === "wake.capped") {
+      // The wrapper woke its idle Agent, or stopped at the cap. Only the Agent's own wrapper may say so.
+      const agent = body.agent;
+      if (typeof agent !== "string" || agent !== socketAgent) return;
+      if (type === "wake.capped") {
+        this.wakes.capped(agent as AgentId);
+        return;
+      }
+      const strings = (value: unknown) =>
+        Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+      this.wakes.woke(agent as AgentId, strings(body.deliveries), strings(body.directives));
       return;
     }
     if (type === "delivery.ack" || type === "directive.ack") {

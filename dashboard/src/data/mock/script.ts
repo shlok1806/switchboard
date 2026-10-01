@@ -29,6 +29,21 @@ const beat = <K extends EventType>(
   effect: opts.effect,
 });
 
+/** The ID a beat's Event got when it was built, for a later beat that names it. */
+function named(b: Beat, keep: (id: string) => void): Beat {
+  return {
+    ...b,
+    build: (at) => {
+      const event = b.build(at);
+      keep(event.id);
+      return event;
+    },
+  };
+}
+
+/** The rename push, which Maya's idle session is woken for (below the Interrupt threshold, so Queued). */
+let renamePush = "";
+
 const S = agent(A.shlokClaude);
 const SX = agent(A.shlokCodex);
 const SO = agent(A.shlokCodexOld);
@@ -136,20 +151,25 @@ export const LIVE: Beat[] = [
   beat(7.2, "update", S, "tool", { text: "Renamed getJson to request in web/src/api. Callers in web/src/pages still import getJson until the next push." }, { task: 12, turn: "shlok-t88" }),
   beat(7.8, "turn.end", S, "hook", { turn: 88 }, { turn: "shlok-t88" }),
   beat(9, "command", S, "hook", { command: "git push origin task/12-rename-getjson" }, { task: 12 }),
-  beat(9.8, "push", S, null, {
-    branch: "task/12-rename-getjson",
-    commit: "7c2d0f1",
-    message: "Rename getJson to request",
-    commits: [{ sha: "7c2d0f1", message: "Rename getJson to request" }],
-    files: RENAME_PUSH_FILES,
-  }, {
-    task: 12,
-    jev: {
-      [A.mayaClaude]: { interrupt: 0.52, queue: 0.44, drop: 0.04 },
-      [A.devClaude]: { interrupt: 0.81, queue: 0.17, drop: 0.02 },
-      [A.shlokCodex]: { interrupt: 0.01, queue: 0.11, drop: 0.88 },
+  named(
+    beat(9.8, "push", S, null, {
+      branch: "task/12-rename-getjson",
+      commit: "7c2d0f1",
+      message: "Rename getJson to request",
+      commits: [{ sha: "7c2d0f1", message: "Rename getJson to request" }],
+      files: RENAME_PUSH_FILES,
+    }, {
+      task: 12,
+      jev: {
+        [A.mayaClaude]: { interrupt: 0.52, queue: 0.44, drop: 0.04 },
+        [A.devClaude]: { interrupt: 0.81, queue: 0.17, drop: 0.02 },
+        [A.shlokCodex]: { interrupt: 0.01, queue: 0.11, drop: 0.88 },
+      },
+    }),
+    (id) => {
+      renamePush = id;
     },
-  }),
+  ),
   beat(12, "proxy.raw", D, "proxy", {
     model: "claude-sonnet-4-5",
     inputTokens: 39_022,
@@ -167,6 +187,12 @@ export const LIVE: Beat[] = [
   }, { turn: "dev-t23" }),
   beat(12.4, "command", D, "hook", { command: "git rebase origin/task/12-rename-getjson" }, { task: 16, turn: "dev-t23" }),
   beat(13, "update", D, "tool", { text: "Saw the rename in #12. Rebased task/16 and now wrapping request() instead of getJson." }, { task: 16, turn: "dev-t23" }),
+  // Maya's session was idle: her wrapper woke it for the Queued push.
+  {
+    t: 15,
+    build: (at) =>
+      makeEvent("wake", M, null, { verdicts: [`verdict-${renamePush}-maya`], events: [renamePush], directives: [] }, { at }),
+  },
   beat(15.5, "proxy.digest", M, "proxy", {
     model: "claude-opus-4-5",
     inputTokens: 52_880,

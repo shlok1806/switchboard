@@ -318,6 +318,8 @@ export const codex: CliAdapter = {
   interrupts: true,
   // Not known to clear its composer on double Escape or Ctrl+C, so neither reads as clearing.
   idleClears: false,
+  // Not yet (#63).
+  wakes: false,
   proxy: true,
   sessionFromHooks: true,
 

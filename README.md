@@ -126,6 +126,7 @@ the clock. A resumed session (`claude --resume <id>`, `codex resume <id>`,
 | Proxy Capture (digest and raw) | yes | yes | yes, unverified |
 | Next-turn delivery | SessionStart / UserPromptSubmit hooks | SessionStart / UserPromptSubmit `additionalContext`; `read_channel` fallback | SessionStart / BeforeAgent `additionalContext` |
 | Interrupts and Directives | typed mid-turn | typed mid-turn | downgraded to Queue, labelled `cli-cannot-interrupt` |
+| Idle wake (a Queue that needs the Agent wakes it while idle) | yes | not yet (#63) | not yet (#63) |
 
 Edit tools report the files they change. A shell command (a heredoc, `sed`, a script)
 does not, so the wrapper snapshots the call's worktree with git just before and just

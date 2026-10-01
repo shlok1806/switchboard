@@ -19,9 +19,13 @@
 // Everything from the Channel is short structured facts, framed as information,
 // never as instructions (ADR 0005). The one exception is a Directive, framed as
 // coming from the named Person.
+//
+// When something here deserves it and the Agent is idle, its wrapper may not wait
+// for the next turn: it takes everything held as one prompt and types it, a Wake
+// (see shared/src/wakes.ts and wake.ts).
 
 import type { Delivery, DirectiveDelivery, LostClaim } from "../../shared/src/index";
-import { deliveriesNotice, directivesNotice, holderName, STANDING_RULE } from "../../shared/src/index";
+import { deliveriesNotice, directivesNotice, holderName, STANDING_RULE, wakesAgent } from "../../shared/src/index";
 
 /** The hooks whose output Claude Code adds to the model's context. */
 export const CONTEXT_HOOKS = ["SessionStart", "UserPromptSubmit"] as const;
@@ -46,6 +50,13 @@ export function lostClaimsNotice(lost: readonly LostClaim[]): string {
     ...lost.map(describeLostClaim),
     "Do not keep working on these Tasks unless your own Person asks you to. Uncommitted work for them stays where it is.",
   ].join("\n");
+}
+
+/** What a Wake takes: the text to type, and the Deliveries (Verdict IDs) and Directives in it. */
+export interface WakeBatch {
+  text: string;
+  deliveries: string[];
+  directives: string[];
 }
 
 /** What the Channel handed over for the Agent's next turn, in a register or heartbeat answer. */
@@ -90,6 +101,22 @@ export class NextTurn {
       if (oldest !== undefined) this.seen.delete(oldest);
     }
     return true;
+  }
+
+  /** Whether anything held deserves waking an idle Agent for: a Directive, or a Delivery `wakesAgent` says does. */
+  get wakeWorthy(): boolean {
+    return this.directives.size > 0 || [...this.deliveries.values()].some(wakesAgent);
+  }
+
+  /**
+   * Everything held, for a Wake to type as one prompt, once; null when nothing held
+   * deserves a Wake. What deserves none rides along, as it would at the next turn.
+   */
+  takeForWake(): WakeBatch | null {
+    if (!this.wakeWorthy) return null;
+    const deliveries = [...this.deliveries.keys()];
+    const directives = [...this.directives.keys()];
+    return { text: this.take("UserPromptSubmit"), deliveries, directives };
   }
 
   /** What a hook prints into the Agent's context, once; "" for other hooks and when there is nothing to tell. */
