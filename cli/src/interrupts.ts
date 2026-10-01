@@ -18,6 +18,9 @@
 // If that lasts longer than `waitMs` it gives up and tells the Channel why, and the
 // Relay delivers the Interrupt as a Queue at the next turn. While it types, the
 // Person's own keystrokes are held back and sent right after, never interleaved.
+//
+// The same guards let the wrapper wake its idle session for what is Queued (`wake`,
+// see wake.ts), which types only at the idle prompt and never waits for its moment.
 
 import type { ClaudeHookInput } from "./hooks/summarize";
 
@@ -196,6 +199,11 @@ export class InputLine {
     return this.text === "" && !this.unknown && !this.pasting;
   }
 
+  /** Whether the CLI is at its prompt with no turn running, as far as its hooks and the keys show. */
+  get atPrompt(): boolean {
+    return this.idle;
+  }
+
   /** The line was sent elsewhere (Claude Code reported a submitted prompt). */
   clear(): void {
     this.reset();
@@ -206,16 +214,20 @@ export class InputLine {
     this.idle = idle;
   }
 
-  /** Reads keystrokes the Person typed. Returns whether they included Enter or Escape. */
-  keys(data: string): { enter: boolean; cancel: boolean } {
+  /**
+   * Reads keystrokes the Person typed. Returns whether they included Enter or Escape,
+   * and whether an Enter certainly submitted a prompt the Person wrote.
+   */
+  keys(data: string): { enter: boolean; cancel: boolean; submitted: boolean } {
     let enter = false;
     let cancel = false;
+    let submitted = false;
     for (const key of this.read(data)) {
       if (key.kind === "enter") enter = true;
       if (key.kind === "escape") cancel = true;
-      this.press(key);
+      if (this.press(key)) submitted = true;
     }
-    return { enter, cancel };
+    return { enter, cancel, submitted };
   }
 
   private reset(): void {
@@ -224,28 +236,29 @@ export class InputLine {
     this.unknown = false;
   }
 
-  /** What one key does to the line. */
-  private press(key: Key): void {
+  /** What one key does to the line. True when it submitted a prompt with text the wrapper saw typed. */
+  private press(key: Key): boolean {
     const escapeAt = this.escapeAt;
     this.escapeAt = null;
     switch (key.kind) {
       case "text":
         this.text += key.text;
-        return;
+        return false;
       case "newline":
         this.text += "\n";
-        return;
+        return false;
       case "enter": {
         // `\` then Enter starts a new line; Enter on a suggestion takes the suggestion.
         const backslash = this.moved ? this.text.includes("\\") : this.text.endsWith("\\");
         if (this.unknown || backslash || suggesting(this.text, this.moved)) {
           if (!this.moved && backslash) this.text = `${this.text.slice(0, -1)}\n`;
-          return;
+          return false;
         }
+        const submitted = this.text.trim() !== "";
         this.reset();
         // A submitted prompt starts a turn.
-        this.idle = false;
-        return;
+        if (submitted) this.idle = false;
+        return submitted;
       }
       case "escape": {
         const now = this.now();
@@ -257,37 +270,37 @@ export class InputLine {
         this.lastEscapeAt = now;
         if (this.text === "" && lastEscapeAt !== null && now - lastEscapeAt < PICKER_ESCAPE_MS) {
           this.unknown = true;
-          return;
+          return false;
         }
         const gap = escapeAt === null ? Number.POSITIVE_INFINITY : now - escapeAt;
         if (gap >= DOUBLE_ESCAPE_MS) {
           this.escapeAt = now;
-          return;
+          return false;
         }
         // While a turn runs, Escape cancels it; with suggestions up, it closes them.
         if (this.idleClears && this.idle && !this.unknown && !suggesting(this.text, this.moved)) this.reset();
-        return;
+        return false;
       }
       case "interrupt":
         if (this.idleClears && this.idle) this.reset();
-        return;
+        return false;
       case "backspace":
         if (!this.moved) this.text = [...this.text].slice(0, -1).join("");
-        return;
+        return false;
       case "delete-word":
         if (!this.moved) this.text = withoutLastWord(this.text);
-        return;
+        return false;
       case "delete-to-line-start":
         if (!this.moved) this.text = this.text.slice(0, this.text.lastIndexOf("\n") + 1);
-        return;
+        return false;
       case "move":
         this.moved = true;
-        return;
+        return false;
       case "unknown":
         this.unknown = true;
-        return;
+        return false;
       case "none":
-        return;
+        return false;
     }
   }
 
@@ -413,6 +426,8 @@ export interface InterruptTyperOptions {
    * as Claude Code's does. Off, the wrapper never reads those keys as clearing.
    */
   idleClears?: boolean;
+  /** The Person submitted a prompt they typed themselves. */
+  onPersonPrompt?: () => void;
 }
 
 export class InterruptTyper {
@@ -439,11 +454,19 @@ export class InterruptTyper {
   /** The Person typed `data`: passes it to the agent CLI, or holds it while an Interrupt is being typed. */
   personTyped(data: string): void {
     this.lastKey = this.now();
-    const { enter, cancel } = this.line.keys(data);
+    // An open dialog takes the keys: Enter there answers it, it submits no prompt.
+    const dialog = this.dialog !== null;
+    const { enter, cancel, submitted } = this.line.keys(data);
     // Enter or Escape answers or cancels an open dialog.
     if (enter || cancel) this.dialog = null;
     if (this.held) this.held.push(data);
     else this.options.write(data);
+    if (submitted && !dialog) this.options.onPersonPrompt?.();
+  }
+
+  /** Whether the CLI waits at its prompt: a turn ended (or a session started) and no prompt since. */
+  get atPrompt(): boolean {
+    return this.line.atPrompt;
   }
 
   /** The agent CLI wrote `data` to the terminal: watch whether bracketed paste is on. */
@@ -501,6 +524,27 @@ export class InterruptTyper {
     return next;
   }
 
+  /**
+   * Types the prompt `produce` gives into the session now, only if the CLI waits at
+   * its prompt and nothing stops typing (the Person, a dialog, a session not ready).
+   * It never waits for the moment: the caller asks again later. `produce` runs only
+   * once the prompt will be typed, so what it takes is never taken in vain; it gives
+   * null when there is nothing to type any more.
+   */
+  wake(produce: () => string | null): Promise<{ typed: true } | { typed: false; reason: NotTyped | "busy" | "empty" }> {
+    const next = this.turn.then(async () => {
+      if (!this.line.atPrompt) return { typed: false as const, reason: "busy" as const };
+      const reason = this.blocked();
+      if (reason !== null) return { typed: false as const, reason };
+      const text = produce();
+      if (text === null) return { typed: false as const, reason: "empty" as const };
+      await this.typeText(text);
+      return { typed: true as const };
+    });
+    this.turn = next.catch(() => {});
+    return next;
+  }
+
   /** What stops an Interrupt being typed right now, or null when nothing does. */
   private blocked(): NotTyped | null {
     if (!this.started || !this.pasteMode) return "session-not-ready";
@@ -520,6 +564,12 @@ export class InterruptTyper {
       await sleep(POLL_MS);
       reason = this.blocked();
     }
+    await this.typeText(text);
+    return { typed: true };
+  }
+
+  /** Types `text` as one prompt and submits it, holding the Person's keystrokes back meanwhile. */
+  private async typeText(text: string): Promise<void> {
     this.held = [];
     // The typed prompt starts a turn, if none is running.
     this.line.setIdle(false);
@@ -533,7 +583,6 @@ export class InterruptTyper {
       this.held = null;
       for (const data of held) this.options.write(data);
     }
-    return { typed: true };
   }
 }
 

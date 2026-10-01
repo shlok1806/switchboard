@@ -8,3 +8,4 @@ export * from "./domain";
 export * from "./hooks";
 export * from "./proxy";
 export * from "./relay";
+export * from "./wakes";

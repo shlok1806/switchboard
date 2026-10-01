@@ -44,7 +44,7 @@ describe("InputLine", () => {
     expect(line.empty).toBe(true);
     line.keys("ab");
     expect(line.empty).toBe(false);
-    expect(line.keys("\r")).toEqual({ enter: true, cancel: false });
+    expect(line.keys("\r")).toEqual({ enter: true, cancel: false, submitted: true });
     expect(line.empty).toBe(true);
     line.setIdle(true);
     line.keys("x");
@@ -68,7 +68,7 @@ describe("InputLine", () => {
     expect(line.empty).toBe(true);
     line.keys("u");
     expect(line.empty).toBe(false);
-    expect(line.keys("\x1b[13u")).toEqual({ enter: true, cancel: false });
+    expect(line.keys("\x1b[13u")).toEqual({ enter: true, cancel: false, submitted: true });
     expect(line.empty).toBe(true);
     line.setIdle(true);
     expect(line.keys("\x1b[27u").cancel).toBe(true);
@@ -410,6 +410,101 @@ describe("InterruptTyper after the Person clears their line", () => {
     const { typer: t } = typer({ idleClears: false });
     t.personTyped("fixit\x17");
     expect(await t.type(DIRECTIVE)).toEqual({ typed: true });
+  });
+});
+
+describe("InterruptTyper, waking an idle session", () => {
+  /** A typer for Claude Code whose session started, with bracketed paste on. */
+  function typer(onPersonPrompt: () => void = () => {}) {
+    const written: string[] = [];
+    const t = new InterruptTyper({
+      write: (d) => written.push(d),
+      quietMs: 0,
+      log: () => {},
+      idleClears: true,
+      onPersonPrompt,
+    });
+    t.hook({ hook_event_name: "SessionStart", source: "startup" });
+    t.output("\x1b[?2004h");
+    return { typer: t, written };
+  }
+  const WAKE = "[Switchboard] Wake";
+  const inVain = () => {
+    throw new Error("taken when it could not be typed");
+  };
+
+  it("types at the idle prompt, taking what it types only then", async () => {
+    const { typer: t, written } = typer();
+    let taken = 0;
+    const produce = () => {
+      taken += 1;
+      return WAKE;
+    };
+    expect(await t.wake(produce)).toEqual({ typed: true });
+    expect(written).toEqual([`\x1b[200~${WAKE}\x1b[201~`, "\r"]);
+    // The typed prompt started a turn: no second Wake until it ends.
+    expect(await t.wake(produce)).toEqual({ typed: false, reason: "busy" });
+    t.hook({ hook_event_name: "Stop" });
+    expect(await t.wake(produce)).toEqual({ typed: true });
+    expect(taken).toBe(2);
+  });
+
+  it("never wakes a session at work or in a dialog", async () => {
+    const busy = typer();
+    busy.typer.hook({ hook_event_name: "UserPromptSubmit" });
+    expect(await busy.typer.wake(inVain)).toEqual({ typed: false, reason: "busy" });
+    // A question or a permission prompt comes mid-turn: the session is at work, and the dialog open.
+    for (const hook of [
+      { hook_event_name: "PreToolUse", tool_name: "AskUserQuestion" },
+      { hook_event_name: "PermissionRequest", tool_name: "Bash" },
+    ]) {
+      const dialog = typer();
+      dialog.typer.hook({ hook_event_name: "Stop" });
+      dialog.typer.hook(hook);
+      expect(await dialog.typer.wake(inVain), hook.hook_event_name).toEqual({ typed: false, reason: "busy" });
+      expect(dialog.written).toEqual([]);
+    }
+  });
+
+  it("never types over its Person, however long they leave their line", async () => {
+    const { typer: t, written } = typer();
+    t.personTyped("half a th");
+    expect(await t.wake(inVain)).toEqual({ typed: false, reason: "person-typing" });
+    expect(written).toEqual(["half a th"]);
+    t.personTyped("\x15");
+    expect(await t.wake(() => WAKE)).toEqual({ typed: true });
+  });
+
+  it("types nothing when there is nothing left to type", async () => {
+    const { typer: t, written } = typer();
+    expect(await t.wake(() => null)).toEqual({ typed: false, reason: "empty" });
+    expect(written).toEqual([]);
+  });
+
+  it("is still at its prompt after Enter on an empty line, which submits nothing", async () => {
+    const { typer: t } = typer();
+    t.personTyped("\r");
+    expect(t.atPrompt).toBe(true);
+    expect(await t.wake(() => WAKE)).toEqual({ typed: true });
+  });
+
+  it("tells when the Person submits a prompt they wrote; not an empty line, a dialog answer, or its own typing", async () => {
+    let prompts = 0;
+    const { typer: t } = typer(() => {
+      prompts += 1;
+    });
+    t.personTyped("\r");
+    expect(prompts).toBe(0);
+    t.personTyped("carry on\r");
+    expect(prompts).toBe(1);
+    t.hook({ hook_event_name: "PermissionRequest", tool_name: "Bash" });
+    t.personTyped("1\r");
+    expect(prompts).toBe(1);
+    t.hook({ hook_event_name: "Stop" });
+    expect(await t.wake(() => WAKE)).toEqual({ typed: true });
+    t.hook({ hook_event_name: "Stop" });
+    expect(await t.type("[Switchboard] Interrupt")).toEqual({ typed: true });
+    expect(prompts).toBe(1);
   });
 });
 

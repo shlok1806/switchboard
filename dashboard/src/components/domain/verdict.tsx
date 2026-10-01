@@ -1,5 +1,5 @@
 import type { Agent, AgentId, Verdict, VerdictOption } from "@shared/index";
-import { ArrowDown } from "lucide-react";
+import { AlarmClock, ArrowDown } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DOWNGRADE_LABEL, VERDICT_LABEL, prob } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -81,15 +81,28 @@ export function DowngradeNote({ verdict }: { verdict: Verdict }) {
   );
 }
 
+/** A Queue that did not wait for the next turn: the Agent was idle, and its wrapper woke it with it. */
+function WokeNote() {
+  return (
+    <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-accent-tint px-2 py-0.5 text-[12px] text-accent-ink">
+      <AlarmClock className="size-3" aria-hidden />
+      Delivered by a Wake: the Agent was idle
+    </span>
+  );
+}
+
 /** Every Verdict for one Event: which Agent, what it decided, and why. */
 export function VerdictTable({
   verdicts,
   agentById,
   threshold,
+  woken = new Set(),
 }: {
   verdicts: Verdict[];
   agentById: Map<AgentId, Agent>;
   threshold: number;
+  /** The Agents whose Queue Verdict on this Event a Wake delivered. */
+  woken?: ReadonlySet<AgentId>;
 }) {
   if (!verdicts.length) {
     return <p className="text-[13px] text-ink-3">No Agent was asked.</p>;
@@ -123,6 +136,7 @@ export function VerdictTable({
               </div>
             )}
             <DowngradeNote verdict={v} />
+            {v.delivered === "queue" && woken.has(v.agent) && <WokeNote />}
           </div>
         </li>
       ))}
