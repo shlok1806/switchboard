@@ -376,6 +376,30 @@ describe("InterruptTyper after the Person clears their line", () => {
     }
   });
 
+  it("stays idle on Claude Code's idle_prompt Notification, which it sends only while waiting at its prompt", async () => {
+    const { typer: t } = typer();
+    t.hook({ hook_event_name: "Stop" });
+    // After about a minute at the prompt: "Claude is waiting for your input".
+    t.hook({ hook_event_name: "Notification", notification_type: "idle_prompt" });
+    t.personTyped("fixit\x1b\x1b");
+    expect(await t.type(DIRECTIVE)).toEqual({ typed: true });
+    // The typed Directive's turn ends, and a minute later the same again: Ctrl+C clears too.
+    t.hook({ hook_event_name: "Stop" });
+    t.hook({ hook_event_name: "Notification", notification_type: "idle_prompt" });
+    t.personTyped("fixit\x03");
+    expect(await t.type(DIRECTIVE)).toEqual({ typed: true });
+  });
+
+  it("is not idle after a Notification that can come mid-turn, or one of no known type", async () => {
+    for (const type of ["permission_prompt", "elicitation_dialog", "agent_needs_input", undefined]) {
+      const { typer: t } = typer();
+      t.hook({ hook_event_name: "Stop" });
+      t.hook({ hook_event_name: "Notification", ...(type === undefined ? {} : { notification_type: type }) });
+      t.personTyped("fixit\x1b\x1b");
+      expect(await t.type(DIRECTIVE), String(type)).toEqual(personTyping);
+    }
+  });
+
   it("does not take double Escape or Ctrl+C as clearing in a CLI whose prompt keeps its text (Codex)", async () => {
     for (const keys of ["\x1b\x1b", "\x1b[27u\x1b[27u", "\x03", "\x1b[99;5u"]) {
       const { typer: t } = typer({ idleClears: false });
@@ -403,7 +427,41 @@ describe("InputLine, the rewind picker", () => {
     line.keys("half a thought\x1b\x1b");
     expect(line.empty).toBe(true);
     clock.now += 1000;
-    line.keys("\x1b\x1b\r");
+    line.keys("\x1b\x1b");
+    line.keys("\r");
     expect(line.empty).toBe(false);
+  });
+
+  it("is not empty after an Escape that may complete a double press with the one before, whatever came between", () => {
+    // A double Escape clears the line; a third Escape soon after may open the picker.
+    for (const gap of [100, 1000]) {
+      const { line, clock } = lineAt();
+      line.keys("abc\x1b");
+      clock.now += 100;
+      line.keys("\x1b");
+      expect(line.empty).toBe(true);
+      clock.now += gap;
+      // Separate reads: in one, ESC then CR is Alt+Enter.
+      line.keys("\x1b");
+      line.keys("\r");
+      expect(line.empty, `third Escape ${gap} ms later`).toBe(false);
+    }
+    // A key typed and deleted between two Escapes leaves the line empty for the second.
+    const { line, clock } = lineAt();
+    line.keys("\x1b");
+    clock.now += 200;
+    line.keys("a\x7f");
+    clock.now += 200;
+    line.keys("\x1b");
+    line.keys("\r");
+    expect(line.empty).toBe(false);
+  });
+
+  it("is still empty after Escapes far apart, or one Escape alone", () => {
+    const { line, clock } = lineAt();
+    line.keys("\x1b");
+    clock.now += 5_000;
+    line.keys("\x1b");
+    expect(line.empty).toBe(true);
   });
 });

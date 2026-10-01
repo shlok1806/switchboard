@@ -26,6 +26,8 @@ export interface ClaudeHookInput {
   tool_name?: string;
   /** The tool call, the same in its PreToolUse and PostToolUse hooks. */
   tool_use_id?: string;
+  /** A Notification hook's kind, such as "idle_prompt" or "permission_prompt". */
+  notification_type?: string;
   tool_input?: Record<string, unknown>;
   tool_response?: unknown;
 }

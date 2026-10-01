@@ -176,8 +176,10 @@ export class InputLine {
   private pasting = false;
   /** Claude Code is at its prompt with no turn running, where Escape and Ctrl+C clear the line. */
   private idle = false;
-  /** When the last key was an Escape, the time it was pressed. */
+  /** When the last key was an Escape, the time it was pressed. Other keys and a clear reset it. */
   private escapeAt: number | null = null;
+  /** When an Escape was last pressed, whatever came after. Only the next Escape moves it. */
+  private lastEscapeAt: number | null = null;
   /** Bytes of an escape sequence, or of a paste end, split across reads. */
   private partial = "";
 
@@ -247,17 +249,17 @@ export class InputLine {
       }
       case "escape": {
         const now = this.now();
-        const gap = escapeAt === null ? Number.POSITIVE_INFINITY : now - escapeAt;
-        if (gap >= PICKER_ESCAPE_MS) {
-          this.escapeAt = now;
-          return;
-        }
         // On an empty line a double Escape opens Claude Code's rewind picker (Codex's
         // "edit previous message"), where Enter puts an earlier prompt back on the line.
-        if (this.text === "") {
+        // Any Escape soon after another may complete a double press, whatever came
+        // between (a double Escape that cleared the line, a key typed and deleted).
+        const lastEscapeAt = this.lastEscapeAt;
+        this.lastEscapeAt = now;
+        if (this.text === "" && lastEscapeAt !== null && now - lastEscapeAt < PICKER_ESCAPE_MS) {
           this.unknown = true;
           return;
         }
+        const gap = escapeAt === null ? Number.POSITIVE_INFINITY : now - escapeAt;
         if (gap >= DOUBLE_ESCAPE_MS) {
           this.escapeAt = now;
           return;
@@ -462,7 +464,10 @@ export class InterruptTyper {
     // hook may come from a turn: one the Person started, one the CLI started by itself
     // (a background task finishing), or one that compacted its context mid-turn.
     const idle = event === "Stop" || (event === "SessionStart" && IDLE_SOURCES.has(input.source ?? ""));
-    if (event !== "SessionEnd") this.line.setIdle(idle);
+    // Claude Code sends its idle_prompt Notification only while it waits at its prompt
+    // (no turn running, no dialog open), after about a minute: it changes nothing.
+    const waiting = event === "Notification" && input.notification_type === "idle_prompt";
+    if (event !== "SessionEnd" && !waiting) this.line.setIdle(idle);
     switch (event) {
       case "SessionStart":
         this.started = true;
