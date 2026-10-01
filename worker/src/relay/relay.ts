@@ -81,6 +81,8 @@ const RECENT_CODE_EVENTS = 50;
 const MAX_PENDING_DELIVERIES = 200;
 /** The longest Task description sent to Jev, in characters. */
 const MAX_DESCRIPTION = 1000;
+/** The most Tasks one Agent is described with, its newest Claims. */
+const MAX_HELD_TASKS = 5;
 /** The most touched files sent to Jev. */
 const MAX_TOUCHED = 50;
 
@@ -470,15 +472,20 @@ export class Relay {
       ]);
       const overlap = overlapOf(event, { touched, taskFiles, corpus });
       const addressed = addressedTo(event, agent.id, heldNumbers);
-      const task = held[0];
+      // What it works on now: a finished Task (in review) keeps its Claim until the PR merges, but is done.
+      const working = held
+        .filter((t) => t.status === "claimed")
+        .sort((a, b) => (b.claim?.claimedAt ?? "").localeCompare(a.claim?.claimedAt ?? "") || b.number - a.number)
+        .slice(0, MAX_HELD_TASKS);
       const state: RelayState = {
         agent: {
           id: agent.id,
-          task:
-            task === undefined
-              ? null
-              : { number: task.number, title: task.title, description: truncate(task.description, MAX_DESCRIPTION) },
-          currentStep: task?.steps.find((step) => !step.done)?.text ?? null,
+          tasks: working.map((task) => ({
+            number: task.number,
+            title: task.title,
+            description: truncate(task.description, MAX_DESCRIPTION),
+            currentStep: task.steps.find((step) => !step.done)?.text ?? null,
+          })),
           filesTouched: touched.slice(0, MAX_TOUCHED),
         },
         event: {

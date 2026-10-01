@@ -34,7 +34,9 @@ import {
   DEFAULT_INTERRUPT_THRESHOLD,
   DELIVERY_DIFF_LINES,
   deliveriesNotice,
+  finishPath,
   interruptNotice,
+  releasePath,
   taskBranch,
 } from "../../shared/src/index";
 import type { ComparedFile } from "../src/github/index";
@@ -367,8 +369,14 @@ describe("Verdicts", () => {
     expect(state).toEqual({
       agent: {
         id: alice.id,
-        task: { number: 1, title: "Users page", description: "Show every user.\n\n- [x] list\n- [ ] names" },
-        currentStep: "names",
+        tasks: [
+          {
+            number: 1,
+            title: "Users page",
+            description: "Show every user.\n\n- [x] list\n- [ ] names",
+            currentStep: "names",
+          },
+        ],
         filesTouched: ["web/users.tsx", "src/shared.ts"],
       },
       event: {
@@ -399,6 +407,38 @@ describe("Verdicts", () => {
       state,
     });
     expect(verdict?.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("describes the Tasks the Agent holds right now, as it claims, finishes and releases them", async () => {
+    const { alice, bobBranch } = await twoAgents();
+    await delivered(github.open({ title: "Settings page", body: "- [ ] form" }));
+    await alice.edited("src/shared.ts");
+    let pushes = 0;
+    /** The Tasks the Relay told Jev Alice holds, at Bob's next push. */
+    const aliceTasksNow = async () => {
+      pushes += 1;
+      const push = await pushed(bobBranch, `Change ${pushes}`, [added("src/shared.ts", 1)]);
+      const [verdict] = await verdictsOn(push.id, 1);
+      expect(verdict).toMatchObject({ agent: alice.id, source: "jev" });
+      return verdict?.state?.agent.tasks.map((t) => [t.number, t.currentStep]);
+    };
+    const finish = async (number: number) =>
+      expect((await post(finishPath(number), "alice", {}, alice.id)).status).toBe(200);
+    const release = async (number: number) =>
+      expect((await post(releasePath(number), "alice", {}, alice.id)).status).toBe(200);
+
+    expect(await aliceTasksNow()).toEqual([[1, "names"]]);
+    // A new Claim is named at once, newest first, next to the one she still holds.
+    await alice.claim(3);
+    expect(await aliceTasksNow()).toEqual([
+      [3, "form"],
+      [1, "names"],
+    ]);
+    // Finished: in review, its pull request open. She holds the Claim but works on #3.
+    await finish(1);
+    expect(await aliceTasksNow()).toEqual([[3, "form"]]);
+    await release(3);
+    expect(await aliceTasksNow()).toEqual([]);
   });
 
   it("finds a renamed symbol the Agent uses even when it never touched the file", async () => {
