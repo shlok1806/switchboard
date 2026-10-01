@@ -56,18 +56,29 @@ function secretName(name: string): boolean {
 }
 
 /**
- * `pattern`, matched only where it starts a word. A JSON-escaped newline, tab or
- * carriage return (`\n`) counts as a word break too: a raw request body holds the
- * files an Agent read that way, so a key alone on its line follows an `n`.
+ * `pattern`, matched only where it starts a word: not right after a letter or digit.
+ * What the proxy reads also puts a token right after these, which end in one:
+ * - JSON escapes, as a raw request body holds the files an Agent read: `\n`, `\t`,
+ *   `\r`, `\f`, `\b`, `"`;
+ * - an ANSI color from terminal output, raw (`ESC[31m`) or JSON-escaped (`\u001b[31m`);
+ * - URL encoding: `%22`, `%3D`, `%20`.
+ * An identifier's `_` counts as a break too (`MY_ghp_...`).
  */
 function token(pattern: RegExp): RegExp {
-  return new RegExp(`(?:(?<![A-Za-z0-9_])|(?<=\\\\[nrt]))${pattern.source}`, "g");
+  return new RegExp(
+    "(?:(?<![A-Za-z0-9])|(?<=\\\\[nrtfb])|(?<=\\\\u00[0-9a-fA-F]{2})|(?<=\\x1b\\[[0-9;]*m)|(?<=\\\\u001[bB]\\[[0-9;]*m)|(?<=%[0-9A-Fa-f]{2}))" +
+      pattern.source,
+    "g",
+  );
 }
 
 const RULES: Rule[] = [
   // PEM private key blocks, whatever the key type. Newlines may be real or JSON-escaped.
+  // A block is at most 16 KB (an 8192-bit RSA key is about 6.5 KB) and holds no other
+  // BEGIN, so a BEGIN with no END looks ahead only that far, and no text is read twice.
   {
-    pattern: /-----BEGIN ([A-Z0-9 ]*)PRIVATE KEY-----[\s\S]*?-----END \1PRIVATE KEY-----/g,
+    pattern:
+      /-----BEGIN ([A-Z0-9 ]{0,40})PRIVATE KEY-----(?:(?!-----BEGIN )[\s\S]){0,16384}?-----END \1PRIVATE KEY-----/g,
     replace: (_match, kind = "") => `-----BEGIN ${kind}PRIVATE KEY-----${MASK}-----END ${kind}PRIVATE KEY-----`,
   },
   // Anthropic, before OpenAI: both start with `sk-`.
@@ -95,13 +106,14 @@ const RULES: Rule[] = [
   // Switchboard's own credentials (worker/src/session.ts), which an Agent can read from
   // its Person's config or its own session files. A Person session is `v1.`, a
   // base64url JSON payload and a base64url HMAC-SHA256 (43 characters); an Agent token
-  // is the Agent token prefix and 32 random bytes in base64url (43 characters).
+  // is the Agent token prefix and 32 random bytes in base64url (43 characters). Their
+  // exact shape names them, so they are masked wherever they start, whatever is before.
   {
-    pattern: token(/v1\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/),
+    pattern: /v1\.eyJ[A-Za-z0-9_-]{1,4096}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g,
     replace: keepPrefix("v1."),
   },
   {
-    pattern: token(new RegExp(`${AGENT_TOKEN_PREFIX}[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])`)),
+    pattern: new RegExp(`${AGENT_TOKEN_PREFIX}[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])`, "g"),
     replace: keepPrefix(AGENT_TOKEN_PREFIX),
   },
   // JWTs: three base64url parts, the first two JSON objects.
@@ -116,43 +128,43 @@ const RULES: Rule[] = [
  * `"apiKey": "value"`. The name keeps; the value is masked. A backslash ends the value,
  * so JSON-escaped newlines (`\n`) do not run into the next line.
  */
-const ASSIGNMENT =
-  /(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_.-]*)(\\?["']?[ \t]*[=:][ \t]*)(?:(\\?")([^"\\\n]*)\\?"|'([^'\\\n]*)'|([^\s"'\\,;{}()[\]]+))/g;
+const NAME = /(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_.-]{0,127})(\\?["']?[ \t]*[=:][ \t]*)/g;
+/** The value right after a name: double-quoted (JSON-escaped or not), single-quoted, or bare. */
+const VALUE = /(?:(\\?")([^"\\\n]*)\\?"|'([^'\\\n]*)'|([^\s"'\\,;{}()[\]]+))/y;
 
+/**
+ * Masks the values of secret assignments, in one pass. Each position costs a bounded
+ * amount: a name is at most 128 characters (a long dotted or dashed blob could start
+ * one after every `.` or `-`), and a value is read only after a secret name, then
+ * skipped. Anything else is looked through, so an assignment inside another's value
+ * is found too (`"text":"DB_PASSWORD=..."`).
+ */
 function maskAssignments(text: string): Masked {
   let count = 0;
-  const out = text.replace(
-    ASSIGNMENT,
-    (
-      match: string,
-      name: string,
-      separator: string,
-      open?: string,
-      double?: string,
-      single?: string,
-      bare?: string,
-    ) => {
-      const value = double || single || bare || "";
-      const head = name.length + separator.length;
-      const secret =
-        secretName(name) &&
-        !harmlessValue(value) &&
-        // A colon (YAML, JSON) counts only after a quoted JSON key or a SHOUTING_NAME,
-        // so prose like "the key: fix it" is left alone.
-        (!separator.includes(":") || /^\\?["']/.test(separator) || /^[A-Z0-9_]+$/.test(name));
-      if (!secret) {
-        // Not a secret here, but its value may hold one: `"text":"DB_PASSWORD=..."`.
-        const inner = maskAssignments(match.slice(head));
-        count += inner.count;
-        return match.slice(0, head) + inner.text;
-      }
-      count += 1;
-      // Quotes are kept as they were, JSON-escaped (`\"`) or not.
-      const quote = open ? open : single !== undefined ? "'" : "";
-      return `${match.slice(0, head)}${quote}${MASK}${quote}`;
-    },
-  );
-  return { text: out, count };
+  let out = "";
+  let from = 0;
+  const names = new RegExp(NAME.source, "g");
+  const values = new RegExp(VALUE.source, "y");
+  for (let found = names.exec(text); found !== null; found = names.exec(text)) {
+    const [, name = "", separator = ""] = found;
+    // A colon (YAML, JSON) counts only after a quoted JSON key or a SHOUTING_NAME,
+    // so prose like "the key: fix it" is left alone.
+    const named =
+      secretName(name) && (!separator.includes(":") || /^\\?["']/.test(separator) || /^[A-Z0-9_]+$/.test(name));
+    if (!named) continue;
+    values.lastIndex = names.lastIndex;
+    const valued = values.exec(text);
+    if (!valued) continue;
+    const [, open, double, single, bare] = valued;
+    if (harmlessValue(double || single || bare || "")) continue;
+    count += 1;
+    // Quotes are kept as they were, JSON-escaped (`\"`) or not.
+    const quote = open ? open : single !== undefined ? "'" : "";
+    out += `${text.slice(from, names.lastIndex)}${quote}${MASK}${quote}`;
+    from = values.lastIndex;
+    names.lastIndex = values.lastIndex;
+  }
+  return { text: out + text.slice(from), count };
 }
 
 /** Masks every detected secret in `text`. */
