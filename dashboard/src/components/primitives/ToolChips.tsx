@@ -200,57 +200,78 @@ export default function ToolChips({
         <div className="mt-1.5 flex flex-col gap-1">
           {steps.slice(0, step).map((row, i) => {
             const rowOpen = openRows.has(keyOf(row, i));
+            // A step with nothing more to show (a Claude Code command has no exit code) does not open.
+            const expandable = row.detail.length > 0;
+            const icon = (
+              <svg
+                width="13" height="13" viewBox="0 0 24 24" fill={row.icon === "think" ? "currentColor" : "none"} stroke="currentColor"
+                className={expandable ? `transition-opacity duration-100 group-hover/row:opacity-0 ${rowOpen ? "opacity-0" : ""}` : ""}
+              >
+                {Icons[row.icon]}
+              </svg>
+            );
+            const label = <span className="shrink-0 text-[12.5px] font-medium text-ink">{row.label}</span>;
+            // The text in its own span: an ellipsis does not apply to text directly inside a flex box.
+            const chip = (
+              <span
+                className={`inline-flex h-5.5 min-w-0 flex-1 items-center rounded-chip bg-field px-1.5
+                  text-[11.5px] text-ink-2 shadow-hairline
+                  ${expandable ? "cursor-pointer transition-colors duration-100 hover:bg-hover-2" : ""}
+                  ${row.mono ? "font-mono" : ""}`}
+              >
+                <span className="min-w-0 truncate">{row.chip}</span>
+              </span>
+            );
             return (
             <div key={keyOf(row, i)} style={{ animation: "fade-up 300ms cubic-bezier(0.23,1,0.32,1) both" }}>
-              <button
-                type="button"
-                aria-expanded={rowOpen}
-                onClick={() => toggleRow(keyOf(row, i))}
-                className="group/row -mx-[3px] flex h-7 w-[calc(100%+6px)] min-w-0 items-center gap-2 rounded-control px-[3px] text-left transition-colors duration-100 hover:bg-hover-2"
-              >
-                <span className="relative flex size-4 shrink-0 items-center justify-center text-ink-3">
-                  <svg
-                    width="13" height="13" viewBox="0 0 24 24" fill={row.icon === "think" ? "currentColor" : "none"} stroke="currentColor"
-                    className={`transition-opacity duration-100 group-hover/row:opacity-0 ${rowOpen ? "opacity-0" : ""}`}
-                  >
-                    {Icons[row.icon]}
-                  </svg>
-                  <svg
-                    width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
-                    className={`absolute transition-[opacity,transform] duration-150 group-hover/row:opacity-100 ${rowOpen ? "opacity-100" : "opacity-0"}`}
-                    style={{ transform: rowOpen ? "rotate(0deg)" : "rotate(-90deg)" }}
-                  >
-                    <path d="M6 9l6 6 6-6" />
-                  </svg>
-                </span>
-                <span className="shrink-0 text-[12.5px] font-medium text-ink">{row.label}</span>
-                <span
-                  className={`inline-flex h-5.5 min-w-0 flex-1 cursor-pointer items-center truncate rounded-chip bg-field px-1.5
-                    text-[11.5px] text-ink-2 shadow-hairline transition-colors duration-100 hover:bg-hover-2
-                    ${row.mono ? "font-mono" : ""}`}
+              {expandable ? (
+                <button
+                  type="button"
+                  aria-expanded={rowOpen}
+                  onClick={() => toggleRow(keyOf(row, i))}
+                  className="group/row -mx-[3px] flex h-7 w-[calc(100%+6px)] min-w-0 items-center gap-2 rounded-control px-[3px] text-left transition-colors duration-100 hover:bg-hover-2"
                 >
-                  {row.chip}
-                </span>
-              </button>
+                  <span className="relative flex size-4 shrink-0 items-center justify-center text-ink-3">
+                    {icon}
+                    <svg
+                      width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+                      className={`absolute transition-[opacity,transform] duration-150 group-hover/row:opacity-100 ${rowOpen ? "opacity-100" : "opacity-0"}`}
+                      style={{ transform: rowOpen ? "rotate(0deg)" : "rotate(-90deg)" }}
+                    >
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  </span>
+                  {label}
+                  {chip}
+                </button>
+              ) : (
+                <div className="-mx-[3px] flex h-7 w-[calc(100%+6px)] min-w-0 items-center gap-2 px-[3px]">
+                  <span className="flex size-4 shrink-0 items-center justify-center text-ink-3">{icon}</span>
+                  {label}
+                  {chip}
+                </div>
+              )}
 
-              {/* expanded detail */}
-              <div
-                className="grid transition-[grid-template-rows,opacity] duration-300"
-                style={{ gridTemplateRows: rowOpen ? "1fr" : "0fr", opacity: rowOpen ? 1 : 0, transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
-              >
-                <div className="min-h-0 overflow-hidden">
-                  <div className="mt-0.5 mb-1 ml-2 flex flex-col gap-0.5 border-l border-line py-0.5 pl-3.5">
-                    {row.detail.map((line) => (
-                      <span
-                        key={line.text}
-                        className={`truncate text-[11.5px] leading-[1.6] ${row.detailMono ? "font-mono" : ""} ${line.tone === "add" ? "text-green" : "text-ink-2"}`}
-                      >
-                        {line.text}
-                      </span>
-                    ))}
+              {/* expanded detail, when there is any (a Claude Code command has no exit code to show) */}
+              {row.detail.length > 0 && (
+                <div
+                  className="grid transition-[grid-template-rows,opacity] duration-300"
+                  style={{ gridTemplateRows: rowOpen ? "1fr" : "0fr", opacity: rowOpen ? 1 : 0, transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
+                >
+                  <div className="min-h-0 overflow-hidden">
+                    <div className="mt-0.5 mb-1 ml-2 flex flex-col gap-0.5 border-l border-line py-0.5 pl-3.5">
+                      {row.detail.map((line) => (
+                        <span
+                          key={line.text}
+                          className={`truncate text-[11.5px] leading-[1.6] ${row.detailMono ? "font-mono" : ""} ${line.tone === "add" ? "text-green" : "text-ink-2"}`}
+                        >
+                          {line.text}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
             );
           })}

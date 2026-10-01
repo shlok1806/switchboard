@@ -158,7 +158,7 @@ function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelE
               e.type === "file.edit" ? [{ file: e.payload.path.split("/").pop()!, add: e.payload.additions, del: e.payload.deletions }] : [],
             )}
             diffLines={{}}
-            labels={{ header: `${events.length} Hook Events`, more: "" }}
+            labels={{ header: `${events.length} Hook ${events.length === 1 ? "Event" : "Events"}`, more: "" }}
           />
         ) : (
           <ul className="flex flex-col gap-2">
@@ -189,7 +189,11 @@ function hookStep(e: ChannelEvent): ToolStep {
       chip: e.payload.arg,
       mono: true,
       detailMono: true,
-      detail: [{ text: `${e.payload.ok ? "ok" : "failed"} in ${e.payload.durationMs} ms` }, ...(e.payload.output ? [{ text: e.payload.output }] : [])],
+      // A hook-captured call has no duration or output; only the Tool Capture's do.
+      detail: [
+        { text: `${e.payload.ok ? "ok" : "failed"}${e.payload.durationMs === undefined ? "" : ` in ${e.payload.durationMs} ms`}` },
+        ...(e.payload.output ? [{ text: e.payload.output }] : []),
+      ],
     };
   if (e.type === "file.edit")
     return {
@@ -201,7 +205,15 @@ function hookStep(e: ChannelEvent): ToolStep {
       detail: [{ text: `+${e.payload.additions} -${e.payload.deletions}`, tone: "add" }],
     };
   if (e.type === "command")
-    return { icon: "run", label: "Command", chip: e.payload.command, mono: true, detailMono: true, detail: [{ text: `exit ${e.payload.exitCode}` }] };
+    // Claude Code does not report a shell command's exit code; Codex does.
+    return {
+      icon: "run",
+      label: "Command",
+      chip: e.payload.command,
+      mono: true,
+      detailMono: true,
+      detail: e.payload.exitCode === undefined ? [] : [{ text: `exit ${e.payload.exitCode}` }],
+    };
   return { icon: "think", label: EVENT_TYPE_LABEL[e.type], chip: summarize(e), mono: false, detailMono: false, detail: [{ text: summarize(e) }] };
 }
 

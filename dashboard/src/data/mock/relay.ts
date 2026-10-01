@@ -8,7 +8,7 @@ import type {
   VerdictOption,
   VerdictProbabilities,
 } from "@shared/index";
-import { DEFAULT_INTERRUPT_INTERVAL_SECONDS, DEFAULT_INTERRUPT_THRESHOLD } from "@shared/index";
+import { DEFAULT_INTERRUPT_INTERVAL_SECONDS, DEFAULT_INTERRUPT_THRESHOLD, UNRELAYED_EVENT_TYPES } from "@shared/index";
 import { AGENT_FILES, AGENT_SYMBOLS } from "./fixtures";
 
 /** The Relay settings a Worker runs with by default (worker/wrangler.jsonc). */
@@ -70,8 +70,9 @@ export function relay(
   scripted: Record<string, VerdictProbabilities> = {},
 ): Verdict[] {
   const verdicts: Verdict[] = [];
-  // A Directive is addressed and always delivered; the Relay never gives a Verdict on it.
-  if (event.type === "directive" || event.type === "directive.delivery") return verdicts;
+  // As the real Relay: no Verdicts on Directives (addressed and always delivered), model
+  // context, or per-call lifecycle Events such as tool calls and commands.
+  if (UNRELAYED_EVENT_TYPES.includes(event.type)) return verdicts;
   const senderAgent = event.actor.kind === "agent" ? event.actor.agentId : null;
 
   for (const agent of agents) {

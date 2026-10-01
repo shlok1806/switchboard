@@ -92,13 +92,15 @@ export class MockChannelSource implements ChannelSource {
         this.apply(
           {
             t: 0,
+            // As the Hook Capture records them: a shell call is its command, any other tool a tool.call.
             build: (at) =>
-              makeEvent("tool.call", agentActor(a.agent as Agent["id"]), "hook", {
-                tool: a.tool,
-                arg: a.arg,
-                ok: true,
-                durationMs: 10 + Math.round(Math.random() * 400),
-              }, { at, task: a.task }),
+              a.tool === "Bash"
+                ? makeEvent("command", agentActor(a.agent as Agent["id"]), "hook", { command: a.arg }, { at, task: a.task })
+                : makeEvent("tool.call", agentActor(a.agent as Agent["id"]), "hook", {
+                    tool: a.tool,
+                    arg: a.arg,
+                    ok: true,
+                  }, { at, task: a.task }),
           },
           new Date().toISOString(),
           true,

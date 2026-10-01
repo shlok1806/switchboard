@@ -170,7 +170,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
               </div>
             )}
 
-            {output && (
+            {output && Object.keys(output).length > 0 && (
               <div>
                 <h4 className="text-muted-foreground mb-2 text-sm font-medium">
                   Output

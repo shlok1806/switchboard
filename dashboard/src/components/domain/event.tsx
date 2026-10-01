@@ -216,8 +216,9 @@ export function EventBody({ event }: { event: ChannelEvent }) {
             type: event.payload.tool,
             state: event.payload.ok ? "output-available" : "output-error",
             input: { arg: event.payload.arg },
+            // A hook-captured call has neither; only the Tool Capture's do.
             output: {
-              durationMs: event.payload.durationMs,
+              ...(event.payload.durationMs === undefined ? {} : { durationMs: event.payload.durationMs }),
               ...(event.payload.output ? { output: event.payload.output } : {}),
             },
           }}
