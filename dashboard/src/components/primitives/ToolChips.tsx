@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /* Switchboard: from Beautiful UI ToolChips (MIT, Shane Levine). Local edits:
- * `animate` prop, row keys by index, optional "+N more", no fixed min-height.
+ * `animate` prop, row keys by index, optional "+N more", no fixed min-height,
+ * rows without detail do not open, a cut-short chip shows its full text.
  * ─────────────────────────────────────────────────────────
  * TOOL CHIPS
  * An agent run as compact rows: tool calls with inline
@@ -106,6 +108,53 @@ const DIFF_LINES: Record<string, ToolDiffLine[]> = {
     { text: "export const hero = \"pistachio\";", tone: "add" },
   ],
 };
+
+/**
+ * A row's chip. Cut short, its full text shows on hover. On a row that does not open
+ * (in no button), the chip also takes keyboard focus and shows its full text there too,
+ * so nothing is only readable with a mouse.
+ */
+function Chip({ text, mono, inButton }: { text: string; mono: boolean; inButton: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [cut, setCut] = useState(false);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setCut(el.scrollWidth > el.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text]);
+
+  // The text in its own span: an ellipsis does not apply to text directly inside a flex box.
+  const body = (
+    <span
+      title={cut && inButton ? text : undefined}
+      tabIndex={cut && !inButton ? 0 : undefined}
+      className={`inline-flex h-5.5 min-w-0 flex-1 items-center rounded-chip bg-field px-1.5
+        text-[11.5px] text-ink-2 shadow-hairline
+        ${inButton ? "cursor-pointer transition-colors duration-100 hover:bg-hover-2" : ""}
+        ${mono ? "font-mono" : ""}`}
+    >
+      <span ref={ref} className="min-w-0 truncate">
+        {text}
+      </span>
+    </span>
+  );
+  if (inButton) return body;
+  // Always in the tooltip, which opens only while the text is cut short: a tree that
+  // changed with `cut` would remount the measured span and lose its observer.
+  return (
+    <Tooltip open={cut && open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>{body}</TooltipTrigger>
+      <TooltipContent className={`max-w-[min(32rem,90vw)] break-all whitespace-pre-wrap ${mono ? "font-mono" : ""}`}>
+        {text}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 export default function ToolChips({
   steps = ROWS,
@@ -211,17 +260,7 @@ export default function ToolChips({
               </svg>
             );
             const label = <span className="shrink-0 text-[12.5px] font-medium text-ink">{row.label}</span>;
-            // The text in its own span: an ellipsis does not apply to text directly inside a flex box.
-            const chip = (
-              <span
-                className={`inline-flex h-5.5 min-w-0 flex-1 items-center rounded-chip bg-field px-1.5
-                  text-[11.5px] text-ink-2 shadow-hairline
-                  ${expandable ? "cursor-pointer transition-colors duration-100 hover:bg-hover-2" : ""}
-                  ${row.mono ? "font-mono" : ""}`}
-              >
-                <span className="min-w-0 truncate">{row.chip}</span>
-              </span>
-            );
+            const chip = <Chip text={row.chip} mono={row.mono} inButton={expandable} />;
             return (
             <div key={keyOf(row, i)} style={{ animation: "fade-up 300ms cubic-bezier(0.23,1,0.32,1) both" }}>
               {expandable ? (
