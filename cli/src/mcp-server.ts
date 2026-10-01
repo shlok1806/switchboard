@@ -157,8 +157,8 @@ export class SwitchboardTools {
     private readonly client: ChannelClient,
     /** The session's Agent and its token, once the wrapper has registered it. */
     private readonly agentId: () => Promise<{ id: AgentId; token: string } | null>,
-    /** Where the session runs, inside the repo whose Tasks these are. */
-    private readonly repoDir: string,
+    /** Where the session runs, inside a clone of the Channel's repo, whose Tasks these are. */
+    private readonly checkout: { dir: string; repo: string },
     /** Takes what the wrapper holds for the Agent's next turn, if anything. */
     private readonly nextTurn: () => Promise<string> = async () => "",
   ) {}
@@ -228,7 +228,7 @@ export class SwitchboardTools {
   private async openBranch(agent: AgentId, task: Task): Promise<string> {
     const branch = task.branch ?? taskBranch(task.number, task.title);
     try {
-      const tree = await openTaskWorktree(this.repoDir, branch);
+      const tree = await openTaskWorktree(this.checkout.dir, this.checkout.repo, branch);
       if (task.branch === undefined) await this.post<TaskActionResponse>(agent, branchPath(task.number), { branch });
       return worktreeGuide(tree);
     } catch (error) {
@@ -253,7 +253,12 @@ export class SwitchboardTools {
     }
     let tree: TaskWorktree;
     try {
-      tree = await adoptTaskBranch(this.repoDir, task.number, taskBranch(task.number, task.title));
+      tree = await adoptTaskBranch(
+        this.checkout.dir,
+        this.checkout.repo,
+        task.number,
+        taskBranch(task.number, task.title),
+      );
     } catch (error) {
       throw new Error(
         `You hold Task #${task.number}, but its branch was never set up, and setting it up now failed: ` +
@@ -292,7 +297,7 @@ export class SwitchboardTools {
     return this.run("finish_task", `#${task}`, task, async (agent) => {
       const current = (await this.as<TaskResponse>(agent, `/api/tasks/${task}`)).task;
       const branch = current.branch ?? (await this.recoverBranch(agent, current));
-      const pushed = await pushTaskBranch(this.repoDir, branch);
+      const pushed = await pushTaskBranch(this.checkout.dir, this.checkout.repo, branch);
       const body = summary === undefined ? {} : { summary };
       const finished = (await this.post<TaskActionResponse>(agent, finishPath(task), body)).task;
       const pr = finished.pr === undefined ? "" : ` #${finished.pr}: ${pullUrl(finished.url, finished.pr)}`;
@@ -486,7 +491,7 @@ export async function runMcpServer(env: NodeJS.ProcessEnv = process.env): Promis
   const tools = new SwitchboardTools(
     new ChannelClient({ url: config.url, repo: config.repo, credential: "" }),
     agentFromFile(env[AGENT_FILE_ENV]),
-    env[REPO_DIR_ENV] || process.cwd(),
+    { dir: env[REPO_DIR_ENV] || process.cwd(), repo: config.repo },
     nextTurnFromFile(env[NEXT_TURN_FILE_ENV]),
   );
   const server = createMcpServer(tools);

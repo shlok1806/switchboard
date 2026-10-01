@@ -240,6 +240,9 @@ async function callTool(term: Terminal, tool: string, input: unknown): Promise<s
 beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "switchboard-e2e-"));
   cwd = await realpath(await mkdtemp(join(tmpdir(), "switchboard-repo-")));
+  // The Person runs the wrapper in a clone of the Channel's repo (no Task branches here, so no fetches).
+  await git(cwd, "init", "--quiet", "-b", "main");
+  await git(cwd, "remote", "add", "origin", CHANNEL_URL);
   const githubUrl = await github.start(await freePort());
   const jevUrl = await jev.start(await freePort());
   const port = await freePort();
@@ -773,6 +776,20 @@ async function git(dir: string, ...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+/** The Channel repo's GitHub URL, as a Person's clone names its origin. */
+const CHANNEL_URL = `https://github.com/${github.repo}.git`;
+
+/**
+ * A Person's clone of the Channel's repo, whose origin is a local bare repo
+ * standing in for GitHub: origin names the GitHub URL, and git's insteadOf sends
+ * its fetches and pushes to `origin`.
+ */
+async function cloneChannel(origin: string, dir: string): Promise<void> {
+  await git(dirname(dir), "clone", "--quiet", origin, dir);
+  await git(dir, "remote", "set-url", "origin", CHANNEL_URL);
+  await git(dir, "config", `url.${origin}.insteadOf`, CHANNEL_URL);
+}
+
 describe("a branch per Task (ADR 0006)", () => {
   let origin = "";
   let repo = "";
@@ -788,7 +805,7 @@ describe("a branch per Task (ADR 0006)", () => {
     await git(seed, "commit", "--quiet", "-m", "First commit");
     await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
     // The Person's clone, where they run the wrapper.
-    await git(scratch, "clone", "--quiet", origin, join(scratch, "repo"));
+    await cloneChannel(origin, join(scratch, "repo"));
     repo = await realpath(join(scratch, "repo"));
     github.origin = origin;
   });
@@ -893,6 +910,8 @@ describe("a branch per Task (ADR 0006)", () => {
     const claimed = await claimWithoutOrigin(term, number);
     expect(claimed).toContain(`claim_task: You hold Task #${number} now: Setup failed.`);
     expect(claimed).toContain(`The Claim holds, but its branch ${branch} could not be set up: git `);
+    // git's own message names neither the repo nor the directory; the answer does.
+    expect(claimed).toContain(`(In ${repo}, a clone of ${github.repo}.)`);
     expect(claimed).toContain("finish_task");
     expect((await api<TaskResponse>(`/api/tasks/${number}`)).task).toMatchObject({ status: "claimed" });
     expect((await api<TaskResponse>(`/api/tasks/${number}`)).task.branch).toBeUndefined();
@@ -1126,8 +1145,8 @@ describe("the Relay and Queue delivery (ADR 0005)", () => {
     await git(seed, "add", ".");
     await git(seed, "commit", "--quiet", "-m", "Shared helpers");
     await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
-    await git(scratch, "clone", "--quiet", origin, join(scratch, "relay-a"));
-    await git(scratch, "clone", "--quiet", origin, join(scratch, "relay-b"));
+    await cloneChannel(origin, join(scratch, "relay-a"));
+    await cloneChannel(origin, join(scratch, "relay-b"));
     repoA = await realpath(join(scratch, "relay-a"));
     repoB = await realpath(join(scratch, "relay-b"));
     github.origin = origin;
@@ -1250,8 +1269,8 @@ describe("two Agents on Task worktrees", () => {
     await git(seed, "add", ".");
     await git(seed, "commit", "--quiet", "-m", "Greeter");
     await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
-    await git(scratch, "clone", "--quiet", origin, join(scratch, "worktrees-a"));
-    await git(scratch, "clone", "--quiet", origin, join(scratch, "worktrees-b"));
+    await cloneChannel(origin, join(scratch, "worktrees-a"));
+    await cloneChannel(origin, join(scratch, "worktrees-b"));
     const repoA = await realpath(join(scratch, "worktrees-a"));
     const repoB = await realpath(join(scratch, "worktrees-b"));
     github.origin = origin;
@@ -1351,8 +1370,8 @@ describe("Interrupt delivery", () => {
     await git(seed, "add", ".");
     await git(seed, "commit", "--quiet", "-m", "Start");
     await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
-    await git(scratch, "clone", "--quiet", origin, join(scratch, "interrupt-a"));
-    await git(scratch, "clone", "--quiet", origin, join(scratch, "interrupt-b"));
+    await cloneChannel(origin, join(scratch, "interrupt-a"));
+    await cloneChannel(origin, join(scratch, "interrupt-b"));
     repoA = await realpath(join(scratch, "interrupt-a"));
     repoB = await realpath(join(scratch, "interrupt-b"));
     github.origin = origin;
@@ -2110,5 +2129,51 @@ describe("switchboard run codex and gemini", () => {
       term.type("quit\r");
       expect(await term.exited).toBe(0);
     });
+  });
+});
+
+describe("the wrapper runs only in a clone of the Channel's repo", () => {
+  const guide = `git clone https://github.com/${github.repo}.git, then run switchboard from inside it.`;
+
+  /** Runs `switchboard run claude` in `dir`, expecting it to stop before the agent CLI starts. */
+  async function refusedIn(dir: string): Promise<string> {
+    const term = new Terminal(["run", "claude"], gitEnv, dir);
+    expect(await term.exited).toBe(1);
+    expect(term.output).not.toContain("FAKE-CLAUDE");
+    expect(term.output).not.toContain("is on the Channel");
+    return term.output.replace(/\r/g, "");
+  }
+
+  it("refuses a directory that is not a git repository, such as a home directory", async () => {
+    const home = await realpath(await mkdtemp(join(scratch, "home-")));
+    const output = await refusedIn(home);
+    expect(output).toContain(`switchboard: ${home} is not inside a git repository.`);
+    expect(output).toContain(`the Channel's repo, ${github.repo}`);
+    expect(output).toContain(guide);
+  });
+
+  it("refuses a clone of another repo", async () => {
+    const other = await realpath(await mkdtemp(join(scratch, "other-")));
+    await git(other, "init", "--quiet", "-b", "main");
+    await git(other, "remote", "add", "origin", "git@github.com:someone/else.git");
+    const output = await refusedIn(other);
+    expect(output).toContain(`switchboard: ${other} is a clone of someone/else, not of ${github.repo}.`);
+    expect(output).toContain(guide);
+  });
+
+  it("starts in a clone however its origin URL is written, and in a worktree of one", async () => {
+    const clone = await realpath(await mkdtemp(join(scratch, "ssh-clone-")));
+    await git(clone, "init", "--quiet", "-b", "main");
+    // The SSH form, in another case, without .git.
+    await git(clone, "remote", "add", "origin", `git@github.com:${github.repo.toUpperCase()}`);
+    await git(clone, "commit", "--quiet", "--allow-empty", "-m", "Start");
+    const tree = `${clone}-side`;
+    await git(clone, "worktree", "add", "--quiet", "-b", "side", tree);
+    for (const dir of [clone, tree]) {
+      const term = new Terminal(["run", "claude"], gitEnv, dir);
+      await term.started();
+      term.type("quit\r");
+      expect(await term.exited).toBe(0);
+    }
   });
 });
