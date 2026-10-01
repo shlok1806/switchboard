@@ -58,44 +58,117 @@ export function pasteText(text: string): string {
 }
 
 /**
+ * Claude Code clears its input on a second Escape within this long of the first
+ * (its double-press window).
+ */
+export const DOUBLE_ESCAPE_MS = 800;
+
+/** One key the Person pressed, as far as the input line goes. */
+type Key =
+  | { kind: "text"; text: string }
+  | { kind: "enter" | "escape" | "backspace" | "delete-word" | "clear" | "other" };
+
+/**
+ * `text` without its last word, the way Ctrl+W and Alt+Backspace delete one: spaces
+ * before the cursor, then a run of word characters or a run of punctuation. Where
+ * Claude Code's keys could delete more (Ctrl+W takes `src/app.ts` whole), this
+ * takes the least, so the line is never thought empty while it is not.
+ */
+function withoutLastWord(text: string): string {
+  const trimmed = text.replace(/\s+$/u, "");
+  const word = /(?:[\p{L}\p{N}_]+|[^\p{L}\p{N}_\s]+)$/u.exec(trimmed);
+  return word ? trimmed.slice(0, word.index) : trimmed;
+}
+
+/**
  * What the Person's keystrokes say about their input line. Only a guess: the
  * wrapper sees keys, not Claude Code's screen, so it errs towards "not empty".
+ * Like Backspace, the word keys assume the cursor is at the end of the line.
  */
 export class InputLine {
-  private chars = 0;
+  private text = "";
   private pasting = false;
+  /** When the last key was an Escape, the time it was pressed. */
+  private escapeAt: number | null = null;
   /** Bytes of an escape sequence split across reads. */
   private partial = "";
 
+  constructor(private readonly now: () => number = Date.now) {}
+
   get empty(): boolean {
-    return this.chars === 0 && !this.pasting;
+    return this.text === "" && !this.pasting;
   }
 
   /** The line was sent or cleared elsewhere (Claude Code reported a submitted prompt). */
   clear(): void {
-    this.chars = 0;
+    this.text = "";
   }
 
   /** Reads keystrokes the Person typed. Returns whether they included Enter or Escape. */
   keys(data: string): { enter: boolean; cancel: boolean } {
-    const text = this.partial + data;
-    this.partial = "";
     let enter = false;
     let cancel = false;
+    for (const key of this.read(data)) {
+      // A paste marker or a key release: no key press.
+      if (key === null) continue;
+      if (key.kind === "enter") enter = true;
+      if (key.kind === "escape") cancel = true;
+      this.press(key);
+    }
+    return { enter, cancel };
+  }
+
+  /** What one key does to the line. */
+  private press(key: Key): void {
+    const escapeAt = this.escapeAt;
+    this.escapeAt = null;
+    switch (key.kind) {
+      case "text":
+        this.text += key.text;
+        return;
+      case "enter":
+      case "clear":
+        this.text = "";
+        return;
+      case "escape": {
+        const now = this.now();
+        if (escapeAt !== null && now - escapeAt <= DOUBLE_ESCAPE_MS) {
+          // A double Escape clears the line. A third starts over.
+          this.text = "";
+        } else {
+          this.escapeAt = now;
+        }
+        return;
+      }
+      case "backspace":
+        this.text = [...this.text].slice(0, -1).join("");
+        return;
+      case "delete-word":
+        this.text = withoutLastWord(this.text);
+        return;
+      case "other":
+        return;
+    }
+  }
+
+  /** The keys in `data`, keeping an escape sequence split across reads for the next one. */
+  private *read(data: string): Generator<Key | null> {
+    const text = this.partial + data;
+    this.partial = "";
     let i = 0;
     while (i < text.length) {
       const ch = text[i] ?? "";
       if (ch === "\x1b") {
         const rest = text.slice(i);
-        if (rest.length === 1) {
-          // A lone Escape at the end of a read: a key press, most likely.
-          cancel = true;
+        if (rest.length === 1 || rest[1] === "\x1b") {
+          // A lone Escape at the end of a read, or one followed by another: a key press, most likely.
+          yield { kind: "escape" };
           i += 1;
           continue;
         }
         if (rest[1] !== "[" && rest[1] !== "O") {
-          // Alt+key, or Escape followed by something else.
-          cancel ||= rest[1] === "\x1b";
+          // Alt+Backspace, or another Alt+key.
+          yield { kind: rest[1] === "\x7f" ? "delete-word" : "other" };
           i += 2;
           continue;
         }
@@ -104,58 +177,57 @@ export class InputLine {
         if (!csi) {
           // Incomplete: wait for the rest.
           this.partial = rest;
-          break;
+          return;
         }
-        this.sequence(csi[1] ?? "", csi[3] ?? "", (key) => {
-          if (key === "enter") enter = true;
-          if (key === "escape") cancel = true;
-        });
+        yield this.sequence(csi[1] ?? "", csi[3] ?? "");
         i += 1 + csi[0].length;
         continue;
       }
-      if (this.pasting) {
-        this.chars += 1;
-      } else if (ch === "\r" || ch === "\n") {
-        this.chars = 0;
-        enter = true;
-      } else if (ch === "\x03" || ch === "\x15") {
-        // Ctrl+C and Ctrl+U clear Claude Code's input.
-        this.chars = 0;
-      } else if (ch === "\x7f" || ch === "\b") {
-        this.chars = Math.max(0, this.chars - 1);
-      } else if (ch >= " ") {
-        this.chars += 1;
-      }
       i += 1;
+      if (this.pasting) yield { kind: "text", text: ch };
+      else if (ch === "\r" || ch === "\n") yield { kind: "enter" };
+      // Ctrl+C and Ctrl+U clear Claude Code's input; Ctrl+W deletes a word.
+      else if (ch === "\x03" || ch === "\x15") yield { kind: "clear" };
+      else if (ch === "\x17") yield { kind: "delete-word" };
+      else if (ch === "\x7f" || ch === "\b") yield { kind: "backspace" };
+      else if (ch >= " ") yield { kind: "text", text: ch };
+      else yield { kind: "other" };
     }
-    return { enter, cancel };
   }
 
-  /** One escape sequence: paste markers, and keys sent as `CSI <code> ; <mods> u` (the kitty keyboard protocol). */
-  private sequence(params: string, final: string, key: (key: "enter" | "escape") => void): void {
+  /**
+   * One escape sequence: paste markers, and keys sent as
+   * `CSI <code>[:<alternates>] ; <mods>[:<event>] u` (the kitty keyboard protocol).
+   * A key release is no key press, so it yields nothing.
+   */
+  private sequence(params: string, final: string): Key | null {
     if (final === "~" && params === "200") {
       this.pasting = true;
-      return;
+      return null;
     }
     if (final === "~" && params === "201") {
       this.pasting = false;
-      return;
+      return null;
     }
-    if (final !== "u") return;
-    const [code, mods] = params.split(";").map((p) => Number(p.split(":")[0]));
-    const ctrl = mods !== undefined && ((mods - 1) & 4) !== 0;
-    if (code === 13) {
-      this.chars = 0;
-      key("enter");
-    } else if (code === 27) {
-      key("escape");
-    } else if (ctrl && (code === 99 || code === 117)) {
-      this.chars = 0;
-    } else if (code === 127 || code === 8) {
-      this.chars = Math.max(0, this.chars - 1);
-    } else if (code !== undefined && code >= 32 && !ctrl) {
-      this.chars += 1;
-    }
+    if (final !== "u") return { kind: "other" };
+    const [codeField = "", modsField = ""] = params.split(";");
+    const [mods, event] = modsField.split(":");
+    if (event === "3") return null;
+    const code = Number(codeField.split(":")[0]);
+    const flags = Math.max(0, Number(mods || "1") - 1);
+    const ctrl = (flags & 4) !== 0;
+    const alt = (flags & 2) !== 0;
+    // Super, hyper and meta are the bits above.
+    const command = ctrl || alt || flags >= 8;
+    if (code === 13) return { kind: "enter" };
+    if (code === 27) return { kind: "escape" };
+    if (ctrl && (code === 99 || code === 117)) return { kind: "clear" };
+    if ((ctrl && code === 119) || (alt && code === 127)) return { kind: "delete-word" };
+    if (code === 127 || code === 8) return { kind: "backspace" };
+    // Codes in Unicode's private use area are keys with no text: arrows, F-keys, modifiers.
+    const printable = code >= 32 && !(code >= 0xe000 && code <= 0xf8ff);
+    if (printable && !command) return { kind: "text", text: String.fromCodePoint(code) };
+    return { kind: "other" };
   }
 }
 
@@ -169,7 +241,7 @@ export interface InterruptTyperOptions {
 }
 
 export class InterruptTyper {
-  private readonly line = new InputLine();
+  private readonly line: InputLine;
   private lastKey = 0;
   private started = false;
   private pasteMode = false;
@@ -186,6 +258,7 @@ export class InterruptTyper {
     this.quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
     this.waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
     this.now = options.now ?? Date.now;
+    this.line = new InputLine(this.now);
   }
 
   /** The Person typed `data`: passes it to the agent CLI, or holds it while an Interrupt is being typed. */
