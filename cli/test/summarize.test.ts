@@ -44,6 +44,21 @@ describe("repoPath", () => {
       rmSync(link, { force: true });
     }
   });
+
+  it("names a file under a symlinked directory in the repo as the repo's, wherever the link points", () => {
+    // repo/linked -> a directory outside the repo: the file is linked/o.ts, never the outside path.
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "switchboard-summarize-outside-")));
+    symlinkSync(outside, join(root, "linked"));
+    try {
+      expect(repoPath(root, join(root, "linked", "o.ts"))).toBe("linked/o.ts");
+      expect(repoPath(root, "linked/o.ts")).toBe("linked/o.ts");
+      // The outside directory by its own path is still outside, and stays as given.
+      expect(repoPath(root, join(outside, "o.ts"))).toBe(join(outside, "o.ts"));
+    } finally {
+      rmSync(join(root, "linked"), { force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("HookSummarizer", () => {

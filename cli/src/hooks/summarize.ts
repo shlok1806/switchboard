@@ -176,18 +176,38 @@ export class HookSummarizer {
  * in a Task worktree must read `src/app.ts`, never `.switchboard/worktrees/.../src/app.ts`.
  */
 export function repoPath(root: string, path: string): string {
-  // Both sides by their real paths: a CLI can name a file through a symlink, as
-  // macOS names /private/var as /var, while the repo is known by the other.
-  const base = canonical(root);
-  const absolute = canonical(isAbsolute(path) ? path : resolve(root, path));
+  const absolute = isAbsolute(path) ? path : resolve(root, path);
+  // As named first, as git names files: a file under a symlinked directory in the repo
+  // is the repo's file, wherever the link points.
+  const named = within(root, absolute);
+  if (named !== null) return named;
+  // Outside, as named: it may be the repo reached through a symlink (macOS names
+  // /private/var as /var), so compare real paths. Still outside, it stays as given.
+  return within(realRoot(root), canonical(absolute)) ?? path;
+}
+
+/** `absolute` relative to the checkout under `base` that holds it, or null when it is outside `base`. */
+function within(base: string, absolute: string): string | null {
   const inside = relative(base, absolute);
-  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return path;
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return null;
   // The nearest directory above the file with a `.git` (a worktree has a `.git` file) holds it.
   for (let dir = dirname(absolute); dir !== base && relative(base, dir) !== ""; dir = dirname(dir)) {
     if (existsSync(join(dir, ".git"))) return relative(dir, absolute);
     if (dirname(dir) === dir) break;
   }
   return inside;
+}
+
+/** The repo roots' real paths, resolved once each. */
+const realRoots = new Map<string, string>();
+
+function realRoot(root: string): string {
+  let real = realRoots.get(root);
+  if (real === undefined) {
+    real = canonical(root);
+    realRoots.set(root, real);
+  }
+  return real;
 }
 
 /**
