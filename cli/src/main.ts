@@ -3,7 +3,7 @@
 //
 //   switchboard login --url <channel url> [--repo <owner>/<repo>]
 //   switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
-//   switchboard run codex|gemini [--nickname <name>] [...args for Codex or Gemini CLI]
+//   switchboard run codex|gemini [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
 //   switchboard whoami
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
@@ -17,8 +17,8 @@ import { runCli } from "./run";
 const USAGE = `Usage:
   switchboard login --url <channel url> [--repo <owner>/<repo>]
   switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
-  switchboard run codex [--nickname <name>] [...arguments for Codex]
-  switchboard run gemini [--nickname <name>] [...arguments for Gemini CLI]
+  switchboard run codex [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
+  switchboard run gemini [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard whoami
 
 \`login\` signs you in with GitHub (a code to enter at github.com) for one Channel.
@@ -31,10 +31,11 @@ starting Proxy mode (digest by default; off runs without the proxy), and --no-ma
 turns off secret masking. Every other argument goes to Claude Code, including
 --resume and --continue.
 
-\`run codex\` and \`run gemini\` do the same for Codex and Gemini CLI, without the
-Proxy Capture (it reads Anthropic's API only). Codex runs Switchboard's hooks once
-you trust them in its /hooks screen; until then Queued Events reach the Agent
-through the read_channel tool.`;
+\`run codex\` and \`run gemini\` do the same for Codex and Gemini CLI, with the same
+flags. Custom Codex providers and Gemini Vertex AI sessions run without the Proxy
+Capture, with a notice saying why. Codex runs Switchboard's hooks once you trust
+them in its /hooks screen; until then Queued Events reach the Agent through the
+read_channel tool.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({

@@ -1,4 +1,78 @@
-hi cutie
+# Switchboard
+
+A shared Channel for people on different machines who point their coding agents at
+the same GitHub repo. Every Claim, Update and message from every Person and Agent
+shows up on one Dashboard, where everyone can see it. The terms used here are
+defined in [CONTEXT.md](CONTEXT.md).
+
+## Getting started
+
+You need Node.js 22 or newer, git, a GitHub account with write access to the
+Channel's repo, and at least one of Claude Code, Codex or Gemini CLI.
+
+### 1. Install the CLI
+
+The CLI is not published to a package registry yet. Install it from a clone of this
+repo:
+
+```sh
+git clone https://github.com/shlok1806/switchboard.git
+cd switchboard/cli
+npm ci
+npm install -g .
+switchboard --help
+```
+
+`npm ci` builds the CLI into `dist/`, and `npm install -g .` links the global
+`switchboard` command to this checkout (npm may warn that it skipped the `prepare`
+script; `npm ci` already ran it). The command runs whatever is in `dist/`, so
+after `git pull` run `npm ci` in `switchboard/cli` again to rebuild it.
+
+### 2. Clone the Channel's repo
+
+Each Channel belongs to one GitHub repo, and your Agents work in a clone of that
+repo. Clone it (this is the repo you want the Agents to work on, not Switchboard,
+unless they are the same):
+
+```sh
+git clone https://github.com/<owner>/<repo>.git
+cd <repo>
+```
+
+`switchboard run` works in the directory you start it in, so start it in that
+clone. When an Agent claims a Task, Switchboard creates the Task's branch from
+`main` on `origin`, pushes it, and checks it out in a worktree of its own under
+`.switchboard/worktrees/` in the clone (ADR 0006). Finishing the Task pushes the
+branch again and opens its pull request. Started outside a git repo, claims fail;
+started in a clone of a different repo, the branches go to that repo's `origin`.
+
+git runs these commands without a terminal, so it cannot ask for a password. Make
+sure you can push from the clone without a prompt: use an SSH remote, or a
+credential helper such as the one `gh auth setup-git` installs.
+
+### 3. Sign in
+
+```sh
+switchboard login --url https://switchboard.switchboard-worker.workers.dev/<owner>/<repo>
+```
+
+The CLI prints a code to enter at github.com, then saves your session. `switchboard
+whoami` shows who you are signed in as, and to which Channel. The same URL, opened
+in a browser, is the Channel's Dashboard. The hosted Worker has Channels only for
+the repos it allows (`ALLOWED_REPOS` in [worker/wrangler.jsonc](worker/wrangler.jsonc)).
+
+### 4. Run your agent CLI
+
+From the clone of the Channel's repo:
+
+```sh
+switchboard run claude   # or: switchboard run codex, switchboard run gemini
+```
+
+The agent CLI starts as usual, and its session joins the Channel as an Agent.
+Arguments after the CLI's name go to the agent CLI, apart from the Switchboard flags
+described [below](#running-an-agent-cli-through-switchboard). Open the Dashboard to
+watch the Channel and send Directives.
 
 ## Signing in
 
