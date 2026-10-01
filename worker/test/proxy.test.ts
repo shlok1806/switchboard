@@ -5,7 +5,7 @@
 
 import { reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   Agent,
   AgentDeliverable,
@@ -21,8 +21,20 @@ import type {
   ProxyTurn,
   StreamMessage,
 } from "../../shared/src/index";
-import { agentDeliverable, agentDeliverables, agentPath, RAW_PROXY_CAP_BYTES } from "../../shared/src/index";
+import {
+  agentDeliverable,
+  agentDeliverables,
+  agentPath,
+  branchPath,
+  claimPath,
+  finishPath,
+  RAW_PROXY_CAP_BYTES,
+  releasePath,
+  taskBranch,
+} from "../../shared/src/index";
+import { installGitHub } from "../src/github/index";
 import { type As, bearer, forgetTokens, remember, streamQuery, url } from "./client";
+import { FakeGitHub } from "./fake-github";
 
 function call(path: string, init?: RequestInit): Promise<Response> {
   return exports.default.fetch(new Request(url(path), init));
@@ -299,6 +311,65 @@ describe("recording Proxy Events", () => {
     });
     expect(noTokens.type).toBe("proxy.refused");
     expect(await shlok.proxyEvents()).toEqual([]);
+  });
+});
+
+describe("the Task a Proxy Event is about (#88)", () => {
+  let github: FakeGitHub;
+  beforeEach(() => {
+    github = new FakeGitHub();
+    installGitHub(github);
+  });
+  afterEach(() => installGitHub(null));
+
+  /** A Task action as the Agent, the way its wrapper's tools call them. */
+  async function act(path: string, agent: AgentId, body: unknown = {}): Promise<void> {
+    const response = await call(path, {
+      method: "POST",
+      headers: { Authorization: await bearer({ person: "shlok", agent }), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+  }
+
+  it("tags each Proxy Event, digest and raw, with the Task the Agent works on, following its Claims without a restart", async () => {
+    github.open({ title: "Users page" });
+    github.open({ title: "Settings page" });
+    const shlok = wrapper("shlok");
+    const agent = (await shlok.register(SESSION, { proxyMode: "raw" })).id;
+    const taskOf = async (event: ProxyEvent) => {
+      expect(await shlok.proxy(agent, event)).toEqual({ type: "proxy.ack", id: event.id });
+      return (await shlok.proxyEvents()).find((e) => e.id === event.id)?.task ?? null;
+    };
+
+    // Holding no Task: none.
+    expect(await taskOf(digest())).toBeNull();
+    expect(await taskOf(raw())).toBeNull();
+    // A Claim: its Task, in both modes.
+    await act(claimPath(1), agent);
+    expect(await taskOf(digest())).toBe(1);
+    expect(await taskOf(raw())).toBe(1);
+    // A second Claim: the newest is the one it works on.
+    await act(claimPath(2), agent);
+    expect(await taskOf(digest())).toBe(2);
+    // Released: back to the one it still holds.
+    await act(releasePath(2), agent);
+    expect(await taskOf(raw())).toBe(1);
+    // Finished: in review, the Claim stands until the PR merges, but the work is done.
+    await act(branchPath(1), agent, { branch: taskBranch(1, "Users page") });
+    await act(finishPath(1), agent);
+    expect(await taskOf(digest())).toBeNull();
+  });
+
+  it("tags another Agent's Proxy Events with its own Task, not this one's", async () => {
+    github.open({ title: "Users page" });
+    const shlok = wrapper("shlok");
+    const mine = (await shlok.register(SESSION)).id;
+    const other = (await shlok.register("8c3e0000-0000-4000-8000-000000000000")).id;
+    await act(claimPath(1), mine);
+    const event = digest();
+    await shlok.proxy(other, event);
+    expect((await shlok.proxyEvents()).find((e) => e.id === event.id)?.task).toBeUndefined();
   });
 });
 
