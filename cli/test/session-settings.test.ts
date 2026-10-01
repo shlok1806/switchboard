@@ -5,7 +5,8 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HookSummarizer, shortCommand } from "../src/hooks/summarize";
+import { HookSummarizer, SWITCHBOARD_TOOL, shortCommand } from "../src/hooks/summarize";
+import { MCP_SERVER_NAME } from "../src/mcp-server";
 import { applySessionSettings, mergeSettings } from "../src/session-settings";
 
 const hook = (command: string) => ({ type: "command" as const, command });
@@ -70,5 +71,36 @@ describe("summarizing hooks", () => {
     expect(hooks.summarize({ hook_event_name: "Stop" })).toEqual([{ type: "turn.end", payload: { turn: 1 } }]);
     expect(hooks.summarize({ hook_event_name: "Stop" })).toEqual([{ type: "turn.end", payload: { turn: 2 } }]);
     expect(hooks.summarize({ hook_event_name: "Notification" })).toEqual([]);
+  });
+
+  it("gives one Event per tool call: a shell call is its command, Switchboard's own tools none (#55)", () => {
+    const hooks = new HookSummarizer("/repo");
+    const post = (tool_name: string, tool_input: Record<string, unknown>, tool_response: unknown = {}) =>
+      hooks.summarize({ hook_event_name: "PostToolUse", tool_name, tool_input, tool_response });
+    // A shell call (Codex's and Gemini CLI's arrive as Bash): one `command`, with the command and exit code.
+    expect(post("Bash", { command: "npm test" }, { exitCode: 1 })).toEqual([
+      { type: "command", payload: { command: "npm test", exitCode: 1 } },
+    ]);
+    // Switchboard's own MCP tools are the Tool Capture's: Claude Code and Codex name them
+    // mcp__switchboard__<tool>, Gemini CLI mcp_switchboard_<tool>.
+    for (const tool of [
+      "mcp__switchboard__claim_task",
+      "mcp__switchboard__read_channel",
+      "mcp__switchboard__post_update",
+      "mcp__switchboard__complete_step",
+      "mcp__switchboard__finish_task",
+      "mcp_switchboard_claim_task",
+    ]) {
+      expect(post(tool, { task: 7 }), tool).toEqual([]);
+    }
+    // Other MCP tools, and a server merely named like it, are still one tool.call.
+    expect(post("mcp__github__get_issue", { number: 7 })).toEqual([
+      { type: "tool.call", payload: { tool: "mcp__github__get_issue", arg: "number=7", ok: true } },
+    ]);
+    expect(post("mcp__switchboardx__claim", { task: 7 })).toHaveLength(1);
+    // A shell call with no command text falls back to a tool.call.
+    expect(post("Bash", {})).toEqual([{ type: "tool.call", payload: { tool: "Bash", arg: "", ok: true } }]);
+    // The pattern follows the server's name.
+    expect(SWITCHBOARD_TOOL.test(`mcp__${MCP_SERVER_NAME}__x`)).toBe(true);
   });
 });

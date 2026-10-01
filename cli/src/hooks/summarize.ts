@@ -33,6 +33,13 @@ export interface ClaudeHookInput {
 /** The hooks the wrapper installs, and the Claude Code hook names they listen on. */
 export const CAPTURED_HOOKS = ["SessionStart", "PostToolUse", "Stop", "SessionEnd"] as const;
 
+/**
+ * Switchboard's own MCP tools, as the CLIs name them in their hooks: Claude Code and
+ * Codex `mcp__switchboard__<tool>`, Gemini CLI `mcp_switchboard_<tool>` (the server is
+ * MCP_SERVER_NAME in mcp-server.ts).
+ */
+export const SWITCHBOARD_TOOL = /^(?:mcp__switchboard__|mcp_switchboard_)/;
+
 /** Tools that edit files, and the input field that holds the file's path. */
 const FILE_EDIT_TOOLS: Record<string, string> = {
   Write: "file_path",
@@ -119,10 +126,24 @@ export class HookSummarizer {
     }
   }
 
+  /** One tool call, as one Event (#55), plus the file it edited, for an edit tool. */
   private toolUse(input: ClaudeHookInput): HookEventDraft[] {
     const tool = str(input.tool_name);
     if (!tool) return [];
+    // Switchboard's own tools record themselves, with their output and Task (the Tool Capture).
+    if (SWITCHBOARD_TOOL.test(tool)) return [];
     const toolInput = input.tool_input ?? {};
+    // A shell call is its command, with the whole command text and its exit code.
+    const command = tool === "Bash" ? str(toolInput.command) : undefined;
+    if (command) {
+      const exitCode = exitCodeOf(input.tool_response);
+      return [
+        {
+          type: "command",
+          payload: { command: shortCommand(command), ...(exitCode === undefined ? {} : { exitCode }) },
+        },
+      ];
+    }
     const events: HookEventDraft[] = [
       { type: "tool.call", payload: { tool: truncate(tool, 100), arg: this.arg(tool, toolInput), ok: true } },
     ];
@@ -131,14 +152,6 @@ export class HookSummarizer {
     if (path) {
       const { additions, deletions } = changedLines(tool, toolInput, input.tool_response);
       events.push({ type: "file.edit", payload: { path: this.path(path), additions, deletions } });
-    }
-    const command = tool === "Bash" ? str(toolInput.command) : undefined;
-    if (command) {
-      const exitCode = exitCodeOf(input.tool_response);
-      events.push({
-        type: "command",
-        payload: { command: shortCommand(command), ...(exitCode === undefined ? {} : { exitCode }) },
-      });
     }
     return events;
   }
