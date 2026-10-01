@@ -1,45 +1,52 @@
 // File changes made through the shell (#57). Edit tools report the files they
 // change; a shell command (a heredoc, sed, a script) does not. So the Hook Capture
-// takes a snapshot of the working trees just before each shell call (its
-// PreToolUse hook, which the CLI waits for) and another just after (PostToolUse),
-// and reports each file that differs as one `file.edit`, with the lines added and
-// removed.
+// takes a snapshot of the call's worktree just before each shell call (its
+// PreToolUse hook, which the CLI waits for) and another just after (PostToolUse,
+// which it also waits for), and reports each file that differs as one `file.edit`,
+// with the lines added and removed.
 //
-// A snapshot is a git tree of each worktree of the repo as it is on disk, made the
-// way `git stash` makes one: `git add -A` into a temporary copy of the worktree's
-// index, then `git write-tree`. So:
-// - Tracked and untracked files count; ignored files do not (.gitignore, and
-//   `.switchboard/` through .git/info/exclude, so a Task worktree is not seen twice).
-// - Only files whose size or time changed are read, thanks to the index's stat
-//   cache, so a snapshot of a big repo with a few changes stays cheap.
-// - Every worktree is covered, the Task worktrees included, wherever the command
-//   ran. Paths are relative to the worktree, as git and the Relay name them.
+// The worktree is the one the call runs in (the hook's `cwd`, or the shell tool's
+// own `workdir`). Other worktrees are left alone: another Agent's Task worktree in
+// the same clone (ADR 0006) changes while this command runs, and those changes are
+// that Agent's.
+//
+// A snapshot is a git tree of the worktree as it is on disk, made the way
+// `git stash` makes one: `git add` into a temporary copy of the worktree's index,
+// then `git write-tree`. So:
+// - Tracked and untracked files count; ignored files do not.
+// - Only the files `git status` lists (changed or untracked) are read, and only
+//   those up to MAX_HASHED_BYTES. A bigger file is followed by its size and time
+//   alone, and reported with no line counts when they change.
+// - Everything git writes goes to a scratch object directory (the repo's own is
+//   read through it as an alternate), deleted after the call: nothing is left in
+//   the Person's .git.
+// - The repo's clean filters (git-lfs, git-crypt) are turned off for the snapshot.
 // - A rename shows as a delete and an add, a binary file as 0 lines each way.
-// The blobs `git add` writes go to the repo's object store, unreferenced, as with
-// `git stash create`; git's own gc clears them.
+// A snapshot that takes longer than SNAPSHOT_TIMEOUT_MS is abandoned and its git
+// processes killed; that call is not counted.
 //
 // Only the time the command runs is compared, so Edit-tool changes (their own
-// calls) are never counted twice. A change the Person makes in the same worktree
-// while the command runs is counted with it: nothing on disk tells them apart.
+// calls) are never counted twice. Not told apart: the Person's changes in the
+// same worktree while the command runs, and two shell calls of the session that
+// run at the same time in one worktree (each counts the other's changes).
 
-import { execFile } from "node:child_process";
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { copyFile, lstat, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
-import { promisify } from "node:util";
-
-const run = promisify(execFile);
+import { isAbsolute, join, resolve } from "node:path";
 
 /**
- * How long the snapshot before a command may take: inside the 2 s the hook waits
- * for the wrapper's answer (hook-command.ts), after which the CLI runs the command
- * anyway. Past it, the call is left uncounted.
+ * How long a snapshot may take: inside the 2 s the hook waits for the wrapper's
+ * answer (hook-command.ts), after which the CLI goes on anyway.
  */
 const SNAPSHOT_TIMEOUT_MS = 1_500;
-/** How long one git command may take. */
-const GIT_TIMEOUT_MS = 30_000;
+/** The largest file hashed to count its lines. Bigger ones are followed by size and time. */
+export const MAX_HASHED_BYTES = 1024 * 1024;
 /** The most files one shell call reports. A build or an install into unignored files can touch thousands. */
 export const MAX_SHELL_EDITS = 200;
+/** Scratch directories this old are left over from a wrapper that was killed mid-call. */
+const STALE_SCRATCH_MS = 60 * 60 * 1000;
+const SCRATCH_PREFIX = "switchboard-shell-";
 
 export interface FileChange {
   path: string;
@@ -47,138 +54,236 @@ export interface FileChange {
   deletions: number;
 }
 
-/** Each worktree's tree as it was on disk, by worktree path. */
-type Snapshot = Map<string, string>;
+/** One worktree as it was: its tree, and the big files' sizes and times. */
+interface Snapshot {
+  tree: string;
+  big: Map<string, string>;
+}
+
+/** One shell call: its worktree, its scratch directory, and the snapshot before it. */
+interface Call {
+  worktree: string;
+  scratch: string;
+  before: Snapshot;
+}
 
 export class ShellEdits {
-  /** Snapshots taken before shell calls that have not finished, by tool call ID. */
-  private readonly before = new Map<string, Promise<Snapshot | null>>();
+  /** Shell calls under way, by tool call ID. */
+  private readonly calls = new Map<string, Promise<Call | null>>();
 
-  /** `cwd` is anywhere inside the repo the session works in. */
-  constructor(
-    private readonly cwd: string,
-    private readonly log: (line: string) => void,
-  ) {}
+  constructor(private readonly log: (line: string) => void) {
+    void sweepStaleScratch();
+  }
 
   /**
-   * A shell call is about to run: takes the snapshot it is compared against. The CLI
-   * waits for this (and gives up on its hook after a while), so a snapshot that takes
-   * too long is not used: the command may have started before it was done.
+   * A shell call is about to run in `dir`: takes the snapshot it is compared against.
+   * The CLI waits for this, so a snapshot that takes too long is not used: the
+   * command may have started before it was done.
    */
-  async start(callId: string): Promise<void> {
-    const snapshot = this.timely("before");
-    this.before.set(callId, snapshot);
+  async start(callId: string, dir: string): Promise<void> {
+    const call = this.begin(dir);
+    this.calls.set(callId, call);
     // Too many unfinished calls means their PostToolUse hooks never came: drop the oldest.
-    if (this.before.size > 50) this.before.delete(this.before.keys().next().value ?? "");
-    await snapshot;
+    if (this.calls.size > 50) {
+      const oldest = this.calls.keys().next().value ?? "";
+      void this.calls.get(oldest)?.then((dropped) => dropped && rm(dropped.scratch, { recursive: true, force: true }));
+      this.calls.delete(oldest);
+    }
+    await call;
   }
 
   /**
    * The shell call finished: the files it changed, at most MAX_SHELL_EDITS of them.
-   * The CLI waits for the snapshot after it too (the PostToolUse hook), so the next
-   * tool's changes, an Edit tool's say, are not counted with this command's.
+   * The CLI waits for the snapshot after it too, so the next tool's changes, an
+   * Edit tool's say, are not counted with this command's.
    */
   async finish(callId: string): Promise<FileChange[]> {
-    const before = await this.before.get(callId);
-    this.before.delete(callId);
-    if (!before) return [];
-    const after = await this.timely("after");
-    if (!after) return [];
-    const changes: FileChange[] = [];
-    for (const [worktree, tree] of after) {
-      const old = before.get(worktree);
-      if (old === undefined || old === tree) continue;
-      changes.push(...(await this.diff(worktree, old, tree)));
+    const call = await this.calls.get(callId);
+    this.calls.delete(callId);
+    if (!call) return [];
+    try {
+      const after = await this.timely("after", (signal) => snapshot(call.worktree, call.scratch, signal));
+      if (!after) return [];
+      const changes = await changesBetween(call, after);
+      if (changes.length > MAX_SHELL_EDITS) {
+        this.log(`shell edits: ${changes.length} files changed; reporting the first ${MAX_SHELL_EDITS}`);
+        return changes.slice(0, MAX_SHELL_EDITS);
+      }
+      return changes;
+    } finally {
+      await rm(call.scratch, { recursive: true, force: true });
     }
-    if (changes.length > MAX_SHELL_EDITS) {
-      this.log(`shell edits: ${changes.length} files changed; reporting the first ${MAX_SHELL_EDITS}`);
-      return changes.slice(0, MAX_SHELL_EDITS);
-    }
-    return changes;
   }
 
-  /**
-   * A snapshot taken within SNAPSHOT_TIMEOUT_MS, or null. A late one is not used:
-   * the CLI may have moved on (run the command, or the next tool) before it was done.
-   */
-  private async timely(when: "before" | "after"): Promise<Snapshot | null> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<null>((resolve) => {
-      timer = setTimeout(() => {
-        this.log(`shell edits: the snapshot ${when} the command took over ${SNAPSHOT_TIMEOUT_MS} ms; not counted`);
-        resolve(null);
-      }, SNAPSHOT_TIMEOUT_MS);
-    });
-    const taken = this.snapshot().catch((error: Error) => {
-      this.log(`shell edits: no snapshot ${when} the command: ${error.message}`);
+  private async begin(dir: string): Promise<Call | null> {
+    let worktree: string;
+    try {
+      worktree = (await git(dir, ["rev-parse", "--show-toplevel"])).trim();
+    } catch (error) {
+      this.log(`shell edits: ${dir} is not in a git worktree: ${(error as Error).message}`);
       return null;
-    });
-    return Promise.race([taken, late]).finally(() => clearTimeout(timer));
+    }
+    const scratch = await mkdtemp(join(tmpdir(), SCRATCH_PREFIX));
+    const before = await this.timely("before", (signal) => snapshot(worktree, scratch, signal));
+    if (before) return { worktree, scratch, before };
+    await rm(scratch, { recursive: true, force: true });
+    return null;
   }
 
-  private async git(cwd: string, args: string[], env: Record<string, string> = {}): Promise<string> {
-    const { stdout } = await run("git", args, {
+  /** A snapshot taken within SNAPSHOT_TIMEOUT_MS, or null; a late one's git processes are killed. */
+  private async timely(when: "before" | "after", take: (signal: AbortSignal) => Promise<Snapshot>) {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), SNAPSHOT_TIMEOUT_MS);
+    try {
+      return await take(abort.signal);
+    } catch (error) {
+      this.log(
+        abort.signal.aborted
+          ? `shell edits: the snapshot ${when} the command took over ${SNAPSHOT_TIMEOUT_MS} ms; not counted`
+          : `shell edits: no snapshot ${when} the command: ${(error as Error).message}`,
+      );
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** Runs git, killed when `signal` aborts. `input` goes to its stdin. */
+function git(
+  cwd: string,
+  args: string[],
+  { env = {}, input, signal }: { env?: Record<string, string>; input?: string; signal?: AbortSignal } = {},
+): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn("git", args, {
       cwd,
       env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
-      timeout: GIT_TIMEOUT_MS,
-      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+      ...(signal ? { signal } : {}),
     });
-    return stdout;
-  }
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolvePromise(Buffer.concat(out).toString("utf8"));
+      else reject(new Error(`git ${args[0]} exited ${code}: ${Buffer.concat(err).toString("utf8").trim()}`));
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.end(input ?? "");
+  });
+}
 
-  /** Every worktree of the repo that has a checkout. */
-  private async worktrees(): Promise<string[]> {
-    const list = await this.git(this.cwd, ["worktree", "list", "--porcelain", "-z"]);
-    const paths: string[] = [];
-    let path: string | null = null;
-    for (const field of [...list.split("\0"), ""]) {
-      if (field.startsWith("worktree ")) path = field.slice("worktree ".length);
-      else if (field === "bare") path = null;
-      else if (field === "" && path !== null) {
-        paths.push(path);
-        path = null;
-      }
-    }
-    return paths;
-  }
+/** `-c` overrides that turn off every clean filter the repo configures (git-lfs, git-crypt). */
+async function withoutFilters(worktree: string, signal: AbortSignal): Promise<string[]> {
+  const names = await git(worktree, ["config", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$"], {
+    signal,
+  }).catch(() => "");
+  const filters = new Set(names.split("\n").flatMap((key) => /^filter\.(.+)\.(?:clean|process)$/.exec(key)?.[1] ?? []));
+  return [...filters].flatMap((name) => [
+    "-c",
+    `filter.${name}.clean=cat`,
+    "-c",
+    `filter.${name}.process=`,
+    "-c",
+    `filter.${name}.required=false`,
+  ]);
+}
 
-  private async snapshot(): Promise<Snapshot> {
-    const snapshot: Snapshot = new Map();
-    const scratch = await mkdtemp(join(tmpdir(), "switchboard-shell-"));
-    try {
-      for (const [n, worktree] of (await this.worktrees()).entries()) {
-        const tree = await this.treeOf(worktree, join(scratch, `index-${n}`)).catch(() => null);
-        if (tree !== null) snapshot.set(worktree, tree);
-      }
-    } finally {
-      await rm(scratch, { recursive: true, force: true });
-    }
-    return snapshot;
-  }
+/**
+ * The worktree as a tree, its changed and untracked files up to MAX_HASHED_BYTES
+ * read into it, through a copy of its index and into the call's scratch objects.
+ */
+async function snapshot(worktree: string, scratch: string, signal: AbortSignal): Promise<Snapshot> {
+  const index = (
+    await git(worktree, ["rev-parse", "--path-format=absolute", "--git-path", "index"], { signal })
+  ).trim();
+  const objects = (
+    await git(worktree, ["rev-parse", "--path-format=absolute", "--git-path", "objects"], { signal })
+  ).trim();
+  const own = join(scratch, "objects");
+  await mkdir(own, { recursive: true });
+  const copy = join(scratch, `index-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await copyFile(index, copy).catch(() => {});
+  const env = { GIT_INDEX_FILE: copy, GIT_OBJECT_DIRECTORY: own, GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
+  const filters = await withoutFilters(worktree, signal);
 
-  /** The worktree's files as a tree, through a copy of its index (whose stat cache spares unchanged files). */
-  private async treeOf(worktree: string, index: string): Promise<string> {
-    const own = (await this.git(worktree, ["rev-parse", "--git-path", "index"])).trim();
-    await copyFile(isAbsolute(own) ? own : join(worktree, own), index).catch(() => {});
-    const env = { GIT_INDEX_FILE: index };
-    await this.git(worktree, ["add", "-A", "--", "."], env);
-    return (await this.git(worktree, ["write-tree"], env)).trim();
+  // What git sees changed or untracked, from the index's stat cache (nothing is written).
+  const status = await git(
+    worktree,
+    [...filters, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules"],
+    { env, signal },
+  );
+  const small: string[] = [];
+  const big = new Map<string, string>();
+  for (const entry of status.split("\0")) {
+    if (entry.length < 4) continue;
+    const path = entry.slice(3);
+    const info = await lstat(join(worktree, path)).catch(() => null);
+    if (info?.isFile() && info.size > MAX_HASHED_BYTES) big.set(path, `${info.size}:${info.mtimeMs}`);
+    else small.push(path);
   }
+  if (small.length > 0) {
+    await git(worktree, [...filters, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], {
+      env: { ...env, GIT_LITERAL_PATHSPECS: "1" },
+      signal,
+      input: `${small.join("\0")}\0`,
+    });
+  }
+  const tree = (await git(worktree, [...filters, "write-tree"], { env, signal })).trim();
+  await rm(copy, { force: true });
+  return { tree, big };
+}
 
-  private async diff(worktree: string, from: string, to: string): Promise<FileChange[]> {
-    const out = await this.git(worktree, ["diff-tree", "-r", "-z", "--numstat", "--no-renames", from, to]);
-    const changes: FileChange[] = [];
+/** One change per file that differs between the call's two snapshots. */
+async function changesBetween(call: Call, after: Snapshot): Promise<FileChange[]> {
+  const { before, worktree, scratch } = call;
+  const bigPaths = new Set([...before.big.keys(), ...after.big.keys()]);
+  const changes: FileChange[] = [];
+  if (before.tree !== after.tree) {
+    const objects = (await git(worktree, ["rev-parse", "--path-format=absolute", "--git-path", "objects"])).trim();
+    const env = { GIT_OBJECT_DIRECTORY: join(scratch, "objects"), GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
+    const out = await git(worktree, ["diff-tree", "-r", "-z", "--numstat", "--no-renames", before.tree, after.tree], {
+      env,
+    });
     // `<added>\t<deleted>\t<path>\0` per file; `-` for a binary file.
     for (const record of out.split("\0")) {
       const match = /^(\d+|-)\t(\d+|-)\t(.+)$/s.exec(record);
       if (!match) continue;
       const [, added = "-", deleted = "-", path = ""] = match;
+      // A big file is in the tree as git last indexed it, so its lines are not compared.
+      if (bigPaths.has(path)) continue;
       changes.push({
         path,
         additions: added === "-" ? 0 : Number(added),
         deletions: deleted === "-" ? 0 : Number(deleted),
       });
     }
-    return changes;
   }
+  // A big file changed when its size or time did, or it came or went (from the list, or as git has it).
+  for (const path of bigPaths) {
+    if (before.big.get(path) !== after.big.get(path)) changes.push({ path, additions: 0, deletions: 0 });
+  }
+  return changes.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/** Removes scratch directories left by a wrapper that was killed in the middle of a call. */
+async function sweepStaleScratch(): Promise<void> {
+  const dir = tmpdir();
+  const names = await readdir(dir).catch(() => [] as string[]);
+  for (const name of names) {
+    if (!name.startsWith(SCRATCH_PREFIX)) continue;
+    const path = join(dir, name);
+    const info = await stat(path).catch(() => null);
+    if (info && Date.now() - info.mtimeMs > STALE_SCRATCH_MS) await rm(path, { recursive: true, force: true });
+  }
+}
+
+/** The directory a shell call runs in: the shell tool's own `workdir`, else the hook's `cwd`. */
+export function shellDir(cwd: string | undefined, toolInput: Record<string, unknown> | undefined, fallback: string) {
+  const base = cwd && isAbsolute(cwd) ? cwd : fallback;
+  const workdir = toolInput?.workdir;
+  return typeof workdir === "string" && workdir !== "" ? resolve(base, workdir) : base;
 }

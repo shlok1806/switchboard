@@ -22,7 +22,7 @@ import { MAX_HOOK_EVENTS_PER_MESSAGE, MAX_HOOK_TEXT_LENGTH, truncate } from "../
 import { DIALOG_HOOKS, DIALOG_TOOLS } from "../interrupts";
 import { CONTEXT_HOOKS } from "../next-turn";
 import type { SessionSettings } from "../session-settings";
-import { ShellEdits } from "./shell-edits";
+import { ShellEdits, shellDir } from "./shell-edits";
 import { CAPTURED_HOOKS, type ClaudeHookInput, type HookEventDraft, HookSummarizer } from "./summarize";
 
 /** The most unacknowledged messages kept while the Channel cannot be reached. Oldest go first. */
@@ -89,7 +89,7 @@ export class HookCapture {
   private constructor(private readonly options: HookCaptureOptions) {
     this.socketPath = join(options.dir, "hook.sock");
     this.summarizer = new HookSummarizer(options.root);
-    this.shellEdits = new ShellEdits(options.root, options.log);
+    this.shellEdits = new ShellEdits(options.log);
     // Half-open: the hook has finished writing, and waits for the answer, which may take a moment.
     this.server = createServer({ allowHalfOpen: true }, (conn) => {
       this.readingHooks += 1;
@@ -228,7 +228,9 @@ export class HookCapture {
     for (const each of inputs) {
       if (each.tool_name !== "Bash") continue;
       const callId = each.tool_use_id ?? "";
-      if (each.hook_event_name === "PreToolUse") await this.shellEdits.start(callId);
+      if (each.hook_event_name === "PreToolUse") {
+        await this.shellEdits.start(callId, shellDir(each.cwd, each.tool_input, this.options.root));
+      }
       if (each.hook_event_name === "PostToolUse") await this.shellChanges(callId);
     }
     const context = this.options.context?.(input.hook_event_name) ?? "";
