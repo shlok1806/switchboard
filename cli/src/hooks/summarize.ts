@@ -24,6 +24,8 @@ export interface ClaudeHookInput {
   source?: string;
   reason?: string;
   tool_name?: string;
+  /** The tool call, the same in its PreToolUse and PostToolUse hooks. */
+  tool_use_id?: string;
   tool_input?: Record<string, unknown>;
   tool_response?: unknown;
 }

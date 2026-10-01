@@ -18,6 +18,9 @@
 //            the status and a hash of the bytes it got back
 //   edit <path>
 //         -> one Edit tool call on the file at <path> (its PostToolUse hook)
+//   shell <command>
+//         -> one Bash tool call: its PreToolUse hooks, then the command, run for real
+//            in the current directory (`\n` in it is a line break), then PostToolUse
 //   busy <seconds>
 //         -> works for a while, printing as it goes, like a long model turn
 //   permission <tool>
@@ -246,6 +249,26 @@ async function answer(command) {
   }
   const model = /^model (.*)$/.exec(command);
   if (model) await modelTurn(model[1]);
+  const shell = /^shell (.+)$/.exec(command);
+  if (shell) {
+    // A Bash tool call: its PreToolUse hooks, the command for real (`\n` in it is a line break), PostToolUse.
+    const tool_input = { command: shell[1].replaceAll("\\n", "\n") };
+    const tool_use_id = `toolu_${createHash("sha256").update(`${Date.now()}${Math.random()}`).digest("hex").slice(0, 12)}`;
+    runHooks("PreToolUse", { permission_mode: "default", tool_name: "Bash", tool_input, tool_use_id }, "Bash");
+    const result = spawnSync("/bin/sh", ["-c", tool_input.command], { cwd: process.cwd() });
+    runHooks(
+      "PostToolUse",
+      {
+        permission_mode: "default",
+        tool_name: "Bash",
+        tool_input,
+        tool_use_id,
+        tool_response: { stdout: `${result.stdout ?? ""}`, stderr: `${result.stderr ?? ""}`, exitCode: result.status },
+      },
+      "Bash",
+    );
+    console.log(`FAKE-CLAUDE shell done exit=${result.status}`);
+  }
   const edit = /^edit (.+)$/.exec(command);
   if (edit) {
     toolUse(

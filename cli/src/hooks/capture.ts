@@ -18,11 +18,12 @@ import { createServer, type Server } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentId, HookCaptureMessage, HookCaptureReply, HookEvent } from "../../../shared/src/index";
-import { MAX_HOOK_EVENTS_PER_MESSAGE } from "../../../shared/src/index";
+import { MAX_HOOK_EVENTS_PER_MESSAGE, MAX_HOOK_TEXT_LENGTH, truncate } from "../../../shared/src/index";
 import { DIALOG_HOOKS, DIALOG_TOOLS } from "../interrupts";
 import { CONTEXT_HOOKS } from "../next-turn";
 import type { SessionSettings } from "../session-settings";
-import { CAPTURED_HOOKS, type ClaudeHookInput, HookSummarizer } from "./summarize";
+import { ShellEdits, shellDir } from "./shell-edits";
+import { CAPTURED_HOOKS, type ClaudeHookInput, type HookEventDraft, HookSummarizer } from "./summarize";
 
 /** The most unacknowledged messages kept while the Channel cannot be reached. Oldest go first. */
 const MAX_PENDING = 1000;
@@ -75,6 +76,7 @@ type Pending = { ids: Set<string>; events: HookEvent[] };
 export class HookCapture {
   readonly socketPath: string;
   private readonly summarizer: HookSummarizer;
+  private readonly shellEdits: ShellEdits;
   private readonly server: Server;
   private agent: AgentId | null = null;
   /** Events not yet sent because the Agent is not registered. */
@@ -87,13 +89,15 @@ export class HookCapture {
   private constructor(private readonly options: HookCaptureOptions) {
     this.socketPath = join(options.dir, "hook.sock");
     this.summarizer = new HookSummarizer(options.root);
-    this.server = createServer((conn) => {
+    this.shellEdits = new ShellEdits(options.log);
+    // Half-open: the hook has finished writing, and waits for the answer, which may take a moment.
+    this.server = createServer({ allowHalfOpen: true }, (conn) => {
       this.readingHooks += 1;
       const chunks: Buffer[] = [];
       let size = 0;
       let read = false;
       // Reads the hook's whole input once, and gives the answer for it.
-      const finish = (): string => {
+      const finish = async (): Promise<string> => {
         if (read) return "";
         read = true;
         if (size <= MAX_INPUT_BYTES) return this.receive(Buffer.concat(chunks).toString("utf8"));
@@ -106,11 +110,14 @@ export class HookCapture {
       });
       conn.on("error", () => {});
       // The hook sent everything: answer, then close.
-      conn.on("end", () => conn.end(finish()));
+      conn.on("end", () => {
+        void finish().then((answer) => conn.end(answer));
+      });
       conn.on("close", () => {
-        finish();
-        this.readingHooks -= 1;
-        this.checkIdle();
+        void finish().finally(() => {
+          this.readingHooks -= 1;
+          this.checkIdle();
+        });
       });
     });
   }
@@ -141,7 +148,8 @@ export class HookCapture {
   settings(): SessionSettings {
     const hook = { type: "command" as const, command: this.command(), timeout: 10 };
     const names = [...new Set<string>([...CAPTURED_HOOKS, ...CONTEXT_HOOKS, ...DIALOG_HOOKS])];
-    const matchers: Record<string, string> = { PostToolUse: "*", PreToolUse: DIALOG_TOOLS.join("|") };
+    // PreToolUse: the dialog tools, and the shell, whose changes are worked out around it.
+    const matchers: Record<string, string> = { PostToolUse: "*", PreToolUse: [...DIALOG_TOOLS, "Bash"].join("|") };
     return {
       hooks: Object.fromEntries(
         names.map((name) => {
@@ -200,7 +208,7 @@ export class HookCapture {
   }
 
   /** Takes one hook's input, and returns what the hook prints back into the agent CLI. */
-  private receive(text: string): string {
+  private async receive(text: string): Promise<string> {
     let inputs: ClaudeHookInput[];
     try {
       const raw = JSON.parse(text) as Record<string, unknown>;
@@ -214,15 +222,42 @@ export class HookCapture {
     if (input === undefined) return "";
     if (typeof input.session_id === "string") this.options.onSessionId?.(input.session_id);
     for (const each of inputs) this.options.onHook?.(each);
-    const events = inputs
-      .flatMap((each) => this.summarizer.summarize(each))
-      .map((draft) => ({ id: randomUUID(), ...draft }) as HookEvent);
-    if (events.length > 0) {
-      if (this.agent) this.enqueue(events);
-      else this.unsent.push(...events);
+    this.record(inputs.flatMap((each) => this.summarizer.summarize(each)));
+    // A shell call: the CLI is answered once the snapshot before it (PreToolUse) or after it
+    // (PostToolUse) is taken, so the snapshots hold the command's changes and nothing else.
+    for (const each of inputs) {
+      if (each.tool_name !== "Bash") continue;
+      const callId = each.tool_use_id ?? "";
+      if (each.hook_event_name === "PreToolUse") {
+        await this.shellEdits.start(callId, shellDir(each.cwd, each.tool_input, this.options.root));
+      }
+      if (each.hook_event_name === "PostToolUse") await this.shellChanges(callId);
     }
     const context = this.options.context?.(input.hook_event_name) ?? "";
     return this.options.answer ? this.options.answer(input.hook_event_name, context) : context;
+  }
+
+  /** Gives drafts their IDs and sends them, or holds them until the Agent is registered. */
+  private record(drafts: HookEventDraft[]): void {
+    const events = drafts.map((draft) => ({ id: randomUUID(), ...draft }) as HookEvent);
+    if (events.length === 0) return;
+    if (this.agent) this.enqueue(events);
+    else this.unsent.push(...events);
+  }
+
+  /** Records one `file.edit` per file shell call `callId` changed. */
+  private async shellChanges(callId: string): Promise<void> {
+    try {
+      const changes = await this.shellEdits.finish(callId);
+      this.record(
+        changes.map((change) => ({
+          type: "file.edit",
+          payload: { ...change, path: truncate(change.path, MAX_HOOK_TEXT_LENGTH) },
+        })),
+      );
+    } catch (error) {
+      this.options.log(`shell edits failed: ${(error as Error).message}`);
+    }
   }
 
   private enqueue(events: HookEvent[]): void {
