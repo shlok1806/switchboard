@@ -4,12 +4,14 @@ import type {
   ChannelEvent,
   Cli,
   DowngradeReason,
+  EventType,
   Holder,
   Presence,
   TaskField,
   TaskSyncVia,
   VerdictOption,
 } from "@shared/index";
+import { UNRELAYED_EVENT_TYPES } from "@shared/index";
 
 export const CLI_LABEL: Record<Cli, string> = {
   "claude-code": "Claude Code",
@@ -223,3 +225,23 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "mirror.failed": "GitHub mirror failed",
   verdict: "Verdict",
 };
+
+/**
+ * Why the Relay gives no Verdicts on an Event of this type, or null when it does
+ * consider it (UNRELAYED_EVENT_TYPES in shared/src/relay.ts).
+ */
+export function unrelayedReason(type: EventType): string | null {
+  if (!UNRELAYED_EVENT_TYPES.includes(type)) return null;
+  switch (type) {
+    case "verdict":
+      return "Not relayed: a Verdict is the Relay's own output.";
+    case "directive":
+    case "directive.delivery":
+      return "Not relayed: a Directive reaches its Agent without a Verdict.";
+    case "proxy.raw":
+    case "proxy.digest":
+      return "Not relayed: model context and replies stay on the Dashboard.";
+    default:
+      return "Not relayed (lifecycle Event).";
+  }
+}

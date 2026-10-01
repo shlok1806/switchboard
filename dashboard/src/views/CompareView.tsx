@@ -48,7 +48,8 @@ export function CompareView({ turn }: { turn?: string }) {
   const moments = useMoments();
   const { agentById } = useIndex();
   const can = useCapabilities();
-  const moment = moments.find((m) => m.turn === turn) ?? moments[0];
+  // A turn the URL names that is not on the Channel is not found, never quietly another turn.
+  const moment = turn === undefined ? moments[0] : moments.find((m) => m.turn === turn);
 
   if (!can.captures && moments.length === 0) {
     return (
@@ -104,7 +105,16 @@ export function CompareView({ turn }: { turn?: string }) {
       </nav>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {!moment ? (
+        {!moment && turn !== undefined ? (
+          <Pending title="No such model turn" className="h-full">
+            <span className="font-mono text-[12px] break-all text-ink-2">{turn}</span> is not on this Channel.{" "}
+            {moments.length > 0 && (
+              <a href={href({ view: "compare" })} className="text-accent-ink hover:underline">
+                Show the latest turn
+              </a>
+            )}
+          </Pending>
+        ) : !moment ? (
           <div className="flex h-full items-center justify-center p-6">
             <p className="text-[14px] text-ink-3">Waiting for the first model turn</p>
           </div>
@@ -214,7 +224,8 @@ function hookStep(e: ChannelEvent): ToolStep {
       detailMono: true,
       detail: e.payload.exitCode === undefined ? [] : [{ text: `exit ${e.payload.exitCode}` }],
     };
-  return { icon: "think", label: EVENT_TYPE_LABEL[e.type], chip: summarize(e), mono: false, detailMono: false, detail: [{ text: summarize(e) }] };
+  // The chip already says it all: the row does not open (a cut chip shows its full text itself).
+  return { icon: "think", label: EVENT_TYPE_LABEL[e.type], chip: summarize(e), mono: false, detailMono: false, detail: [] };
 }
 
 function ProxyCard({ event }: { event: ChannelEvent }) {

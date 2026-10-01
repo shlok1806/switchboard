@@ -2,7 +2,7 @@ import type { Agent, AgentId, ChannelEvent, Task, ToolCall, Verdict } from "@sha
 import ToolChips, { type ToolStep } from "@/components/primitives/ToolChips";
 import { Tool } from "@/components/ui/tool";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
-import { EVENT_TYPE_LABEL, TASK_FIELD_LABEL, ago, clock, compact, holderName, summarize } from "@/lib/format";
+import { EVENT_TYPE_LABEL, TASK_FIELD_LABEL, ago, clock, compact, holderName, summarize, unrelayedReason } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ActorAvatar, AgentLink, CaptureChip, CaptureIcon, RawBadge, TaskLink, VerdictTally } from "./pills";
 import { ArrowRight, X } from "lucide-react";
@@ -131,7 +131,8 @@ export function toolSteps(calls: ToolCall[]): ToolStep[] {
     chip: c.arg,
     mono: true,
     detailMono: true,
-    detail: [{ text: `${c.name}(${c.arg})` }],
+    // Nothing more than the row says: the row does not open, and a chip cut short shows its full text itself.
+    detail: [],
   }));
 }
 
@@ -224,6 +225,23 @@ export function EventBody({ event }: { event: ChannelEvent }) {
           }}
         />
       );
+    case "command": {
+      const { command, exitCode } = event.payload;
+      return (
+        <div className="flex flex-col gap-3">
+          <pre className="overflow-x-auto rounded-lg bg-inset px-3 py-2.5 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink">
+            $ {command}
+          </pre>
+          {exitCode !== undefined && (
+            <dl className="grid grid-cols-2 gap-3">
+              <Field label="Exit code">
+                <span className={cn("font-mono text-[12px] tabular-nums", exitCode === 0 ? "text-green" : "text-red")}>{exitCode}</span>
+              </Field>
+            </dl>
+          )}
+        </div>
+      );
+    }
     case "directive":
       return (
         <div className="flex flex-col gap-3 rounded-lg bg-inset p-3">
@@ -302,6 +320,7 @@ export function EventDetail({
   onClose?: () => void;
 }) {
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
+  const unrelayed = event.type !== "directive" ? unrelayedReason(event.type) : null;
   return (
     <article className="flex flex-col gap-5">
       <header className="flex items-start gap-3">
@@ -335,7 +354,7 @@ export function EventDetail({
       <section className="flex flex-col gap-2.5">
         <h3 className="flex items-center justify-between text-[13px] font-medium text-ink">
           Verdicts
-          {event.type !== "directive" && verdictsLive && (
+          {event.type !== "directive" && unrelayed === null && verdictsLive && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span tabIndex={0} className="rounded-full bg-hover px-2 py-0.5 font-mono text-[11.5px] font-normal text-ink-3">
@@ -351,6 +370,8 @@ export function EventDetail({
             No Verdict: a Directive always reaches <span className="font-mono text-[12.5px] text-ink-2">{event.payload.to}</span>, labelled
             as from {event.actor.kind === "person" ? event.actor.person : "its sender"}.
           </p>
+        ) : unrelayed !== null ? (
+          <p className="rounded-lg bg-inset px-3 py-2.5 text-[13px] text-ink-3">{unrelayed}</p>
         ) : verdictsLive ? (
           <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
         ) : (
