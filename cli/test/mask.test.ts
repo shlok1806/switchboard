@@ -157,3 +157,79 @@ describe("secret masking", () => {
     }
   });
 });
+
+describe("secret masking, right after escapes and encodings", () => {
+  const GITHUB = "ghp_1234567890abcdefghijABCDEFGHIJ123456";
+  const AWS = "AKIAIOSFODNN7EXAMPLE";
+  const tokens: [string, string][] = [
+    [ANTHROPIC, "sk-ant-****"],
+    [OPENAI, "sk-****"],
+    [GITHUB, "ghp_****"],
+    [AWS, "AKIA****"],
+    [JWT, "eyJ****"],
+    [SESSION, "v1.****"],
+    [AGENT_TOKEN, "sba_****"],
+  ];
+  // What can sit right before a token in what the proxy reads: JSON escapes, an ANSI
+  // color from terminal output (raw or JSON-escaped), URL encoding, an identifier's `_`.
+  const before = [
+    "\\f",
+    "\\b",
+    "\\u0022",
+    "\\u003d",
+    "\x1b[31m",
+    "\x1b[0;1m",
+    "\\u001b[31m",
+    "%22",
+    "%3D",
+    "%20",
+    "%0A",
+    "MY_",
+  ];
+  for (const prefix of before) {
+    it(`masks a token right after ${JSON.stringify(prefix)}`, () => {
+      for (const [token, masked] of tokens) {
+        expect(maskSecrets(`x ${prefix}${token} y`), `${prefix}${token.slice(0, 8)}`).toEqual({
+          text: `x ${prefix}${masked} y`,
+          count: 1,
+        });
+      }
+    });
+  }
+
+  it("leaves a key-like word that is part of another word", () => {
+    for (const text of [
+      "xghp_1234567890abcdefghijABCDEFGHIJ",
+      "desk-booking-application-service-v2",
+      "the risk-adjusted-return-calculation-module",
+      "FAKIAIOSFODNN7EXAMPLE",
+      "seyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefgh",
+    ]) {
+      expect(maskSecrets(text)).toEqual({ text, count: 0 });
+    }
+  });
+});
+
+describe("secret masking time", () => {
+  /** Masks `text`, and how long it took, in ms. */
+  function timed(text: string): number {
+    const started = performance.now();
+    maskSecrets(text);
+    return performance.now() - started;
+  }
+
+  // Each grew with the square of its length: seconds at these sizes. A raw request body
+  // can hold a minified file or a long dotted blob, and the proxy waits on the mask.
+  it.each([
+    ["a dotted blob", "a.".repeat(35_000)],
+    ["repeated session prefixes", "v1.eyJA".repeat(20_000)],
+    ["a dashed blob", "a-".repeat(35_000)],
+    ["chained assignments", "a=".repeat(50_000)],
+    ["chained quoted assignments", 'a="'.repeat(30_000)],
+    ["unfinished JWTs", "eyJAAAAA.".repeat(15_000)],
+    ["unfinished key blocks", "-----BEGIN RSA PRIVATE KEY-----\n".repeat(3_000)],
+    ["key prefixes", "sk-ant-x sk-x ghp_x AKIA xoxb- ".repeat(5_000)],
+  ])("stays linear on %s", (_name, text) => {
+    expect(timed(text)).toBeLessThan(500);
+  });
+});
