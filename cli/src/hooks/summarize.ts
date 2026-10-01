@@ -3,8 +3,8 @@
 // shared limits, heredoc bodies are dropped from commands, and file contents are
 // never copied, only counted.
 
-import { existsSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { EventPayloads, HookEventType } from "../../../shared/src/index";
 import {
   MAX_HOOK_ARG_LENGTH,
@@ -177,14 +177,54 @@ export class HookSummarizer {
  */
 export function repoPath(root: string, path: string): string {
   const absolute = isAbsolute(path) ? path : resolve(root, path);
-  const inside = relative(root, absolute);
-  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return path;
+  // As named first, as git names files: a file under a symlinked directory in the repo
+  // is the repo's file, wherever the link points.
+  const named = within(root, absolute);
+  if (named !== null) return named;
+  // Outside, as named: it may be the repo reached through a symlink (macOS names
+  // /private/var as /var), so compare real paths. Still outside, it stays as given.
+  return within(realRoot(root), canonical(absolute)) ?? path;
+}
+
+/** `absolute` relative to the checkout under `base` that holds it, or null when it is outside `base`. */
+function within(base: string, absolute: string): string | null {
+  const inside = relative(base, absolute);
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return null;
   // The nearest directory above the file with a `.git` (a worktree has a `.git` file) holds it.
-  for (let dir = dirname(absolute); dir !== root && relative(root, dir) !== ""; dir = dirname(dir)) {
+  for (let dir = dirname(absolute); dir !== base && relative(base, dir) !== ""; dir = dirname(dir)) {
     if (existsSync(join(dir, ".git"))) return relative(dir, absolute);
     if (dirname(dir) === dir) break;
   }
   return inside;
+}
+
+/** The repo roots' real paths, resolved once each. */
+const realRoots = new Map<string, string>();
+
+function realRoot(root: string): string {
+  let real = realRoots.get(root);
+  if (real === undefined) {
+    real = canonical(root);
+    realRoots.set(root, real);
+  }
+  return real;
+}
+
+/**
+ * `path` with every symlink in it resolved. A file a tool is about to create, in
+ * directories that may not exist yet, keeps the missing tail as given, on the
+ * resolved path of the part that exists.
+ */
+function canonical(path: string): string {
+  const missing: string[] = [];
+  for (let dir = resolve(path); ; dir = dirname(dir)) {
+    try {
+      return join(realpathSync(dir), ...missing.reverse());
+    } catch {
+      if (dirname(dir) === dir) return resolve(path);
+      missing.push(basename(dir));
+    }
+  }
 }
 
 /** Lines added and removed by a file edit, from Claude Code's patch when it gives one. */

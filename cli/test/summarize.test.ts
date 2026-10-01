@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -26,6 +26,38 @@ describe("repoPath", () => {
 
   it("leaves a path outside the repo as given", () => {
     expect(repoPath(root, "/etc/hosts")).toBe("/etc/hosts");
+  });
+
+  it("names a file reached through a symlink, as macOS's /var is to /private/var", () => {
+    const link = join(realpathSync(tmpdir()), `switchboard-summarize-link-${process.pid}`);
+    symlinkSync(root, link);
+    try {
+      // The file through the link, the repo by its real path; and the other way round.
+      expect(repoPath(root, join(link, "src", "greet.ts"))).toBe("src/greet.ts");
+      expect(repoPath(link, join(root, "src", "greet.ts"))).toBe("src/greet.ts");
+      expect(repoPath(root, join(link, ".switchboard", "worktrees", "task", "2-add-a-farewell", "src", "new.ts"))).toBe(
+        "src/new.ts",
+      );
+      // A file the tool is about to create, in a directory that does not exist yet.
+      expect(repoPath(root, join(link, "docs", "guide", "new.md"))).toBe("docs/guide/new.md");
+    } finally {
+      rmSync(link, { force: true });
+    }
+  });
+
+  it("names a file under a symlinked directory in the repo as the repo's, wherever the link points", () => {
+    // repo/linked -> a directory outside the repo: the file is linked/o.ts, never the outside path.
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "switchboard-summarize-outside-")));
+    symlinkSync(outside, join(root, "linked"));
+    try {
+      expect(repoPath(root, join(root, "linked", "o.ts"))).toBe("linked/o.ts");
+      expect(repoPath(root, "linked/o.ts")).toBe("linked/o.ts");
+      // The outside directory by its own path is still outside, and stays as given.
+      expect(repoPath(root, join(outside, "o.ts"))).toBe(join(outside, "o.ts"));
+    } finally {
+      rmSync(join(root, "linked"), { force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
