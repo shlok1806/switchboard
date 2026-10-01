@@ -378,10 +378,17 @@ export type VerdictSource = "jev" | "rule" | "fallback";
 export interface RelayState {
   agent: {
     id: AgentId;
-    /** The Task the Agent holds, if any. */
-    task: { number: TaskNumber; title: string; description: string } | null;
-    /** The first Step of its Task that is not done. */
-    currentStep: string | null;
+    /**
+     * The Tasks the Agent is working on: claimed by it and not yet finished, newest
+     * Claim first. A Task in review, or released, is not among them.
+     */
+    tasks: {
+      number: TaskNumber;
+      title: string;
+      description: string;
+      /** The first Step of the Task that is not done. */
+      currentStep: string | null;
+    }[];
     /** Files it edited, most recently edited first. */
     filesTouched: string[];
   };

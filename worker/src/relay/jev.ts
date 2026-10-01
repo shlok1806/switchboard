@@ -28,7 +28,7 @@ export const VERDICT_QUESTION = {
   instructions:
     "Should `agent` be told about `event`? `overlap` was computed in code: files both touch, symbols the " +
     "event's diff removed or renamed that the agent uses, and whether the event is addressed to the agent. " +
-    "Drop if it is irrelevant to the agent's task and files. Queue if it is relevant but can wait until the " +
+    "Drop if it is irrelevant to the agent's tasks and files. Queue if it is relevant but can wait until the " +
     "agent's next turn. Interrupt only if the agent will likely produce conflicting or broken work if it keeps " +
     "going without knowing.",
   criteria: {

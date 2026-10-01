@@ -1300,8 +1300,7 @@ describe("two Agents on Task worktrees", () => {
       jev.requests.slice(asked).find((r) => r.state.event.type === "push" && r.state.agent.id === bId),
     );
     expect(request.state.agent).toMatchObject({
-      task: { number: farewell, title: "Add a farewell" },
-      currentStep: "Add farewell",
+      tasks: [{ number: farewell, title: "Add a farewell", currentStep: "Add farewell" }],
       filesTouched: ["src/greet.ts"],
     });
     expect(request.state.event).toMatchObject({ sender: aId, files: ["src/greet.ts", "src/names.ts"] });
