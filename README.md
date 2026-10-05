@@ -120,8 +120,8 @@ the clock. A resumed session (`claude --resume <id>`, `codex resume <id>`,
 
 | | Claude Code | Codex | Gemini CLI (unverified, see below) |
 |---|---|---|---|
-| Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, AfterTool, AfterAgent, SessionEnd |
-| Files changed through the shell | yes | yes | no |
+| Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, BeforeTool (shell), AfterTool, AfterAgent, SessionEnd |
+| Files changed through the shell | yes | yes | yes, unverified |
 | Switchboard MCP tools | yes | yes (approved for the session) | yes |
 | Proxy Capture (digest and raw) | yes | yes | yes, unverified |
 | Next-turn delivery | SessionStart / UserPromptSubmit hooks | SessionStart / UserPromptSubmit `additionalContext`; `read_channel` fallback | SessionStart / BeforeAgent `additionalContext` |
@@ -135,20 +135,30 @@ lines added and removed.
 - **Which worktree:** the one the call runs in. Other worktrees, such as another Agent's
   Task worktree in the same clone, are not looked at.
 - **What counts:** tracked and untracked files do; ignored files don't. A rename is a
-  delete and an add, and a binary file has no line counts.
+  delete and an add, and a binary file has no line counts. Files inside a submodule
+  checked out in the worktree count too, by their path in the worktree
+  (`vendor/lib/a.ts`).
 - **Big files:** a file over 1 MB is not read. It is reported with no line counts when
   its size or time changes.
 - **Nothing left behind:** git's work goes to a scratch directory that is deleted after
   the call, so nothing is added to the repo's `.git`. Clean filters (git-lfs,
   git-crypt) are turned off for the snapshots.
+- **Shell calls at the same time:** two calls of the session running at once in one
+  worktree share their snapshots. Each reports what changed since the last report of
+  either, so every change is reported once.
 - **What it can't tell apart:** a change the Person makes in the same worktree while the
-  command runs, and two shell calls that run at the same time in one worktree (each
-  counts the other's changes).
+  command runs.
 - **When it is skipped:** if a snapshot takes over 1.5 s, its git processes are stopped
   and that call is logged and not counted.
 - **Limits:**
-  - a command still running in the background after its call ends is not followed;
-  - changes inside a submodule are not seen;
+  - a command still running in the background after its call ends is not followed. No
+    hook says when it ends, and what changes after its call cannot be told from the
+    Person's changes or the next tools';
+  - a command that leaves the call's worktree, such as a one-shot
+    `cd <another worktree> && ...` from the main checkout, is not followed there. The
+    command text cannot say reliably where it writes (`cd`, `pushd`, `git -C`, a
+    script), and that worktree may be another Agent's, changing at the same time: its
+    changes would be credited to this Agent. So they are missed, never misattributed;
   - at most 200 files are reported per call.
 
 The Proxy Capture reads Anthropic's Messages API, OpenAI's Responses API and
@@ -207,7 +217,9 @@ that event.
 Gemini CLI was not installed on the machine this was built on. Its adapter follows
 Gemini CLI's hook documentation and is tested only against a stand-in: hook names,
 the `additionalContext` output, `GEMINI_CLI_SYSTEM_SETTINGS_PATH` and `hooksConfig`
-are unverified against the real CLI. Its Proxy Capture is tested against Gemini
+are unverified against the real CLI. So is its shell tool's BeforeTool hook, which
+names no call: a BeforeTool and the AfterTool after it are paired by directory and
+command, in order. Its Proxy Capture is tested against Gemini
 and Code Assist API fixtures, but has not been verified with the real CLI.
 Interrupts stay downgraded until typing into Gemini CLI mid-turn has been seen
 to work.

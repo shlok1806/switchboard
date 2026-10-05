@@ -2638,6 +2638,23 @@ describe("file changes made through the shell (#57)", () => {
     term.type("quit\r");
     expect(await term.exited).toBe(0);
   });
+
+  it("Gemini CLI: one file.edit per file a shell command changes, around its BeforeTool and AfterTool hooks (#91)", async () => {
+    const repo = join(scratch, "shell-gemini");
+    await cloneChannel(origin, repo);
+    const term = new Terminal(
+      ["run", "gemini"],
+      { ...gitEnv, SWITCHBOARD_GEMINI_BIN: join(here, "fixtures", "fake-gemini.mjs") },
+      await realpath(repo),
+    );
+    const sessionId = (await term.waitForOutput(/FAKE-GEMINI session=([\w-]+)/))[1] ?? "";
+    const id = `e2e/gemini/${sessionId.slice(0, 4)}`;
+    await term.waitForOutput(/FAKE-GEMINI hook SessionStart exit=0/);
+    for (const command of CALLS) await shell(term, "FAKE-GEMINI", command);
+    expect(await fileEdits(id, EXPECTED.length)).toEqual(EXPECTED);
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  });
 });
 
 // Last, so it sees every git command the suite ran.

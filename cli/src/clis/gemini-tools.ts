@@ -2,7 +2,8 @@
 
 /** Gemini CLI's built-in tools, as the Claude Code tools the Hook Capture knows. */
 export const GEMINI_TOOLS: Record<string, { name: string; fields?: Record<string, string> }> = {
-  run_shell_command: { name: "Bash" },
+  // Its working directory is `dir_path` (`directory` in older versions), read as Claude Code's shell `workdir`.
+  run_shell_command: { name: "Bash", fields: { dir_path: "workdir", directory: "workdir" } },
   write_file: { name: "Write" },
   replace: { name: "Edit" },
   read_file: { name: "Read", fields: { absolute_path: "file_path" } },
