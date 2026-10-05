@@ -499,6 +499,15 @@ describe("switchboard run claude", () => {
     expect(await sessionEvents(firstId)).toEqual({ starts: 2, ends: 2 });
   });
 
+  it("resumes the latest session in this directory with --continue", async () => {
+    const term = new Terminal(["run", "claude", "--continue"]);
+    const { args } = await term.started();
+    expect(args.slice(2)).toEqual(["--resume", firstSession]);
+    await waitForPresence(firstId, "live");
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+    await waitForPresence(firstId, "gone");
+  });
   it("renames running Agents from themselves, the CLI and the Dashboard, and shows each one's account", async () => {
     // The Claude Code login the wrapper reads its Account Label from: only the masked address leaves the laptop.
     await mkdir(join(scratch, "claude"), { recursive: true });
@@ -556,16 +565,6 @@ describe("switchboard run claude", () => {
       term.type("quit\r");
       expect(await term.exited).toBe(0);
     }
-  });
-
-  it("resumes the latest session in this directory with --continue", async () => {
-    const term = new Terminal(["run", "claude", "--continue"]);
-    const { args } = await term.started();
-    expect(args.slice(2)).toEqual(["--resume", firstSession]);
-    await waitForPresence(firstId, "live");
-    term.type("quit\r");
-    expect(await term.exited).toBe(0);
-    await waitForPresence(firstId, "gone");
   });
 
   it("gives two sessions side by side two Agents, and marks a silent one Gone", async () => {
@@ -705,7 +704,7 @@ describe("Switchboard's tools (the Tool Capture)", () => {
 
     expect(await call("list_tasks", {})).toContain(`#${held} Dashboard [claimed] held by dev`);
     expect(term.output).toContain(
-      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","finish_task"]',
+      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","list_agents","rename","finish_task"]',
     );
     expect(await call("claim_task", { task: held })).toBe(`claim_task ERROR: Task #${held} is held by dev.`);
     expect(await call("claim_task", { task: claims })).toContain(`claim_task: You hold Task #${claims} now`);
