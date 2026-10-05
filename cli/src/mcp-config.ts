@@ -10,6 +10,7 @@ import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentId } from "../../shared/src/index";
+import { REPO_ENV } from "./channel-choice";
 import { configDir } from "./config";
 import { AGENT_FILE_ENV, MCP_SERVER_NAME, NEXT_TURN_FILE_ENV, REPO_DIR_ENV } from "./mcp-server";
 
@@ -55,12 +56,13 @@ export function writeClaudeMcpConfig(tools: SessionTools): string {
 
 /**
  * Prepares the session's MCP server. It is this same `switchboard` program run as
- * `switchboard mcp`, with the same config directory, so it reads the Channel's URL
- * and repo itself. It acts only with the Agent's token (ADR 0007), which the
+ * `switchboard mcp`, with the same config directory, so it reads the Worker's URL
+ * itself, and with the repo of the Channel the wrapper chose (ADR 0008), so the
+ * tools are on the same Channel as the rest of the session. It acts only with the Agent's token (ADR 0007), which the
  * wrapper writes to the session's private directory with the Agent ID; nothing
  * given to the agent CLI on its command line holds a credential.
  */
-export function prepareSessionTools(cwd: string, env: NodeJS.ProcessEnv = process.env): SessionTools {
+export function prepareSessionTools(cwd: string, repo: string, env: NodeJS.ProcessEnv = process.env): SessionTools {
   const dir = mkdtempSync(join(tmpdir(), "switchboard-session-"));
   const agentFile = join(dir, "agent");
   const nextTurnFile = join(dir, "next-turn");
@@ -75,6 +77,7 @@ export function prepareSessionTools(cwd: string, env: NodeJS.ProcessEnv = proces
         [AGENT_FILE_ENV]: agentFile,
         [NEXT_TURN_FILE_ENV]: nextTurnFile,
         [REPO_DIR_ENV]: cwd,
+        [REPO_ENV]: repo,
         SWITCHBOARD_CONFIG_DIR: configDir(env),
       },
     },

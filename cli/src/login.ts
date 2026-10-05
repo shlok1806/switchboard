@@ -1,5 +1,13 @@
 // `switchboard login --url <channel url>`: signs the Person in with GitHub's device
-// flow (ADR 0007) and saves a Switchboard session for the Channel.
+// flow (ADR 0007) and saves their Switchboard session, the Worker that issued it and
+// the Channel named here as their default.
+//
+// One login is enough (ADR 0008): the session is the Person's, not a Channel's, so
+// it serves every Channel on that Worker they have write access to. Logging in
+// again for another Channel of the same Worker runs no device flow: the saved
+// session is checked by joining that Channel, which then becomes the default.
+// Without `--url` the saved Worker is used. `--force` signs in afresh, say as
+// another GitHub account.
 //
 // The Channel URL is the Dashboard's: `https://<worker>/<owner>/<repo>`. A bare
 // Worker URL works too when the Worker has exactly one Channel repo, or with
@@ -20,13 +28,16 @@ import type {
   ErrorResponse,
 } from "../../shared/src/index";
 import { channelKey } from "../../shared/src/index";
-import { ChannelClient } from "./channel-client";
-import { type Config, writeConfig } from "./config";
+import { ChannelClient, ChannelError } from "./channel-client";
+import { type Config, readConfig, writeConfig } from "./config";
 
 export interface LoginOptions {
-  url: string;
+  /** The Channel's URL or the Worker's. Left out, it is the Worker of the saved session. */
+  url?: string;
   repo?: string;
   devLogin?: string;
+  /** Signs in afresh even when the saved session would do. */
+  force?: boolean;
   /** Where messages for the Person go. */
   say: (line: string) => void;
   env?: NodeJS.ProcessEnv;
@@ -84,9 +95,48 @@ export async function resolveChannel(rawUrl: string, rawRepo?: string): Promise<
   return { origin: url.origin, repo: only };
 }
 
+/**
+ * Makes `repo` the default Channel with the session already saved, when there is one
+ * issued by this very Worker and the Channel lets its Person in. Null when the Person
+ * has to sign in: no saved session, one from another Worker (it is never sent
+ * there), or one the Worker no longer accepts.
+ */
+async function reuseSession(origin: string, repo: string, options: LoginOptions): Promise<Config | null> {
+  const saved = await readConfig(options.env).catch(() => null);
+  if (saved === null || saved.url !== origin) return null;
+  try {
+    const joined = await new ChannelClient({ url: origin, repo, credential: saved.session }).join();
+    return { ...saved, repo, person: joined.person.name };
+  } catch (error) {
+    if (!(error instanceof ChannelError)) throw error;
+    if (error.status === 401) {
+      options.say("Your saved session is no longer valid, so you need to sign in again.");
+      return null;
+    }
+    if (error.status === 0) throw new LoginError(error.message);
+    throw new LoginError(
+      `${error.message} You are signed in as ${saved.person}; \`switchboard login --force\` signs in again, say as another GitHub account.`,
+    );
+  }
+}
+
+export interface LoginResult {
+  path: string;
+  config: Config;
+  /** True when the saved session was kept and no sign-in ran. */
+  reused: boolean;
+}
+
 /** Signs in, checks the session works by joining the Channel, and saves it. Returns the config path. */
-export async function login(options: LoginOptions): Promise<{ path: string; config: Config }> {
-  const { origin, repo } = await resolveChannel(options.url, options.repo);
+export async function login(options: LoginOptions): Promise<LoginResult> {
+  const url = options.url ?? (await readConfig(options.env).catch(() => null))?.url;
+  if (url === undefined)
+    throw new LoginError("Say which Channel: switchboard login --url https://<host>/<owner>/<repo>");
+  const { origin, repo } = await resolveChannel(url, options.repo);
+  if (options.devLogin === undefined && !options.force) {
+    const kept = await reuseSession(origin, repo, options);
+    if (kept !== null) return { path: await writeConfig(kept, options.env), config: kept, reused: true };
+  }
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   let answer: { session: string; person: string };
@@ -119,5 +169,5 @@ export async function login(options: LoginOptions): Promise<{ path: string; conf
   // Joining checks the session works for this Channel before it is saved.
   const joined = await new ChannelClient({ url: origin, repo, credential: answer.session }).join();
   const path = await writeConfig({ ...config, person: joined.person.name }, options.env);
-  return { path, config: { ...config, person: joined.person.name } };
+  return { path, config: { ...config, person: joined.person.name }, reused: false };
 }

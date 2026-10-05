@@ -39,6 +39,7 @@ import {
   stepPath,
   taskBranch,
 } from "../../shared/src/index";
+import { ChannelChoiceError, chooseChannel } from "./channel-choice";
 import { ChannelClient } from "./channel-client";
 import { type Config, readConfig } from "./config";
 import { adoptTaskBranch, openTaskWorktree, pushTaskBranch, type TaskWorktree } from "./task-worktree";
@@ -487,11 +488,21 @@ export async function runMcpServer(env: NodeJS.ProcessEnv = process.env): Promis
     console.error("switchboard mcp: not logged in. Run `switchboard login` first.");
     return 1;
   }
+  const repoDir = env[REPO_DIR_ENV] || process.cwd();
+  // The Channel the wrapper chose for the session, which it names in the environment.
+  let repo: string;
+  try {
+    repo = (await chooseChannel(config, { env, cwd: repoDir })).repo;
+  } catch (error) {
+    if (!(error instanceof ChannelChoiceError)) throw error;
+    console.error(`switchboard mcp: ${error.message}`);
+    return 1;
+  }
   // Only the Agent's token, never the Person's session: the tools act as the Agent.
   const tools = new SwitchboardTools(
-    new ChannelClient({ url: config.url, repo: config.repo, credential: "" }),
+    new ChannelClient({ url: config.url, repo, credential: "" }),
     agentFromFile(env[AGENT_FILE_ENV]),
-    { dir: env[REPO_DIR_ENV] || process.cwd(), repo: config.repo },
+    { dir: repoDir, repo },
     nextTurnFromFile(env[NEXT_TURN_FILE_ENV]),
   );
   const server = createMcpServer(tools);

@@ -1,6 +1,8 @@
-// The wrapper's local config: which Channel to use and the Person's Switchboard
-// session for it (ADR 0007). It lives in the user's config directory, never in a
-// repo, because the session acts as the Person.
+// The wrapper's local config: the Person's Switchboard session, the Worker that
+// issued it and their default Channel (ADR 0007, ADR 0008). The session works for
+// every Channel on that Worker the Person has write access to, and is never sent to
+// any other origin. It lives in the user's config directory, never in a repo,
+// because the session acts as the Person.
 //
 //   $SWITCHBOARD_CONFIG_DIR, else $XDG_CONFIG_HOME/switchboard, else ~/.config/switchboard
 
@@ -10,11 +12,14 @@ import { join } from "node:path";
 import type { PersonName } from "../../shared/src/index";
 
 export interface Config {
-  /** The Worker's origin, such as `https://switchboard.example.workers.dev`. */
+  /** The origin of the Worker that issued the session, such as `https://switchboard.example.workers.dev`. */
   url: string;
-  /** The Channel's repo, `owner/name`: its API is at `<url>/r/<repo>/api`. */
+  /**
+   * The default Channel's repo, `owner/name`: the one named at `switchboard login`.
+   * A command uses it unless channel-choice.ts picks another on the same Worker.
+   */
   repo: string;
-  /** The Person's Switchboard session, from `switchboard login`. */
+  /** The Person's Switchboard session, from `switchboard login`. Only ever sent to `url`. */
   session: string;
   /** The Person's GitHub login. */
   person: PersonName;

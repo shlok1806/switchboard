@@ -36,8 +36,9 @@ export interface ChannelTarget {
   credential: string;
 }
 
-export function targetOf(config: Config): ChannelTarget {
-  return { url: config.url, repo: config.repo, credential: config.session };
+/** The Channel of `repo` on the Person's Worker, with their session: it goes to the Worker that issued it only. */
+export function targetOf(config: Config, repo: string): ChannelTarget {
+  return { url: config.url, repo, credential: config.session };
 }
 
 /** Everything the Channel sends the wrapper's WebSocket. */
