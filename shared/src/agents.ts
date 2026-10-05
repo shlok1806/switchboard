@@ -65,6 +65,81 @@ export function sameNickname(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
 
+/** The longest model ID and reasoning effort the Channel keeps (ADR 0010). */
+export const MAX_MODEL_LENGTH = 100;
+export const MAX_EFFORT_LENGTH = 20;
+
+/** A model ID or effort as the Channel keeps it: one line, trimmed, cut to `max`. Empty means unknown. */
+export function cleanModelField(raw: string, max: number): string | null {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
+  const clean = raw.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return clean === "" ? null : clean.slice(0, max);
+}
+
+/** The path that reports an Agent's model (ADR 0010). */
+export function modelPath(id: AgentId): string {
+  return `${agentPath(id)}/model`;
+}
+
+const CLAUDE_FAMILIES: Record<string, string> = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
+const MODEL_WORDS: Record<string, string> = {
+  pro: "Pro",
+  flash: "Flash",
+  lite: "Lite",
+  codex: "Codex",
+  mini: "Mini",
+  nano: "Nano",
+  max: "Max",
+};
+
+/**
+ * A short readable name for a model ID (ADR 0010): `claude-opus-5-5` is "Opus 5.5",
+ * `gpt-5-codex` "GPT-5 Codex", `gemini-3-pro-preview` "Gemini 3 Pro". An ID it does
+ * not know comes back as it is.
+ */
+export function modelLabel(id: string): string {
+  const model = id.trim();
+  // claude-opus-5-5, claude-haiku-4-5-20251001, claude-sonnet-4-20250514, claude-opus-4-1[1m]
+  const claude = /^(?:anthropic[./])?claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:-v\d+(?::\d+)?)?(\[1m\])?$/i.exec(
+    model,
+  );
+  if (claude?.[1] && claude[2]) {
+    const version = claude[3] === undefined ? claude[2] : `${claude[2]}.${claude[3]}`;
+    return `${CLAUDE_FAMILIES[claude[1].toLowerCase()]} ${version}${claude[4] ? " (1M)" : ""}`;
+  }
+  // claude-3-5-sonnet-20241022
+  const older = /^claude-(\d)-(?:(\d)-)?(opus|sonnet|haiku)(?:-\d{8})?$/i.exec(model);
+  if (older?.[1] && older[3]) {
+    return `${CLAUDE_FAMILIES[older[3].toLowerCase()]} ${older[2] === undefined ? older[1] : `${older[1]}.${older[2]}`}`;
+  }
+  // gpt-5, gpt-5-codex, gpt-5.1-codex-mini
+  const gpt = /^gpt-(\d+(?:\.\d+)?)((?:-(?:codex|mini|nano|pro|max))*)$/i.exec(model);
+  if (gpt?.[1] !== undefined) return [`GPT-${gpt[1]}`, ...words(gpt[2] ?? "")].join(" ");
+  // gemini-3-pro-preview, gemini-2.5-flash-lite
+  const gemini = /^(?:models\/)?gemini-(\d+(?:\.\d+)?)((?:-(?:pro|flash|lite))*)(?:-preview(?:-[\w-]+)?|-latest|-\d{3})?$/i.exec(model);
+  if (gemini?.[1] !== undefined) return [`Gemini ${gemini[1]}`, ...words(gemini[2] ?? "")].join(" ");
+  return model;
+}
+
+function words(suffix: string): string[] {
+  return suffix
+    .split("-")
+    .filter((w) => w !== "")
+    .map((w) => MODEL_WORDS[w.toLowerCase()] ?? w);
+}
+
+/**
+ * `POST /api/agents/:id/model`: the Agent's wrapper reports the model its CLI runs on
+ * (ADR 0010). The Agent's own token or its own Person. `via` says where the wrapper
+ * read it: `proxy` (the model requests themselves) or `config` (`--model`, the CLI's
+ * default). Answers with the Agent; a change is an `agent.model` Event.
+ */
+export interface SetModelRequest {
+  model: string | null;
+  effort?: string | null;
+  via?: "proxy" | "config";
+}
+
 /** The path that renames one Agent (ADR 0009). */
 export function nicknamePath(id: AgentId): string {
   return `${agentPath(id)}/nickname`;
@@ -120,6 +195,13 @@ export interface RegisterAgentRequest {
   nickname?: string | null;
   /** Sets the Account Label (ADR 0009). Omit to keep the current one; null clears it. */
   account?: string | null;
+  /**
+   * The model the wrapper knows the CLI runs on (ADR 0010), from `--model` or the
+   * CLI's config, or the Proxy Capture's last report. Omit to keep the Channel's.
+   */
+  model?: string;
+  /** Its reasoning effort, when known. Omitted with `model` keeps the Channel's. */
+  effort?: string;
   /** Sets the Proxy mode (the wrapper's `--proxy`). Omit to keep the current one; new Agents start in digest. */
   proxyMode?: ProxyMode;
   /** Whether the wrapper masks secrets in Proxy Events (`--no-mask` turns it off). Omitted means on. */

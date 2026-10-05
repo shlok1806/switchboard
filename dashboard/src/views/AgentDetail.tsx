@@ -21,7 +21,7 @@ import { Section } from "@/components/shell/section";
 import NumberFlow from "@number-flow/react";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AccountLabel, ActorAvatar } from "@/components/domain/pills";
+import { AccountLabel, ActorAvatar, ModelLabel } from "@/components/domain/pills";
 
 /** Newest first here, so a group is the same sender within two minutes going back. */
 function sameSender(prev: ChannelEvent, e: ChannelEvent) {
@@ -100,6 +100,7 @@ export function AgentDetail({ id }: { id: string }) {
                 <span>{CLI_LABEL[agent.cli]}</span>
                 <span>{agent.person}</span>
                 {agent.account && <AccountLabel account={agent.account} />}
+                {agent.model && <ModelLabel model={agent.model} effort={agent.effort} />}
                 {agent.proxyMode === "raw" && <RawBadge />}
               </div>
             </div>

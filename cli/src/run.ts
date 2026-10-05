@@ -20,6 +20,7 @@ import type {
   InterruptAttach,
   InterruptMessage,
   InterruptResult,
+  SetModelRequest,
   WakeCappedMessage,
   WakeMessage,
 } from "../../shared/src/index";
@@ -29,6 +30,7 @@ import {
   directivesNotice,
   HEARTBEAT_INTERVAL_MS,
   interruptNotice,
+  modelPath,
   STANDING_RULE,
 } from "../../shared/src/index";
 import { accountLabel } from "./account-label";
@@ -40,6 +42,7 @@ import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
 import { prepareSessionTools, type SessionTools } from "./mcp-config";
+import { configuredModel, ModelWatch } from "./model-watch";
 import { NextTurn, type NextTurnItems } from "./next-turn";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
@@ -193,6 +196,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   }
   // Which login of the CLI this Agent runs under, shown beside it on the Channel (ADR 0009).
   const account = await accountLabel(adapter.cli, accountFlag, env);
+  // The model until the Proxy Capture sees the CLI ask for one (ADR 0010).
+  const configured = await configuredModel(adapter.cli, rest, env, cwd);
   const heartbeatMs = seconds(env.SWITCHBOARD_HEARTBEAT_SECONDS, HEARTBEAT_INTERVAL_MS);
   const idleAfterMs = seconds(env.SWITCHBOARD_IDLE_AFTER_SECONDS, DEFAULT_IDLE_AFTER_MS);
   const session = (sessionId: string, resumed: boolean): AgentSession => ({
@@ -203,6 +208,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     source: resumed ? "resume" : "startup",
     ...(nickname === undefined ? {} : { nickname }),
     account,
+    ...configured,
     ...(proxySetting === "off" ? {} : { proxyMode: proxySetting }),
     ...(proxyFlags.mask ? {} : { secretMasking: false }),
     // Whether the wrapper types Interrupts into this CLI's pty. When not, the
@@ -324,6 +330,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       if (message.type === "agent") {
         proxy?.agentChanged(message.agent);
         link?.agentChanged(message.agent);
+        if (message.agent.id === agentId) models.known(message.agent.model, message.agent.effort);
       }
       if (message.type === "delivery" && message.agent === agentId) {
         const kept = addForNextTurn({ deliveries: message.deliveries });
@@ -360,9 +367,25 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     },
   );
 
+  // The model each turn asks for, reported to the Channel once it holds (ADR 0010).
+  // Before the Agent is registered there is no one to report for: the next turn tries again.
+  const models = new ModelWatch(async ({ model, effort }) => {
+    if (agentId === null) return false;
+    try {
+      const body: SetModelRequest = { model, effort, via: "proxy" };
+      await client.request(modelPath(agentId), { method: "POST", body: JSON.stringify(body) });
+      log(`model ${model}${effort === null ? "" : ` (${effort})`}`);
+      return true;
+    } catch (error) {
+      log(`could not report the model: ${(error as Error).message}`);
+      return false;
+    }
+  });
+
   let args = plan.args;
   let hookDir: string | null = null;
   const stopHooks = async () => {
+    models.close();
     stream.close();
     await hooks?.close();
     await proxy?.close();
@@ -388,6 +411,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
           root: cwd,
           send: (frame) => stream.send(frame),
           log,
+          onModel: (seen) => models.seen(seen),
         });
         proxyRoute = route;
         log(`proxy on ${proxy.url} to ${route.upstream} (${route.api.name})`);
@@ -410,6 +434,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     hooks?.setAgent(agent.id);
     if (token !== undefined) tools?.setAgent(agent.id, token);
     proxy?.setAgent(agent);
+    models.known(agent.model, agent.effort);
+    void models.flush();
     attach();
   };
   const linkTo = (sessionId: string, resumed: boolean) => {

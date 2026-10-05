@@ -39,6 +39,8 @@ type AgentRow = {
   session_id: string;
   nickname: string | null;
   account: string | null;
+  model: string | null;
+  effort: string | null;
   presence: string;
   proxy_mode: string;
   secret_masking: number;
@@ -55,6 +57,8 @@ export const AGENTS_SCHEMA = `
     session_id TEXT NOT NULL,
     nickname TEXT,
     account TEXT,
+    model TEXT,
+    effort TEXT,
     presence TEXT NOT NULL,
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
@@ -67,11 +71,13 @@ export const AGENTS_SCHEMA = `
 /** Creates the `agents` table, and adds the columns later ADRs brought to a table made before them. */
 export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(AGENTS_SCHEMA);
-  try {
-    // ADR 0009: the Account Label.
-    sql.exec("ALTER TABLE agents ADD COLUMN account TEXT");
-  } catch {
-    // The column is there already.
+  // ADR 0009: the Account Label. ADR 0010: the model and its effort.
+  for (const column of ["account", "model", "effort"]) {
+    try {
+      sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
+    } catch {
+      // The column is there already.
+    }
   }
 }
 
@@ -123,6 +129,8 @@ function rowToAgent(row: AgentRow): Agent {
     cli: row.cli as Cli,
     ...(row.nickname === null ? {} : { nickname: row.nickname }),
     ...(row.account === null ? {} : { account: row.account }),
+    ...(row.model === null ? {} : { model: row.model }),
+    ...(row.effort === null ? {} : { effort: row.effort }),
     presence: row.presence as Presence,
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
@@ -176,17 +184,22 @@ export class AgentRoster {
       }
     }
     const account = request.account === undefined ? (existing?.account ?? null) : request.account;
+    // What the wrapper knows of the model (ADR 0010); omitted keeps the Channel's.
+    const model = request.model === undefined ? (existing?.model ?? null) : request.model;
+    const effort = request.model === undefined ? (existing?.effort ?? null) : (request.effort ?? null);
     const secretMasking = request.secretMasking === false ? 0 : 1;
     // The wrapper says, every time it registers, whether it can type Interrupts into its CLI.
     const interrupts = request.interrupts === true ? 1 : 0;
     if (existing) {
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
-        `UPDATE agents SET nickname = ?, account = ?, proxy_mode = ?, secret_masking = ?, can_receive_interrupts = ?,
-             presence = 'live', last_seen_at = ?
+        `UPDATE agents SET nickname = ?, account = ?, model = ?, effort = ?, proxy_mode = ?, secret_masking = ?,
+             can_receive_interrupts = ?, presence = 'live', last_seen_at = ?
          WHERE id = ?`,
         nickname,
         account,
+        model,
+        effort,
         proxyMode,
         secretMasking,
         interrupts,
@@ -195,15 +208,17 @@ export class AgentRoster {
       );
     } else {
       this.host.sql.exec(
-        `INSERT INTO agents (id, person, cli, session_id, nickname, account, presence, proxy_mode, secret_masking,
-                             can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
+        `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, presence, proxy_mode,
+                             secret_masking, can_receive_interrupts, last_seen_at, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
         request.sessionId,
         nickname,
         account,
+        model,
+        effort,
         request.proxyMode ?? DEFAULT_PROXY_MODE,
         secretMasking,
         interrupts,
@@ -223,6 +238,9 @@ export class AgentRoster {
       });
     }
     if (existing && existing.nickname !== nickname) this.renamed(id, existing.nickname, nickname, self);
+    if ((existing?.model ?? null) !== model || (existing?.effort ?? null) !== effort) {
+      this.modelChanged(id, existing?.model ?? null, model, effort, null);
+    }
     if (existing?.presence !== "live") this.changed(id, "live");
     this.host.broadcast({ type: "agent", agent });
     await this.watch();
@@ -247,6 +265,46 @@ export class AgentRoster {
     const agent = this.agent(id);
     this.host.broadcast({ type: "agent", agent });
     return { ok: true, agent };
+  }
+
+  /**
+   * The model the Agent runs on, as its wrapper reports it (ADR 0010): only the Agent
+   * itself or its own Person. A change is an `agent.model` Event and is broadcast.
+   */
+  setModel(
+    person: PersonName,
+    id: AgentId,
+    model: string | null,
+    effort: string | null,
+    capture: Capture | null,
+  ): RosterResult {
+    const found = this.owned(person, id);
+    if (!found.ok) return found;
+    if (found.row.model === model && found.row.effort === effort) return { ok: true, agent: rowToAgent(found.row) };
+    this.host.sql.exec("UPDATE agents SET model = ?, effort = ? WHERE id = ?", model, effort, id);
+    this.modelChanged(id, found.row.model, model, effort, capture);
+    const agent = this.agent(id);
+    this.host.broadcast({ type: "agent", agent });
+    return { ok: true, agent };
+  }
+
+  private modelChanged(
+    id: AgentId,
+    from: string | null,
+    to: string | null,
+    effort: string | null,
+    capture: Capture | null,
+  ): void {
+    this.host.append({
+      type: "agent.model",
+      actor: { kind: "agent", agentId: id },
+      capture,
+      payload: {
+        ...(from === null ? {} : { from }),
+        ...(to === null ? {} : { to }),
+        ...(effort === null ? {} : { effort }),
+      },
+    });
   }
 
   /**

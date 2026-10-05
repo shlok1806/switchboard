@@ -465,6 +465,8 @@ describe("switchboard run claude", () => {
 
     expect((await wrapperEvents(firstId)).map((e) => [e.type, e.payload])).toEqual([
       ["session.start", { cwd, resumed: false, source: "startup" }],
+      // Started with --model opus: the model it is told to start on (ADR 0010).
+      ["agent.model", { to: "opus" }],
       ["presence", { presence: "live" }],
       ["presence", { presence: "idle" }],
       ["presence", { presence: "live" }],
@@ -827,6 +829,55 @@ describe("the Proxy Capture", () => {
   });
 
   const proxyEvents = async (id: string) => (await agentEvents(id)).filter((e) => e.capture === "proxy");
+
+  it("shows the model each Agent runs on: configured at start, then what its requests ask for", async () => {
+    // Started with --model: that is all the Channel knows until the first request.
+    const term = new Terminal(["run", "claude", "--model", "claude-haiku-4-5"], {
+      ANTHROPIC_BASE_URL: upstreamUrl,
+      ANTHROPIC_API_KEY: API_KEY,
+    });
+    const { agentEnv: id } = await term.started();
+    const agentOf = async () => (await agents()).find((a) => a.id === id);
+    expect(await waitFor("the configured model", async () => (await agentOf())?.model)).toBe("claude-haiku-4-5");
+
+    // The first turn asks for the model the CLI really runs on.
+    term.type("model secret-prompt-one\r");
+    await waitFor("the requested model", async () =>
+      (await agentOf())?.model === "claude-opus-5-5" ? true : undefined,
+    );
+    // A subagent on another model is not a switch.
+    term.type("subagent claude-haiku-4-5 secret-prompt-two\r");
+    await waitFor("the subagent's turn", () =>
+      (term.output.match(/FAKE-CLAUDE model base=/g) ?? []).length === 2 ? true : undefined,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    expect((await agentOf())?.model).toBe("claude-opus-5-5");
+    // The Person switches model mid-session (/model): the next request says so.
+    term.type("setmodel claude-sonnet-5-5 high\r");
+    await term.waitForOutput(/FAKE-CLAUDE model set claude-sonnet-5-5/);
+    term.type("model secret-prompt-three\r");
+    const switched = await waitFor("the switch", async () => {
+      const agent = await agentOf();
+      return agent?.model === "claude-sonnet-5-5" ? agent : undefined;
+    });
+    expect(switched.effort).toBe("high");
+
+    const changes = (await agentEvents(id)).filter((e): e is EventOf<"agent.model"> => e.type === "agent.model");
+    expect(changes.map((e) => [e.capture, e.payload])).toEqual([
+      [null, { to: "claude-haiku-4-5" }],
+      ["proxy", { from: "claude-haiku-4-5", to: "claude-opus-5-5" }],
+      ["proxy", { from: "claude-opus-5-5", to: "claude-sonnet-5-5", effort: "high" }],
+    ]);
+    // Only the model ID and effort left the request: no prompt, no key, no tools.
+    const shared = JSON.stringify([await agents(), changes]);
+    for (const secret of ["secret-prompt", API_KEY, '"Agent"']) expect(shared).not.toContain(secret);
+    // The other Agents see it by name.
+    expect(await callTool(term, "list_agents", {})).toContain("model Sonnet 5.5 (claude-sonnet-5-5), effort high");
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+    // The next test counts the keys the API sees from its own session.
+    seenKeys.length = 0;
+  });
 
   it("routes the model traffic through a local proxy unchanged, and each turn arrives as a Proxy Event", async () => {
     const term = new Terminal(["run", "claude"], { ANTHROPIC_BASE_URL: upstreamUrl, ANTHROPIC_API_KEY: API_KEY });

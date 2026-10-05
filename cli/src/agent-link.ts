@@ -24,6 +24,9 @@ export interface AgentSession {
   nickname?: string;
   /** The Account Label (ADR 0009); null sends none. */
   account?: string | null;
+  /** The model from `--model` or the CLI's config (ADR 0010), until the Channel knows better. */
+  model?: string;
+  effort?: string;
   /** The starting Proxy mode (`--proxy`), when the Person gave one. */
   proxyMode?: ProxyMode;
   /** False when the Person turned secret masking off (`--no-mask`). */
@@ -75,6 +78,9 @@ export class AgentLink {
     const known = this.known;
     const nickname = known === null ? this.session.nickname : (known.nickname ?? null);
     const proxyMode = known === null ? this.session.proxyMode : known.proxyMode;
+    // What the Channel last knew of the model wins over the configured one: the proxy may have seen a switch.
+    const model = known?.model ?? this.session.model;
+    const effort = known?.model !== undefined ? known.effort : this.session.effort;
     const answer = await this.client.register({
       cli: this.session.cli,
       sessionId: this.session.sessionId,
@@ -83,6 +89,7 @@ export class AgentLink {
       ...(this.session.source === undefined ? {} : { source: this.session.source }),
       ...(nickname === undefined ? {} : { nickname }),
       ...(this.session.account === undefined ? {} : { account: this.session.account }),
+      ...(model === undefined ? {} : { model, ...(effort === undefined ? {} : { effort }) }),
       ...(proxyMode === undefined ? {} : { proxyMode }),
       ...(this.session.secretMasking === undefined ? {} : { secretMasking: this.session.secretMasking }),
       ...(this.session.interrupts === undefined ? {} : { interrupts: this.session.interrupts }),

@@ -1,5 +1,6 @@
 import type { Actor, Agent, Capture, ChannelEvent, Presence, Verdict, VerdictOption } from "@shared/index";
-import { Bot, GitMerge, Radio, User, UserRound, Webhook, Wrench, Cpu, type LucideIcon } from "lucide-react";
+import { modelLabel } from "@shared/index";
+import { Bot, GitMerge, Radio, Sparkles, User, UserRound, Webhook, Wrench, Cpu, type LucideIcon } from "lucide-react";
 import { StatusPill } from "@/components/atoms/StatusPill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { initials } from "@/components/shell/nav";
@@ -167,6 +168,23 @@ export function AccountLabel({ account, className }: { account: string; classNam
     <span className={className ?? "inline-flex min-w-0 items-center gap-1"} title="The login of its CLI this Agent runs under">
       <UserRound className="size-3.5 shrink-0" aria-hidden />
       <span className="truncate">{account}</span>
+    </span>
+  );
+}
+
+/**
+ * The model an Agent runs on (ADR 0010): a short name such as "Opus 5.5", the raw ID
+ * on hover, and the reasoning effort when the requests carry one.
+ */
+export function ModelLabel({ model, effort, className }: { model: string; effort?: string; className?: string }) {
+  const label = modelLabel(model);
+  return (
+    <span className={className ?? "inline-flex min-w-0 items-center gap-1"} title={effort ? `${model}, effort ${effort}` : model}>
+      <Sparkles className="size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">
+        {label}
+        {effort ? ` · ${effort}` : ""}
+      </span>
     </span>
   );
 }

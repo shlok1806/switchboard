@@ -459,6 +459,24 @@ export class Channel extends DurableObject<Env> {
     );
   }
 
+  /** The model an Agent runs on, from its wrapper (ADR 0010): the Agent's own token or its own Person. */
+  setAgentModel(
+    caller: Caller,
+    id: AgentId,
+    model: string | null,
+    effort: string | null,
+    via: "proxy" | "config",
+  ): RosterResult {
+    if (caller.agent !== undefined && caller.agent !== id) {
+      return {
+        ok: false,
+        status: 403,
+        reason: `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`,
+      };
+    }
+    return this.agents.setModel(caller.person, id, model, effort, via === "proxy" ? "proxy" : null);
+  }
+
   /** Sets an Agent's Proxy mode; only its own Person may. Its wrapper hears on the stream. */
   setProxyMode(person: PersonName, id: AgentId, mode: ProxyMode): RosterResult {
     return this.agents.setProxyMode(person, id, mode);

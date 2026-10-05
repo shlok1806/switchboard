@@ -39,6 +39,7 @@ import {
   MAX_HISTORY_LIMIT,
   MAX_NICKNAME_LENGTH,
   MAX_UPDATE_LENGTH,
+  modelLabel,
   nicknamePath,
   releasePath,
   stepPath,
@@ -90,6 +91,11 @@ export function describeAgent(agent: Agent, me?: AgentId): string {
   if (agent.id === me) parts.push("(you)");
   parts.push(`of ${agent.person}, ${agent.cli}`);
   if (agent.account !== undefined) parts.push(`account ${agent.account}`);
+  if (agent.model !== undefined) {
+    const label = modelLabel(agent.model);
+    const name = label === agent.model ? agent.model : `${label} (${agent.model})`;
+    parts.push(`model ${name}${agent.effort === undefined ? "" : `, effort ${agent.effort}`}`);
+  }
   parts.push(`[${agent.presence}]`);
   return parts.join(" ");
 }
@@ -142,6 +148,9 @@ function describeEvent(event: AgentDeliverable, agents: ReadonlyMap<AgentId, Age
       break;
     case "merge":
       detail = `#${event.payload.pr} ${event.payload.branch} into ${event.payload.into} (${event.payload.files.map((f) => f.path).join(", ")})`;
+      break;
+    case "agent.model":
+      detail = `${event.payload.from ?? "(unknown)"} -> ${event.payload.to ?? "(unknown)"}${event.payload.effort ? ` (effort ${event.payload.effort})` : ""}`;
       break;
     case "agent.rename":
       detail = `${event.payload.agent} ${event.payload.from ?? "(no Nickname)"} -> ${event.payload.to ?? "(no Nickname)"}`;
@@ -510,7 +519,7 @@ export function createMcpServer(tools: SwitchboardTools): McpServer {
     {
       description:
         "Lists the Channel's Agents: each one's permanent Agent ID, Nickname, Person, CLI, Account Label (which " +
-        "login of its CLI it runs under) and Presence. Marks you with (you).",
+        "login of its CLI it runs under), the model it runs on and Presence. Marks you with (you).",
       inputSchema: {},
     },
     () => answer(tools.listAgents()),

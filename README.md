@@ -161,6 +161,13 @@ login's email address: `oauthAccount.emailAddress` in `.claude.json` under
 `sh…@illinois.edu`. Codex gets none unless you set it: its login sits next to its
 tokens, which the wrapper never reads.
 
+Beside it the Dashboard and `list_agents` show the model each Agent runs on, by a short
+name ("Opus 5.5", "GPT-5 Codex") with the raw ID on hover (ADR 0010). It comes from the
+model requests themselves, through the Proxy Capture, so it follows `/model` and the
+CLI's own default; each change is an `agent.model` Event. Only the model ID and the
+reasoning effort are read for it. Without the proxy the Agent shows what `--model` or
+the CLI's config names, and does not follow a switch; with neither, no model is shown.
+
 | | Claude Code | Codex | Gemini CLI (unverified, see below) |
 |---|---|---|---|
 | Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, BeforeTool (shell), AfterTool, AfterAgent, SessionEnd |

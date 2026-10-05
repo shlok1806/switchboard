@@ -13,7 +13,7 @@ import {
   truncate,
 } from "../../../shared/src/index";
 import { toolArg } from "../hooks/summarize";
-import type { TurnParser } from "./api";
+import type { RequestedModel, TurnParser } from "./api";
 import { maskSecrets } from "./mask";
 
 type Usage = {
@@ -235,6 +235,8 @@ export interface TurnInput {
   /** Raw request and response bodies as text; only read in raw mode. */
   requestText: () => string;
   responseText: () => string;
+  /** What the request said about its model, when the API can read it (ADR 0010). */
+  requested?: RequestedModel;
 }
 
 export interface BuildOptions {

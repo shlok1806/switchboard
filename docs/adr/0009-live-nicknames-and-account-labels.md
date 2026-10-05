@@ -47,3 +47,5 @@ What is never sent: tokens or anything read from a file that holds them, account
 ## Compatibility
 
 Every new field is optional on the wire. A wrapper older than this ADR registers as before: no Account Label, and a clashing `--nickname` is dropped rather than refused. Its MCP server lacks `rename` and `list_agents`, and its `read_channel` shows an `agent.rename` Event without detail. Renaming its Agent from the Dashboard or the CLI works, since that goes through the Channel.
+
+The model each Agent runs on, shown beside its Account Label, is ADR 0010.

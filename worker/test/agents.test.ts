@@ -19,7 +19,7 @@ import type {
   StreamMessage,
   TaskListResponse,
 } from "../../shared/src/index";
-import { agentPath, nicknamePath } from "../../shared/src/index";
+import { agentPath, modelPath, nicknamePath } from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
 import { type As, bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
@@ -566,3 +566,63 @@ async function waitUntil<T>(check: () => T | undefined): Promise<T | undefined> 
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+describe("The model an Agent runs on (ADR 0010)", () => {
+  async function report(as: As | string, id: AgentId, body: unknown): Promise<Response> {
+    return call(modelPath(id), {
+      method: "POST",
+      headers: { Authorization: await bearer(as) },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function modelEvents(as: string): Promise<EventOf<"agent.model">[]> {
+    const response = await call("/api/events", { headers: { Authorization: await bearer(as) } });
+    return (await response.json<HistoryResponse>()).events.filter(
+      (e): e is EventOf<"agent.model"> => e.type === "agent.model",
+    );
+  }
+
+  it("takes the model from registration, follows the wrapper's reports, and everyone sees each change", async () => {
+    const shlok = person("shlok");
+    const ana = person("ana");
+    const agent = await shlok.registered("cccc0000-0000-4000-8000-000000000001", { model: "claude-opus-5-5" });
+    expect(agent.model).toBe("claude-opus-5-5");
+    await ana.subscribe();
+
+    const me = { person: "shlok", agent: agent.id };
+    const switched = await report(me, agent.id, { model: "claude-sonnet-5-5", effort: "high", via: "proxy" });
+    expect(switched.status).toBe(200);
+    expect((await switched.json<AgentResponse>()).agent).toMatchObject({ model: "claude-sonnet-5-5", effort: "high" });
+    const seen = await waitUntil(() =>
+      ana.received.find((m) => m.type === "agent" && m.agent.id === agent.id && m.agent.model === "claude-sonnet-5-5"),
+    );
+    expect(seen).toBeDefined();
+    // The same report again changes nothing.
+    expect((await report(me, agent.id, { model: "claude-sonnet-5-5", effort: "high", via: "proxy" })).status).toBe(200);
+
+    expect((await modelEvents("ana")).map((e) => [e.actor, e.capture, e.payload])).toEqual([
+      [{ kind: "agent", agentId: agent.id }, null, { to: "claude-opus-5-5" }],
+      [
+        { kind: "agent", agentId: agent.id },
+        "proxy",
+        { from: "claude-opus-5-5", to: "claude-sonnet-5-5", effort: "high" },
+      ],
+    ]);
+    // A wrapper from before ADR 0010 registers again without one: the Channel keeps it.
+    expect((await shlok.registered("cccc0000-0000-4000-8000-000000000001", { resumed: true })).model).toBe(
+      "claude-sonnet-5-5",
+    );
+  });
+
+  it("lets only the Agent itself or its own Person report its model", async () => {
+    const shlok = person("shlok");
+    const agent = await shlok.registered("cccc0000-0000-4000-8000-000000000002");
+    const other = await shlok.registered("dddd0000-0000-4000-8000-000000000002");
+    expect((await report({ person: "shlok", agent: other.id }, agent.id, { model: "x" })).status).toBe(403);
+    expect((await report("ana", agent.id, { model: "x" })).status).toBe(403);
+    expect((await report("shlok", agent.id, { model: 5 })).status).toBe(400);
+    expect((await report("shlok", agent.id, { model: "gpt-5-codex", via: "config" })).status).toBe(200);
+    expect((await shlok.agents()).find((a) => a.id === agent.id)?.model).toBe("gpt-5-codex");
+  });
+});
