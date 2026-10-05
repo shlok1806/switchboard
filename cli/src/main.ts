@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // The Switchboard laptop CLI.
 //
-//   switchboard login --url <channel url> [--repo <owner>/<repo>]
-//   switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
-//   switchboard run codex|gemini [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
+//   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
+//   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
+//   switchboard run codex|gemini [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
 //   switchboard whoami
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
+import { ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig } from "./config";
 import { LoginError, login as signIn } from "./login";
@@ -15,15 +16,21 @@ import { runMcpServer } from "./mcp-server";
 import { runCli } from "./run";
 
 const USAGE = `Usage:
-  switchboard login --url <channel url> [--repo <owner>/<repo>]
-  switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
-  switchboard run codex [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
-  switchboard run gemini [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
+  switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
+  switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
+  switchboard run codex [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
+  switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard whoami
 
-\`login\` signs you in with GitHub (a code to enter at github.com) for one Channel.
-The Channel URL is its Dashboard's, https://<host>/<owner>/<repo>. You need write
-access to the repo.
+\`login\` signs you in with GitHub (a code to enter at github.com), once: the session
+works for every Channel on that host whose repo you have write access to. The
+Channel URL is its Dashboard's, https://<host>/<owner>/<repo>, and that Channel
+becomes your default. Logging in again for another Channel of the same host only
+changes the default; --force signs in afresh.
+
+\`run\` uses the Channel of the repo you are working in: --repo, else $SWITCHBOARD_REPO,
+else the GitHub repo of this directory's git origin remote when the host has a Channel
+for it, else your default. \`whoami\` shows which one that is.
 
 \`run claude\` starts Claude Code as usual and joins the session to the Channel as an Agent.
 Its model traffic goes through a local proxy (the Proxy Capture): --proxy sets the
@@ -40,20 +47,27 @@ read_channel tool.`;
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
-    options: { url: { type: "string" }, repo: { type: "string" }, "dev-login": { type: "string" } },
+    options: {
+      url: { type: "string" },
+      repo: { type: "string" },
+      "dev-login": { type: "string" },
+      force: { type: "boolean" },
+    },
   });
-  if (!values.url) {
-    console.error("Usage: switchboard login --url <channel url> [--repo <owner>/<repo>]");
-    return 2;
-  }
   try {
-    const { path, config } = await signIn({
-      url: values.url,
+    const { path, config, reused } = await signIn({
+      ...(values.url === undefined ? {} : { url: values.url }),
       ...(values.repo === undefined ? {} : { repo: values.repo }),
       ...(values["dev-login"] === undefined ? {} : { devLogin: values["dev-login"] }),
+      ...(values.force ? { force: true } : {}),
       say: (line) => console.log(line),
     });
-    console.log(`Signed in to ${config.repo} on ${config.url} as ${config.person}. Saved to ${path}.`);
+    console.log(
+      reused
+        ? `Already signed in on ${config.url} as ${config.person}, so there was no need to sign in again. ` +
+            `Your default Channel is ${config.repo}. Saved to ${path}.`
+        : `Signed in to ${config.repo} on ${config.url} as ${config.person}. Saved to ${path}.`,
+    );
     return 0;
   } catch (error) {
     if (error instanceof LoginError || (error as { status?: number }).status !== undefined) {
@@ -70,7 +84,16 @@ async function whoami(): Promise<number> {
     console.error(`Not logged in (no ${configPath()}).`);
     return 1;
   }
-  console.log(`${config.person} on ${config.repo} at ${config.url}`);
+  console.log(`${config.person} at ${config.url}`);
+  console.log(`Default Channel: ${config.repo}`);
+  try {
+    const choice = await chooseChannel(config, { cwd: process.cwd() });
+    console.log(`In this directory, \`switchboard run\` uses ${describeChoice(choice)}.`);
+  } catch (error) {
+    if (!(error instanceof ChannelChoiceError)) throw error;
+    console.error(`switchboard: ${error.message}`);
+    return 1;
+  }
   return 0;
 }
 

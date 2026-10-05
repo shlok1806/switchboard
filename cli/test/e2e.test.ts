@@ -393,7 +393,34 @@ describe("switchboard run claude", () => {
     const mode = (await stat(join(scratch, "config", "config.json"))).mode & 0o777;
     expect(mode).toBe(0o600);
     const whoami = await promisify(execFile)(process.execPath, [CLI, "whoami"], { env });
-    expect(whoami.stdout).toContain(`e2e on ${github.repo}`);
+    expect(whoami.stdout).toContain(`e2e at ${base}`);
+    expect(whoami.stdout).toContain(`Default Channel: ${github.repo}`);
+  });
+
+  it("does not ask to sign in a second time on the same Worker", async () => {
+    const before = await readFile(join(scratch, "config", "config.json"), "utf8");
+    const { stdout } = await promisify(execFile)(process.execPath, [CLI, "login", "--repo", github.repo], { env });
+    expect(stdout).toContain(`Already signed in on ${base} as e2e`);
+    expect(stdout).not.toContain("enter the code");
+    expect(await readFile(join(scratch, "config", "config.json"), "utf8")).toBe(before);
+  });
+
+  it("fails in the Worker's own words, not with a prompt to log in, when the chosen Channel refuses", async () => {
+    // A clone of a repo this Worker has no Channel for, named outright.
+    const clone = join(scratch, "elsewhere");
+    await git(scratch, "init", "--quiet", clone);
+    await git(clone, "remote", "add", "origin", "https://github.com/e2e/elsewhere.git");
+    const run = promisify(execFile)(process.execPath, [CLI, "run", "claude", "--repo", "e2e/elsewhere"], {
+      env,
+      cwd: clone,
+    });
+    const refused = await run.then(
+      () => null,
+      (error: { stderr: string }) => error.stderr,
+    );
+    expect(refused).toContain("There is no Channel for e2e/elsewhere here.");
+    expect(refused).not.toContain("switchboard login");
+    expect(refused).not.toContain("Not logged in");
   });
 
   it("refuses to log in someone without write access to the repo", async () => {

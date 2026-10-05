@@ -32,6 +32,7 @@ import {
   STANDING_RULE,
 } from "../../shared/src/index";
 import { AgentLink, type AgentSession } from "./agent-link";
+import { type ChannelChoice, ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ChannelClient, ChannelError, targetOf } from "./channel-client";
 import type { CliAdapter, ProxyRoute, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
@@ -59,26 +60,38 @@ function dim(text: string): string {
   return process.stderr.isTTY ? `\x1b[2m${text}\x1b[0m` : text;
 }
 
-/** Takes the wrapper's own `--nickname` out of the arguments meant for the agent CLI. */
-export function takeNickname(args: string[]): { nickname?: string; rest: string[] } {
+/** Takes one of the wrapper's own `--<name> <value>` options out of the arguments meant for the agent CLI. */
+function takeOption(args: string[], name: string): { value?: string; rest: string[] } {
   const rest: string[] = [];
-  let nickname: string | undefined;
+  let value: string | undefined;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i] ?? "";
     if (arg === "--") {
       rest.push(...args.slice(i));
       break;
     }
-    if (arg === "--nickname") {
-      nickname = args[i + 1];
+    if (arg === `--${name}`) {
+      value = args[i + 1];
       i++;
-    } else if (arg.startsWith("--nickname=")) {
-      nickname = arg.slice("--nickname=".length);
+    } else if (arg.startsWith(`--${name}=`)) {
+      value = arg.slice(name.length + 3);
     } else {
       rest.push(arg);
     }
   }
-  return nickname === undefined ? { rest } : { nickname, rest };
+  return value === undefined ? { rest } : { value, rest };
+}
+
+/** Takes the wrapper's own `--nickname` out of the arguments meant for the agent CLI. */
+export function takeNickname(args: string[]): { nickname?: string; rest: string[] } {
+  const { value, rest } = takeOption(args, "nickname");
+  return value === undefined ? { rest } : { nickname: value, rest };
+}
+
+/** Takes the wrapper's own `--repo`, which names the Channel (ADR 0008), out of the agent CLI's arguments. */
+export function takeRepo(args: string[]): { repo?: string; rest: string[] } {
+  const { value, rest } = takeOption(args, "repo");
+  return value === undefined ? { rest } : { repo: value, rest };
 }
 
 export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<number> {
@@ -100,9 +113,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   };
 
   const { nickname, rest: afterNickname } = takeNickname(rawArgs);
+  const { repo: repoFlag, rest: afterRepo } = takeRepo(afterNickname);
   let proxyFlags: ProxyFlags;
   try {
-    proxyFlags = takeProxyFlags(afterNickname);
+    proxyFlags = takeProxyFlags(afterRepo);
   } catch (error) {
     console.error(`switchboard: ${(error as Error).message}`);
     return 2;
@@ -123,11 +137,27 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     console.error(`switchboard: ${(error as Error).message}`);
     return 1;
   }
+  // One login serves every Channel on the Worker (ADR 0008): this session's is chosen
+  // here, once, and every part of the session is told the same repo.
+  let choice: ChannelChoice;
+  try {
+    choice = await chooseChannel(config, { ...(repoFlag === undefined ? {} : { flag: repoFlag }), env, cwd });
+  } catch (error) {
+    if (!(error instanceof ChannelChoiceError)) throw error;
+    console.error(`switchboard: ${error.message}`);
+    return 2;
+  }
+  const { repo } = choice;
+  log(`using ${describeChoice(choice)} at ${config.url}`);
+  if (choice.reason !== "default" || choice.note !== undefined) {
+    console.error(dim(`switchboard: using ${describeChoice(choice)}`));
+  }
+
   // An Agent's Tasks are branches pushed through origin, so a session starts only in
   // a clone of the Channel's repo. A command that starts no session runs anywhere.
   if (plan.kind !== "none") {
     try {
-      await channelCheckout(cwd, config.repo);
+      await channelCheckout(cwd, repo);
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
       console.error(`switchboard: ${error.message}`);
@@ -137,7 +167,22 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   // Registering trades the Person's session for the Agent's token; the client then
   // acts with the token, and the stream reconnects with it (ADR 0007).
-  const client = new ChannelClient(targetOf(config));
+  const client = new ChannelClient(targetOf(config, repo));
+  // The Channel checks the Person's Membership itself. A refusal is said in its own
+  // words, since signing in again would not change it; when the Channel cannot be
+  // reached the session starts anyway and keeps trying.
+  try {
+    if (plan.kind !== "none") await client.join();
+  } catch (error) {
+    if (!(error instanceof ChannelError)) throw error;
+    if (error.status !== 0) {
+      log(`the Channel for ${repo} refused ${config.person}: ${error.message}`);
+      console.error(`switchboard: the Channel for ${repo} at ${config.url} refused ${config.person}: ${error.message}`);
+      if (error.status === 401) console.error("switchboard: run `switchboard login` to sign in again.");
+      return 1;
+    }
+    log(`could not reach the Channel for ${repo}: ${error.message}`);
+  }
   const heartbeatMs = seconds(env.SWITCHBOARD_HEARTBEAT_SECONDS, HEARTBEAT_INTERVAL_MS);
   const idleAfterMs = seconds(env.SWITCHBOARD_IDLE_AFTER_SECONDS, DEFAULT_IDLE_AFTER_MS);
   const session = (sessionId: string, resumed: boolean): AgentSession => ({
@@ -393,7 +438,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         ...(adapter.hookAnswer ? { answer: adapter.hookAnswer } : {}),
       });
       // Switchboard's MCP tools for this session only (the Tool Capture).
-      tools = prepareSessionTools(cwd, env);
+      tools = prepareSessionTools(cwd, repo, env);
       const installed = await adapter.install({
         ...ctx,
         args: plan.args,
@@ -420,7 +465,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     childEnv.SWITCHBOARD_AGENT_ID = expected;
     try {
       const agent = await link.register();
-      console.error(dim(`switchboard: ${agent.id} is on the Channel for ${config.repo} at ${config.url}`));
+      console.error(dim(`switchboard: ${agent.id} is on the Channel for ${repo} at ${config.url}`));
     } catch (error) {
       if (error instanceof ChannelError && error.status !== 0) {
         console.error(`switchboard: the Channel refused ${expected}: ${error.message}`);

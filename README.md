@@ -58,9 +58,11 @@ credential helper such as the one `gh auth setup-git` installs.
 switchboard login --url https://switchboard.switchboard-worker.workers.dev/<owner>/<repo>
 ```
 
-The CLI prints a code to enter at github.com, then saves your session. `switchboard
-whoami` shows who you are signed in as, and to which Channel. The same URL, opened
-in a browser, is the Channel's Dashboard. The hosted Worker has Channels only for
+The CLI prints a code to enter at github.com, then saves your session. You do this
+once: the session works for every Channel on the Worker whose repo you can write to
+([Signing in](#signing-in)). `switchboard whoami` shows who you are signed in as and
+which Channel the current directory uses. The same URL, opened in a browser, is the
+Channel's Dashboard. The hosted Worker has Channels only for
 the repos it allows (`ALLOWED_REPOS` in [worker/wrangler.jsonc](worker/wrangler.jsonc)).
 
 ### 4. Run your agent CLI
@@ -89,6 +91,25 @@ github.com, then saves a Switchboard session in `~/.config/switchboard/config.js
 switchboard login --url https://<worker>/<owner>/<repo>
 ```
 
+You sign in once (ADR 0008). The session is yours, not one Channel's, so it works
+for every Channel on that Worker whose repo you have write access to, and it is
+only ever sent to that Worker. The repo named at login is your default Channel.
+Each command picks its Channel in this order:
+
+1. `--repo <owner>/<repo>` on `switchboard run`.
+2. The `SWITCHBOARD_REPO` environment variable.
+3. The GitHub repo of the current directory's git `origin` remote, unless the
+   Worker says it has no Channel for it.
+4. Your default Channel.
+
+So in a clone of any repo that has a Channel, `switchboard run claude` joins that
+repo's Channel with no further login. `switchboard whoami` shows who you are, the
+Worker, your default Channel and the Channel the current directory uses. If the
+Channel refuses you (no write access, or no Channel for that repo), the command
+fails with the Worker's reason. `switchboard login --repo <owner>/<repo>` changes
+the default without signing in again, and `switchboard login --force` signs in
+afresh, say as another GitHub account.
+
 Every `switchboard run` trades that session for an Agent token that works for that
 one Agent only, and stops working when the Agent goes Gone (ADR 0007). Switchboard
 writes to GitHub as the Switchboard GitHub App, so Issues show `switchboard[bot]`;
@@ -102,9 +123,9 @@ http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
 
 ```sh
 switchboard login --url <channel url>
-switchboard run claude [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...claude arguments]
-switchboard run codex  [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...codex arguments]
-switchboard run gemini [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...gemini arguments]
+switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...claude arguments]
+switchboard run codex  [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...codex arguments]
+switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...gemini arguments]
 ```
 
 The wrapper sets up hooks, Switchboard's MCP tools and the proxy for each session

@@ -76,6 +76,10 @@ _Avoid_: User, member, account
 Whether a Person may use a Channel: they have write access to its repo on GitHub. It is checked when they sign in and again every few minutes, so someone removed from the repo loses the Channel within minutes. There is no separate invite.
 _Avoid_: Invite, seat, role
 
+**Default Channel**:
+The Channel a Person named when they signed in with the CLI. A command uses it when nothing else picks one: no `--repo`, no `SWITCHBOARD_REPO`, and no clone of a repo that has a Channel around it. One sign-in serves every Channel on the Worker the Person has Membership of.
+_Avoid_: Current channel, active channel
+
 **Agent Token**:
 The credential one Agent acts with. `switchboard run` trades its Person's session for it when it registers the Agent. It posts that Agent's Events, claims and releases for it and reads the Channel, and nothing else: no Directives, nothing as the Person, nothing for other Agents. It stops working when the Agent goes Gone.
 _Avoid_: API key, bot token
