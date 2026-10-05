@@ -39,6 +39,37 @@ export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{3,127}$/;
 /** The longest Nickname the Channel accepts, in characters. */
 export const MAX_NICKNAME_LENGTH = 40;
 
+/** The longest Account Label the Channel accepts, in characters (ADR 0009). */
+export const MAX_ACCOUNT_LABEL_LENGTH = 64;
+
+/**
+ * A Nickname as the Channel stores it: trimmed, inner whitespace collapsed, control
+ * characters removed. Empty means none. Returns undefined when it is too long.
+ */
+export function cleanNickname(raw: string): string | null | undefined {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
+  const clean = raw.replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  if (clean.length > MAX_NICKNAME_LENGTH) return undefined;
+  return clean === "" ? null : clean;
+}
+
+/** An Account Label as the Channel stores it: like a Nickname, cut to `MAX_ACCOUNT_LABEL_LENGTH`. Empty means none. */
+export function cleanAccountLabel(raw: string): string | null {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
+  const clean = raw.replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return clean === "" ? null : clean.slice(0, MAX_ACCOUNT_LABEL_LENGTH);
+}
+
+/** Two Nicknames clash when they are the same without regard to case (ADR 0009). */
+export function sameNickname(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/** The path that renames one Agent (ADR 0009). */
+export function nicknamePath(id: AgentId): string {
+  return `${agentPath(id)}/nickname`;
+}
+
 /**
  * The Agent ID for a session: `<person>/<cli short name>/<4 of the session id>`, the
  * first 4 characters, or the last 4 for Codex (see `AGENT_ID_SESSION_END`).
@@ -81,8 +112,14 @@ export interface RegisterAgentRequest {
   rejoin?: boolean;
   /** Working directory of the session. */
   cwd: string;
-  /** Sets the Nickname. Omit to keep the current one; null clears it. */
+  /**
+   * Sets the Nickname. Omit to keep the current one; null clears it. A Nickname
+   * another Agent holds is not set, and the answer says so in `nicknameRefused`
+   * (ADR 0009); the Agent registers anyway.
+   */
   nickname?: string | null;
+  /** Sets the Account Label (ADR 0009). Omit to keep the current one; null clears it. */
+  account?: string | null;
   /** Sets the Proxy mode (the wrapper's `--proxy`). Omit to keep the current one; new Agents start in digest. */
   proxyMode?: ProxyMode;
   /** Whether the wrapper masks secrets in Proxy Events (`--no-mask` turns it off). Omitted means on. */
@@ -120,6 +157,20 @@ export interface AgentResponse {
    * working when the Agent goes Gone, and registering again issues a new one.
    */
   token?: string;
+  /**
+   * `POST /api/agents` only: why the Nickname asked for was not set, when it was
+   * not (another Agent holds it). The Agent registered anyway (ADR 0009).
+   */
+  nicknameRefused?: string;
+}
+
+/**
+ * `POST /api/agents/:id/nickname`: rename an Agent while it runs (ADR 0009). The
+ * Agent's own token or any Person on the Channel may. Null or an empty name clears
+ * it. Answers with the Agent, or 409 naming the Agent that holds the name.
+ */
+export interface RenameAgentRequest {
+  nickname: string | null;
 }
 
 /**

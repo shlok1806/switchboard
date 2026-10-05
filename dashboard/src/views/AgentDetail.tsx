@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import type { AgentId, ChannelEvent, ProxyMode } from "@shared/index";
+import type { Agent, AgentId, ChannelEvent, ProxyMode } from "@shared/index";
+import { MAX_NICKNAME_LENGTH } from "@shared/index";
+import { Button } from "@/components/atoms/Button";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
 import { IssueLink } from "@/components/domain/pending";
 import { SegmentedControl } from "@/components/atoms/SegmentedControl";
@@ -19,7 +21,7 @@ import { Section } from "@/components/shell/section";
 import NumberFlow from "@number-flow/react";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ActorAvatar } from "@/components/domain/pills";
+import { AccountLabel, ActorAvatar } from "@/components/domain/pills";
 
 /** Newest first here, so a group is the same sender within two minutes going back. */
 function sameSender(prev: ChannelEvent, e: ChannelEvent) {
@@ -41,7 +43,10 @@ export function AgentDetail({ id }: { id: string }) {
       events
         .filter(
           (e) =>
-            ((e.actor.kind === "agent" && e.actor.agentId === id) || (e.type === "directive" && e.payload.to === id)) &&
+            ((e.actor.kind === "agent" && e.actor.agentId === id) ||
+              (e.type === "directive" && e.payload.to === id) ||
+              // Renamed by a Person, or its name taken while it was Gone (ADR 0009).
+              (e.type === "agent.rename" && e.payload.agent === id)) &&
             (capture === "All" || (e.capture && CAPTURE_LABEL[e.capture] === capture)),
         )
         .slice()
@@ -94,6 +99,7 @@ export function AgentDetail({ id }: { id: string }) {
                 {agent.nickname && <span className="text-ink-2">{agent.nickname}</span>}
                 <span>{CLI_LABEL[agent.cli]}</span>
                 <span>{agent.person}</span>
+                {agent.account && <AccountLabel account={agent.account} />}
                 {agent.proxyMode === "raw" && <RawBadge />}
               </div>
             </div>
@@ -146,10 +152,12 @@ export function AgentDetail({ id }: { id: string }) {
               Directives arrive with <IssueLink capability="directives" />.
             </p>
           ) : agent.presence !== "gone" ? (
-            <Composer defaultAgent={agent.id} />
+            <Composer key={agent.id} defaultAgent={agent.id} />
           ) : (
             <p className="rounded-xl bg-inset p-4 text-[13px] text-ink-3">Gone. A Directive waits until it resumes.</p>
           )}
+
+          <RenameSection agent={agent} />
 
           <Section title={held.length > 1 ? `Claims · ${held.length}` : "Claim"} bodyClassName="flex flex-col gap-2">
             {held.length ? (
@@ -224,5 +232,66 @@ export function AgentDetail({ id }: { id: string }) {
         </aside>
       </div>
     </div>
+  );
+}
+
+/**
+ * Renames the Agent while it runs (ADR 0009). Anyone on the Channel may; the Agent ID
+ * never changes, and the rename shows in the history as old → new.
+ */
+function RenameSection({ agent }: { agent: Agent }) {
+  const store = useStore();
+  const [name, setName] = useState(agent.nickname ?? "");
+  const [busy, setBusy] = useState(false);
+  // Someone else renamed it meanwhile: show the Channel's name.
+  useEffect(() => setName(agent.nickname ?? ""), [agent.nickname]);
+  const changed = name.trim() !== (agent.nickname ?? "");
+
+  const save = async (nickname: string | null) => {
+    setBusy(true);
+    const r = await store.source.act({ type: "rename", agent: agent.id, nickname });
+    setBusy(false);
+    if (!r.ok) toast.error(r.reason);
+    else toast.success(nickname ? `${agent.id} is now ${nickname.trim()}` : `${agent.id} has no Nickname now`);
+  };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (changed) void save(name.trim() || null);
+  };
+
+  return (
+    <Section
+      title="Nickname"
+      action={
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" aria-label="About Nicknames" className="grid size-6 place-items-center rounded text-ink-4 hover:text-ink-2">
+              <Info className="size-3.5" aria-hidden />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Anyone on the Channel can rename an Agent while it runs. Its Agent ID never changes, and Nicknames are unique.</TooltipContent>
+        </Tooltip>
+      }
+      bodyClassName="flex flex-col gap-2"
+    >
+      <form onSubmit={submit} className="flex items-center gap-2">
+        <input
+          aria-label="Nickname"
+          placeholder="No Nickname"
+          maxLength={MAX_NICKNAME_LENGTH}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="h-8 min-w-0 flex-1 rounded-lg border border-line-strong bg-field px-2.5 text-[13.5px] text-ink outline-none placeholder:text-ink-4 focus-visible:border-accent max-md:text-[16px]"
+        />
+        <Button type="submit" size="sm" variant="secondary" disabled={!changed || busy}>
+          Rename
+        </Button>
+      </form>
+      {agent.nickname && (
+        <button type="button" onClick={() => void save(null)} disabled={busy} className="self-start text-[12.5px] text-ink-3 hover:text-ink-2">
+          Clear Nickname
+        </button>
+      )}
+    </Section>
   );
 }

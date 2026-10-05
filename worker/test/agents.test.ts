@@ -12,15 +12,16 @@ import type {
   AgentsResponse,
   ChannelEvent,
   ErrorResponse,
+  EventOf,
   HistoryResponse,
   RegisterAgentRequest,
   ReportedPresence,
   StreamMessage,
   TaskListResponse,
 } from "../../shared/src/index";
-import { agentPath } from "../../shared/src/index";
+import { agentPath, nicknamePath } from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
-import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
+import { type As, bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
 
 const TEN_MINUTES = 10 * 60_000;
@@ -427,3 +428,141 @@ describe("sharing the Channel's one alarm with the Task reconcile", () => {
     expect(await titles()).toEqual(["Opened while no webhook arrived", "Another one"]);
   });
 });
+
+describe("Renaming and Account Labels (ADR 0009)", () => {
+  /** Renames Agent `id`, as an Agent with its token or as a Person with their session. */
+  async function rename(as: As | string, id: AgentId, nickname: string | null): Promise<Response> {
+    return call(nicknamePath(id), {
+      method: "POST",
+      headers: { Authorization: await bearer(as) },
+      body: JSON.stringify({ nickname }),
+    });
+  }
+
+  async function renames(as: string): Promise<EventOf<"agent.rename">[]> {
+    const response = await call("/api/events", { headers: { Authorization: await bearer(as) } });
+    return (await response.json<HistoryResponse>()).events.filter(
+      (e): e is EventOf<"agent.rename"> => e.type === "agent.rename",
+    );
+  }
+
+  it("lets a running Agent rename itself, and everyone on the stream sees it at once", async () => {
+    const shlok = person("shlok");
+    const ana = person("ana");
+    const agent = await shlok.registered("aaaa0000-0000-4000-8000-000000000001", { nickname: "scout" });
+    await ana.subscribe();
+
+    const response = await rename({ person: "shlok", agent: agent.id }, agent.id, "  scout   a ");
+    expect(response.status).toBe(200);
+    expect((await response.json<AgentResponse>()).agent).toMatchObject({ id: agent.id, nickname: "scout a" });
+
+    const seen = await waitUntil(() =>
+      ana.received.find((m) => m.type === "agent" && m.agent.id === agent.id && m.agent.nickname === "scout a"),
+    );
+    expect(seen).toBeDefined();
+    expect((await ana.agents()).find((a) => a.id === agent.id)?.nickname).toBe("scout a");
+    // The Agent ID is untouched; the history says who renamed, through which Capture, and from what.
+    const [event] = await renames("ana");
+    expect(event).toMatchObject({
+      actor: { kind: "agent", agentId: agent.id },
+      capture: "tool",
+      payload: { agent: agent.id, from: "scout", to: "scout a" },
+    });
+  });
+
+  it("lets any Person on the Channel rename any Agent, and clear its Nickname", async () => {
+    const shlok = person("shlok");
+    const agent = await shlok.registered("aaaa0000-0000-4000-8000-000000000002", { nickname: "scout" });
+
+    expect((await rename("ana", agent.id, "ranger")).status).toBe(200);
+    expect((await rename("ana", agent.id, "")).status).toBe(200);
+    expect((await shlok.agents()).find((a) => a.id === agent.id)?.nickname).toBeUndefined();
+    expect((await renames("shlok")).map((e) => [e.actor, e.capture, e.payload])).toEqual([
+      [{ kind: "person", person: "ana" }, null, { agent: agent.id, from: "scout", to: "ranger" }],
+      [{ kind: "person", person: "ana" }, null, { agent: agent.id, from: "ranger" }],
+    ]);
+    // Renaming to the name it has records nothing.
+    expect((await rename("ana", agent.id, null)).status).toBe(200);
+    expect(await renames("shlok")).toHaveLength(2);
+  });
+
+  it("lets an Agent rename itself only", async () => {
+    const shlok = person("shlok");
+    const mine = await shlok.registered("aaaa0000-0000-4000-8000-000000000003");
+    const other = await shlok.registered("bbbb0000-0000-4000-8000-000000000003", { nickname: "other" });
+    expect((await rename({ person: "shlok", agent: mine.id }, other.id, "mine")).status).toBe(403);
+    expect((await rename("shlok", other.id, "x".repeat(41))).status).toBe(400);
+    expect((await rename("shlok", "shlok/claude/none", "x")).status).toBe(404);
+    expect((await shlok.agents()).find((a) => a.id === other.id)?.nickname).toBe("other");
+  });
+
+  it("keeps Nicknames unique: refuses one a running Agent holds, and takes one from a Gone Agent", async () => {
+    const shlok = person("shlok");
+    const ana = person("ana");
+    const scout = await shlok.registered("aaaa0000-0000-4000-8000-000000000004", { nickname: "Scout" });
+    const other = await ana.registered("bbbb0000-0000-4000-8000-000000000004");
+
+    const clash = await rename("ana", other.id, "scout");
+    expect(clash.status).toBe(409);
+    expect((await clash.json<ErrorResponse>()).reason).toContain(scout.id);
+
+    expect((await shlok.end(scout.id)).status).toBe(200);
+    expect((await rename("ana", other.id, "scout")).status).toBe(200);
+    const agents = await ana.agents();
+    expect(agents.find((a) => a.id === other.id)?.nickname).toBe("scout");
+    expect(agents.find((a) => a.id === scout.id)?.nickname).toBeUndefined();
+    expect((await renames("ana")).map((e) => e.payload)).toEqual([
+      { agent: scout.id, from: "Scout" },
+      { agent: other.id, to: "scout" },
+    ]);
+  });
+
+  it("registers an Agent whose --nickname is taken, without the name, and says why", async () => {
+    const shlok = person("shlok");
+    const scout = await shlok.registered("aaaa0000-0000-4000-8000-000000000005", { nickname: "scout" });
+    const second = "bbbb0000-0000-4000-8000-000000000005";
+    await shlok.registered(second, { nickname: "ranger" });
+
+    const response = await shlok.register(second, { resumed: true, nickname: "SCOUT" });
+    expect(response.status).toBe(200);
+    const answer = await response.json<AgentResponse>();
+    expect(answer.agent.nickname).toBe("ranger");
+    expect(answer.nicknameRefused).toContain(scout.id);
+    // A wrapper that registers again without one keeps the Channel's.
+    const kept = await shlok.registered(second, { resumed: true, rejoin: true });
+    expect(kept.nickname).toBe("ranger");
+    expect(await renames("shlok")).toEqual([]);
+  });
+
+  it("records a resume that changes the Nickname as a rename by the Agent", async () => {
+    const shlok = person("shlok");
+    const session = "aaaa0000-0000-4000-8000-000000000006";
+    const agent = await shlok.registered(session, { nickname: "scout" });
+    await shlok.registered(session, { resumed: true, nickname: "scout-a" });
+    expect((await renames("shlok")).map((e) => [e.actor, e.capture, e.payload])).toEqual([
+      [{ kind: "agent", agentId: agent.id }, null, { agent: agent.id, from: "scout", to: "scout-a" }],
+    ]);
+  });
+
+  it("stores the Account Label the wrapper sends, keeps it when omitted, and clears it on null", async () => {
+    const shlok = person("shlok");
+    const session = "aaaa0000-0000-4000-8000-000000000007";
+    const agent = await shlok.registered(session, { account: " sh…@illinois.edu " });
+    expect(agent.account).toBe("sh…@illinois.edu");
+    expect((await shlok.agents()).find((a) => a.id === agent.id)?.account).toBe("sh…@illinois.edu");
+    // An older wrapper sends none: the label stays.
+    expect((await shlok.registered(session, { resumed: true })).account).toBe("sh…@illinois.edu");
+    expect((await shlok.registered(session, { resumed: true, account: "x".repeat(80) })).account).toBe("x".repeat(64));
+    expect((await shlok.registered(session, { resumed: true, account: null })).account).toBeUndefined();
+    expect((await shlok.register(session, { resumed: true, account: 7 as unknown as string })).status).toBe(400);
+  });
+});
+
+async function waitUntil<T>(check: () => T | undefined): Promise<T | undefined> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const value = check();
+    if (value !== undefined || Date.now() > deadline) return value;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}

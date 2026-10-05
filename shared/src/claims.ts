@@ -65,6 +65,8 @@ export const SWITCHBOARD_TOOLS = [
   "post_update",
   "read_channel",
   "finish_task",
+  "rename",
+  "list_agents",
 ] as const;
 
 export type SwitchboardTool = (typeof SWITCHBOARD_TOOLS)[number];

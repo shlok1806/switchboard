@@ -7,8 +7,12 @@
 // - The Channel alone decides Gone: when the session ends, or when an Agent has
 //   been silent for `goneAfterMs`. A Durable Object alarm checks for silence.
 // - Every Presence change is an Event.
+// - A Nickname is unique on the Channel and can change while the Agent runs: by the
+//   Agent itself or by any Person on the Channel. A name held by a Gone Agent is free
+//   to take; every change is an `agent.rename` Event (ADR 0009).
 
 import type {
+  Actor,
   Agent,
   AgentId,
   Capture,
@@ -26,7 +30,7 @@ import type {
   ReportedPresence,
   StreamMessage,
 } from "../../shared/src/index";
-import { agentIdFor, DEFAULT_PROXY_MODE } from "../../shared/src/index";
+import { agentIdFor, DEFAULT_PROXY_MODE, sameNickname } from "../../shared/src/index";
 
 type AgentRow = {
   id: string;
@@ -34,6 +38,7 @@ type AgentRow = {
   cli: string;
   session_id: string;
   nickname: string | null;
+  account: string | null;
   presence: string;
   proxy_mode: string;
   secret_masking: number;
@@ -49,6 +54,7 @@ export const AGENTS_SCHEMA = `
     cli TEXT NOT NULL,
     session_id TEXT NOT NULL,
     nickname TEXT,
+    account TEXT,
     presence TEXT NOT NULL,
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
@@ -57,6 +63,20 @@ export const AGENTS_SCHEMA = `
     started_at TEXT NOT NULL
   );
 `;
+
+/** Creates the `agents` table, and adds the columns later ADRs brought to a table made before them. */
+export function createAgentsTable(sql: SqlStorage): void {
+  sql.exec(AGENTS_SCHEMA);
+  try {
+    // ADR 0009: the Account Label.
+    sql.exec("ALTER TABLE agents ADD COLUMN account TEXT");
+  } catch {
+    // The column is there already.
+  }
+}
+
+/** Who changes a Nickname, and through which Capture: the Agent itself (Tool Capture), or a Person. */
+export type Renamer = { actor: Extract<Actor, { kind: "agent" | "person" }>; capture: Capture | null };
 
 /** What the roster needs from the Channel that hosts it. */
 export interface RosterHost {
@@ -67,7 +87,7 @@ export interface RosterHost {
   goneAfterMs: number;
   append<K extends EventType>(event: {
     type: K;
-    actor: { kind: "agent"; agentId: AgentId };
+    actor: Extract<Actor, { kind: "agent" | "person" }>;
     capture: Capture | null;
     payload: EventPayloads[K];
   }): ChannelEvent;
@@ -91,6 +111,8 @@ export type RosterResult =
       directives?: DirectiveDelivery[];
       /** A new Agent token, set only by registration (ADR 0007). */
       token?: string;
+      /** Registration only: why the Nickname asked for was not set (ADR 0009). */
+      nicknameRefused?: string;
     }
   | Refusal;
 
@@ -100,6 +122,7 @@ function rowToAgent(row: AgentRow): Agent {
     person: row.person,
     cli: row.cli as Cli,
     ...(row.nickname === null ? {} : { nickname: row.nickname }),
+    ...(row.account === null ? {} : { account: row.account }),
     presence: row.presence as Presence,
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
@@ -141,17 +164,29 @@ export class AgentRoster {
       };
     }
 
+    // A Nickname another Agent holds is not set, and does not stop the session (ADR 0009).
+    const self: Renamer = { actor: { kind: "agent", agentId: id }, capture: null };
+    let nicknameRefused: string | undefined;
+    let nickname = request.nickname === undefined ? (existing?.nickname ?? null) : request.nickname;
+    if (typeof request.nickname === "string") {
+      const taken = this.takeName(request.nickname, id, self);
+      if (!taken.ok) {
+        nicknameRefused = taken.reason;
+        nickname = existing?.nickname ?? null;
+      }
+    }
+    const account = request.account === undefined ? (existing?.account ?? null) : request.account;
     const secretMasking = request.secretMasking === false ? 0 : 1;
     // The wrapper says, every time it registers, whether it can type Interrupts into its CLI.
     const interrupts = request.interrupts === true ? 1 : 0;
     if (existing) {
-      const nickname = request.nickname === undefined ? existing.nickname : request.nickname;
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
-        `UPDATE agents SET nickname = ?, proxy_mode = ?, secret_masking = ?, can_receive_interrupts = ?,
+        `UPDATE agents SET nickname = ?, account = ?, proxy_mode = ?, secret_masking = ?, can_receive_interrupts = ?,
              presence = 'live', last_seen_at = ?
          WHERE id = ?`,
         nickname,
+        account,
         proxyMode,
         secretMasking,
         interrupts,
@@ -160,14 +195,15 @@ export class AgentRoster {
       );
     } else {
       this.host.sql.exec(
-        `INSERT INTO agents (id, person, cli, session_id, nickname, presence, proxy_mode, secret_masking,
+        `INSERT INTO agents (id, person, cli, session_id, nickname, account, presence, proxy_mode, secret_masking,
                              can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
         request.sessionId,
-        request.nickname ?? null,
+        nickname,
+        account,
         request.proxyMode ?? DEFAULT_PROXY_MODE,
         secretMasking,
         interrupts,
@@ -186,10 +222,66 @@ export class AgentRoster {
         ...(source === undefined ? {} : { source }),
       });
     }
+    if (existing && existing.nickname !== nickname) this.renamed(id, existing.nickname, nickname, self);
     if (existing?.presence !== "live") this.changed(id, "live");
     this.host.broadcast({ type: "agent", agent });
     await this.watch();
+    return { ok: true, agent, ...(nicknameRefused === undefined ? {} : { nicknameRefused }) };
+  }
+
+  /**
+   * Renames a running (or Gone) Agent: by the Agent itself, or by any Person on the
+   * Channel (ADR 0009). `nickname` is already clean; null clears it. Refuses a name
+   * another Agent that is not Gone holds, naming it; takes one from a Gone Agent.
+   */
+  rename(id: AgentId, nickname: string | null, by: Renamer): RosterResult {
+    const row = this.row(id);
+    if (!row) return { ok: false, status: 404, reason: `No Agent ${id} on this Channel.` };
+    if (row.nickname === nickname) return { ok: true, agent: rowToAgent(row) };
+    if (nickname !== null) {
+      const taken = this.takeName(nickname, id, by);
+      if (!taken.ok) return taken;
+    }
+    this.host.sql.exec("UPDATE agents SET nickname = ? WHERE id = ?", nickname, id);
+    this.renamed(id, row.nickname, nickname, by);
+    const agent = this.agent(id);
+    this.host.broadcast({ type: "agent", agent });
     return { ok: true, agent };
+  }
+
+  /**
+   * Makes `nickname` free for Agent `id`: refused when another Agent that is not Gone
+   * holds it; taken, and recorded, from a Gone Agent that does (ADR 0009).
+   */
+  private takeName(nickname: string, id: AgentId, by: Renamer): { ok: true } | Refusal {
+    const holders = this.host.sql
+      .exec<AgentRow>("SELECT * FROM agents WHERE nickname IS NOT NULL AND id != ?", id)
+      .toArray()
+      .filter((row) => row.nickname !== null && sameNickname(row.nickname, nickname));
+    const live = holders.find((row) => row.presence !== "gone");
+    if (live) {
+      return {
+        ok: false,
+        status: 409,
+        reason: `The Nickname "${live.nickname}" is taken by Agent ${live.id} on this Channel. Pick another one.`,
+      };
+    }
+    for (const gone of holders) {
+      this.host.sql.exec("UPDATE agents SET nickname = NULL WHERE id = ?", gone.id);
+      this.renamed(gone.id as AgentId, gone.nickname, null, by);
+      this.host.broadcast({ type: "agent", agent: this.agent(gone.id) });
+    }
+    return { ok: true };
+  }
+
+  /** Records an `agent.rename` Event, named for whoever renamed. */
+  private renamed(id: AgentId, from: string | null, to: string | null, by: Renamer): void {
+    this.host.append({
+      type: "agent.rename",
+      actor: by.actor,
+      capture: by.capture,
+      payload: { agent: id, ...(from === null ? {} : { from }), ...(to === null ? {} : { to }) },
+    });
   }
 
   /** The Agent is still running, with the Presence its wrapper observes. A Gone Agent comes back. */

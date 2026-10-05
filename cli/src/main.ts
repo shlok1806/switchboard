@@ -2,8 +2,9 @@
 // The Switchboard laptop CLI.
 //
 //   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
-//   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
-//   switchboard run codex|gemini [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
+//   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
+//   switchboard run codex|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
+//   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
 //   switchboard whoami
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
@@ -13,13 +14,15 @@ import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig } from "./config";
 import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
+import { renameAgent } from "./rename";
 import { runCli } from "./run";
 
 const USAGE = `Usage:
   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
-  switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
-  switchboard run codex [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
-  switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
+  switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
+  switchboard run codex [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
+  switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
+  switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
   switchboard whoami
 
 \`login\` signs you in with GitHub (a code to enter at github.com), once: the session
@@ -38,11 +41,20 @@ starting Proxy mode (digest by default; off runs without the proxy), and --no-ma
 turns off secret masking. Every other argument goes to Claude Code, including
 --resume and --continue.
 
+--nickname names the Agent on the Channel; it stays unique there, so a name another
+running Agent holds is not set. --account-label (or $SWITCHBOARD_ACCOUNT_LABEL) says
+which login of the CLI the Agent runs under; without it, Claude Code and Gemini CLI
+sessions show their login's email address, masked (sh…@example.com).
+
 \`run codex\` and \`run gemini\` do the same for Codex and Gemini CLI, with the same
 flags. Custom Codex providers and Gemini Vertex AI sessions run without the Proxy
 Capture, with a notice saying why. Codex runs Switchboard's hooks once you trust
 them in its /hooks screen; until then Queued Events reach the Agent through the
-read_channel tool.`;
+read_channel tool.
+
+\`rename\` changes an Agent's Nickname while it runs, as everyone on the Channel sees it.
+Name the Agent by its Agent ID, the ID without your login (claude/7f3a), or its
+current Nickname; --clear removes the Nickname.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -97,6 +109,27 @@ async function whoami(): Promise<number> {
   return 0;
 }
 
+async function rename(args: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { repo: { type: "string" }, clear: { type: "boolean" } },
+  });
+  const [agent, nickname, ...extra] = positionals;
+  if (agent === undefined || extra.length > 0 || (nickname === undefined) === !values.clear) {
+    console.error(`Usage: switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]`);
+    return 2;
+  }
+  return renameAgent({
+    agent,
+    nickname: nickname ?? null,
+    ...(values.repo === undefined ? {} : { repo: values.repo }),
+    cwd: process.cwd(),
+    env: process.env,
+    say: (line) => console.log(line),
+  });
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
@@ -104,6 +137,8 @@ async function main(argv: string[]): Promise<number> {
       return login(rest);
     case "whoami":
       return whoami();
+    case "rename":
+      return rename(rest);
     case "mcp":
       return runMcpServer();
     case "run": {

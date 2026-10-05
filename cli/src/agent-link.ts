@@ -4,6 +4,11 @@
 // Channel forgets the Agent or revokes its token (it went Gone), and ends the
 // session on exit. Failures never stop the agent CLI; they are logged and retried
 // on the next heartbeat.
+//
+// Once the Channel has registered the Agent, its Nickname and Proxy mode are the
+// Channel's: anyone may change them while the Agent runs (ADR 0009). Registering
+// again within the session sends what the Channel last said, never what the
+// wrapper started with, so a change made meanwhile is not undone.
 
 import type { Agent, AgentId, Cli, ProxyMode, ReportedPresence } from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
@@ -17,6 +22,8 @@ export interface AgentSession {
   /** How the agent CLI started the session ("startup", "resume"). */
   source?: string;
   nickname?: string;
+  /** The Account Label (ADR 0009); null sends none. */
+  account?: string | null;
   /** The starting Proxy mode (`--proxy`), when the Person gave one. */
   proxyMode?: ProxyMode;
   /** False when the Person turned secret masking off (`--no-mask`). */
@@ -27,6 +34,8 @@ export interface AgentSession {
 
 export class AgentLink {
   private agent: Agent | null = null;
+  /** The Agent as the Channel last described it, kept across registrations. */
+  private known: Agent | null = null;
   /** Whether the Channel registered the Agent once already, in this session. */
   private registered = false;
   private presence: ReportedPresence = "live";
@@ -47,20 +56,34 @@ export class AgentLink {
     private readonly onNextTurn: (items: NextTurnItems) => void = () => {},
   ) {}
 
+  /** The Channel changed the Agent (say, renamed it): keep it, for registering again. */
+  agentChanged(agent: Agent): void {
+    if (this.known === null || agent.id !== this.known.id) return;
+    this.known = agent;
+    if (this.agent !== null) this.agent = agent;
+  }
+
   get id(): AgentId | null {
     return this.agent?.id ?? null;
   }
 
-  /** Registers the Agent. Throws on refusals and network failures; the caller decides. */
-  async register(): Promise<Agent> {
+  /**
+   * Registers the Agent. Throws on refusals and network failures; the caller decides.
+   * A Nickname the Channel would not set (another Agent holds it) is in `nicknameRefused`.
+   */
+  async register(): Promise<Agent & { nicknameRefused?: string }> {
+    const known = this.known;
+    const nickname = known === null ? this.session.nickname : (known.nickname ?? null);
+    const proxyMode = known === null ? this.session.proxyMode : known.proxyMode;
     const answer = await this.client.register({
       cli: this.session.cli,
       sessionId: this.session.sessionId,
       resumed: this.session.resumed,
       cwd: this.session.cwd,
       ...(this.session.source === undefined ? {} : { source: this.session.source }),
-      ...(this.session.nickname === undefined ? {} : { nickname: this.session.nickname }),
-      ...(this.session.proxyMode === undefined ? {} : { proxyMode: this.session.proxyMode }),
+      ...(nickname === undefined ? {} : { nickname }),
+      ...(this.session.account === undefined ? {} : { account: this.session.account }),
+      ...(proxyMode === undefined ? {} : { proxyMode }),
       ...(this.session.secretMasking === undefined ? {} : { secretMasking: this.session.secretMasking }),
       ...(this.session.interrupts === undefined ? {} : { interrupts: this.session.interrupts }),
       // Registered before in this session: the session goes on, it does not start again.
@@ -68,11 +91,13 @@ export class AgentLink {
     });
     const { agent } = answer;
     this.agent = agent;
+    this.known = agent;
     this.registered = true;
     this.log(`registered ${agent.id}`);
+    if (answer.nicknameRefused !== undefined) this.log(`Nickname not set: ${answer.nicknameRefused}`);
     this.onRegistered(agent, answer.token);
     this.handOver(answer);
-    return agent;
+    return answer.nicknameRefused === undefined ? agent : { ...agent, nicknameRefused: answer.nicknameRefused };
   }
 
   /** Starts heartbeating. Registers first on the next beat if registration has not succeeded yet. */
@@ -127,7 +152,9 @@ export class AgentLink {
       }
       const id = this.agent?.id;
       if (!id) return;
-      this.handOver(await this.client.heartbeat(id, this.presence));
+      const answer = await this.client.heartbeat(id, this.presence);
+      this.agentChanged(answer.agent);
+      this.handOver(answer);
     } catch (error) {
       const lost =
         this.agent !== null && error instanceof ChannelError && (error.status === 404 || error.status === 401);

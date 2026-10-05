@@ -4,7 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useCapabilities, useChannel } from "@/data/store";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { Status, StatusIndicator, StatusLabel } from "@/components/kibo-ui/status";
-import { PresenceDot, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
+import { AccountLabel, PresenceDot, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { CLI_LABEL, PRESENCE_LABEL, ago } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -118,8 +118,9 @@ export function AgentsView() {
                           >
                             {a.id}
                           </a>
-                          <span className="truncate text-[12.5px] text-ink-3" title={`Last seen ${ago(a.lastSeenAt)}`}>
-                            {a.nickname ?? ago(a.lastSeenAt)}
+                          <span className="flex min-w-0 items-center gap-2 text-[12.5px] text-ink-3" title={`Last seen ${ago(a.lastSeenAt)}`}>
+                            <span className="truncate">{a.nickname ?? ago(a.lastSeenAt)}</span>
+                            {a.account && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
                           </span>
                         </div>
                       </div>
@@ -161,6 +162,7 @@ export function AgentsView() {
                     <span className="truncate text-[12.5px] text-ink-3">
                       {a.nickname ? `${a.nickname} · ` : ""}
                       {CLI_LABEL[a.cli]}
+                      {a.account ? ` · ${a.account}` : ""}
                     </span>
                     {held.length > 0 && <ClaimCell agent={a} tasks={held} />}
                   </div>

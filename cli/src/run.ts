@@ -31,6 +31,7 @@ import {
   interruptNotice,
   STANDING_RULE,
 } from "../../shared/src/index";
+import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { type ChannelChoice, ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ChannelClient, ChannelError, targetOf } from "./channel-client";
@@ -88,6 +89,12 @@ export function takeNickname(args: string[]): { nickname?: string; rest: string[
   return value === undefined ? { rest } : { nickname: value, rest };
 }
 
+/** Takes the wrapper's own `--account-label` (ADR 0009) out of the agent CLI's arguments. */
+export function takeAccountLabel(args: string[]): { accountLabel?: string; rest: string[] } {
+  const { value, rest } = takeOption(args, "account-label");
+  return value === undefined ? { rest } : { accountLabel: value, rest };
+}
+
 /** Takes the wrapper's own `--repo`, which names the Channel (ADR 0008), out of the agent CLI's arguments. */
 export function takeRepo(args: string[]): { repo?: string; rest: string[] } {
   const { value, rest } = takeOption(args, "repo");
@@ -113,7 +120,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   };
 
   const { nickname, rest: afterNickname } = takeNickname(rawArgs);
-  const { repo: repoFlag, rest: afterRepo } = takeRepo(afterNickname);
+  const { accountLabel: accountFlag, rest: afterAccount } = takeAccountLabel(afterNickname);
+  const { repo: repoFlag, rest: afterRepo } = takeRepo(afterAccount);
   let proxyFlags: ProxyFlags;
   try {
     proxyFlags = takeProxyFlags(afterRepo);
@@ -183,6 +191,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
     log(`could not reach the Channel for ${repo}: ${error.message}`);
   }
+  // Which login of the CLI this Agent runs under, shown beside it on the Channel (ADR 0009).
+  const account = await accountLabel(adapter.cli, accountFlag, env);
   const heartbeatMs = seconds(env.SWITCHBOARD_HEARTBEAT_SECONDS, HEARTBEAT_INTERVAL_MS);
   const idleAfterMs = seconds(env.SWITCHBOARD_IDLE_AFTER_SECONDS, DEFAULT_IDLE_AFTER_MS);
   const session = (sessionId: string, resumed: boolean): AgentSession => ({
@@ -192,6 +202,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     cwd,
     source: resumed ? "resume" : "startup",
     ...(nickname === undefined ? {} : { nickname }),
+    account,
     ...(proxySetting === "off" ? {} : { proxyMode: proxySetting }),
     ...(proxyFlags.mask ? {} : { secretMasking: false }),
     // Whether the wrapper types Interrupts into this CLI's pty. When not, the
@@ -310,7 +321,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     (message) => {
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
       if (message.type === "proxy.ack" || message.type === "proxy.refused") proxy?.reply(message);
-      if (message.type === "agent") proxy?.agentChanged(message.agent);
+      if (message.type === "agent") {
+        proxy?.agentChanged(message.agent);
+        link?.agentChanged(message.agent);
+      }
       if (message.type === "delivery" && message.agent === agentId) {
         const kept = addForNextTurn({ deliveries: message.deliveries });
         if (kept.length > 0) log(`queued for the next turn: ${kept.length} from the Relay`);
@@ -466,6 +480,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     try {
       const agent = await link.register();
       console.error(dim(`switchboard: ${agent.id} is on the Channel for ${repo} at ${config.url}`));
+      if (agent.nicknameRefused !== undefined) console.error(`switchboard: ${agent.nicknameRefused}`);
     } catch (error) {
       if (error instanceof ChannelError && error.status !== 0) {
         console.error(`switchboard: the Channel refused ${expected}: ${error.message}`);

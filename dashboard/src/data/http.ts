@@ -21,7 +21,7 @@ import type {
   ClaimRefusal,
   Verdict,
 } from "@shared/index";
-import { LIVE_PING, MAX_HISTORY_LIMIT, claimPath, releasePath } from "@shared/index";
+import { LIVE_PING, MAX_HISTORY_LIMIT, claimPath, nicknamePath, releasePath } from "@shared/index";
 import type { Capabilities, ChannelSource, ClaimResult, ConnectionState } from "./source";
 
 /**
@@ -49,6 +49,7 @@ const ACTION_NAME: Record<PersonAction["type"], string> = {
   directive: "Directives",
   takeover: "Takeover",
   "proxy-mode": "changing Proxy mode",
+  rename: "renaming Agents",
 };
 
 /**
@@ -297,6 +298,8 @@ export class HttpChannelSource implements ChannelSource {
           return { path: `/api/tasks/${action.task}/takeover`, body: { to: action.to } };
         case "proxy-mode":
           return { path: `/api/agents/${encodeURIComponent(action.agent)}/proxy-mode`, body: { mode: action.mode } };
+        case "rename":
+          return { path: nicknamePath(action.agent), body: { nickname: action.nickname } };
       }
     })();
     try {

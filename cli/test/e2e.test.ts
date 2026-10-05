@@ -26,7 +26,7 @@ import type {
   TouchedFilesResponse,
   Verdict,
 } from "../../shared/src/index";
-import { agentPath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
+import { agentPath, nicknamePath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
 import { CODE_ASSIST_SSE, GEMINI_SSE, RESPONSES_SSE, RESPONSES_TURN } from "./fixtures/api-shapes";
 import { GitHubApi } from "./fixtures/github-api";
 import { JevApi } from "./fixtures/jev-api";
@@ -497,6 +497,65 @@ describe("switchboard run claude", () => {
       { cwd, resumed: true, source: "resume" },
     ]);
     expect(await sessionEvents(firstId)).toEqual({ starts: 2, ends: 2 });
+  });
+
+  it("renames running Agents from themselves, the CLI and the Dashboard, and shows each one's account", async () => {
+    // The Claude Code login the wrapper reads its Account Label from: only the masked address leaves the laptop.
+    await mkdir(join(scratch, "claude"), { recursive: true });
+    await writeFile(
+      join(scratch, "claude", ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "ada.lovelace@example.edu", accountUuid: "do-not-send" } }),
+    );
+    const a = new Terminal(["run", "claude", "--nickname", "alpha"]);
+    const b = new Terminal(["run", "claude", "--nickname", "beta", "--account-label", "work"]);
+    const aId = `e2e/claude/${(await a.started()).sessionId.slice(0, 4)}`;
+    const bId = `e2e/claude/${(await b.started()).sessionId.slice(0, 4)}`;
+    await a.attached(aId);
+    await b.attached(bId);
+    const nicknameOf = async (id: string) => (await agents()).find((agent) => agent.id === id)?.nickname;
+    const shown = await agents();
+    expect(shown.find((agent) => agent.id === aId)).toMatchObject({ nickname: "alpha", account: "ad…@example.edu" });
+    expect(shown.find((agent) => agent.id === bId)).toMatchObject({ nickname: "beta", account: "work" });
+    expect(JSON.stringify(shown)).not.toContain("do-not-send");
+    expect(JSON.stringify(shown)).not.toContain("lovelace");
+
+    // The Agent renames itself. A name another running Agent holds is refused, naming it.
+    const clash = await callTool(a, "rename", { nickname: "BETA" });
+    expect(clash).toContain("rename ERROR");
+    expect(clash).toContain(bId);
+    expect(await callTool(a, "rename", { nickname: "alpha-a" })).toContain(`${aId} is "alpha-a" on the Channel now`);
+    expect(await nicknameOf(aId)).toBe("alpha-a");
+    // The other Agent sees the new name, and the account, when it lists the Channel's Agents.
+    expect(await callTool(b, "list_agents", {})).toMatch(
+      new RegExp(`${aId} "alpha-a" of e2e, claude-code account ad…@example\\.edu \\[(live|idle)\\]`),
+    );
+
+    // The Person, from another terminal, names the Agent by its Nickname.
+    const { stdout } = await promisify(execFile)(process.execPath, [CLI, "rename", "beta", "beta-b"], { env, cwd });
+    expect(stdout).toContain(`${bId} is "beta-b" on ${github.repo} now.`);
+    expect(await nicknameOf(bId)).toBe("beta-b");
+
+    // Another Person, the way the Dashboard does it.
+    const renamed = await asPerson("dashboard", nicknamePath(aId as AgentId), {
+      method: "POST",
+      body: JSON.stringify({ nickname: "alpha-z" }),
+    });
+    expect(renamed.status).toBe(200);
+
+    // The history keeps every Event under the Agent ID, shows its current name beside it,
+    // and reads each rename as old -> new, named for who made it.
+    const read = await callTool(b, "read_channel", { limit: 100 });
+    expect(read).toContain(`${aId} (alpha-z) agent.rename (tool): ${aId} alpha -> alpha-a`);
+    expect(read).toContain(`e2e agent.rename: ${bId} beta -> beta-b`);
+    expect(read).toContain(`dashboard agent.rename: ${aId} alpha-a -> alpha-z`);
+
+    // The wrapper's next heartbeats and registrations keep the Channel's name, not the one it started with.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(await nicknameOf(aId)).toBe("alpha-z");
+    for (const term of [a, b]) {
+      term.type("quit\r");
+      expect(await term.exited).toBe(0);
+    }
   });
 
   it("resumes the latest session in this directory with --continue", async () => {

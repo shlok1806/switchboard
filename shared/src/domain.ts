@@ -36,8 +36,16 @@ export interface Agent {
   id: AgentId;
   person: PersonName;
   cli: Cli;
-  /** Optional readable label. Never replaces the Agent ID. */
+  /**
+   * Optional readable label, unique on the Channel. Never replaces the Agent ID; it
+   * can change while the Agent runs (ADR 0009).
+   */
   nickname?: string;
+  /**
+   * Which login of its agent CLI the Agent runs under, such as `sh…@illinois.edu`,
+   * as its wrapper reported it (ADR 0009). A hint, never an identity.
+   */
+  account?: string;
   presence: Presence;
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */
@@ -199,6 +207,13 @@ export interface EventPayloads {
    */
   "session.end": { reason: "exit" | "timeout"; detail?: string };
   presence: { presence: Presence };
+  /**
+   * An Agent's Nickname changed (ADR 0009). `from` and `to` are absent when it had or
+   * gets none. The actor is whoever renamed: the Agent itself, or a Person. `agent`
+   * names the renamed Agent, which differs from the actor when a Person renamed it or
+   * when taking a name cleared it from a Gone Agent.
+   */
+  "agent.rename": { agent: AgentId; from?: string; to?: string };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */
