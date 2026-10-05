@@ -7,7 +7,10 @@ page says how the App is set up for the production Worker at
 again for another deployment.
 
 The production App is **switchboard-shlok** (App ID `5138187`, client ID
-`Iv23li8zKXvsEdSDTRYt`), installed on `shlok1806/switchboard` only.
+`Iv23li8zKXvsEdSDTRYt`), installed on the `shlok1806` account with access to all
+of its repositories. The production Worker allows a Channel for
+`shlok1806/switchboard`, `shlok1806/switchboard-playground` and `shlok1806/greenroom`
+(`ALLOWED_REPOS`).
 
 ## 1. Register the App
 
@@ -71,9 +74,12 @@ the repo webhook (repo Settings, Webhooks) so deliveries do not arrive twice.
 
 ## 3. Install the App on the repo
 
-The App's page, Install App, pick the account, "Only select repositories", choose
-`shlok1806/switchboard`. A repo gets a Channel only if the App is installed on it and
-it is listed in the `ALLOWED_REPOS` var (worker/wrangler.jsonc).
+The App's page, Install App, pick the account, then either "All repositories" (what
+production uses) or "Only select repositories" with each repo that should have a
+Channel. A repo gets a Channel only if the App is installed on it and it is listed in
+the `ALLOWED_REPOS` var (worker/wrangler.jsonc), which production sets to
+`shlok1806/switchboard,shlok1806/switchboard-playground,shlok1806/greenroom`. Adding
+a repo there needs a deploy, and nobody has to sign in again for it (ADR 0008).
 
 ## 4. Worker secrets
 
