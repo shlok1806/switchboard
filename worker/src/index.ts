@@ -117,7 +117,14 @@ const ROUTES = new Set([
 
 /** What an Agent token may call (ADR 0007): read the Channel, and act for its own Agent only. */
 const AGENT_ROUTES = new Set(["GET /api/events", "GET /api/relay", "POST /api/updates", "GET /api/stream"]);
-const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set(["list", "heartbeat", "end", "touched-files"]);
+const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
+  "list",
+  "heartbeat",
+  "end",
+  "touched-files",
+  "nickname",
+  "model",
+]);
 
 const AGENT_REFUSED =
   "An Agent token cannot do this. Agents read the Channel, post their own Events, and claim, release and finish " +

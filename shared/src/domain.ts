@@ -36,8 +36,24 @@ export interface Agent {
   id: AgentId;
   person: PersonName;
   cli: Cli;
-  /** Optional readable label. Never replaces the Agent ID. */
+  /**
+   * Optional readable label, unique on the Channel. Never replaces the Agent ID; it
+   * can change while the Agent runs (ADR 0009).
+   */
   nickname?: string;
+  /**
+   * Which login of its agent CLI the Agent runs under, such as `sh…@illinois.edu`,
+   * as its wrapper reported it (ADR 0009). A hint, never an identity.
+   */
+  account?: string;
+  /**
+   * The model the Agent runs on, as its agent CLI sends it (ADR 0010): from the Proxy
+   * Capture's view of each model request, else the CLI's `--model` or config default.
+   * Absent when unknown; never a guess.
+   */
+  model?: string;
+  /** The reasoning effort the requests ask for, when they carry one (such as `high`). */
+  effort?: string;
   presence: Presence;
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */
@@ -199,6 +215,19 @@ export interface EventPayloads {
    */
   "session.end": { reason: "exit" | "timeout"; detail?: string };
   presence: { presence: Presence };
+  /**
+   * An Agent's Nickname changed (ADR 0009). `from` and `to` are absent when it had or
+   * gets none. The actor is whoever renamed: the Agent itself, or a Person. `agent`
+   * names the renamed Agent, which differs from the actor when a Person renamed it or
+   * when taking a name cleared it from a Gone Agent.
+   */
+  "agent.rename": { agent: AgentId; from?: string; to?: string };
+  /**
+   * The model an Agent runs on changed, or became known (ADR 0010). `from` and `to`
+   * are model IDs, absent when unknown; `effort` is the new reasoning effort, if any.
+   * The actor is the Agent; the Capture is `proxy` when the Proxy Capture saw it.
+   */
+  "agent.model": { from?: string; to?: string; effort?: string };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */

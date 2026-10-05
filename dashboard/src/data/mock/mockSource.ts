@@ -12,7 +12,7 @@ import type {
   Verdict,
   VerdictProbabilities,
 } from "@shared/index";
-import { holderName } from "@shared/index";
+import { cleanNickname, holderName, sameNickname } from "@shared/index";
 import { ALL_CAPABILITIES, type ChannelSource, type ClaimResult, type ConnectionState } from "../source";
 import { ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
@@ -212,6 +212,31 @@ export class MockChannelSource implements ChannelSource {
         if (!a) return { ok: false, reason: "Unknown Agent." };
         if (a.person !== this.me) return { ok: false, reason: `Only ${a.person} can change this Agent's Proxy mode.` };
         a.proxyMode = action.mode;
+        this.emit({ type: "agent", agent: a });
+        return { ok: true };
+      }
+      case "rename": {
+        // Like the Worker (ADR 0009): anyone may rename any Agent; a running Agent's name is taken, a Gone one's is free.
+        const a = this.agents.find((x) => x.id === action.agent);
+        if (!a) return { ok: false, reason: "Unknown Agent." };
+        const nickname = action.nickname === null ? null : cleanNickname(action.nickname);
+        if (nickname === undefined) return { ok: false, reason: "A Nickname is at most 40 characters." };
+        if ((a.nickname ?? null) === nickname) return { ok: true };
+        const holders = nickname === null ? [] : this.agents.filter((x) => x.id !== a.id && x.nickname && sameNickname(x.nickname, nickname));
+        const live = holders.find((x) => x.presence !== "gone");
+        if (live) return { ok: false, reason: `The Nickname "${live.nickname}" is taken by Agent ${live.id} on this Channel. Pick another one.` };
+        for (const gone of holders) {
+          this.record(makeEvent("agent.rename", me, null, { agent: gone.id, from: gone.nickname }, { at }), undefined, true);
+          delete gone.nickname;
+          this.emit({ type: "agent", agent: gone });
+        }
+        this.record(
+          makeEvent("agent.rename", me, null, { agent: a.id, ...(a.nickname ? { from: a.nickname } : {}), ...(nickname ? { to: nickname } : {}) }, { at }),
+          undefined,
+          true,
+        );
+        if (nickname === null) delete a.nickname;
+        else a.nickname = nickname;
         this.emit({ type: "agent", agent: a });
         return { ok: true };
       }

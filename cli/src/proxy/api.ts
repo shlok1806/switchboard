@@ -4,6 +4,18 @@
 // Nothing here can change what the agent CLI sees; the proxy forwards the bytes
 // first and hands a copy to the parser.
 
+/** What a turn request says about its model (ADR 0010). */
+export interface RequestedModel {
+  model?: string;
+  effort?: string;
+  main?: boolean;
+}
+
+/** A string field, when it is a non-empty string. */
+export function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
 /** The model APIs the Proxy Capture reads. */
 export type ApiName = "anthropic-messages" | "openai-responses" | "gemini";
 
@@ -67,6 +79,13 @@ export interface ApiFormat {
    * request, never the reply. Such calls produce no Event.
    */
   background?(request: Record<string, unknown>): string | null;
+  /**
+   * The model a turn request asks for, and its reasoning effort when it names one
+   * (ADR 0010). `main` says whether the request is from the session's main thread,
+   * when the request can tell (a subagent's turns may run on another model). Only
+   * these strings are ever kept from the request.
+   */
+  requested?(request: Record<string, unknown>): RequestedModel;
   /**
    * For APIs that also run turns over a WebSocket: which upgrade paths carry turns,
    * whether a client message starts one, and a parser for its events.

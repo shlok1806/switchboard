@@ -53,7 +53,9 @@ export type PersonAction =
   /** `POST /api/tasks/:number/takeover`. Only valid on a Stale Claim (ADR 0002). */
   | { type: "takeover"; task: TaskNumber; to: Holder }
   /** `POST /api/agents/:id/proxy-mode`. Only the Agent's own Person may change it. */
-  | { type: "proxy-mode"; agent: AgentId; mode: ProxyMode };
+  | { type: "proxy-mode"; agent: AgentId; mode: ProxyMode }
+  /** `POST /api/agents/:id/nickname`. Any Person on the Channel may rename any Agent (ADR 0009); null clears it. */
+  | { type: "rename"; agent: AgentId; nickname: string | null };
 
 export type ActionResult = { ok: true } | { ok: false; reason: string };
 

@@ -17,6 +17,7 @@ import type {
   ProxyEvent,
   ProxyMode,
 } from "../../../shared/src/index";
+import type { SeenModel } from "../model-watch";
 import type { ApiFormat } from "./api";
 import { DEFAULT_UPSTREAM, ProxyServer } from "./server";
 import { buildProxyEvent } from "./turn";
@@ -40,6 +41,11 @@ export interface ProxyCaptureOptions {
   root: string;
   send: (frame: string) => boolean;
   log: (line: string) => void;
+  /**
+   * Each turn's model, as its request asks for it (or its response names it): the
+   * model ID, effort and whether it is the main thread's (ADR 0010). Nothing else.
+   */
+  onModel?: (seen: SeenModel) => void;
 }
 
 export class ProxyCapture {
@@ -63,6 +69,12 @@ export class ProxyCapture {
       capturing: () => ({ capture: capture !== null, raw: capture?.mode === "raw" }),
       onTurn: (turn) => {
         if (!capture) return;
+        const model = turn.requested?.model ?? (turn.reader.model || undefined);
+        options.onModel?.({
+          ...(model === undefined ? {} : { model }),
+          ...(turn.requested?.effort === undefined ? {} : { effort: turn.requested.effort }),
+          ...(turn.requested?.main === undefined ? {} : { main: turn.requested.main }),
+        });
         const event = buildProxyEvent(turn, {
           mode: capture.mode,
           mask: options.mask,

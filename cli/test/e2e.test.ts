@@ -26,7 +26,7 @@ import type {
   TouchedFilesResponse,
   Verdict,
 } from "../../shared/src/index";
-import { agentPath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
+import { agentPath, nicknamePath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
 import { CODE_ASSIST_SSE, GEMINI_SSE, RESPONSES_SSE, RESPONSES_TURN } from "./fixtures/api-shapes";
 import { GitHubApi } from "./fixtures/github-api";
 import { JevApi } from "./fixtures/jev-api";
@@ -465,6 +465,8 @@ describe("switchboard run claude", () => {
 
     expect((await wrapperEvents(firstId)).map((e) => [e.type, e.payload])).toEqual([
       ["session.start", { cwd, resumed: false, source: "startup" }],
+      // Started with --model opus: the model it is told to start on (ADR 0010).
+      ["agent.model", { to: "opus" }],
       ["presence", { presence: "live" }],
       ["presence", { presence: "idle" }],
       ["presence", { presence: "live" }],
@@ -507,6 +509,64 @@ describe("switchboard run claude", () => {
     term.type("quit\r");
     expect(await term.exited).toBe(0);
     await waitForPresence(firstId, "gone");
+  });
+  it("renames running Agents from themselves, the CLI and the Dashboard, and shows each one's account", async () => {
+    // The Claude Code login the wrapper reads its Account Label from: only the masked address leaves the laptop.
+    await mkdir(join(scratch, "claude"), { recursive: true });
+    await writeFile(
+      join(scratch, "claude", ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "ada.lovelace@example.edu", accountUuid: "do-not-send" } }),
+    );
+    const a = new Terminal(["run", "claude", "--nickname", "alpha"]);
+    const b = new Terminal(["run", "claude", "--nickname", "beta", "--account-label", "work"]);
+    const aId = `e2e/claude/${(await a.started()).sessionId.slice(0, 4)}`;
+    const bId = `e2e/claude/${(await b.started()).sessionId.slice(0, 4)}`;
+    await a.attached(aId);
+    await b.attached(bId);
+    const nicknameOf = async (id: string) => (await agents()).find((agent) => agent.id === id)?.nickname;
+    const shown = await agents();
+    expect(shown.find((agent) => agent.id === aId)).toMatchObject({ nickname: "alpha", account: "ad…@example.edu" });
+    expect(shown.find((agent) => agent.id === bId)).toMatchObject({ nickname: "beta", account: "work" });
+    expect(JSON.stringify(shown)).not.toContain("do-not-send");
+    expect(JSON.stringify(shown)).not.toContain("lovelace");
+
+    // The Agent renames itself. A name another running Agent holds is refused, naming it.
+    const clash = await callTool(a, "rename", { nickname: "BETA" });
+    expect(clash).toContain("rename ERROR");
+    expect(clash).toContain(bId);
+    expect(await callTool(a, "rename", { nickname: "alpha-a" })).toContain(`${aId} is "alpha-a" on the Channel now`);
+    expect(await nicknameOf(aId)).toBe("alpha-a");
+    // The other Agent sees the new name, and the account, when it lists the Channel's Agents.
+    expect(await callTool(b, "list_agents", {})).toMatch(
+      new RegExp(`${aId} "alpha-a" of e2e, claude-code account ad…@example\\.edu \\[(live|idle)\\]`),
+    );
+
+    // The Person, from another terminal, names the Agent by its Nickname.
+    const { stdout } = await promisify(execFile)(process.execPath, [CLI, "rename", "beta", "beta-b"], { env, cwd });
+    expect(stdout).toContain(`${bId} is "beta-b" on ${github.repo} now.`);
+    expect(await nicknameOf(bId)).toBe("beta-b");
+
+    // Another Person, the way the Dashboard does it.
+    const renamed = await asPerson("dashboard", nicknamePath(aId as AgentId), {
+      method: "POST",
+      body: JSON.stringify({ nickname: "alpha-z" }),
+    });
+    expect(renamed.status).toBe(200);
+
+    // The history keeps every Event under the Agent ID, shows its current name beside it,
+    // and reads each rename as old -> new, named for who made it.
+    const read = await callTool(b, "read_channel", { limit: 100 });
+    expect(read).toContain(`${aId} (alpha-z) agent.rename (tool): ${aId} alpha -> alpha-a`);
+    expect(read).toContain(`e2e agent.rename: ${bId} beta -> beta-b`);
+    expect(read).toContain(`dashboard agent.rename: ${aId} alpha-a -> alpha-z`);
+
+    // The wrapper's next heartbeats and registrations keep the Channel's name, not the one it started with.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(await nicknameOf(aId)).toBe("alpha-z");
+    for (const term of [a, b]) {
+      term.type("quit\r");
+      expect(await term.exited).toBe(0);
+    }
   });
 
   it("gives two sessions side by side two Agents, and marks a silent one Gone", async () => {
@@ -646,7 +706,7 @@ describe("Switchboard's tools (the Tool Capture)", () => {
 
     expect(await call("list_tasks", {})).toContain(`#${held} Dashboard [claimed] held by dev`);
     expect(term.output).toContain(
-      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","finish_task"]',
+      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","list_agents","rename","finish_task"]',
     );
     expect(await call("claim_task", { task: held })).toBe(`claim_task ERROR: Task #${held} is held by dev.`);
     expect(await call("claim_task", { task: claims })).toContain(`claim_task: You hold Task #${claims} now`);
@@ -769,6 +829,55 @@ describe("the Proxy Capture", () => {
   });
 
   const proxyEvents = async (id: string) => (await agentEvents(id)).filter((e) => e.capture === "proxy");
+
+  it("shows the model each Agent runs on: configured at start, then what its requests ask for", async () => {
+    // Started with --model: that is all the Channel knows until the first request.
+    const term = new Terminal(["run", "claude", "--model", "claude-haiku-4-5"], {
+      ANTHROPIC_BASE_URL: upstreamUrl,
+      ANTHROPIC_API_KEY: API_KEY,
+    });
+    const { agentEnv: id } = await term.started();
+    const agentOf = async () => (await agents()).find((a) => a.id === id);
+    expect(await waitFor("the configured model", async () => (await agentOf())?.model)).toBe("claude-haiku-4-5");
+
+    // The first turn asks for the model the CLI really runs on.
+    term.type("model secret-prompt-one\r");
+    await waitFor("the requested model", async () =>
+      (await agentOf())?.model === "claude-opus-5-5" ? true : undefined,
+    );
+    // A subagent on another model is not a switch.
+    term.type("subagent claude-haiku-4-5 secret-prompt-two\r");
+    await waitFor("the subagent's turn", () =>
+      (term.output.match(/FAKE-CLAUDE model base=/g) ?? []).length === 2 ? true : undefined,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    expect((await agentOf())?.model).toBe("claude-opus-5-5");
+    // The Person switches model mid-session (/model): the next request says so.
+    term.type("setmodel claude-sonnet-5-5 high\r");
+    await term.waitForOutput(/FAKE-CLAUDE model set claude-sonnet-5-5/);
+    term.type("model secret-prompt-three\r");
+    const switched = await waitFor("the switch", async () => {
+      const agent = await agentOf();
+      return agent?.model === "claude-sonnet-5-5" ? agent : undefined;
+    });
+    expect(switched.effort).toBe("high");
+
+    const changes = (await agentEvents(id)).filter((e): e is EventOf<"agent.model"> => e.type === "agent.model");
+    expect(changes.map((e) => [e.capture, e.payload])).toEqual([
+      [null, { to: "claude-haiku-4-5" }],
+      ["proxy", { from: "claude-haiku-4-5", to: "claude-opus-5-5" }],
+      ["proxy", { from: "claude-opus-5-5", to: "claude-sonnet-5-5", effort: "high" }],
+    ]);
+    // Only the model ID and effort left the request: no prompt, no key, no tools.
+    const shared = JSON.stringify([await agents(), changes]);
+    for (const secret of ["secret-prompt", API_KEY, '"Agent"']) expect(shared).not.toContain(secret);
+    // The other Agents see it by name.
+    expect(await callTool(term, "list_agents", {})).toContain("model Sonnet 5.5 (claude-sonnet-5-5), effort high");
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+    // The next test counts the keys the API sees from its own session.
+    seenKeys.length = 0;
+  });
 
   it("routes the model traffic through a local proxy unchanged, and each turn arrives as a Proxy Event", async () => {
     const term = new Terminal(["run", "claude"], { ANTHROPIC_BASE_URL: upstreamUrl, ANTHROPIC_API_KEY: API_KEY });

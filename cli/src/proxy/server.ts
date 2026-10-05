@@ -21,7 +21,7 @@ import { PassThrough, type Transform } from "node:stream";
 import * as zlib from "node:zlib";
 import { RAW_PROXY_CAP_BYTES } from "../../../shared/src/index";
 import { anthropicMessages } from "./anthropic";
-import { type ApiFormat, type EventParser, record, safeParse } from "./api";
+import { type ApiFormat, type EventParser, type RequestedModel, record, safeParse } from "./api";
 import { CappedBody, type TurnInput } from "./turn";
 import { agreedDeflate, MessageReader } from "./websocket";
 
@@ -189,8 +189,9 @@ export class ProxyServer {
           raw: mode.raw,
           path,
           request: new CappedBody(RAW_PROXY_CAP_BYTES),
-          // The whole request, in either mode, when the API can tell the CLI's own calls from it.
-          whole: this.api.background ? new CappedBody(MAX_REQUEST_READ_BYTES) : null,
+          // The whole request, in either mode, when the API can tell the CLI's own calls
+          // from it, or read the model it asks for (ADR 0010).
+          whole: this.api.background || this.api.requested ? new CappedBody(MAX_REQUEST_READ_BYTES) : null,
           requestRead,
         }
       : null;
@@ -287,11 +288,16 @@ export class ProxyServer {
     });
   }
 
-  /** What a request is when the CLI made it for itself, from the whole request; null for a turn or when unreadable. */
-  private backgroundCall(capture: Capture): string | null {
-    if (!this.api.background || !capture.whole || capture.whole.truncated) return null;
+  /** The whole request, parsed, or null when it was not kept or is unreadable. */
+  private wholeRequest(capture: Capture): Record<string, unknown> | null {
+    if (!capture.whole || capture.whole.truncated) return null;
     const body = safeParse(capture.whole.text());
-    return typeof body === "object" && body !== null && !Array.isArray(body) ? this.api.background(record(body)) : null;
+    return typeof body === "object" && body !== null && !Array.isArray(body) ? record(body) : null;
+  }
+
+  /** What a request is when the CLI made it for itself, from the whole request; null for a turn or when unreadable. */
+  private backgroundCall(body: Record<string, unknown> | null): string | null {
+    return this.api.background && body !== null ? this.api.background(body) : null;
   }
 
   /** Starts reading one model turn's response. */
@@ -332,15 +338,18 @@ export class ProxyServer {
         this.inFlight.delete(done);
         this.safe(() => {
           reader.end();
-          const own = !failed && reader.seen ? this.backgroundCall(capture) : null;
+          const body = !failed && reader.seen ? this.wholeRequest(capture) : null;
+          const own = this.backgroundCall(body);
           if (own !== null) this.options.log(`proxy: not captured: ${own}`);
           else if (!failed && reader.seen) {
+            const requested = body !== null ? this.api.requested?.(body) : undefined;
             this.options.onTurn({
               reader,
               request: capture.request,
               response,
               requestText: () => capture.request.text(),
               responseText: () => response.text(),
+              ...(requested === undefined ? {} : { requested }),
             });
           }
         });
@@ -424,7 +433,14 @@ export class ProxyServer {
   } {
     const ws = this.api.websocket;
     if (!ws) throw new Error("this API has no WebSocket turns");
-    type Turn = { reader: EventParser; raw: boolean; request: CappedBody; response: CappedBody; finish: () => void };
+    type Turn = {
+      reader: EventParser;
+      raw: boolean;
+      request: CappedBody;
+      response: CappedBody;
+      finish: () => void;
+      requested?: RequestedModel;
+    };
     let turn: Turn | null = null;
     const stop = (current: Turn | null) => {
       if (!current) return;
@@ -458,6 +474,7 @@ export class ProxyServer {
             request: new CappedBody(RAW_PROXY_CAP_BYTES),
             response: new CappedBody(RAW_PROXY_CAP_BYTES),
             finish,
+            ...(this.api.requested ? { requested: this.api.requested(message) } : {}),
           };
           if (mode.raw) next.request.push(Buffer.from(text, "utf8"));
           turn = next;
@@ -481,6 +498,7 @@ export class ProxyServer {
               response: current.response,
               requestText: () => current.request.text(),
               responseText: () => current.response.text(),
+              ...(current.requested === undefined ? {} : { requested: current.requested }),
             });
           }
         });

@@ -19,7 +19,7 @@
 // they reproduce the whole request. A newer Claude Code that words these
 // differently has its calls captured again, which is the safe way to be wrong.
 
-import { type ApiFormat, record } from "./api";
+import { type ApiFormat, type RequestedModel, record, text } from "./api";
 import { TurnReader } from "./turn";
 
 /** How Claude Code's title instruction starts. */
@@ -67,10 +67,27 @@ function background(request: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * The model a Messages API request asks for, and its effort (`output_config.effort`).
+ * Only Claude Code's main thread offers the tool that starts subagents (Agent, once
+ * Task), so a request offering it is the main thread's; a subagent's runs on its own model.
+ */
+function requested(request: Record<string, unknown>): RequestedModel {
+  const tools = Array.isArray(request.tools) ? request.tools.map((tool) => record(tool).name) : [];
+  const model = text(request.model);
+  const effort = text(record(request.output_config).effort);
+  return {
+    ...(model === undefined ? {} : { model }),
+    ...(effort === undefined ? {} : { effort }),
+    main: tools.includes("Agent") || tools.includes("Task"),
+  };
+}
+
 export const anthropicMessages: ApiFormat = {
   name: "anthropic-messages",
   defaultUpstream: "https://api.anthropic.com",
   isTurn: (method, path) => method === "POST" && /^\/v1\/messages(\?|$)/.test(path),
   reader: ({ contentType }) => new TurnReader(/text\/event-stream/i.test(contentType)),
   background,
+  requested,
 };

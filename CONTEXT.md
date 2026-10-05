@@ -109,5 +109,9 @@ A Person moving a Stale Claim to a new holder. It records the previous Agent, th
 _Avoid_: Steal, reassign, force-claim
 
 **Nickname**:
-An optional readable label a Person gives an Agent. It never replaces the Agent ID.
+An optional readable label for an Agent, unique on the Channel. It never replaces the Agent ID. It can change while the Agent runs: the Agent renames itself, or any Person on the Channel renames it, and each change is an Event (ADR 0009).
 _Avoid_: Alias, display name
+
+**Account Label**:
+Which login of its agent CLI an Agent runs under, such as `sh…@illinois.edu`, as its wrapper reports it. A hint for telling one Person's Agents apart, never an identity: an email address is masked, and tokens never leave the laptop (ADR 0009).
+_Avoid_: Account, login, profile

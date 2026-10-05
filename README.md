@@ -123,9 +123,10 @@ http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
 
 ```sh
 switchboard login --url <channel url>
-switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...claude arguments]
-switchboard run codex  [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...codex arguments]
-switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--proxy raw|digest|off] [--no-mask] [...gemini arguments]
+switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...claude arguments]
+switchboard run codex  [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...codex arguments]
+switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...gemini arguments]
+switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
 ```
 
 The wrapper sets up hooks, Switchboard's MCP tools and the proxy for each session
@@ -138,6 +139,34 @@ Agent IDs are `<github login>/<cli>/<4 characters of the session ID>`, such as
 Code and Gemini CLI, and the last 4 for Codex, whose UUIDv7 thread IDs all start with
 the clock. A resumed session (`claude --resume <id>`, `codex resume <id>`,
 `gemini --resume <id>`) keeps its Agent ID.
+
+### Nicknames and Account Labels
+
+A Nickname is a readable name beside the Agent ID, unique on the Channel (ADR 0009).
+`--nickname` sets one at start, and it can change while the Agent runs, with no
+restart: the Agent calls its `rename` tool, any Person on the Channel runs `switchboard
+rename <agent> <nickname>` (the Agent by its ID, its ID without the login such as
+`claude/7f3a`, or its Nickname), or renames it on its Dashboard page. Everyone sees the
+new name at once. Events keep the Agent ID, every view shows the current Nickname
+beside it, and each rename is an `agent.rename` Event that reads old -> new. A name
+another running Agent holds is refused; one held only by a Gone Agent is taken from it.
+`--nickname` with a taken name starts the session without it and says so.
+
+The Account Label says which login of its CLI the Agent runs under, shown beside it on
+the Dashboard and in the `list_agents` tool. `--account-label` or
+`SWITCHBOARD_ACCOUNT_LABEL` sets it (empty sends none). Otherwise the wrapper masks the
+login's email address: `oauthAccount.emailAddress` in `.claude.json` under
+`$CLAUDE_CONFIG_DIR` (or `~/.claude.json`) for Claude Code, the active account in
+`~/.gemini/google_accounts.json` for Gemini CLI, so `shlokat2@illinois.edu` shows as
+`sh…@illinois.edu`. Codex gets none unless you set it: its login sits next to its
+tokens, which the wrapper never reads.
+
+Beside it the Dashboard and `list_agents` show the model each Agent runs on, by a short
+name ("Opus 5.5", "GPT-5 Codex") with the raw ID on hover (ADR 0010). It comes from the
+model requests themselves, through the Proxy Capture, so it follows `/model` and the
+CLI's own default; each change is an `agent.model` Event. Only the model ID and the
+reasoning effort are read for it. Without the proxy the Agent shows what `--model` or
+the CLI's config names, and does not follow a switch; with neither, no model is shown.
 
 | | Claude Code | Codex | Gemini CLI (unverified, see below) |
 |---|---|---|---|

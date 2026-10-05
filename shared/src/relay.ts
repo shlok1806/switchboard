@@ -31,6 +31,9 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   "command",
   "turn.end",
   "presence",
+  // About names, not work (ADR 0009).
+  "agent.rename",
+  "agent.model",
   "session.start",
   "session.end",
   "claim.refused",

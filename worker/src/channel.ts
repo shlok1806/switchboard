@@ -34,7 +34,7 @@ import type {
 } from "../../shared/src/index";
 import { DEFAULT_GONE_AFTER_SECONDS, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
-import { AGENTS_SCHEMA, AgentRoster, type RosterResult } from "./agents";
+import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
 import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
@@ -150,7 +150,7 @@ export class Channel extends DurableObject<Env> {
         joined_at TEXT NOT NULL
       );
     `);
-    ctx.storage.sql.exec(AGENTS_SCHEMA);
+    createAgentsTable(ctx.storage.sql);
     ctx.storage.sql.exec(HOOK_CAPTURE_SCHEMA);
     ctx.storage.sql.exec(RELAY_SCHEMA);
     ctx.storage.sql.exec(DIRECTIVES_SCHEMA);
@@ -435,6 +435,46 @@ export class Channel extends DurableObject<Env> {
   sendDirective(caller: Caller, to: AgentId, text: string): DirectiveResult {
     this.join(caller.person);
     return this.directives.send(caller, to, text);
+  }
+
+  /**
+   * Renames an Agent (ADR 0009): the Agent itself, through its token (the Tool
+   * Capture), or any Person on the Channel. Everyone hears on the stream.
+   */
+  renameAgent(caller: Caller, id: AgentId, nickname: string | null): RosterResult {
+    if (caller.agent !== undefined && caller.agent !== id) {
+      return {
+        ok: false,
+        status: 403,
+        reason: `This token belongs to Agent ${caller.agent}. An Agent renames itself only.`,
+      };
+    }
+    if (caller.agent === undefined) this.join(caller.person);
+    return this.agents.rename(
+      id,
+      nickname,
+      caller.agent === undefined
+        ? { actor: { kind: "person", person: caller.person }, capture: null }
+        : { actor: { kind: "agent", agentId: caller.agent }, capture: "tool" },
+    );
+  }
+
+  /** The model an Agent runs on, from its wrapper (ADR 0010): the Agent's own token or its own Person. */
+  setAgentModel(
+    caller: Caller,
+    id: AgentId,
+    model: string | null,
+    effort: string | null,
+    via: "proxy" | "config",
+  ): RosterResult {
+    if (caller.agent !== undefined && caller.agent !== id) {
+      return {
+        ok: false,
+        status: 403,
+        reason: `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`,
+      };
+    }
+    return this.agents.setModel(caller.person, id, model, effort, via === "proxy" ? "proxy" : null);
   }
 
   /** Sets an Agent's Proxy mode; only its own Person may. Its wrapper hears on the stream. */

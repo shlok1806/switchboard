@@ -7,7 +7,17 @@
 // response object. The events are the same either way.
 
 import { patchFiles, SHELL_TOOLS, shellCommand } from "../clis/codex-tools";
-import { type ApiFormat, BodyReader, type EventParser, num, record, safeParse, type ToolUse } from "./api";
+import {
+  type ApiFormat,
+  BodyReader,
+  type EventParser,
+  num,
+  type RequestedModel,
+  record,
+  safeParse,
+  type ToolUse,
+  text,
+} from "./api";
 
 /** The events that end a turn. */
 const LAST_EVENTS = new Set(["response.completed", "response.failed", "response.incomplete", "error"]);
@@ -184,11 +194,19 @@ export class ResponsesReader implements EventParser {
   }
 }
 
+/** The model a Responses API request (or `response.create` message) asks for, and `reasoning.effort`. */
+function requested(request: Record<string, unknown>): RequestedModel {
+  const model = text(request.model);
+  const effort = text(record(request.reasoning).effort);
+  return { ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }) };
+}
+
 export const openaiResponses: ApiFormat = {
   name: "openai-responses",
   defaultUpstream: "https://api.openai.com/v1",
   isTurn: (method, path) => method === "POST" && /^\/responses\/?(\?|$)/.test(path),
   reader: ({ contentType }) => new ResponsesReader(contentType),
+  requested,
   websocket: {
     isTurnSocket: (path) => /^\/responses\/?(\?|$)/.test(path),
     // `generate: false` only warms the connection up; the model does not answer it.

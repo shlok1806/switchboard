@@ -173,6 +173,17 @@ export function summarize(e: ChannelEvent): string {
       return `Could not mirror the ${e.payload.change} to GitHub (${e.payload.call}): ${e.payload.reason}`;
     case "verdict":
       return `${VERDICT_LABEL[e.payload.option]} for ${e.payload.agent}`;
+    case "agent.model": {
+      const { from, to, effort } = e.payload;
+      const effortNote = effort ? ` (effort ${effort})` : "";
+      if (from === undefined) return to === undefined ? "Model unknown" : `Model is ${to}${effortNote}`;
+      return `Model ${from} → ${to ?? "unknown"}${effortNote}`;
+    }
+    case "agent.rename": {
+      const { agent, from, to } = e.payload;
+      const who = e.actor.kind === "agent" && e.actor.agentId === agent ? "Renamed itself" : `Renamed ${agent}`;
+      return `${who}: ${from ?? "no Nickname"} → ${to ?? "no Nickname"}`;
+    }
   }
 }
 
@@ -196,6 +207,8 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "session.start": "Session",
   "session.end": "Session",
   presence: "Presence",
+  "agent.rename": "Rename",
+  "agent.model": "Model",
   "tool.call": "Tool call",
   "file.edit": "File edit",
   command: "Command",

@@ -15,7 +15,12 @@
 //            output Claude Code adds to the model's context
 //   model <prompt>
 //         -> one call to the Messages API through ANTHROPIC_BASE_URL, streaming; prints
-//            the status and a hash of the bytes it got back
+//            the status and a hash of the bytes it got back. The request names the
+//            current model and offers the Agent tool, as Claude Code's main thread does
+//   setmodel <id> [effort]
+//         -> like /model: later calls ask for <id>, with `output_config.effort` if given
+//   subagent <id> <prompt>
+//         -> one call as a subagent does: on model <id>, without the Agent tool
 //   edit <path>
 //         -> one Edit tool call on the file at <path> (its PostToolUse hook)
 //   shell <command>
@@ -138,7 +143,10 @@ async function callTool(name, input) {
  * One model turn, the way Claude Code calls the Messages API: to ANTHROPIC_BASE_URL
  * (its settings' `env` wins over the environment), with its API key, streaming.
  */
-async function modelTurn(prompt) {
+let currentModel = "claude-opus-5-5";
+let currentEffort;
+
+async function modelTurn(prompt, subagentModel) {
   const base = settings.env?.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
   try {
     const response = await fetch(`${base}/v1/messages?beta=true`, {
@@ -149,10 +157,14 @@ async function modelTurn(prompt) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-opus-5-5",
+        model: subagentModel ?? currentModel,
         stream: true,
         max_tokens: 1024,
         messages: [{ role: "user", content: prompt }],
+        tools: subagentModel === undefined ? [{ name: "Agent" }, { name: "Bash" }] : [{ name: "Bash" }],
+        ...(currentEffort === undefined || subagentModel !== undefined
+          ? {}
+          : { output_config: { effort: currentEffort } }),
       }),
     });
     const body = Buffer.from(await response.arrayBuffer());
@@ -270,6 +282,14 @@ async function answer(command) {
   }
   const model = /^model (.*)$/.exec(command);
   if (model) await modelTurn(model[1]);
+  const switched = /^setmodel (\S+)(?: (\S+))?$/.exec(command);
+  if (switched) {
+    currentModel = switched[1];
+    currentEffort = switched[2];
+    console.log(`FAKE-CLAUDE model set ${currentModel}`);
+  }
+  const subagent = /^subagent (\S+) (.*)$/.exec(command);
+  if (subagent) await modelTurn(subagent[2], subagent[1]);
   const shell = /^shell (.+)$/.exec(command);
   if (shell) {
     // A Bash tool call: its PreToolUse hooks, the command for real (`\n` in it is a line break), PostToolUse.
