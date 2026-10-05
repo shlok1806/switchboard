@@ -21,6 +21,7 @@
 //   shell <command>
 //         -> one Bash tool call: its PreToolUse hooks, then the command, run for real
 //            in the current directory (`\n` in it is a line break), then PostToolUse
+//   end   -> ends the turn the Person's line started (the Stop hook), leaving it at its prompt
 //   busy <seconds>
 //         -> works for a while, printing as it goes, like a long model turn
 //   permission <tool>
@@ -31,11 +32,14 @@
 // Like Claude Code, it turns bracketed paste on. A pasted text (between the paste
 // markers) followed by Enter is one prompt however many lines it has: it prints
 // `FAKE-CLAUDE pasted prompt=<json> during=<what it was doing>` when the prompt
-// arrives, and runs the UserPromptSubmit hooks when it gets to it.
+// arrives, and runs the UserPromptSubmit hooks when it gets to it. A prompt pasted
+// while it was doing nothing starts a turn of its own: it runs the lines in the file
+// FAKE_CLAUDE_REPLY_FILE names, if any (such as `call post_update {...}`), then ends
+// the turn (the Stop hook).
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -199,14 +203,27 @@ lines.on("line", (line) => {
     console.log(
       `FAKE-CLAUDE pasted prompt=${JSON.stringify(prompt)} before=${JSON.stringify(before)} after=${JSON.stringify(after)} during=${doing}`,
     );
-    queue = queue.then(() => {
+    const idle = doing === "nothing";
+    queue = queue.then(async () => {
       runHooks("UserPromptSubmit", { prompt });
       console.log("FAKE-CLAUDE prompted");
+      if (idle) await pastedTurn();
     });
     return;
   }
   queue = queue.then(() => answer(line.trim()));
 });
+
+/** The turn a prompt pasted at the idle prompt starts: the reply file's lines, then the turn's end. */
+async function pastedTurn() {
+  const file = process.env.FAKE_CLAUDE_REPLY_FILE;
+  const reply = file && existsSync(file) ? readFileSync(file, "utf8") : "";
+  for (const line of reply.split("\n")) {
+    if (line.trim() !== "") await answer(line.trim());
+  }
+  runHooks("Stop", { stop_hook_active: false });
+  console.log("FAKE-CLAUDE pasted turn done");
+}
 
 async function answer(command) {
   const call = /^call (\w+) (.*)$/.exec(command);
@@ -223,6 +240,10 @@ async function answer(command) {
     console.log("FAKE-CLAUDE prompted");
   }
   if (command === "work") console.log("FAKE-CLAUDE working on it");
+  if (command === "end") {
+    runHooks("Stop", { stop_hook_active: false });
+    console.log("FAKE-CLAUDE turn ended");
+  }
   const busy = /^busy (\d+(?:\.\d+)?)$/.exec(command);
   if (busy) {
     doing = "busy";

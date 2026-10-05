@@ -81,6 +81,12 @@ export interface CliAdapter {
    * the line "not empty", so an Interrupt is never typed onto text still there.
    */
   idleClears: boolean;
+  /**
+   * Whether the wrapper wakes this CLI's idle session for what is Queued for it (a
+   * Wake, see wake.ts): true only where its hooks tell when a turn ends and typing a
+   * prompt at its idle prompt was seen to start a turn with the real CLI.
+   */
+  wakes: boolean;
   /** Whether the Proxy Capture can read this CLI's model traffic. */
   proxy: boolean;
   /**

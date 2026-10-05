@@ -20,6 +20,8 @@ import type {
   InterruptAttach,
   InterruptMessage,
   InterruptResult,
+  WakeCappedMessage,
+  WakeMessage,
 } from "../../shared/src/index";
 import {
   agentIdFor,
@@ -41,6 +43,7 @@ import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
 import { channelCheckout, GitError } from "./task-worktree";
+import { Waker } from "./wake";
 
 /** How long the wrapper waits for the Channel to hear that the session ended. */
 const END_TIMEOUT_MS = 3000;
@@ -168,6 +171,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     waitMs: seconds(env.SWITCHBOARD_INTERRUPT_WAIT_SECONDS, DEFAULT_WAIT_MS),
     idleClears: adapter.idleClears,
     log,
+    onPersonPrompt: () => waker?.reset("the Person sent a prompt"),
   });
   // Tells the Channel this socket is the Agent's wrapper, so its Interrupts and Directives come here.
   const attach = () => {
@@ -196,6 +200,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const directed = async (message: DirectiveInterruptMessage) => {
     const { directive } = message;
     log(`Directive ${directive.id} from ${directive.from}`);
+    waker?.reset(`Directive from ${directive.from}`);
     const outcome = await typer.type(directivesNotice([directive]));
     log(
       outcome.typed
@@ -224,9 +229,36 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       log("left next-turn notices for the read_channel tool: the CLI's hooks are not running");
     }
   };
+  // Wakes the Agent while it is idle for what deserves it, instead of waiting for its next turn.
+  const waker = adapter.wakes
+    ? new Waker({
+        type: (produce) => typer.wake(produce),
+        pending: () => hooksRunning && nextTurn.wakeWorthy,
+        take: () => nextTurn.takeForWake(),
+        woke: (batch) => {
+          if (agentId === null) return;
+          const frame: WakeMessage = {
+            type: "wake",
+            agent: agentId,
+            deliveries: batch.deliveries,
+            directives: batch.directives,
+          };
+          if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear of the Wake: not connected");
+        },
+        capped: () => {
+          if (agentId === null) return;
+          const frame: WakeCappedMessage = { type: "wake.capped", agent: agentId };
+          if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear the Wakes stopped: not connected");
+        },
+        log,
+      })
+    : null;
   const addForNextTurn = (items: NextTurnItems) => {
     const kept = nextTurn.add(items);
+    // A Directive is the Person's word: the Agent may be woken again.
+    if ((items.directives ?? []).some((d) => kept.includes(d.id))) waker?.reset("a Directive from its Person");
     heldForTools();
+    waker?.poke();
     return kept;
   };
   const stream = client.follow(
@@ -353,6 +385,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             log("the CLI's hooks are running");
           }
           typer.hook(input);
+          // A turn ended: what arrived meanwhile may wake the Agent now.
+          waker?.poke();
         },
         ...(discovering === null ? {} : { onSessionId: (sessionId: string) => linkTo(sessionId, discovering.resumed) }),
         ...(adapter.translateHook ? { translate: adapter.translateHook } : {}),
@@ -482,6 +516,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   });
 
   clearTimeout(trustTimer);
+  waker?.stop();
   discovering.abort();
   watch.stop();
   stdin.off("data", onInput);

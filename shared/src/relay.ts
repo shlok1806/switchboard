@@ -20,6 +20,8 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   // Addressed and always delivered, without a Verdict (see directives.ts).
   "directive",
   "directive.delivery",
+  // A wrapper waking its own Agent: it delivers what was already relayed (see wakes.ts).
+  "wake",
   // Model context and replies stay on the Dashboard (ADR 0005).
   "proxy.raw",
   "proxy.digest",

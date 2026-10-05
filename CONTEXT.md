@@ -59,8 +59,12 @@ The layer between the channel and each Agent. For every Event and every Agent it
 _Avoid_: Router, filter, gate, arbiter
 
 **Verdict**:
-The Relay's decision for one Event and one Agent. Drop means the Agent never hears about it. Queue means it is delivered at the start of the Agent's next turn. Interrupt means it is sent right away as a prompt into the Agent's running session, which reads it mid-work without being stopped. People on the Dashboard always see every Event, whatever the Verdict.
+The Relay's decision for one Event and one Agent. Drop means the Agent never hears about it. Queue means it is delivered at the start of the Agent's next turn, or by a Wake when it needs the Agent and the Agent is idle. Interrupt means it is sent right away as a prompt into the Agent's running session, which reads it mid-work without being stopped. People on the Dashboard always see every Event, whatever the Verdict.
 _Avoid_: Decision, classification, routing
+
+**Wake**:
+An idle Agent's wrapper typing what waits for its next turn as one prompt, which starts that turn, once its Person is quiet. Only a Directive, an Update on the Agent's Task, or a change to a file it touched wakes it; the rest rides along. An Agent is woken at most 3 times in 10 minutes without a prompt or Directive from its Person, so two Agents cannot wake each other forever.
+_Avoid_: Nudge, ping, poke
 
 ## Participants
 

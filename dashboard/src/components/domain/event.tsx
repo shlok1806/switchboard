@@ -10,6 +10,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { FileDiff } from "./diff";
 import { VerdictTable } from "./verdict";
 import { IssueLink } from "./pending";
+import { useChannel } from "@/data/store";
+import { href } from "@/lib/router";
 
 const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   update: "text-ink",
@@ -145,6 +147,39 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/** A Wake: why the Agent started a turn, and the Events and Directives it was woken with, each a link. */
+function WakeBody({ event }: { event: Extract<ChannelEvent, { type: "wake" }> }) {
+  const { events } = useChannel();
+  const byId = new Map(events.map((e) => [e.id, e]));
+  const delivered = [...event.payload.events, ...event.payload.directives];
+  return (
+    <div className="flex flex-col gap-2.5">
+      <p className="text-[13.5px] leading-relaxed text-ink">
+        The Agent was idle, so its wrapper typed what was waiting for its next turn as one prompt, which started a
+        turn. Its Person did not write that prompt.
+      </p>
+      {delivered.length > 0 && (
+        <ul className="flex flex-col gap-1.5">
+          {delivered.map((id) => {
+            const woken = byId.get(id);
+            return (
+              <li key={id}>
+                <a
+                  href={href({ view: "feed", event: id })}
+                  className="flex min-w-0 flex-col gap-0.5 rounded-lg bg-inset px-3 py-2 transition-colors hover:bg-hover"
+                >
+                  <span className="text-[12px] text-ink-3">{woken ? EVENT_TYPE_LABEL[woken.type] : "Event"}</span>
+                  <span className="truncate text-[13px] text-ink">{woken ? summarize(woken) : id}</span>
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** The body of one Event, by type. */
 export function EventBody({ event }: { event: ChannelEvent }) {
   switch (event.type) {
@@ -242,6 +277,8 @@ export function EventBody({ event }: { event: ChannelEvent }) {
         </div>
       );
     }
+    case "wake":
+      return <WakeBody event={event} />;
     case "directive":
       return (
         <div className="flex flex-col gap-3 rounded-lg bg-inset p-3">
@@ -308,6 +345,7 @@ export function EventDetail({
   taskByNumber,
   threshold,
   verdictsLive = true,
+  woken,
   onClose,
 }: {
   event: ChannelEvent;
@@ -316,6 +354,8 @@ export function EventDetail({
   taskByNumber: Map<number, Task>;
   threshold: number;
   verdictsLive?: boolean;
+  /** The Agents whose Queue Verdict on this Event a Wake delivered. */
+  woken?: ReadonlySet<AgentId>;
   /** Shown as a close button in the header, where the Event opens beside the feed. */
   onClose?: () => void;
 }) {
@@ -373,7 +413,7 @@ export function EventDetail({
         ) : unrelayed !== null ? (
           <p className="rounded-lg bg-inset px-3 py-2.5 text-[13px] text-ink-3">{unrelayed}</p>
         ) : verdictsLive ? (
-          <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
+          <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} woken={woken} />
         ) : (
           <p className="rounded-lg bg-inset px-3 py-2.5 text-[13px] text-ink-3">
             Arrives with the Relay (<IssueLink capability="verdicts" />).

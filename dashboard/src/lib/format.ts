@@ -143,6 +143,8 @@ export function summarize(e: ChannelEvent): string {
       return e.payload.delivered === "interrupt"
         ? `Directive from ${e.payload.from} typed into the session right away`
         : `Directive from ${e.payload.from} held for the next turn${e.payload.reason ? `: ${DOWNGRADE_LABEL[e.payload.reason]}` : ""}`;
+    case "wake":
+      return `Woken while idle for ${wokenFor(e.payload.verdicts.length, e.payload.directives.length)}`;
     case "takeover":
       return `Took over from ${holderName(e.payload.from)} for ${holderName(e.payload.to)}`;
     case "push":
@@ -211,6 +213,7 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   update: "Update",
   directive: "Directive",
   "directive.delivery": "Directive delivery",
+  wake: "Wake",
   takeover: "Takeover",
   push: "Push",
   merge: "Merge",
@@ -238,10 +241,21 @@ export function unrelayedReason(type: EventType): string | null {
     case "directive":
     case "directive.delivery":
       return "Not relayed: a Directive reaches its Agent without a Verdict.";
+    case "wake":
+      return "Not relayed: it delivered what was already Queued for this Agent.";
     case "proxy.raw":
     case "proxy.digest":
       return "Not relayed: model context and replies stay on the Dashboard.";
     default:
       return "Not relayed (lifecycle Event).";
   }
+}
+
+/** What a Wake delivered, such as "2 Queued Events and 1 Directive". */
+function wokenFor(queued: number, directives: number): string {
+  const parts = [
+    ...(queued > 0 ? [`${queued} Queued ${queued === 1 ? "Event" : "Events"}`] : []),
+    ...(directives > 0 ? [`${directives} ${directives === 1 ? "Directive" : "Directives"}`] : []),
+  ];
+  return parts.length > 0 ? parts.join(" and ") : "nothing";
 }

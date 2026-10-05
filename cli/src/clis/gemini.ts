@@ -107,6 +107,8 @@ export const gemini: CliAdapter = {
   binEnv: "SWITCHBOARD_GEMINI_BIN",
   interrupts: false,
   idleClears: false,
+  // Interrupts cannot be typed into it, so neither can a Wake (#63).
+  wakes: false,
   proxy: true,
   sessionFromHooks: true,
 
