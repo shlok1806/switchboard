@@ -6,6 +6,7 @@ import { useCapabilities, useChannel } from "@/data/store";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { Status, StatusIndicator, StatusLabel } from "@/components/kibo-ui/status";
 import { AccountLabel, ModelLabel, PresenceDot, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
+import { AgentUsage } from "@/components/domain/usage";
 import { CLI_LABEL, PRESENCE_LABEL, ago } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -121,9 +122,14 @@ export function AgentsView() {
                           </a>
                           <span className="flex min-w-0 items-center gap-2 text-[12.5px] text-ink-3" title={`Last seen ${ago(a.lastSeenAt)}`}>
                             <span className="truncate">{a.nickname ?? ago(a.lastSeenAt)}</span>
-                            {a.account && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
+                            {a.account && !a.usage?.email && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
                             {a.model && <ModelLabel model={a.model} effort={a.effort} className="flex min-w-0 shrink items-center gap-1" />}
                           </span>
+                          {a.usage && (
+                            <div className="pt-1.5">
+                              <AgentUsage agent={a} compact />
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -164,9 +170,10 @@ export function AgentsView() {
                     <span className="truncate text-[12.5px] text-ink-3">
                       {a.nickname ? `${a.nickname} · ` : ""}
                       {CLI_LABEL[a.cli]}
-                      {a.account ? ` · ${a.account}` : ""}
+                      {a.account && !a.usage?.email ? ` · ${a.account}` : ""}
                       {a.model ? ` · ${modelLabel(a.model)}` : ""}
                     </span>
+                    {a.usage && <AgentUsage agent={a} compact />}
                     {held.length > 0 && <ClaimCell agent={a} tasks={held} />}
                   </div>
                 </div>

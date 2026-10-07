@@ -1,0 +1,20 @@
+Warning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 23% used · resets Oct 7 at 2:39am (America/Chicago)
+Current week (all models): 47% used · resets Oct 8 at 4:59pm (America/Chicago)
+Current week (Fable): 27% used · resets Oct 8 at 4:59pm (America/Chicago)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.
+
+Last 24h · 313 requests · 2 sessions
+  100% of your usage was at >150k context
+  90% of your usage came from sessions active for 8+ hours
+
+Last 7d · 632 requests · 9 sessions
+  92% of your usage was at >150k context
+  67% of your usage came from sessions active for 8+ hours
+  11% of your usage was while 4+ sessions ran in parallel
+  Top skills: /web-designer 8%
+  Top MCP servers: switchboard 1%

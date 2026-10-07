@@ -30,6 +30,8 @@ export interface ClaudeHookInput {
   notification_type?: string;
   tool_input?: Record<string, unknown>;
   tool_response?: unknown;
+  /** Where the session's transcript is, which the wrapper reads for usage (ADR 0011). */
+  transcript_path?: string;
 }
 
 /** The hooks the wrapper installs, and the Claude Code hook names they listen on. */

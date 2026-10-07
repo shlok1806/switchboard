@@ -6,6 +6,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import type {
+  AccountUsage,
   Actor,
   Agent,
   AgentId,
@@ -27,6 +28,7 @@ import type {
   ProxyMode,
   RegisterAgentRequest,
   ReportedPresence,
+  ReportedUsage,
   StreamMessage,
   Task,
   TaskNumber,
@@ -48,6 +50,7 @@ import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
 import { type NewTask, type TaskResult, Tasks, workingTasks } from "./tasks";
+import { AccountUsageStore } from "./usage";
 import { Wakes } from "./wakes";
 
 type EventRow = {
@@ -120,6 +123,7 @@ export class Channel extends DurableObject<Env> {
   private readonly staleClaims: StaleClaims;
   /** Verdicts for every new Event and connected Agent, and Queue deliveries (ADR 0003, ADR 0005). */
   private readonly relay: Relay;
+  private readonly usage: AccountUsageStore;
   /** Directives from Persons to Agents, delivered without the Relay (ADR 0005). */
   private readonly directives: Directives;
   /** Records the wrappers' idle wakes. */
@@ -151,6 +155,7 @@ export class Channel extends DurableObject<Env> {
       );
     `);
     createAgentsTable(ctx.storage.sql);
+    this.usage = new AccountUsageStore(ctx.storage.sql);
     ctx.storage.sql.exec(HOOK_CAPTURE_SCHEMA);
     ctx.storage.sql.exec(RELAY_SCHEMA);
     ctx.storage.sql.exec(DIRECTIVES_SCHEMA);
@@ -401,11 +406,31 @@ export class Channel extends DurableObject<Env> {
     this.join(person);
     const result = this.withNextTurn(await this.agents.register(person, request));
     if (!result.ok) return result;
+    if (request.usage !== undefined) this.recordUsage(request.usage);
     return { ...result, token: await this.access.issueAgentToken(result.agent.id, person) };
   }
 
-  async heartbeat(person: PersonName, id: AgentId, presence: ReportedPresence): Promise<RosterResult> {
-    return this.withNextTurn(await this.agents.heartbeat(person, id, presence));
+  async heartbeat(
+    person: PersonName,
+    id: AgentId,
+    presence: ReportedPresence,
+    usage?: ReportedUsage,
+  ): Promise<RosterResult> {
+    const result = this.withNextTurn(await this.agents.heartbeat(person, id, presence, usage));
+    if (result.ok && usage !== undefined) this.recordUsage(usage);
+    return result;
+  }
+
+  /** Every account the Channel has usage readings for (ADR 0011). */
+  listAccounts(): AccountUsage[] {
+    return this.usage.list();
+  }
+
+  /** Keeps an account's `/usage` reading, when the report names the account, and tells the stream. */
+  private recordUsage(usage: ReportedUsage): void {
+    if (usage.email === undefined || usage.limits === undefined) return;
+    const account = this.usage.record(usage.email, usage.plan, usage.limits);
+    if (account !== null) this.broadcast({ type: "account", account });
   }
 
   /**

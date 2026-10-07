@@ -38,7 +38,7 @@ jobs:
         run: npm run typecheck && npm run lint && npm test
       - name: Dashboard
         working-directory: dashboard
-        run: npm run build
+        run: npm run build && npm test
 
   deploy:
     needs: check

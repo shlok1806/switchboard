@@ -14,7 +14,7 @@ import type {
 } from "@shared/index";
 import { cleanNickname, holderName, sameNickname } from "@shared/index";
 import { ALL_CAPABILITIES, type ChannelSource, type ClaimResult, type ConnectionState } from "../source";
-import { ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
+import { accounts, ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
 import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
 
@@ -50,6 +50,7 @@ export class MockChannelSource implements ChannelSource {
       events: this.events,
       verdicts: this.verdicts,
       relay: RELAY,
+      accounts,
       cursor: this.events.at(-1)?.seq ?? 0,
     });
   }

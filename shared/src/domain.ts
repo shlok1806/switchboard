@@ -3,6 +3,8 @@
  * Every name here follows CONTEXT.md. If a term changes there, change it here.
  */
 
+import type { AgentUsage } from "./usage";
+
 /* ── Participants ─────────────────────────────────────────── */
 
 /** A Person's name: their GitHub login, lowercased (ADR 0007). */
@@ -54,6 +56,11 @@ export interface Agent {
   model?: string;
   /** The reasoning effort the requests ask for, when they carry one (such as `high`). */
   effort?: string;
+  /**
+   * What its wrapper last reported about usage (ADR 0011): the account it runs
+   * under, that account's limits from `/usage`, and its own session's tokens.
+   */
+  usage?: AgentUsage;
   presence: Presence;
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */

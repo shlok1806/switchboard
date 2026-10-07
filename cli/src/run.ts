@@ -37,6 +37,7 @@ import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { type ChannelChoice, ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ChannelClient, ChannelError, targetOf } from "./channel-client";
+import { claudeConfigDir, projectDir } from "./claude-session";
 import type { CliAdapter, ProxyRoute, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
@@ -48,10 +49,18 @@ import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
 import { channelCheckout, GitError } from "./task-worktree";
+import { readAccount } from "./usage/limits";
+import { UsageSchedule } from "./usage/schedule";
+import { SessionTally } from "./usage/session";
+import { UsageWatch } from "./usage/watch";
 import { Waker } from "./wake";
 
 /** How long the wrapper waits for the Channel to hear that the session ended. */
 const END_TIMEOUT_MS = 3000;
+/** How long a session that ends waits for a usage reading in progress. */
+const USAGE_END_WAIT_MS = 10_000;
+/** The environment variable that turns usage readings off (ADR 0011): `off`. */
+const USAGE_ENV = "SWITCHBOARD_USAGE";
 /** How long the wrapper waits for the first SessionStart hook before it says the hooks are not running. */
 const HOOK_TRUST_WAIT_MS = 8000;
 
@@ -425,6 +434,28 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
   }
 
+  // Usage (ADR 0011): the account's limits from Claude Code's own /usage, and the
+  // session's tokens from its transcript, read at the start, after every turn and
+  // every few minutes, and sent with the heartbeat. Claude Code only.
+  const bin = env[adapter.binEnv] || adapter.command;
+  let usage: { schedule: UsageSchedule; tally: SessionTally } | null = null;
+  const watchUsage = (sessionId: string) => {
+    if (usage !== null || adapter.cli !== "claude-code" || env[USAGE_ENV] === "off") return;
+    const tally = new SessionTally(join(projectDir(claudeConfigDir(env), cwd), `${sessionId}.jsonl`));
+    const watch = new UsageWatch(
+      () => readAccount(bin, env, cwd),
+      tally,
+      (reading) => {
+        const { session: limit } = reading.limits ?? {};
+        log(`usage: ${reading.email ?? "unknown account"}${limit ? `, session ${limit.percent}%` : ""}`);
+        link?.reportUsage(reading);
+      },
+      log,
+    );
+    usage = { schedule: new UsageSchedule(() => watch.read(), { log }), tally };
+    usage.schedule.start();
+  };
+
   // The session's Agent, registered once its session ID is known: before launch,
   // or from the first hook or the adapter's `discover` once the CLI has started.
   let link: AgentLink | null = null;
@@ -444,6 +475,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     link = new AgentLink(client, session(sessionId, resumed), heartbeatMs, log, onRegistered, addForNextTurn);
     link.report(idle?.current ?? "live");
     link.start();
+    watchUsage(sessionId);
   };
 
   let sawSessionStart = false;
@@ -470,6 +502,11 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             log("the CLI's hooks are running");
           }
           typer.hook(input);
+          // The hook knows where the session's transcript is.
+          if (typeof input.transcript_path === "string" && input.transcript_path !== "") {
+            usage?.tally.follow(input.transcript_path);
+          }
+          if (input.hook_event_name === "Stop") usage?.schedule.turnEnded();
           // A turn ended: what arrived meanwhile may wake the Agent now.
           waker?.poke();
         },
@@ -503,6 +540,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered, addForNextTurn);
     const expected = agentIdFor(config.person, adapter.cli, plan.sessionId);
     childEnv.SWITCHBOARD_AGENT_ID = expected;
+    watchUsage(plan.sessionId);
     try {
       const agent = await link.register();
       console.error(dim(`switchboard: ${agent.id} is on the Channel for ${repo} at ${config.url}`));
@@ -518,7 +556,6 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
   }
 
-  const bin = env[adapter.binEnv] || adapter.command;
   const stdin = process.stdin;
   const stdout = process.stdout;
   const cliPty = pty.spawn(bin, args, {
@@ -610,7 +647,11 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   if (stdin.isTTY) stdin.setRawMode(false);
   stdin.pause();
   // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
-  await Promise.all([hooks?.drain(END_TIMEOUT_MS), proxy?.drain(END_TIMEOUT_MS)]);
+  await Promise.all([
+    hooks?.drain(END_TIMEOUT_MS),
+    proxy?.drain(END_TIMEOUT_MS),
+    (usage as { schedule: UsageSchedule } | null)?.schedule.finish(USAGE_END_WAIT_MS),
+  ]);
   await (link as AgentLink | null)?.end(END_TIMEOUT_MS, endDetail);
   await stopHooks();
   sessionTools?.dispose();

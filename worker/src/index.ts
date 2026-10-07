@@ -119,6 +119,7 @@ const ROUTES = new Set([
 const AGENT_ROUTES = new Set(["GET /api/events", "GET /api/relay", "POST /api/updates", "GET /api/stream"]);
 const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
   "list",
+  "accounts",
   "heartbeat",
   "end",
   "touched-files",

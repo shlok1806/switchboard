@@ -10,7 +10,7 @@
 // again within the session sends what the Channel last said, never what the
 // wrapper started with, so a change made meanwhile is not undone.
 
-import type { Agent, AgentId, Cli, ProxyMode, ReportedPresence } from "../../shared/src/index";
+import type { Agent, AgentId, Cli, ProxyMode, ReportedPresence, ReportedUsage } from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
 import type { NextTurnItems } from "./next-turn";
 
@@ -42,6 +42,9 @@ export class AgentLink {
   /** Whether the Channel registered the Agent once already, in this session. */
   private registered = false;
   private presence: ReportedPresence = "live";
+  /** The latest usage reading (ADR 0011), and whether the Channel has yet to hear it. */
+  private usage: ReportedUsage | null = null;
+  private usageUnsent = false;
   private timer: ReturnType<typeof setInterval> | undefined;
   private inFlight: Promise<void> = Promise.resolve();
 
@@ -81,6 +84,7 @@ export class AgentLink {
     // What the Channel last knew of the model wins over the configured one: the proxy may have seen a switch.
     const model = known?.model ?? this.session.model;
     const effort = known?.model !== undefined ? known.effort : this.session.effort;
+    const sentUsage = this.usage;
     const answer = await this.client.register({
       cli: this.session.cli,
       sessionId: this.session.sessionId,
@@ -93,10 +97,12 @@ export class AgentLink {
       ...(proxyMode === undefined ? {} : { proxyMode }),
       ...(this.session.secretMasking === undefined ? {} : { secretMasking: this.session.secretMasking }),
       ...(this.session.interrupts === undefined ? {} : { interrupts: this.session.interrupts }),
+      ...(sentUsage === null ? {} : { usage: sentUsage }),
       // Registered before in this session: the session goes on, it does not start again.
       ...(this.registered ? { rejoin: true } : {}),
     });
     const { agent } = answer;
+    if (this.usage === sentUsage) this.usageUnsent = false;
     this.agent = agent;
     this.known = agent;
     this.registered = true;
@@ -118,12 +124,21 @@ export class AgentLink {
     this.beat();
   }
 
+  /** Sends a new usage reading (ADR 0011) with a heartbeat right away; a failed one goes with the next. */
+  reportUsage(usage: ReportedUsage): void {
+    this.usage = usage;
+    this.usageUnsent = true;
+    this.beat();
+  }
+
   /**
    * The session ended, for `detail` (the agent CLI's own reason, when it gave one).
    * Waits at most `timeoutMs` for the Channel to hear it.
    */
   async end(timeoutMs: number, detail?: string): Promise<void> {
     clearInterval(this.timer);
+    // A usage reading the Channel has not heard yet goes first, so a short session reports it.
+    if (this.usageUnsent && this.agent !== null) this.beat();
     await this.inFlight;
     if (!this.agent) return;
     try {
@@ -159,7 +174,9 @@ export class AgentLink {
       }
       const id = this.agent?.id;
       if (!id) return;
-      const answer = await this.client.heartbeat(id, this.presence);
+      const usage = this.usageUnsent && this.usage !== null ? this.usage : undefined;
+      const answer = await this.client.heartbeat(id, this.presence, usage);
+      if (usage !== undefined && usage === this.usage) this.usageUnsent = false;
       this.agentChanged(answer.agent);
       this.handOver(answer);
     } catch (error) {

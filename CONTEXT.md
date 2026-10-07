@@ -115,3 +115,7 @@ _Avoid_: Alias, display name
 **Account Label**:
 Which login of its agent CLI an Agent runs under, such as `sh…@illinois.edu`, as its wrapper reports it. A hint for telling one Person's Agents apart, never an identity: an email address is masked, and tokens never leave the laptop (ADR 0009).
 _Avoid_: Account, login, profile
+
+**Usage Reading**:
+How much of its Claude account's limits an Agent's account has used, as Claude Code's own `/usage` reports it (the session, the week and each model's week, with their resets), with the account's full email address and plan and what the Agent's own session used. The wrapper sends one with the Agent's heartbeat; the Dashboard shows one card per account (ADR 0011).
+_Avoid_: Quota, billing, limits report

@@ -6,6 +6,7 @@ import type { LostClaim } from "./claims";
 import type { DirectiveDelivery } from "./directives";
 import type { Agent, AgentId, Cli, PersonName, ProxyMode } from "./domain";
 import type { Delivery } from "./relay";
+import type { ReportedUsage } from "./usage";
 
 /** The short CLI name used in an Agent ID, such as `claude` in `shlok/claude/7f3a`. */
 export const CLI_SHORT_NAMES: Record<Cli, string> = {
@@ -211,6 +212,8 @@ export interface RegisterAgentRequest {
    * it cannot: the Relay then delivers the Agent's Interrupts as Queue, downgraded.
    */
   interrupts?: boolean;
+  /** The latest usage reading (ADR 0011). Omitted keeps the Channel's. */
+  usage?: ReportedUsage;
 }
 
 /** `POST /api/agents` and `POST /api/agents/:id/heartbeat` answer with the Agent. */
@@ -263,6 +266,8 @@ export interface RenameAgentRequest {
  */
 export interface HeartbeatRequest {
   presence: ReportedPresence;
+  /** A new usage reading (ADR 0011), sent when the wrapper has one. Omitted keeps the Channel's. */
+  usage?: ReportedUsage;
 }
 
 /** `POST /api/agents/:id/end`: the session ended. The Agent goes Gone until it resumes. */

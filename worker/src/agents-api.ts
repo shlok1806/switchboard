@@ -8,10 +8,12 @@
 //   POST /api/agents/:id/proxy-mode  set the Agent's Proxy mode; its own Person only
 //   POST /api/agents/:id/nickname    rename the Agent; itself, or any Person (ADR 0009)
 //   POST /api/agents/:id/model       the model it runs on; itself or its Person (ADR 0010)
+//   GET  /api/accounts               every account's usage readings (ADR 0011)
 //
 // `:id` is the URL-encoded Agent ID, since Agent IDs contain "/".
 
 import type {
+  AccountsResponse,
   AgentId,
   AgentResponse,
   AgentsResponse,
@@ -25,6 +27,7 @@ import {
   cleanAccountLabel,
   cleanModelField,
   cleanNickname,
+  cleanUsage,
   MAX_ACCOUNT_LABEL_LENGTH,
   MAX_EFFORT_LENGTH,
   MAX_MODEL_LENGTH,
@@ -39,6 +42,7 @@ import { fail, json, readJson } from "./http";
 
 export type AgentRoute =
   | { kind: "list" }
+  | { kind: "accounts" }
   | { kind: "register" }
   | { kind: "heartbeat"; id: AgentId }
   | { kind: "end"; id: AgentId }
@@ -82,6 +86,7 @@ function parseNickname(nickname: unknown): string | null | undefined | false {
 
 /** Returns the Agent route a request is for, or null when it is not one. */
 export function matchAgentRoute(method: string, pathname: string): AgentRoute | null {
+  if (pathname === "/api/accounts") return method === "GET" ? { kind: "accounts" } : null;
   if (pathname === "/api/agents") {
     if (method === "GET") return { kind: "list" };
     if (method === "POST") return { kind: "register" };
@@ -117,7 +122,9 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
     interrupts,
     source,
     rejoin,
+    usage,
   } = body;
+  const cleanedUsage = cleanUsage(usage);
   if (source !== undefined && typeof source !== "string") return { ok: false, reason: '"source" must be text.' };
   if (rejoin !== undefined && typeof rejoin !== "boolean") {
     return { ok: false, reason: '"rejoin" must be true or false.' };
@@ -164,6 +171,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
       ...(interrupts === undefined ? {} : { interrupts }),
       ...(source === undefined ? {} : { source: source.slice(0, 40) }),
       ...(rejoin === undefined ? {} : { rejoin }),
+      ...(cleanedUsage === undefined ? {} : { usage: cleanedUsage }),
     },
   };
 }
@@ -195,15 +203,18 @@ export async function handleAgentRoute(
   switch (route.kind) {
     case "list":
       return json<AgentsResponse>({ agents: await channel.listAgents() });
+    case "accounts":
+      return json<AccountsResponse>({ accounts: await channel.listAccounts() });
     case "register": {
       const parsed = parseRegister(await readJson(request));
       if (!parsed.ok) return fail(400, parsed.reason);
       return answer(await channel.registerAgent(person, parsed.value));
     }
     case "heartbeat": {
-      const { presence } = await readJson(request);
+      const { presence, usage } = await readJson(request);
       if (presence !== "live" && presence !== "idle") return fail(400, '"presence" must be "live" or "idle".');
-      return answer(await channel.heartbeat(person, route.id, presence));
+      // A usage report that does not parse is left out, never a refusal: the heartbeat is what matters.
+      return answer(await channel.heartbeat(person, route.id, presence, cleanUsage(usage)));
     }
     case "end": {
       const { detail } = await readJson(request);

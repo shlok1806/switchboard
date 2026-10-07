@@ -9,6 +9,7 @@ import { Banner, BannerAction, BannerClose, BannerIcon, BannerTitle } from "@/co
 import LoadingState from "@/components/primitives/LoadingState";
 import { Button } from "@/components/atoms/Button";
 import { CommandPalette } from "@/components/domain/palette";
+import { AccountsPanel } from "@/components/domain/usage";
 import { useChannel, useIndex, useStore } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { DOWNGRADE_LABEL, prob } from "@/lib/format";
@@ -182,6 +183,7 @@ export default function App() {
         </header>
         {route.view !== "tasks" && <StaleBanner />}
         <Crumb route={route} taskTitle={route.view === "task" ? taskByNumber.get(route.number)?.title : undefined} />
+        {(route.view === "feed" || route.view === "agents" || route.view === "tasks") && <AccountsPanel />}
         <main className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] md:pb-0">
           <Suspense fallback={<ViewFallback />}>
             {route.view === "feed" && <FeedView selected={route.event} />}
