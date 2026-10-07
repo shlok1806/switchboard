@@ -330,15 +330,12 @@ afterEach(async () => {
 });
 
 describe("Verdicts", () => {
-  it("drops a file edit with no overlap without asking Jev, and records it", async () => {
+  it("drops an Event with no overlap and nothing addressed to the Agent without asking Jev, and records it", async () => {
     const alice = await FakeAgent.start("alice");
     const bob = await FakeAgent.start("bob");
     await alice.edited("web/users.tsx");
-    await bob.edited("README.md");
-    const update = (await events()).find(
-      (e) => e.type === "file.edit" && e.actor.kind === "agent" && e.actor.agentId === bob.id,
-    );
-    if (!update) throw new Error("No file edit Event");
+    const response = await post("/api/updates", "bob", { text: "Tidying the README" }, bob.id);
+    const update = (await response.json<{ event: ChannelEvent }>()).event;
 
     const [verdict] = await verdictsOn(update.id, 1);
     expect(verdict).toMatchObject({
@@ -356,65 +353,6 @@ describe("Verdicts", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect((await verdictEvents()).filter((e) => e.payload.event === update.id)).toHaveLength(1);
     expect(alice.deliveries).toEqual([]);
-  });
-
-  it.each([
-    "codex: if #2 touches any of your work, let me know",
-    "#2 done locally: farewell(user) in src/greet.js now calls formatName too",
-    "#2 ready for review: https://github.com/shlok1806/switchboard/pull/9",
-  ])("asks Jev about a deliberate Update without file overlap: %s", async (text) => {
-    const { alice, bob } = await twoAgents();
-    await alice.edited("src/users.js");
-    const response = await post("/api/updates", "bob", { text, task: 2 }, bob.id);
-    expect(response.status).toBe(201);
-    const update = (await response.json<{ event: ChannelEvent }>()).event;
-
-    expect(await verdictsOn(update.id, 1)).toMatchObject([
-      { agent: alice.id, source: "jev", delivered: "queue", overlap: { files: [], symbols: [] } },
-    ]);
-    expect(jev.calls).toHaveLength(1);
-    expect(jev.calls[0]).toMatchObject({
-      agent: { id: alice.id, task: { number: 1 }, filesTouched: ["src/users.js"] },
-      event: {
-        sender: bob.id,
-        type: "update",
-        task: { number: 2 },
-        summary: `posted an Update: ${JSON.stringify(text)}`,
-      },
-      overlap: { sharedFiles: [], symbolsAgentUses: [], addressedToAgent: null },
-    });
-    await waitFor(async () => (alice.deliveries.length === 1 ? true : undefined));
-    expect(alice.deliveries[0]).toMatchObject({
-      event: update.id,
-      summary: `posted an Update: ${JSON.stringify(text)}`,
-    });
-    expect(bob.deliveries).toEqual([]);
-  });
-
-  it("lets Jev drop an irrelevant Update with no overlap", async () => {
-    const alice = await FakeAgent.start("alice");
-    const bob = await FakeAgent.start("bob");
-    jev.answer = { drop: 1, queue: 0, interrupt: 0 };
-    const response = await post("/api/updates", "bob", { text: "Tidying the README" }, bob.id);
-    const update = (await response.json<{ event: ChannelEvent }>()).event;
-    expect(await verdictsOn(update.id, 1)).toMatchObject([
-      { agent: alice.id, source: "jev", delivered: "drop", overlap: { files: [], symbols: [] } },
-    ]);
-    expect(jev.calls).toHaveLength(1);
-    expect(alice.deliveries).toEqual([]);
-  });
-
-  it("queues an Update with no overlap when Jev fails", async () => {
-    const alice = await FakeAgent.start("alice");
-    const bob = await FakeAgent.start("bob");
-    jev.failure = new Error("Jev unavailable");
-    const response = await post("/api/updates", "bob", { text: "The shared helper has a new caller" }, bob.id);
-    const update = (await response.json<{ event: ChannelEvent }>()).event;
-    expect(await verdictsOn(update.id, 1)).toMatchObject([
-      { agent: alice.id, source: "fallback", delivered: "queue", error: "Jev unavailable" },
-    ]);
-    await waitFor(async () => (alice.deliveries.length === 1 ? true : undefined));
-    expect(alice.deliveries[0]?.event).toBe(update.id);
   });
 
   it("asks Jev about overlap, with the Agent's work, the Event and the overlap as structured state", async () => {
@@ -798,10 +736,7 @@ describe("Queue delivery", () => {
     expect((await verdictEvents()).some((e) => e.payload.event === raw.id)).toBe(false);
     expect(jev.calls.some((state) => JSON.stringify(state).includes("IGNORE ALL"))).toBe(false);
     expect(JSON.stringify(alice.deliveries)).not.toContain("IGNORE ALL");
-    // The deliberate Update is delivered; the preceding raw Proxy Event is not.
-    const pending = (await alice.heartbeat()).deliveries;
-    expect(pending?.map((delivery) => delivery.event)).toEqual([update.id]);
-    expect(JSON.stringify(pending)).not.toContain("IGNORE ALL");
+    expect((await alice.heartbeat()).deliveries).toBeUndefined();
 
     // And the compiler refuses to build a Delivery from an Event that skipped the guard.
     const stored = (await events()).find((e) => e.id === raw.id);
