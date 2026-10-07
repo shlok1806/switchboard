@@ -44,17 +44,21 @@ export class UsageSchedule {
   }
 
   /**
-   * The session is ending: waits at most `timeoutMs` for a read in progress, or
-   * reads once now when none has started yet, so even a short session reports.
+   * The session is ending: waits at most `timeoutMs` for a read in progress, then
+   * reads once more when none has run yet or a turn ended since the last one, so
+   * even a short session reports what its last turn used. The floor does not
+   * hold this last read back.
    */
   async finish(timeoutMs: number): Promise<void> {
     clearTimeout(this.timer);
-    if (!this.stopped && this.lastStart === null) void this.run();
+    if (this.stopped) return;
     this.stopped = true;
-    const current = this.current;
-    if (current === null) return;
+    const last = (async () => {
+      if (this.current !== null) await this.current;
+      if (this.lastStart === null || this.wanted) await this.run(true);
+    })();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([current, new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)))]);
+    await Promise.race([last, new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)))]);
     clearTimeout(timer);
   }
 
@@ -77,8 +81,8 @@ export class UsageSchedule {
     this.timer.unref?.();
   }
 
-  private async run(): Promise<void> {
-    if (this.stopped || this.running) return;
+  private async run(last = false): Promise<void> {
+    if ((this.stopped && !last) || this.running) return;
     this.running = true;
     this.wanted = false;
     this.lastStart = Date.now();

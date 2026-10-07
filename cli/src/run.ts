@@ -647,11 +647,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   if (stdin.isTTY) stdin.setRawMode(false);
   stdin.pause();
   // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
-  await Promise.all([
-    hooks?.drain(END_TIMEOUT_MS),
-    proxy?.drain(END_TIMEOUT_MS),
-    (usage as { schedule: UsageSchedule } | null)?.schedule.finish(USAGE_END_WAIT_MS),
-  ]);
+  await Promise.all([hooks?.drain(END_TIMEOUT_MS), proxy?.drain(END_TIMEOUT_MS)]);
+  // Then the last usage reading, once the last turn end has been seen.
+  await (usage as { schedule: UsageSchedule } | null)?.schedule.finish(USAGE_END_WAIT_MS);
   await (link as AgentLink | null)?.end(END_TIMEOUT_MS, endDetail);
   await stopHooks();
   sessionTools?.dispose();
