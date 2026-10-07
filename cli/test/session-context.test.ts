@@ -53,6 +53,12 @@ describe("main-session context", () => {
     });
     expect(p.context.autoCompactions).toBeUndefined();
   });
+  it("finds the Person's first brief in a Codex rollout without user_message events, excluding injected context", async () => {
+    const p = new ContextParser("codex");
+    for (const e of await fixture("codex-rollout.jsonl")) p.entry(e);
+    expect(p.context).toMatchObject({ task: "Review the login flow", tokens: 166400, window: 258400 });
+    expect(p.context.brief).toBe("Review the login flow\nDB_PASSWORD=****");
+  });
   it("retains partial appended lines, reads after completion, and keeps the first brief", async () => {
     const dir = await mkdtemp(join(tmpdir(), "context-test-"));
     dirs.push(dir);

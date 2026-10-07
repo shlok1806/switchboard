@@ -171,6 +171,18 @@ export class ContextParser {
         }
       }
       if (e.type === "response_item") {
+        if (p.type === "message" && p.role === "user") {
+          // Some rollouts have no user_message event. Initial injected instructions
+          // and environment blocks are user-role items too, but are not the brief.
+          this.prompt(
+            p.content?.filter(
+              (part) =>
+                part.text &&
+                !part.text.startsWith("# AGENTS.md instructions") &&
+                !part.text.startsWith("<environment_context>"),
+            ),
+          );
+        }
         if (p.type === "function_call" || p.type === "custom_tool_call")
           this.context.activity = maskSecrets(`Tool: ${p.name}`).text.slice(0, 120);
       }
