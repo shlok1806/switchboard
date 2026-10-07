@@ -150,6 +150,25 @@ describe("when the wrapper reads usage", () => {
     s.stop();
   });
 
+  it("reads once more when the session ends after a turn, even within the minute", async () => {
+    const { s, reads } = schedule();
+    s.start();
+    await vi.advanceTimersByTimeAsync(5_000);
+    s.turnEnded();
+    await s.finish(1000);
+    expect(reads).toEqual([0, 5_000]);
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(reads).toEqual([0, 5_000]);
+  });
+
+  it("does not read again at the end when nothing happened since the last read", async () => {
+    const { s, reads } = schedule();
+    s.start();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await s.finish(1000);
+    expect(reads).toEqual([0]);
+  });
+
   it("reads once when a session ends before its first read, and stops", async () => {
     const { s, reads } = schedule();
     await s.finish(1000);
