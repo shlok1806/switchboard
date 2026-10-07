@@ -5,8 +5,7 @@
 //    addressed to the Agent: its Task or its Claim changing. Directives never
 //    reach the Relay: they are addressed and always delivered (directives.ts).
 // 2. With neither, it Drops without asking Jev, and still records the Verdict
-//    (source "rule"), except Updates: deliberate messages always reach Jev,
-//    because they can address an Agent or affect work it has not touched yet.
+//    (source "rule").
 // 3. Otherwise it asks Jev one choice question with structured state (issue #3).
 //    An Interrupt below the threshold becomes a Queue. Jev failing or timing out
 //    never loses the Event: it is Queued (source "fallback") and logged.
@@ -274,12 +273,7 @@ export class Relay {
     const plans = this.plan(event);
     const asked: Plan[] = [];
     for (const plan of plans) {
-      if (
-        event.type !== "update" &&
-        plan.overlap.files.length === 0 &&
-        plan.overlap.symbols.length === 0 &&
-        plan.addressed === null
-      ) {
+      if (plan.overlap.files.length === 0 && plan.overlap.symbols.length === 0 && plan.addressed === null) {
         this.record(event, plan, {
           option: "drop",
           delivered: "drop",
