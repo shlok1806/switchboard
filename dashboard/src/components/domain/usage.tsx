@@ -109,7 +109,7 @@ function StaleLabel({ readAt, now }: { readAt: string; now: number }) {
 function Limits({ limits, now, stale }: { limits: LimitsReading; now: number; stale: boolean }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2">
-      {limits.session && <Meter label="Session" limit={limits.session} now={now} stale={stale} />}
+      {limits.session && <Meter label="5-hour" limit={limits.session} now={now} stale={stale} />}
       {limits.week && <Meter label="Week (all models)" limit={limits.week} now={now} stale={stale} />}
       {limits.models.map((m) => (
         <Meter key={m.model} label={`Week (${m.model})`} limit={m} now={now} stale={stale} />
@@ -165,7 +165,7 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
           <span className="font-medium whitespace-nowrap text-ink">
             {card.agents.length === 0 ? "No Agents running" : `${card.agents.length} ${card.agents.length === 1 ? "Agent" : "Agents"} running`}
           </span>
-          {card.agents.length > 0 && (
+          {card.agents.some((a) => a.session !== undefined) && (
             <span className="text-ink-3">
               <Used session={card.total} />
             </span>
@@ -264,13 +264,13 @@ export function AgentUsage({ agent, compact: small = false }: { agent: Agent; co
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-[12px] text-ink-3">
-        {usage.email && <span className="truncate font-mono text-ink-2">{usage.email}</span>}
+        {(usage.email ?? usage.accountId) && <span className="truncate font-mono text-ink-2">{usage.email ?? usage.accountId}</span>}
         <Used session={usage.session} />
         {stale && limits && <StaleLabel readAt={limits.readAt} now={now} />}
       </span>
       {limits && (limits.session || limits.week) && (
         <div className={cn("grid gap-3", small ? "max-w-[320px] grid-cols-2" : "sm:grid-cols-2")}>
-          {limits.session && <Meter label="Session" limit={limits.session} now={now} stale={stale} compact={small} />}
+          {limits.session && <Meter label="5-hour" limit={limits.session} now={now} stale={stale} compact={small} />}
           {limits.week && <Meter label="Week" limit={limits.week} now={now} stale={stale} compact={small} />}
         </div>
       )}

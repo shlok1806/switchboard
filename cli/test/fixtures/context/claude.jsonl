@@ -1,0 +1,5 @@
+{"type": "user", "message": {"content": "Fix the login redirect\nDB_PASSWORD=private-value"}}
+{"type": "assistant", "message": {"model": "claude-sonnet-5-5", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 3651, "cache_read_input_tokens": 89732, "output_tokens": 591}, "content": [{"type": "tool_use", "name": "Read"}]}}
+{"type": "assistant", "isSidechain": true, "message": {"usage": {"input_tokens": 999999}}}
+{"type": "system", "subtype": "compact_boundary", "compactMetadata": {"trigger": "auto"}}
+{"type": "system", "subtype": "compact_boundary", "compactMetadata": {"trigger": "manual"}}

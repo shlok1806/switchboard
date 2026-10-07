@@ -10,7 +10,15 @@
 // again within the session sends what the Channel last said, never what the
 // wrapper started with, so a change made meanwhile is not undone.
 
-import type { Agent, AgentId, Cli, ProxyMode, ReportedPresence, ReportedUsage } from "../../shared/src/index";
+import type {
+  Agent,
+  AgentContext,
+  AgentId,
+  Cli,
+  ProxyMode,
+  ReportedPresence,
+  ReportedUsage,
+} from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
 import type { NextTurnItems } from "./next-turn";
 
@@ -45,6 +53,7 @@ export class AgentLink {
   /** The latest usage reading (ADR 0011), and whether the Channel has yet to hear it. */
   private usage: ReportedUsage | null = null;
   private usageUnsent = false;
+  readContext?: () => Promise<{ context: AgentContext; usage?: ReportedUsage }>;
   private timer: ReturnType<typeof setInterval> | undefined;
   private inFlight: Promise<void> = Promise.resolve();
 
@@ -138,7 +147,7 @@ export class AgentLink {
   async end(timeoutMs: number, detail?: string): Promise<void> {
     clearInterval(this.timer);
     // A usage reading the Channel has not heard yet goes first, so a short session reports it.
-    if (this.usageUnsent && this.agent !== null) this.beat();
+    if ((this.usageUnsent || this.readContext !== undefined) && this.agent !== null) this.beat();
     await this.inFlight;
     if (!this.agent) return;
     try {
@@ -175,7 +184,11 @@ export class AgentLink {
       const id = this.agent?.id;
       if (!id) return;
       const usage = this.usageUnsent && this.usage !== null ? this.usage : undefined;
-      const answer = await this.client.heartbeat(id, this.presence, usage);
+      const reading = await this.readContext?.().catch((error: Error) => {
+        this.log(`context reading failed: ${error.message}`);
+        return undefined;
+      });
+      const answer = await this.client.heartbeat(id, this.presence, reading?.usage ?? usage, reading?.context);
       if (usage !== undefined && usage === this.usage) this.usageUnsent = false;
       this.agentChanged(answer.agent);
       this.handOver(answer);

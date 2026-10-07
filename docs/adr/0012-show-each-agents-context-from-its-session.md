@@ -1,0 +1,13 @@
+# Each Agent shows its current context and brief from its own session
+
+The owner wants the context window at the top of each Agent card and in the Agents view, with what it is doing beside it. The wrapper reads the main session locally on every heartbeat and sends an optional `context` reading. The Worker stores the latest reading on the Agent and broadcasts it without an Event, following ADR 0011. Older wrappers preserve the reading; malformed optional telemetry never refuses Presence.
+
+Claude Code reports current input plus cache read and cache creation tokens from the latest assistant request, not the cumulative session tally and not subagents. Its transcript records automatic compact boundaries. Explicit context sizes win; otherwise documented Claude Code model windows are used, honoring its context environment overrides. Unknown models have no guessed window. Codex reports `last_token_usage.total_tokens` and `model_context_window` from `token_count` events. Compactions without an automatic/manual reason are not claimed to be automatic. Gemini reports input tokens and an explicit window when its session JSON provides them. Missing data is shown as unavailable, never zero percent.
+
+The context meter is green below 50%, amber from 50% through 80%, and red above 80% with a warning badge. Context fullness is independent of account limit meters. A reading older than 15 minutes is marked stale.
+
+The first Person prompt supplies a 160-character task summary and an expandable full brief. Briefs and activity text always use the Proxy's secret masking before truncation, even when Proxy masking is disabled. The wire bounds a brief to 64 KiB. The latest tool name or message line supplies a 120-character activity; tool arguments and results are never sent. Working directory, current git branch, model and elapsed runtime accompany it.
+
+This extends ADR 0011's Claude-only Usage Reading to Codex: `rate_limits.primary` and `secondary` supply 5-hour and weekly percentages and reset times, without a separate API call or opening authentication files. A Codex reading carries `accountId` instead of a fabricated email. An explicit Account Label groups sessions under that label and Person; without one a session-scoped label keeps unidentified accounts apart. The existing account storage's `email` key is also used for these labelled account identifiers for backwards compatibility. Tokens and authentication files remain local. `SWITCHBOARD_USAGE=off` disables account reporting, not context readings.
+
+New fields are optional on registration and heartbeat. An installed CLI update affects new or resumed wrappers; an already-running wrapper keeps its loaded code until it restarts.

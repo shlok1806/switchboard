@@ -2,6 +2,8 @@
  * The Agent part of the Channel API: how the laptop wrapper registers an Agent,
  * reports its Presence with heartbeats and ends its session. Terms follow CONTEXT.md.
  */
+
+import type { AgentContext } from "./agent-context";
 import type { LostClaim } from "./claims";
 import type { DirectiveDelivery } from "./directives";
 import type { Agent, AgentId, Cli, PersonName, ProxyMode } from "./domain";
@@ -48,16 +50,22 @@ export const MAX_ACCOUNT_LABEL_LENGTH = 64;
  * characters removed. Empty means none. Returns undefined when it is too long.
  */
 export function cleanNickname(raw: string): string | null | undefined {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
-  const clean = raw.replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  const clean = raw
+    .replace(/\s+/g, " ")
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim();
   if (clean.length > MAX_NICKNAME_LENGTH) return undefined;
   return clean === "" ? null : clean;
 }
 
 /** An Account Label as the Channel stores it: like a Nickname, cut to `MAX_ACCOUNT_LABEL_LENGTH`. Empty means none. */
 export function cleanAccountLabel(raw: string): string | null {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
-  const clean = raw.replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  const clean = raw
+    .replace(/\s+/g, " ")
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim();
   return clean === "" ? null : clean.slice(0, MAX_ACCOUNT_LABEL_LENGTH);
 }
 
@@ -101,9 +109,10 @@ const MODEL_WORDS: Record<string, string> = {
 export function modelLabel(id: string): string {
   const model = id.trim();
   // claude-opus-5-5, claude-haiku-4-5-20251001, claude-sonnet-4-20250514, claude-opus-4-1[1m]
-  const claude = /^(?:anthropic[./])?claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:-v\d+(?::\d+)?)?(\[1m\])?$/i.exec(
-    model,
-  );
+  const claude =
+    /^(?:anthropic[./])?claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:-v\d+(?::\d+)?)?(\[1m\])?$/i.exec(
+      model,
+    );
   if (claude?.[1] && claude[2]) {
     const version = claude[3] === undefined ? claude[2] : `${claude[2]}.${claude[3]}`;
     return `${CLAUDE_FAMILIES[claude[1].toLowerCase()]} ${version}${claude[4] ? " (1M)" : ""}`;
@@ -117,7 +126,10 @@ export function modelLabel(id: string): string {
   const gpt = /^gpt-(\d+(?:\.\d+)?)((?:-(?:codex|mini|nano|pro|max))*)$/i.exec(model);
   if (gpt?.[1] !== undefined) return [`GPT-${gpt[1]}`, ...words(gpt[2] ?? "")].join(" ");
   // gemini-3-pro-preview, gemini-2.5-flash-lite
-  const gemini = /^(?:models\/)?gemini-(\d+(?:\.\d+)?)((?:-(?:pro|flash|lite))*)(?:-preview(?:-[\w-]+)?|-latest|-\d{3})?$/i.exec(model);
+  const gemini =
+    /^(?:models\/)?gemini-(\d+(?:\.\d+)?)((?:-(?:pro|flash|lite))*)(?:-preview(?:-[\w-]+)?|-latest|-\d{3})?$/i.exec(
+      model,
+    );
   if (gemini?.[1] !== undefined) return [`Gemini ${gemini[1]}`, ...words(gemini[2] ?? "")].join(" ");
   return model;
 }
@@ -214,6 +226,7 @@ export interface RegisterAgentRequest {
   interrupts?: boolean;
   /** The latest usage reading (ADR 0011). Omitted keeps the Channel's. */
   usage?: ReportedUsage;
+  context?: AgentContext;
 }
 
 /** `POST /api/agents` and `POST /api/agents/:id/heartbeat` answer with the Agent. */
@@ -268,6 +281,7 @@ export interface HeartbeatRequest {
   presence: ReportedPresence;
   /** A new usage reading (ADR 0011), sent when the wrapper has one. Omitted keeps the Channel's. */
   usage?: ReportedUsage;
+  context?: AgentContext;
 }
 
 /** `POST /api/agents/:id/end`: the session ended. The Agent goes Gone until it resumes. */

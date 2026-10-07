@@ -5,7 +5,7 @@
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -451,6 +451,22 @@ describe("switchboard run claude", () => {
 
     const agent = await waitFor("the Agent", async () => (await agents()).find((a) => a.id === firstId));
     expect(agent).toMatchObject({ person: "e2e", cli: "claude-code", nickname: "scout" });
+
+    // Real session-log shapes, read through the built wrapper's heartbeat to the Dashboard API.
+    const transcript = join(scratch, "claude", "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+    await appendFile(transcript, await readFile(join(here, "fixtures/context/claude.jsonl"), "utf8"));
+    const withContext = await waitFor("the Agent context heartbeat", async () => {
+      const a = (await agents()).find((a) => a.id === firstId);
+      return a?.context?.tokens === 93385 ? a : undefined;
+    });
+    expect(withContext.context).toMatchObject({
+      window: 1000000,
+      task: "Fix the login redirect",
+      autoCompactions: 1,
+      activity: "Tool: Read",
+      cwd,
+    });
+    expect(withContext.context?.brief).not.toContain("private-value");
 
     // No output for a second: Idle. Output again: Live.
     await waitForPresence(firstId, "idle");

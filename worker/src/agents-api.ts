@@ -25,6 +25,7 @@ import type {
 import {
   CLIS,
   cleanAccountLabel,
+  cleanContext,
   cleanModelField,
   cleanNickname,
   cleanUsage,
@@ -123,8 +124,10 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
     source,
     rejoin,
     usage,
+    context,
   } = body;
   const cleanedUsage = cleanUsage(usage);
+  const cleanedContext = cleanContext(context);
   if (source !== undefined && typeof source !== "string") return { ok: false, reason: '"source" must be text.' };
   if (rejoin !== undefined && typeof rejoin !== "boolean") {
     return { ok: false, reason: '"rejoin" must be true or false.' };
@@ -171,6 +174,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
       ...(interrupts === undefined ? {} : { interrupts }),
       ...(source === undefined ? {} : { source: source.slice(0, 40) }),
       ...(rejoin === undefined ? {} : { rejoin }),
+      ...(cleanedContext === undefined ? {} : { context: cleanedContext }),
       ...(cleanedUsage === undefined ? {} : { usage: cleanedUsage }),
     },
   };
@@ -211,10 +215,10 @@ export async function handleAgentRoute(
       return answer(await channel.registerAgent(person, parsed.value));
     }
     case "heartbeat": {
-      const { presence, usage } = await readJson(request);
+      const { presence, usage, context } = await readJson(request);
       if (presence !== "live" && presence !== "idle") return fail(400, '"presence" must be "live" or "idle".');
       // A usage report that does not parse is left out, never a refusal: the heartbeat is what matters.
-      return answer(await channel.heartbeat(person, route.id, presence, cleanUsage(usage)));
+      return answer(await channel.heartbeat(person, route.id, presence, cleanUsage(usage), cleanContext(context)));
     }
     case "end": {
       const { detail } = await readJson(request);

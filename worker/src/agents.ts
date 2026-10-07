@@ -14,6 +14,7 @@
 import type {
   Actor,
   Agent,
+  AgentContext,
   AgentId,
   AgentUsage,
   Capture,
@@ -44,6 +45,7 @@ type AgentRow = {
   model: string | null;
   effort: string | null;
   usage: string | null;
+  context: string | null;
   presence: string;
   proxy_mode: string;
   secret_masking: number;
@@ -63,6 +65,7 @@ export const AGENTS_SCHEMA = `
     model TEXT,
     effort TEXT,
     usage TEXT,
+    context TEXT,
     presence TEXT NOT NULL,
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
@@ -76,7 +79,7 @@ export const AGENTS_SCHEMA = `
 export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(AGENTS_SCHEMA);
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
-  for (const column of ["account", "model", "effort", "usage"]) {
+  for (const column of ["account", "model", "effort", "usage", "context"]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
     } catch {
@@ -136,6 +139,7 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.effort === null ? {} : { effort: row.effort }),
     ...(row.usage === null ? {} : { usage: JSON.parse(row.usage) as AgentUsage }),
+    ...(row.context == null ? {} : { context: JSON.parse(row.context) as AgentContext }),
     presence: row.presence as Presence,
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
@@ -242,6 +246,8 @@ export class AgentRoster {
       );
     }
 
+    if (request.context !== undefined)
+      this.host.sql.exec("UPDATE agents SET context = ? WHERE id = ?", JSON.stringify(request.context), id);
     const agent = this.agent(id);
     // Once per session: a wrapper registering again within its session (it went Gone) starts none.
     if (!request.rejoin || existing === undefined) {
@@ -367,6 +373,7 @@ export class AgentRoster {
     id: AgentId,
     presence: ReportedPresence,
     usage?: ReportedUsage,
+    context?: AgentContext,
   ): Promise<RosterResult> {
     const found = this.owned(person, id);
     if (!found.ok) return found;
@@ -382,9 +389,12 @@ export class AgentRoster {
         id,
       );
     }
+    if (context !== undefined)
+      this.host.sql.exec("UPDATE agents SET context = ? WHERE id = ?", JSON.stringify(context), id);
     const agent = this.agent(id);
     if (found.row.presence !== presence) this.changed(id, presence);
-    if (found.row.presence !== presence || usage !== undefined) this.host.broadcast({ type: "agent", agent });
+    if (found.row.presence !== presence || usage !== undefined || context !== undefined)
+      this.host.broadcast({ type: "agent", agent });
     await this.watch();
     return { ok: true, agent };
   }

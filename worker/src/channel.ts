@@ -9,6 +9,7 @@ import type {
   AccountUsage,
   Actor,
   Agent,
+  AgentContext,
   AgentId,
   Capture,
   ChannelEvent,
@@ -415,8 +416,9 @@ export class Channel extends DurableObject<Env> {
     id: AgentId,
     presence: ReportedPresence,
     usage?: ReportedUsage,
+    context?: AgentContext,
   ): Promise<RosterResult> {
-    const result = this.withNextTurn(await this.agents.heartbeat(person, id, presence, usage));
+    const result = this.withNextTurn(await this.agents.heartbeat(person, id, presence, usage, context));
     if (result.ok && usage !== undefined) this.recordUsage(usage);
     return result;
   }
@@ -428,8 +430,9 @@ export class Channel extends DurableObject<Env> {
 
   /** Keeps an account's `/usage` reading, when the report names the account, and tells the stream. */
   private recordUsage(usage: ReportedUsage): void {
-    if (usage.email === undefined || usage.limits === undefined) return;
-    const account = this.usage.record(usage.email, usage.plan, usage.limits);
+    const identity = usage.email ?? usage.accountId;
+    if (identity === undefined || usage.limits === undefined) return;
+    const account = this.usage.record(identity, usage.plan, usage.limits);
     if (account !== null) this.broadcast({ type: "account", account });
   }
 

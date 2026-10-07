@@ -1,0 +1,1 @@
+Claude usage and Codex token_count values captured from local main-session logs on 2026-10-07. Prompts, working paths and tool names are anonymized; unrelated log entries omitted. No credentials are included.

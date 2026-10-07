@@ -48,6 +48,7 @@ import { NextTurn, type NextTurnItems } from "./next-turn";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
+import { SessionContextReader } from "./session-context";
 import { channelCheckout, GitError } from "./task-worktree";
 import { readAccount } from "./usage/limits";
 import { UsageSchedule } from "./usage/schedule";
@@ -460,6 +461,18 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // or from the first hook or the adapter's `discover` once the CLI has started.
   let link: AgentLink | null = null;
   let idle: IdleWatch | null = null;
+  let contextReader: SessionContextReader | null = null;
+  const watchContext = (sessionId: string) => {
+    contextReader = new SessionContextReader(
+      adapter.cli,
+      sessionId,
+      cwd,
+      env,
+      `Codex · ${config.person} · ${account ?? sessionId.slice(-8)}`,
+    );
+    const reader = contextReader;
+    if (link) link.readContext = () => reader.read();
+  };
   const onRegistered = (agent: Agent, token: string | undefined) => {
     agentId = agent.id;
     hooks?.setAgent(agent.id);
@@ -475,6 +488,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     link = new AgentLink(client, session(sessionId, resumed), heartbeatMs, log, onRegistered, addForNextTurn);
     link.report(idle?.current ?? "live");
     link.start();
+    watchContext(sessionId);
     watchUsage(sessionId);
   };
 
@@ -505,6 +519,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
           // The hook knows where the session's transcript is.
           if (typeof input.transcript_path === "string" && input.transcript_path !== "") {
             usage?.tally.follow(input.transcript_path);
+            contextReader?.follow(input.transcript_path);
           }
           if (input.hook_event_name === "Stop") usage?.schedule.turnEnded();
           // A turn ended: what arrived meanwhile may wake the Agent now.
@@ -540,6 +555,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered, addForNextTurn);
     const expected = agentIdFor(config.person, adapter.cli, plan.sessionId);
     childEnv.SWITCHBOARD_AGENT_ID = expected;
+    watchContext(plan.sessionId);
     watchUsage(plan.sessionId);
     try {
       const agent = await link.register();

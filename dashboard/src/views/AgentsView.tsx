@@ -1,3 +1,4 @@
+import { AgentBrief, ContextWindow } from "@/components/domain/context";
 import { useMemo } from "react";
 import type { Agent, Presence, Task } from "@shared/index";
 import { modelLabel } from "@shared/index";
@@ -82,18 +83,19 @@ export function AgentsView() {
         </div>
 
         {/* desktop: a table */}
-        <div className="hidden overflow-hidden rounded-xl border border-line bg-surface md:block">
-          <table className="w-full table-fixed border-collapse text-left">
+        <div className="hidden overflow-x-auto rounded-xl border border-line bg-surface md:block">
+          <table className="w-full min-w-[1000px] table-fixed border-collapse text-left">
             <colgroup>
-              <col className="w-[34%]" />
-              <col className="w-[12%]" />
-              <col className="w-[12%]" />
-              <col className="w-[12%]" />
-              <col className="w-[30%]" />
+              <col className="w-[25%]" />
+              <col className="w-[20%]" />
+              <col className="w-[9%]" />
+              <col className="w-[9%]" />
+              <col className="w-[9%]" />
+              <col className="w-[15%]" />
             </colgroup>
             <thead>
               <tr className="border-b border-line text-[12.5px] text-ink-3">
-                {["Agent", "Person", "CLI", "Proxy", "Claims"].map((h) => (
+                {["Agent", "Context window", "Person", "CLI", "Proxy", "Claims"].map((h) => (
                   <th key={h} className="px-4 py-2.5 font-normal">
                     {h}
                   </th>
@@ -107,7 +109,7 @@ export function AgentsView() {
                   <tr
                     key={a.id}
                     onClick={() => go({ view: "agent", id: a.id })}
-                    className={cn("cursor-pointer border-b border-line-soft transition-colors last:border-0 hover:bg-hover", a.presence === "gone" && "text-ink-3")}
+                    className={cn("cursor-pointer align-top border-b border-line-soft transition-colors last:border-0 hover:bg-hover", a.presence === "gone" && "text-ink-3")}
                   >
                     <td className="px-4 py-3">
                       <div className="flex min-w-0 items-center gap-2.5">
@@ -125,6 +127,7 @@ export function AgentsView() {
                             {a.account && !a.usage?.email && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
                             {a.model && <ModelLabel model={a.model} effort={a.effort} className="flex min-w-0 shrink items-center gap-1" />}
                           </span>
+                          <div className="pt-2"><AgentBrief agent={a} /></div>
                           {a.usage && (
                             <div className="pt-1.5">
                               <AgentUsage agent={a} compact />
@@ -133,6 +136,7 @@ export function AgentsView() {
                         </div>
                       </div>
                     </td>
+                    <td className="px-4 py-3 align-top"><ContextWindow agent={a} /></td>
                     <td className="px-4 py-3 text-[13.5px] text-ink-2">{a.person}</td>
                     <td className="px-4 py-3 text-[13.5px] text-ink-2">{CLI_LABEL[a.cli]}</td>
                     <td className="px-4 py-3">
@@ -163,6 +167,7 @@ export function AgentsView() {
                 >
                   <PresenceDot presence={a.presence} className="mt-1" />
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <ContextWindow agent={a} />
                     <div className="flex min-w-0 items-center justify-between gap-2">
                       <span className="truncate font-mono text-[13px] text-ink">{a.id}</span>
                       <ProxyMode agent={a} />
@@ -173,6 +178,7 @@ export function AgentsView() {
                       {a.account && !a.usage?.email ? ` · ${a.account}` : ""}
                       {a.model ? ` · ${modelLabel(a.model)}` : ""}
                     </span>
+                    <AgentBrief agent={a} />
                     {a.usage && <AgentUsage agent={a} compact />}
                     {held.length > 0 && <ClaimCell agent={a} tasks={held} />}
                   </div>
