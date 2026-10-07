@@ -14,6 +14,7 @@ import type {
   TaskNumber,
   Verdict,
 } from "./domain";
+import type { AccountUsage } from "./usage";
 
 export interface ChannelInfo {
   id: string;
@@ -32,6 +33,8 @@ export interface ChannelSnapshot {
   events: ChannelEvent[];
   verdicts: Verdict[];
   relay: RelayConfig;
+  /** Every account with usage readings (ADR 0011). Absent from a Channel older than it. */
+  accounts?: AccountUsage[];
   /** The `seq` to resume the WebSocket from. */
   cursor: number;
 }
@@ -42,7 +45,9 @@ export type StreamMessage =
   | { type: "verdict"; verdict: Verdict }
   | { type: "agent"; agent: Agent }
   | { type: "task"; task: Task }
-  | { type: "person"; person: Person };
+  | { type: "person"; person: Person }
+  /** An account's usage changed (ADR 0011). */
+  | { type: "account"; account: AccountUsage };
 
 /** Actions a Person takes from the Dashboard. Each maps to one HTTP POST. */
 export type PersonAction =

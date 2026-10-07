@@ -14,6 +14,7 @@ import type {
   DirectiveInterruptMessage,
   DirectiveMessage,
   ErrorResponse,
+  HeartbeatRequest,
   HookCaptureReply,
   InterruptAttached,
   InterruptMessage,
@@ -21,6 +22,7 @@ import type {
   ProxyCaptureReply,
   RegisterAgentRequest,
   ReportedPresence,
+  ReportedUsage,
   StreamMessage,
 } from "../../shared/src/index";
 import { agentPath, channelApiBase, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
@@ -120,10 +122,12 @@ export class ChannelClient {
     return answer;
   }
 
-  heartbeat(id: AgentId, presence: ReportedPresence): Promise<AgentResponse> {
+  /** `usage` is a new usage reading (ADR 0011), sent once. */
+  heartbeat(id: AgentId, presence: ReportedPresence, usage?: ReportedUsage): Promise<AgentResponse> {
+    const body: HeartbeatRequest = { presence, ...(usage === undefined ? {} : { usage }) };
     return this.request<AgentResponse>(`${agentPath(id)}/heartbeat`, {
       method: "POST",
-      body: JSON.stringify({ presence }),
+      body: JSON.stringify(body),
     });
   }
 

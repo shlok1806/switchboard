@@ -1,0 +1,22 @@
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 83% used · resets Oct 7 at 2am (America/Chicago)
+Current week (all models): 44% used · resets Oct 7 at 6am (America/Chicago)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.
+
+Last 24h · 2791 requests · 59 sessions
+  86% of your usage was at >150k context
+  27% of your usage came from subagent-heavy sessions
+  Top skills: /web-designer 78%, /claude-api 3%, /unslop 2%
+  Top subagents: web-designer 7%, general-purpose 2%
+  Top MCP servers: greenroom 8%, switchboard 1%
+
+Last 7d · 12811 requests · 319 sessions
+  81% of your usage was at >150k context
+  57% of your usage came from subagent-heavy sessions
+  35% of your usage came from sessions active for 8+ hours
+  Top skills: /web-designer 25%, /claude-api 1%
+  Top subagents: general-purpose 43%, web-designer 2%, Explore 1%
+  Top MCP servers: greenroom 7%, switchboard 2%

@@ -1,4 +1,6 @@
 import type {
+  AccountUsage,
+  AccountsResponse,
   ActionResult,
   AgentId,
   AgentsResponse,
@@ -157,7 +159,7 @@ export class HttpChannelSource implements ChannelSource {
     const all = await this.allEvents();
     const { events, verdicts } = splitVerdicts(all);
     // Tasks need GitHub; if it is unreachable the board is empty, not broken.
-    const [tasks, agents, relay] = await Promise.all([
+    const [tasks, agents, relay, accounts] = await Promise.all([
       this.get<TaskListResponse>("/api/tasks")
         .then((r) => r.tasks)
         .catch((): Task[] => []),
@@ -165,6 +167,10 @@ export class HttpChannelSource implements ChannelSource {
         .then((r) => r.agents)
         .catch(() => []),
       this.get<RelayResponse>("/api/relay").then((r) => r.relay),
+      // A Worker older than ADR 0011 has no accounts: the panel is empty, not broken.
+      this.get<AccountsResponse>("/api/accounts")
+        .then((r) => r.accounts)
+        .catch((): AccountUsage[] => []),
     ]);
 
     return {
@@ -175,6 +181,7 @@ export class HttpChannelSource implements ChannelSource {
       tasks,
       events,
       relay,
+      accounts,
       cursor: all.at(-1)?.seq ?? 0,
     };
   }

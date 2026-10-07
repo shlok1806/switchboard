@@ -15,6 +15,7 @@ import type {
   Actor,
   Agent,
   AgentId,
+  AgentUsage,
   Capture,
   ChannelEvent,
   Cli,
@@ -28,6 +29,7 @@ import type {
   ProxyMode,
   RegisterAgentRequest,
   ReportedPresence,
+  ReportedUsage,
   StreamMessage,
 } from "../../shared/src/index";
 import { agentIdFor, DEFAULT_PROXY_MODE, sameNickname } from "../../shared/src/index";
@@ -41,6 +43,7 @@ type AgentRow = {
   account: string | null;
   model: string | null;
   effort: string | null;
+  usage: string | null;
   presence: string;
   proxy_mode: string;
   secret_masking: number;
@@ -59,6 +62,7 @@ export const AGENTS_SCHEMA = `
     account TEXT,
     model TEXT,
     effort TEXT,
+    usage TEXT,
     presence TEXT NOT NULL,
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
@@ -71,8 +75,8 @@ export const AGENTS_SCHEMA = `
 /** Creates the `agents` table, and adds the columns later ADRs brought to a table made before them. */
 export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(AGENTS_SCHEMA);
-  // ADR 0009: the Account Label. ADR 0010: the model and its effort.
-  for (const column of ["account", "model", "effort"]) {
+  // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
+  for (const column of ["account", "model", "effort", "usage"]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
     } catch {
@@ -131,6 +135,7 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.account === null ? {} : { account: row.account }),
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.effort === null ? {} : { effort: row.effort }),
+    ...(row.usage === null ? {} : { usage: JSON.parse(row.usage) as AgentUsage }),
     presence: row.presence as Presence,
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
@@ -138,6 +143,12 @@ function rowToAgent(row: AgentRow): Agent {
     lastSeenAt: new Date(row.last_seen_at).toISOString(),
     startedAt: row.started_at,
   };
+}
+
+/** A usage report as an Agent's row keeps it: with the time the Channel heard it. */
+function stamped(usage: ReportedUsage, now: number): string {
+  const kept: AgentUsage = { ...usage, reportedAt: new Date(now).toISOString() };
+  return JSON.stringify(kept);
 }
 
 export class AgentRoster {
@@ -187,19 +198,22 @@ export class AgentRoster {
     // What the wrapper knows of the model (ADR 0010); omitted keeps the Channel's.
     const model = request.model === undefined ? (existing?.model ?? null) : request.model;
     const effort = request.model === undefined ? (existing?.effort ?? null) : (request.effort ?? null);
+    // The latest usage reading (ADR 0011); omitted keeps the Channel's.
+    const usage = request.usage === undefined ? (existing?.usage ?? null) : stamped(request.usage, now);
     const secretMasking = request.secretMasking === false ? 0 : 1;
     // The wrapper says, every time it registers, whether it can type Interrupts into its CLI.
     const interrupts = request.interrupts === true ? 1 : 0;
     if (existing) {
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
-        `UPDATE agents SET nickname = ?, account = ?, model = ?, effort = ?, proxy_mode = ?, secret_masking = ?,
-             can_receive_interrupts = ?, presence = 'live', last_seen_at = ?
+        `UPDATE agents SET nickname = ?, account = ?, model = ?, effort = ?, usage = ?, proxy_mode = ?,
+             secret_masking = ?, can_receive_interrupts = ?, presence = 'live', last_seen_at = ?
          WHERE id = ?`,
         nickname,
         account,
         model,
         effort,
+        usage,
         proxyMode,
         secretMasking,
         interrupts,
@@ -208,9 +222,9 @@ export class AgentRoster {
       );
     } else {
       this.host.sql.exec(
-        `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, presence, proxy_mode,
-                             secret_masking, can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
+        `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, usage, presence,
+                             proxy_mode, secret_masking, can_receive_interrupts, last_seen_at, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
@@ -219,6 +233,7 @@ export class AgentRoster {
         account,
         model,
         effort,
+        usage,
         request.proxyMode ?? DEFAULT_PROXY_MODE,
         secretMasking,
         interrupts,
@@ -342,17 +357,34 @@ export class AgentRoster {
     });
   }
 
-  /** The Agent is still running, with the Presence its wrapper observes. A Gone Agent comes back. */
-  async heartbeat(person: PersonName, id: AgentId, presence: ReportedPresence): Promise<RosterResult> {
+  /**
+   * The Agent is still running, with the Presence its wrapper observes. A Gone Agent
+   * comes back. A usage reading, when the wrapper has a new one, replaces the
+   * Agent's (ADR 0011); it is not an Event.
+   */
+  async heartbeat(
+    person: PersonName,
+    id: AgentId,
+    presence: ReportedPresence,
+    usage?: ReportedUsage,
+  ): Promise<RosterResult> {
     const found = this.owned(person, id);
     if (!found.ok) return found;
     const now = Date.now();
-    this.host.sql.exec("UPDATE agents SET presence = ?, last_seen_at = ? WHERE id = ?", presence, now, id);
-    const agent = this.agent(id);
-    if (found.row.presence !== presence) {
-      this.changed(id, presence);
-      this.host.broadcast({ type: "agent", agent });
+    if (usage === undefined) {
+      this.host.sql.exec("UPDATE agents SET presence = ?, last_seen_at = ? WHERE id = ?", presence, now, id);
+    } else {
+      this.host.sql.exec(
+        "UPDATE agents SET presence = ?, last_seen_at = ?, usage = ? WHERE id = ?",
+        presence,
+        now,
+        stamped(usage, now),
+        id,
+      );
     }
+    const agent = this.agent(id);
+    if (found.row.presence !== presence) this.changed(id, presence);
+    if (found.row.presence !== presence || usage !== undefined) this.host.broadcast({ type: "agent", agent });
     await this.watch();
     return { ok: true, agent };
   }

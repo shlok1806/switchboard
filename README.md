@@ -168,6 +168,13 @@ CLI's own default; each change is an `agent.model` Event. Only the model ID and 
 reasoning effort are read for it. Without the proxy the Agent shows what `--model` or
 the CLI's config names, and does not follow a switch; with neither, no model is shown.
 
+For Claude Code Agents the Dashboard also shows usage (ADR 0011): an Accounts panel with
+one card per Claude account, by its full email address and plan, with the session, week
+and per-model week limits from Claude Code's own `/usage`, their resets, and the Agents
+running on it with their requests, tokens and estimated cost. The wrapper reads it at
+the start, after every turn and every 5 minutes (at most once a minute), using the
+session's own login. `SWITCHBOARD_USAGE=off` turns it off.
+
 | | Claude Code | Codex | Gemini CLI (unverified, see below) |
 |---|---|---|---|
 | Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, BeforeTool (shell), AfterTool, AfterAgent, SessionEnd |

@@ -1,7 +1,9 @@
 import type {
+  AccountUsage,
   Actor,
   Agent,
   AgentId,
+  AgentUsage,
   Capture,
   ChannelEvent,
   DiffHunk,
@@ -57,6 +59,47 @@ export const persons: Person[] = [
   { name: "dev", timeZone: "Asia/Kolkata", joinedAt: ago(60 * 60 * 3) },
 ];
 
+/* ── Usage (ADR 0011) ─────────────────────────────────────── */
+
+const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
+
+/** The latest `/usage` reading of each demo account, and its session percent over the window. */
+export const accounts: AccountUsage[] = [
+  {
+    email: "shlok@illinois.edu",
+    plan: "max",
+    limits: {
+      readAt: ago(40),
+      session: { percent: 74, resetsAt: inMinutes(42) },
+      week: { percent: 44, resetsAt: inMinutes(60 * 40) },
+      models: [{ model: "Fable", percent: 32, resetsAt: inMinutes(60 * 40) }],
+    },
+    history: [52, 55, 61, 64, 70, 74].map((session, i) => ({ at: ago(60 * (50 - i * 10)), session, week: 40 + i })),
+  },
+  {
+    email: "maya@gmail.com",
+    plan: "pro",
+    limits: {
+      readAt: ago(60 * 22),
+      session: { percent: 93, resetsAt: inMinutes(95) },
+      week: { percent: 61, resetsAt: inMinutes(60 * 70) },
+      models: [],
+    },
+    history: [80, 86, 93].map((session, i) => ({ at: ago(60 * (60 - i * 20)), session })),
+  },
+];
+
+function usageOf(email: string, requests: number, outputTokens: number, inputTokens: number, costUsd: number): AgentUsage {
+  const limits = accounts.find((a) => a.email === email)?.limits;
+  return {
+    email,
+    plan: accounts.find((a) => a.email === email)?.plan,
+    ...(limits ? { limits } : {}),
+    session: { requests, inputTokens: Math.round(inputTokens * 0.04), outputTokens, cacheReadTokens: Math.round(inputTokens * 0.9), cacheWriteTokens: Math.round(inputTokens * 0.06), costUsd },
+    reportedAt: ago(40),
+  };
+}
+
 export const agents: Agent[] = [
   {
     id: A.shlokClaude,
@@ -66,6 +109,7 @@ export const agents: Agent[] = [
     account: "sh…@illinois.edu",
     model: "claude-opus-5-5",
     effort: "high",
+    usage: usageOf("shlok@illinois.edu", 214, 61_400, 3_210_000, 41.82),
     presence: "live",
     proxyMode: "digest",
     secretMasking: true,
@@ -93,6 +137,7 @@ export const agents: Agent[] = [
     nickname: "users-page",
     account: "ma…@gmail.com",
     model: "claude-sonnet-5-5",
+    usage: usageOf("maya@gmail.com", 88, 20_100, 990_000, 4.37),
     presence: "live",
     proxyMode: "digest",
     secretMasking: true,
@@ -116,6 +161,7 @@ export const agents: Agent[] = [
     person: "dev",
     cli: "claude-code",
     nickname: "retry",
+    usage: usageOf("shlok@illinois.edu", 40, 9_800, 410_000, 7.9),
     presence: "live",
     proxyMode: "raw",
     secretMasking: true,

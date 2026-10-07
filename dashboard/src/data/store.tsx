@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import type {
+  AccountUsage,
   Agent,
   AgentId,
   ChannelEvent,
@@ -15,8 +16,10 @@ export interface ChannelState {
   status: "loading" | "ready" | "error";
   error?: string;
   connection: ConnectionState;
-  snapshot?: Omit<ChannelSnapshot, "events" | "verdicts" | "agents" | "tasks">;
+  snapshot?: Omit<ChannelSnapshot, "events" | "verdicts" | "agents" | "tasks" | "accounts">;
   agents: Agent[];
+  /** Every account with usage readings (ADR 0011), most recently read first. */
+  accounts: AccountUsage[];
   tasks: Task[];
   /** Oldest first. */
   events: ChannelEvent[];
@@ -33,6 +36,7 @@ export class ChannelStore {
     status: "loading",
     connection: "connecting",
     agents: [],
+    accounts: [],
     tasks: [],
     events: [],
     verdictsByEvent: new Map(),
@@ -80,10 +84,10 @@ export class ChannelStore {
       .snapshot()
       .then((snap) => {
         if (cancelled) return;
-        const { events, verdicts, agents, tasks, ...rest } = snap;
+        const { events, verdicts, agents, tasks, accounts = [], ...rest } = snap;
         const byEvent = new Map<string, Verdict[]>();
         for (const v of verdicts) byEvent.set(v.event, [...(byEvent.get(v.event) ?? []), v]);
-        this.set({ status: "ready", snapshot: rest, events, agents, tasks, verdictsByEvent: byEvent });
+        this.set({ status: "ready", snapshot: rest, events, agents, accounts, tasks, verdictsByEvent: byEvent });
         stop = this.source.subscribe(snap.cursor, (m) => this.apply(m), (connection) => this.set({ connection }));
       })
       .catch((e: unknown) => {
@@ -113,6 +117,9 @@ export class ChannelStore {
       }
       case "agent":
         this.set({ agents: upsert(s.agents, m.agent, (a) => a.id === m.agent.id) });
+        break;
+      case "account":
+        this.set({ accounts: upsert(s.accounts, m.account, (a) => a.email === m.account.email) });
         break;
       case "task":
         this.set({ tasks: upsert(s.tasks, m.task, (t) => t.number === m.task.number) });
