@@ -87,6 +87,7 @@ export function claudeWindow(model: string, env: NodeJS.ProcessEnv): number | un
 export class ContextParser {
   readonly context: AgentContext = { readAt: new Date(0).toISOString() };
   usage?: ReportedUsage;
+  private compactionsKnown = true;
   constructor(
     private cli: Cli,
     private env: NodeJS.ProcessEnv = {},
@@ -134,13 +135,20 @@ export class ContextParser {
       this.context.autoCompactions ??= 0;
     } else if (this.cli === "codex") {
       const p = e.payload ?? {};
+      if (this.compactionsKnown) this.context.autoCompactions ??= 0;
+      if (e.type === "compacted" || (e.type === "event_msg" && p.type === "context_compacted")) {
+        if (p.trigger === "auto" && this.compactionsKnown)
+          this.context.autoCompactions = (this.context.autoCompactions ?? 0) + 1;
+        else if (p.trigger !== "manual") {
+          this.compactionsKnown = false;
+          delete this.context.autoCompactions;
+        }
+      }
       if (e.type === "session_meta" && p.cwd) this.context.cwd = p.cwd;
       if (e.type === "turn_context" && p.model) this.context.model = p.model;
       if (e.type === "event_msg") {
         if (p.type === "user_message") this.prompt(p.message);
         if (p.type === "agent_message") this.activity(p.message);
-        if (p.type === "context_compacted" && p.trigger === "auto")
-          this.context.autoCompactions = (this.context.autoCompactions ?? 0) + 1;
         if (p.type === "token_count") {
           if (p.info) {
             this.context.tokens = number(p.info.last_token_usage?.total_tokens);

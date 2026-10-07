@@ -51,6 +51,10 @@ describe("main-session context", () => {
         week: { percent: 31, resetsAt: new Date(1791962569 * 1000).toISOString() },
       },
     });
+    expect(p.context.autoCompactions).toBe(0);
+    p.entry({ type: "compacted", payload: {} });
+    expect(p.context.autoCompactions).toBeUndefined();
+    p.entry({ type: "event_msg", payload: { type: "context_compacted", trigger: "auto" } });
     expect(p.context.autoCompactions).toBeUndefined();
   });
   it("finds the Person's first brief in a Codex rollout without user_message events, excluding injected context", async () => {
