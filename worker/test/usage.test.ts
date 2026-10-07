@@ -195,3 +195,58 @@ describe("Usage on the Channel (ADR 0011)", () => {
     expect((await accounts("shlok"))[0]?.limits.session?.percent).toBe(33);
   });
 });
+
+describe("Context Reading on the Channel (ADR 0012)", () => {
+  it("stores and broadcasts every context heartbeat while retaining it for older wrappers", async () => {
+    const watcher = await subscribe("ana");
+    const agent = await register("shlok", "ffff0000-0000-4000-8000-000000000001");
+    const context = {
+      readAt: new Date().toISOString(),
+      tokens: 170000,
+      window: 200000,
+      autoCompactions: 2,
+      task: "Fix redirect",
+      brief: "Fix redirect\nFull brief",
+      activity: "Tool: Read",
+      cwd: "/repo",
+      branch: "fix",
+    };
+    const response = await post({ person: agent.person, agent: agent.id }, `${agentPath(agent.id)}/heartbeat`, {
+      presence: "idle",
+      context,
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json<AgentResponse>()).agent.context).toEqual(context);
+    await waitFor(() => watcher.received.find((m) => m.type === "agent" && m.agent.context?.tokens === 170000));
+    expect((await agentNamed("ana", agent.id))?.context).toEqual(context);
+    await heartbeat(agent);
+    expect((await agentNamed("ana", agent.id))?.context).toEqual(context);
+    const invalid = await post({ person: agent.person, agent: agent.id }, `${agentPath(agent.id)}/heartbeat`, {
+      presence: "live",
+      context: { readAt: "bad", tokens: -1 },
+    });
+    expect(invalid.status).toBe(200);
+    expect((await invalid.json<AgentResponse>()).agent.context).toEqual(context);
+    watcher.close();
+  });
+  it("serves Codex primary and weekly limits as a labelled account without inventing an email", async () => {
+    const agent = await register("shlok", "fffe0000-0000-4000-8000-000000000001");
+    const usage = {
+      accountId: "Codex · shlok · work",
+      plan: "plus",
+      limits: {
+        readAt: new Date().toISOString(),
+        session: { percent: 25, resetsAt: "2026-10-08T00:00:00Z" },
+        week: { percent: 51, resetsAt: "2026-10-10T00:00:00Z" },
+        models: [],
+      },
+    };
+    const after = await heartbeat(agent, usage);
+    expect(after.usage?.email).toBeUndefined();
+    expect(after.usage?.accountId).toBe(usage.accountId);
+    const [account] = await accounts("ana");
+    expect(account?.email).toBe(usage.accountId);
+    expect(account?.limits.session?.percent).toBe(25);
+    expect(account?.limits.week?.percent).toBe(51);
+  });
+});

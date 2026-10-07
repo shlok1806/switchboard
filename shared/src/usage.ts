@@ -54,6 +54,8 @@ export interface SessionUsage {
  */
 export interface AgentUsage {
   email?: string;
+  /** Codex account label, or session-scoped identifier when its login is unknown. */
+  accountId?: string;
   /** The plan or subscription type, such as "max". */
   plan?: string;
   limits?: LimitsReading;
@@ -182,11 +184,13 @@ export function cleanUsage(value: unknown): ReportedUsage | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
   const email = text(raw.email, MAX_EMAIL);
+  const accountId = text(raw.accountId, MAX_EMAIL);
   const plan = text(raw.plan, MAX_PLAN);
   const read = limits(raw.limits);
   const used = session(raw.session);
   const usage: ReportedUsage = {
     ...(email === undefined ? {} : { email }),
+    ...(accountId === undefined ? {} : { accountId }),
     ...(plan === undefined ? {} : { plan }),
     ...(read === undefined ? {} : { limits: read }),
     ...(used === undefined ? {} : { session: used }),

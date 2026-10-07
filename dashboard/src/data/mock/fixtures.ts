@@ -102,6 +102,7 @@ function usageOf(email: string, requests: number, outputTokens: number, inputTok
 
 export const agents: Agent[] = [
   {
+    context: { readAt: ago(4), tokens: 420000, window: 1000000, autoCompactions: 1, task: "Add retries to the API client", brief: "Add retries to the API client.\nKeep failed requests readable and avoid retrying writes.", activity: "Tool: Edit", cwd: "/work/switchboard/task-31", branch: "task/31-api-retries" },
     id: A.shlokClaude,
     person: "shlok",
     cli: "claude-code",
@@ -118,6 +119,8 @@ export const agents: Agent[] = [
     startedAt: ago(60 * 52),
   },
   {
+    context: { readAt: ago(4), tokens: 219640, window: 258400, task: "Document the Channel", brief: "Document the Channel and how Agents receive Directives.", activity: "Updating the examples", cwd: "/work/switchboard/docs", branch: "docs/channel" },
+    usage: { accountId: "Codex · shlok · work", plan: "plus", reportedAt: ago(4), limits: { readAt: ago(4), session: { percent: 32, resetsAt: inMinutes(120) }, week: { percent: 51, resetsAt: inMinutes(60 * 70) }, models: [] } },
     id: A.shlokCodex,
     person: "shlok",
     cli: "codex",

@@ -280,3 +280,9 @@ command, in order. Its Proxy Capture is tested against Gemini
 and Code Assist API fixtures, but has not been verified with the real CLI.
 Interrupts stay downgraded until typing into Gemini CLI mid-turn has been seen
 to work.
+
+### Agent context
+
+Each Agent card puts its context window first: current tokens, window size, percent, a meter and automatic compactions when the CLI reports them. Above 80% it warns in red. The Agents view includes a Context window column, plus its first prompt with a Show brief toggle, latest activity, runtime, model, working directory and branch. Briefs and activity always mask detected secrets before sharing. Missing CLI readings show as unavailable. Readings refresh with each heartbeat.
+
+Codex also reports ChatGPT 5-hour and weekly limits from its session log to Accounts. Use `--account-label` to group sessions on the same Codex login; otherwise each unidentified session has a separate labelled card. `SWITCHBOARD_USAGE=off` disables account readings. Update the installed CLI and restart or resume existing wrappers to enable the new readings.

@@ -3,6 +3,7 @@
  * Every name here follows CONTEXT.md. If a term changes there, change it here.
  */
 
+import type { AgentContext } from "./agent-context";
 import type { AgentUsage } from "./usage";
 
 /* ── Participants ─────────────────────────────────────────── */
@@ -61,6 +62,7 @@ export interface Agent {
    * under, that account's limits from `/usage`, and its own session's tokens.
    */
   usage?: AgentUsage;
+  context?: AgentContext;
   presence: Presence;
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */

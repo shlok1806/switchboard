@@ -1,0 +1,5 @@
+{"type": "session_meta", "payload": {"cwd": "/repo"}}
+{"type": "event_msg", "payload": {"type": "user_message", "message": "Add context to Agents"}}
+{"type": "turn_context", "payload": {"model": "gpt-6.1"}}
+{"type": "event_msg", "timestamp": "2026-10-07T20:49:26.280Z", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 324367, "total_tokens": 325567}, "last_token_usage": {"input_tokens": 77950, "cached_input_tokens": 65920, "output_tokens": 223, "total_tokens": 78173}, "model_context_window": 258400}, "rate_limits": {"limit_id": "codex", "primary": {"used_percent": 5.0, "window_minutes": 300, "resets_at": 1791424142}, "secondary": {"used_percent": 31.0, "window_minutes": 10080, "resets_at": 1791962569}, "plan_type": "plus"}}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "hidden tool arguments"}}

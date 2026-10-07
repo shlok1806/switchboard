@@ -100,7 +100,7 @@ export function accountCards(accounts: AccountUsage[], agents: Agent[]): Account
     cards.set(a.email, { email: a.email, plan: a.plan, limits: a.limits, history: a.history, agents: [], total: NONE });
   }
   for (const agent of agents) {
-    const email = agent.usage?.email;
+    const email = agent.usage?.email ?? agent.usage?.accountId;
     if (email === undefined) continue;
     let card = cards.get(email);
     if (card === undefined) {
@@ -129,7 +129,7 @@ export function accountCards(accounts: AccountUsage[], agents: Agent[]): Account
 /** The latest limits for an Agent's account: the account's own, or the Agent's when newer. */
 export function limitsFor(agent: Agent, accounts: AccountUsage[]): LimitsReading | undefined {
   const theirs = agent.usage?.limits;
-  const email = agent.usage?.email;
+  const email = agent.usage?.email ?? agent.usage?.accountId;
   const account = email === undefined ? undefined : accounts.find((a) => a.email === email)?.limits;
   if (account === undefined) return theirs;
   if (theirs === undefined) return account;

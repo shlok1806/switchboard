@@ -117,5 +117,9 @@ Which login of its agent CLI an Agent runs under, such as `sh…@illinois.edu`, 
 _Avoid_: Account, login, profile
 
 **Usage Reading**:
-How much of its Claude account's limits an Agent's account has used, as Claude Code's own `/usage` reports it (the session, the week and each model's week, with their resets), with the account's full email address and plan and what the Agent's own session used. The wrapper sends one with the Agent's heartbeat; the Dashboard shows one card per account (ADR 0011).
+How much of its Claude or Codex account's limits an Agent's account has used, as Claude Code's own `/usage` reports it (the session, the week and each model's week, with their resets), with the account's full email address and plan and what the Agent's own session used. The wrapper sends one with the Agent's heartbeat; the Dashboard shows one card per account (ADR 0011).
 _Avoid_: Quota, billing, limits report
+
+
+**Context Reading**:
+The latest main-session context fullness, automatic compactions when known, first prompt brief, current activity, model and working location, read by the wrapper and sent with each heartbeat (ADR 0012). Separate from cumulative session usage and account limits.

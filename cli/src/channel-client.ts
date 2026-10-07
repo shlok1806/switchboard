@@ -8,6 +8,7 @@
 // makes (heartbeats, its WebSocket, its tools) carries that token instead.
 
 import type {
+  AgentContext,
   AgentId,
   AgentResponse,
   DeliveryMessage,
@@ -123,8 +124,17 @@ export class ChannelClient {
   }
 
   /** `usage` is a new usage reading (ADR 0011), sent once. */
-  heartbeat(id: AgentId, presence: ReportedPresence, usage?: ReportedUsage): Promise<AgentResponse> {
-    const body: HeartbeatRequest = { presence, ...(usage === undefined ? {} : { usage }) };
+  heartbeat(
+    id: AgentId,
+    presence: ReportedPresence,
+    usage?: ReportedUsage,
+    context?: AgentContext,
+  ): Promise<AgentResponse> {
+    const body: HeartbeatRequest = {
+      presence,
+      ...(context === undefined ? {} : { context }),
+      ...(usage === undefined ? {} : { usage }),
+    };
     return this.request<AgentResponse>(`${agentPath(id)}/heartbeat`, {
       method: "POST",
       body: JSON.stringify(body),
