@@ -68,9 +68,9 @@ export default function ChatComposer<T extends string>({
       <div
         role="presentation"
         onClick={() => inputRef.current?.focus()}
-        className="flex cursor-text flex-col gap-1.5 rounded-xl border border-line bg-field p-2 shadow-card transition-[border-color] duration-150 focus-within:border-line-strong"
+        className="flex cursor-text flex-col gap-2 rounded-md bg-inset px-4 py-3 ring-line-strong transition-[background-color,box-shadow] duration-150 focus-within:bg-field focus-within:ring-1"
       >
-        {aside && <div className="flex min-w-0 items-center gap-1 px-1.5 pt-0.5">{aside}</div>}
+        {aside && <div className="flex min-w-0 items-center gap-1">{aside}</div>}
         <textarea
           ref={inputRef}
           value={draft}
@@ -84,11 +84,11 @@ export default function ChatComposer<T extends string>({
           }}
           placeholder={l.placeholder}
           aria-label={l.inputLabel}
-          className="min-h-10 resize-none bg-transparent px-1.5 pt-1 text-[14px] leading-[1.45] text-ink outline-none placeholder:text-ink-4 max-md:text-[16px]"
+          className="min-h-11 resize-none bg-transparent pt-1 text-body leading-normal text-ink outline-none placeholder:text-ink-3 max-md:text-[16px]"
         />
         <div className="flex items-center gap-2">
           {tabs.length > 1 && (
-            <div className="flex shrink-0 items-center rounded-lg bg-hover p-0.5" role="tablist">
+            <div className="flex shrink-0 items-center rounded-md bg-hover p-0.5" role="tablist">
               {tabs.map((item) => (
                 <button
                   key={item}
@@ -99,7 +99,7 @@ export default function ChatComposer<T extends string>({
                     e.stopPropagation();
                     onTabChange(item);
                   }}
-                  className={`h-7 rounded-md px-2.5 text-[12.5px] transition-colors ${tab === item ? "bg-surface font-medium text-ink shadow-hairline" : "text-ink-3 hover:text-ink-2"}`}
+                  className={`h-8 rounded-sm px-3 text-small transition-colors focus-visible:outline-2 focus-visible:outline-accent ${tab === item ? "bg-surface font-medium text-ink" : "text-ink-3 hover:text-ink"}`}
                 >
                   {item}
                 </button>
@@ -116,7 +116,7 @@ export default function ChatComposer<T extends string>({
                 e.stopPropagation();
                 void send();
               }}
-              className="grid size-8 shrink-0 place-items-center rounded-lg transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.96] enabled:bg-accent enabled:text-on-accent disabled:bg-hover-2 disabled:text-ink-4"
+              className="grid size-9 shrink-0 place-items-center rounded-md transition-[background-color,color,transform] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent enabled:bg-ink enabled:text-page enabled:hover:bg-ink-2 enabled:active:scale-[0.96] disabled:bg-hover-2 disabled:text-ink-3"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M12 19V5M5 12l7-7 7 7" />

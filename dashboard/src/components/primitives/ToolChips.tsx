@@ -68,8 +68,8 @@ const ROWS: ToolStep[] = [
   {
     icon: "run", label: "Rebuild and verify", chip: "npm run freeze", mono: true, detailMono: true,
     detail: [
-      { text: "✓ built in 1.2s" },
-      { text: "✓ 34 checks passed" },
+      { text: "Built in 1.2s" },
+      { text: "34 checks passed" },
     ],
   },
   {
@@ -144,7 +144,7 @@ function Chip({
   inButton: boolean;
   onCut?: (cut: boolean) => void;
 }) {
-  const ref = useRef<HTMLSpanElement>(null);
+  const ref = useRef<HTMLElement>(null);
   const [cut, setCut] = useState(false);
   const [open, setOpen] = useState(false);
   useLayoutEffect(() => {
@@ -169,14 +169,21 @@ function Chip({
       tabIndex={cut && !inButton ? 0 : undefined}
       aria-describedby={undefined}
       onBlur={() => setOpen(false)}
-      className={`inline-flex h-5.5 min-w-0 flex-1 items-center rounded-chip bg-field px-1.5
-        text-[11.5px] text-ink-2 shadow-hairline
+      className={`inline-flex h-6 min-w-0 flex-1 items-center rounded-sm bg-hover px-1.5
+        text-small text-ink-2
         ${inButton ? "cursor-pointer transition-colors duration-100 hover:bg-hover-2" : ""}
-        ${mono ? "font-mono" : ""}`}
+        ${mono ? "font-mono" : "" /* taste-skill-ignore: a file name or command is code */}`}
     >
-      <span ref={ref} className="min-w-0 truncate">
-        {text}
-      </span>
+      {/* literal code is a <code>, so it is the only monospace type on the page */}
+      {mono ? (
+        <code ref={ref} className="min-w-0 truncate">
+          {text}
+        </code>
+      ) : (
+        <span ref={ref} className="min-w-0 truncate">
+          {text}
+        </span>
+      )}
     </span>
   );
   if (inButton) return body;
@@ -185,7 +192,7 @@ function Chip({
   return (
     <Tooltip open={cut && open} onOpenChange={setOpen}>
       <TooltipTrigger asChild>{body}</TooltipTrigger>
-      <TooltipContent aria-hidden className={`max-w-[min(32rem,90vw)] [overflow-wrap:anywhere] whitespace-pre-wrap ${mono ? "font-mono" : ""}`}>
+      <TooltipContent aria-hidden className={`max-w-[min(32rem,90vw)] [overflow-wrap:anywhere] whitespace-pre-wrap ${mono ? "font-mono" : "" /* taste-skill-ignore: code */}`}>
         {breakable(text)}
       </TooltipContent>
     </Tooltip>
@@ -292,7 +299,7 @@ export default function ToolChips({
             return !current;
           })
         }
-        className="-mx-1.5 flex w-fit items-center gap-1.5 rounded-control px-1.5 py-1 text-[12.5px] text-ink-2 transition-colors duration-100 hover:bg-hover-2"
+        className="-mx-1.5 flex w-fit items-center gap-1.5 rounded-md px-1.5 py-1 text-small text-ink-2 transition-colors duration-100 hover:bg-hover-2"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="transition-transform duration-200" style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)" }}>
           <path d="M6 9l6 6 6-6" />
@@ -320,7 +327,7 @@ export default function ToolChips({
                 {Icons[row.icon]}
               </svg>
             );
-            const label = <span className="shrink-0 text-[12.5px] font-medium text-ink">{row.label}</span>;
+            const label = <span className="shrink-0 text-small font-medium text-ink">{row.label}</span>;
             const chip = <Chip text={row.chip} mono={row.mono} inButton={expandable} onCut={expandable ? cutOf(key) : undefined} />;
             return (
             <div key={keyOf(row, i)} style={{ animation: "fade-up 300ms cubic-bezier(0.23,1,0.32,1) both" }}>
@@ -329,7 +336,7 @@ export default function ToolChips({
                   type="button"
                   aria-expanded={rowOpen}
                   onClick={() => toggleRow(keyOf(row, i))}
-                  className="group/row -mx-[3px] flex h-7 w-[calc(100%+6px)] min-w-0 items-center gap-2 rounded-control px-[3px] text-left transition-colors duration-100 hover:bg-hover-2"
+                  className="group/row -mx-[3px] flex h-7 w-[calc(100%+6px)] min-w-0 items-center gap-2 rounded-md px-[3px] text-left transition-colors duration-100 hover:bg-hover-2"
                 >
                   <span className="relative flex size-4 shrink-0 items-center justify-center text-ink-3">
                     {icon}
@@ -361,17 +368,20 @@ export default function ToolChips({
                   style={{ gridTemplateRows: rowOpen ? "1fr" : "0fr", opacity: rowOpen ? 1 : 0, transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
                 >
                   <div className="min-h-0 overflow-hidden">
-                    <div className="mt-0.5 mb-1 ml-2 flex flex-col gap-0.5 border-l border-line py-0.5 pl-3.5">
-                      {detail.map((line) => (
-                        <span
+                    <div className="mt-1 mb-1.5 ml-6 flex flex-col gap-0.5 rounded-md bg-hover px-3 py-2">
+                      {detail.map((line) => {
+                        const Tag = ("full" in line ? row.mono : row.detailMono) ? "code" : "span";
+                        return (
+                        <Tag
                           key={line.text}
-                          className={`text-[11.5px] leading-[1.6] [overflow-wrap:anywhere] whitespace-pre-wrap ${
-                            "full" in line ? (row.mono ? "font-mono" : "") : row.detailMono ? "font-mono" : ""
+                          className={`text-small leading-[1.6] [overflow-wrap:anywhere] whitespace-pre-wrap ${
+                            "full" in line ? (row.mono ? "font-mono" : "") : row.detailMono ? "font-mono" : "" /* taste-skill-ignore: tool output is code */
                           } ${"tone" in line && line.tone === "add" ? "text-green" : "text-ink-2"}`}
                         >
                           {breakable(line.text)}
-                        </span>
-                      ))}
+                        </Tag>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -383,7 +393,7 @@ export default function ToolChips({
 
       {/* file-diff chips */}
       {step >= total && diffs.length > 0 && (
-        <div className="mt-2.5 flex max-w-full flex-wrap gap-1.5 border-t border-line pt-2.5">
+        <div className="mt-3 flex max-w-full flex-wrap gap-1.5">
           {diffs.map((d, i) => (
             <span
               key={d.file}
@@ -398,12 +408,12 @@ export default function ToolChips({
                 aria-label={`Show diff for ${d.file}`}
                 onFocus={openPreview(d.file)}
                 onBlur={closePreview(d.file)}
-                className="inline-flex h-7 max-w-full items-center gap-2 rounded-chip
-                  bg-surface px-2 font-mono text-[11.5px] text-ink shadow-btn
-                  transition-colors duration-100 hover:bg-hover"
+                className="inline-flex h-7 max-w-full items-center gap-2 rounded-md
+                  bg-hover px-2 text-small text-ink
+                  transition-colors duration-100 hover:bg-hover-2"
                 style={{ animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${i * 80}ms both` }}
               >
-                <span className="min-w-0 truncate">{d.file}</span>
+                <code className="min-w-0 truncate font-mono">{d.file}</code>{/* taste-skill-ignore: a file path */}
                 <span className="shrink-0 text-green tabular-nums">+{d.add}</span>
                 {d.del > 0 && <span className="shrink-0 text-red tabular-nums">−{d.del}</span>}
               </button>
@@ -412,7 +422,7 @@ export default function ToolChips({
           ))}
           {copy.more && <button
             type="button"
-            className="inline-flex h-7 items-center rounded-chip px-1.5 font-mono text-[11.5px] text-ink-3
+            className="inline-flex h-7 items-center rounded-md px-1.5 text-small text-ink-3
               underline decoration-transparent underline-offset-2 transition-colors duration-100
               hover:text-ink-2 hover:decoration-current"
             style={{ animation: `fade-in 300ms ease-out ${diffs.length * 80}ms both` }}
@@ -425,7 +435,7 @@ export default function ToolChips({
       </div>
       {preview && typeof document !== "undefined" && createPortal(
         <div
-          className="fixed z-50 w-72 overflow-hidden rounded-[10px] bg-surface shadow-overlay"
+          className="fixed z-50 w-72 overflow-hidden rounded-md bg-surface shadow-float"
           style={{
             left: preview.x,
             top: preview.top,
@@ -434,7 +444,7 @@ export default function ToolChips({
             transformOrigin: preview.top === undefined ? "bottom left" : "top left",
           }}
         >
-          <div className="flex items-center justify-between border-b border-line px-2.5 py-1.5 font-mono text-[11px]">
+          <div className="flex items-center justify-between bg-inset px-3 py-2 font-mono text-small">{/* taste-skill-ignore: a diff header is code */}
             <span className="min-w-0 truncate text-ink-2">{preview.file}</span>
             <span className="shrink-0 tabular-nums">
               <span className="text-green">+{diffs.find((diff) => diff.file === preview.file)?.add}</span>
@@ -443,7 +453,7 @@ export default function ToolChips({
               )}
             </span>
           </div>
-          <div className="py-1 font-mono text-[11px] leading-[1.8]">
+          <div className="py-1 font-mono text-small leading-[1.8]">{/* taste-skill-ignore: a diff is code */}
             {(diffLines[preview.file] ?? []).map((line, index) => (
               <div
                 key={index}

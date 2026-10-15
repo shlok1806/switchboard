@@ -2,7 +2,7 @@
 // Agents running on each account and what each used.
 
 import { useEffect, useState } from "react";
-import { ChevronDown, Gauge } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import type { Agent, LimitsReading, SessionUsage, UsageLimit } from "@shared/index";
 import { modelLabel } from "@shared/index";
 import { useChannel } from "@/data/store";
@@ -57,13 +57,13 @@ export function Meter({
   return (
     <div className={cn("flex min-w-0 flex-col gap-1", stale && "opacity-55")} data-tone={tone} data-stale={stale || undefined}>
       <div className="flex min-w-0 items-baseline justify-between gap-2">
-        <span className={cn("truncate text-ink-2", small ? "text-[11.5px]" : "text-[12.5px]")}>{label}</span>
-        <span className={cn("shrink-0 font-medium tabular-nums", TEXT[tone], small ? "text-[11.5px]" : "text-[13px]")}>
+        <span className="truncate text-small text-ink-2">{label}</span>
+        <span className={cn("shrink-0 text-small font-medium tabular-nums", TEXT[tone])}>
           {Math.round(limit.percent)}%
         </span>
       </div>
       <div
-        className={cn("overflow-hidden rounded-full bg-inset", small ? "h-1" : "h-1.5")}
+        className={cn("overflow-hidden rounded-full bg-track", small ? "h-1" : "h-1.5")}
         role="meter"
         aria-label={label}
         aria-valuemin={0}
@@ -72,7 +72,7 @@ export function Meter({
       >
         <div className={cn("h-full rounded-full", BAR[tone])} style={{ width: `${width}%` }} />
       </div>
-      {reset && !small && <span className="truncate text-[11.5px] text-ink-3">{reset}</span>}
+      {reset && !small && <span className="text-small text-pretty text-ink-3 tabular-nums">{reset}</span>}
     </div>
   );
 }
@@ -99,7 +99,7 @@ export function Sparkline({ points, className }: { points: { at: number; percent
 
 function StaleLabel({ readAt, now }: { readAt: string; now: number }) {
   return (
-    <span className="inline-flex h-5 items-center rounded-full bg-inset px-2 text-[11px] font-medium text-ink-3">
+    <span className="inline-flex h-6 items-center rounded-full bg-hover-2 px-2 text-small whitespace-nowrap text-ink-2">
       Stale · read {ago(readAt, now)}
     </span>
   );
@@ -108,7 +108,7 @@ function StaleLabel({ readAt, now }: { readAt: string; now: number }) {
 /** Every limit `/usage` reported: the session, the week and each model's week. */
 function Limits({ limits, now, stale }: { limits: LimitsReading; now: number; stale: boolean }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-x-5 gap-y-4 @md:grid-cols-2">
       {limits.session && <Meter label="5-hour" limit={limits.session} now={now} stale={stale} />}
       {limits.week && <Meter label="Week (all models)" limit={limits.week} now={now} stale={stale} />}
       {limits.models.map((m) => (
@@ -123,7 +123,7 @@ function tokens(s: SessionUsage): string {
 }
 
 function Used({ session }: { session?: SessionUsage }) {
-  if (!session) return <span className="text-ink-4">No usage yet</span>;
+  if (!session) return <span className="text-ink-3">No usage yet</span>;
   return (
     <span className="tabular-nums" title={`${session.inputTokens} input, ${session.cacheReadTokens} cache read, ${session.cacheWriteTokens} cache write, ${session.outputTokens} output tokens`}>
       {session.requests} {session.requests === 1 ? "request" : "requests"} · {tokens(session)}
@@ -132,18 +132,18 @@ function Used({ session }: { session?: SessionUsage }) {
   );
 }
 
-const SHARE_COLOURS = ["bg-accent", "bg-green", "bg-orange", "bg-ink-3", "bg-red"];
+const SHARE_COLOURS = ["bg-ink", "bg-ink-4", "bg-accent", "bg-green", "bg-orange"];
 
 export function AccountCardView({ card, now }: { card: AccountCard; now: number }) {
   const stale = card.limits !== undefined && isStale(card.limits.readAt, now);
   const history = sessionHistory(card, now);
   const shared = card.agents.filter((a) => a.share > 0);
   return (
-    <article className="flex min-w-[300px] flex-1 flex-col gap-3 rounded-xl border border-line bg-surface p-4" aria-label={`Account ${card.email}`}>
+    <article className="@container flex min-w-0 flex-col gap-5 rounded-md bg-inset p-4" aria-label={`Account ${card.email}`}>
       <header className="flex min-w-0 items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col">
-          <span className="font-mono text-[13px] break-all text-ink">{card.email}</span>
-          <span className="text-[12px] text-ink-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="truncate text-body font-medium text-ink" title={card.email}>{card.email}</span>
+          <span className="text-small text-ink-3">
             {card.plan ? `${card.plan[0].toUpperCase()}${card.plan.slice(1)} plan` : "Plan unknown"}
             {card.limits && ` · read ${ago(card.limits.readAt, now)}`}
           </span>
@@ -157,11 +157,11 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
       {card.limits ? (
         <Limits limits={card.limits} now={now} stale={stale} />
       ) : (
-        <p className="text-[12.5px] text-ink-3">No limits: /usage reported none for this login.</p>
+        <p className="text-small text-ink-3">No limits: /usage reported none for this login.</p>
       )}
 
-      <div className="flex flex-col gap-2 border-t border-line-soft pt-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-[12.5px]">
+      <div className="flex flex-col gap-2.5">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-small">
           <span className="font-medium whitespace-nowrap text-ink">
             {card.agents.length === 0 ? "No Agents running" : `${card.agents.length} ${card.agents.length === 1 ? "Agent" : "Agents"} running`}
           </span>
@@ -172,7 +172,7 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
           )}
         </div>
         {shared.length > 1 && (
-          <div className="flex h-1.5 overflow-hidden rounded-full bg-inset" role="img" aria-label="Share of usage by Agent">
+          <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full" role="img" aria-label="Share of usage by Agent">
             {shared.map((a, i) => (
               <div key={a.agent.id} className={SHARE_COLOURS[i % SHARE_COLOURS.length]} style={{ width: `${a.share * 100}%` }} />
             ))}
@@ -180,12 +180,12 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
         )}
         <ul className="flex flex-col gap-1.5">
           {card.agents.map((a, i) => (
-            <li key={a.agent.id} className="flex min-w-0 flex-col text-[12.5px]">
+            <li key={a.agent.id} className="flex min-w-0 flex-col text-small">
               <span className="flex min-w-0 items-center gap-1.5">
                 {shared.length > 1 && a.share > 0 && (
                   <span className={cn("size-2 shrink-0 rounded-full", SHARE_COLOURS[shared.indexOf(a) % SHARE_COLOURS.length])} aria-hidden />
                 )}
-                <a href={href({ view: "agent", id: a.agent.id })} className="truncate text-ink hover:text-accent-ink" title={a.agent.id}>
+                <a href={href({ view: "agent", id: a.agent.id })} className="truncate font-medium text-ink hover:underline" title={a.agent.id}>
                   {a.agent.nickname ?? a.agent.id}
                 </a>
                 <span className="shrink-0 text-ink-3">
@@ -207,43 +207,68 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
 
 const COLLAPSED_KEY = "switchboard.accounts.collapsed";
 
-/** The Accounts panel: one card per account, at the top of the Channel's views. */
-export function AccountsPanel() {
+function readCollapsed(): boolean {
+  try {
+    // Folded unless the Person opened it: the Channel's work leads, the accounts follow.
+    return localStorage.getItem(COLLAPSED_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+/** The Accounts panel: one line of figures, opening to one card per account. */
+export function AccountsPanel({ className }: { className?: string }) {
   const { accounts, agents } = useChannel();
   const now = useNow();
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSED_KEY) === "1");
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const cards = accountCards(accounts, agents);
   if (cards.length === 0) return null;
+  const busiest = cards.reduce((x, y) => ((y.limits?.session?.percent ?? -1) > (x.limits?.session?.percent ?? -1) ? y : x));
   const toggle = () => {
-    localStorage.setItem(COLLAPSED_KEY, collapsed ? "0" : "1");
+    try {
+      localStorage.setItem(COLLAPSED_KEY, collapsed ? "0" : "1");
+    } catch {
+      /* not remembered; still toggles for this visit */
+    }
     setCollapsed(!collapsed);
   };
   return (
-    <section className="shrink-0 border-b border-line bg-page" aria-label="Accounts">
+    <section className={cn("flex shrink-0 flex-col gap-3", className)} aria-label="Accounts">
       <button
         type="button"
         onClick={toggle}
         aria-expanded={!collapsed}
-        className="flex h-9 w-full items-center gap-2 px-4 text-left text-[13px] sm:px-6"
+        className="group flex min-h-10 w-full min-w-0 items-center gap-3 rounded-md bg-inset px-3 text-left text-small transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
       >
-        <Gauge className="size-3.5 text-ink-3" aria-hidden />
-        <span className="font-medium text-ink">Accounts</span>
-        {collapsed && (
-          <span className="flex min-w-0 items-center gap-3 truncate text-ink-3">
-            {cards.map((c) => (
-              <span key={c.email} className="truncate">
-                {c.email}
-                {c.limits?.session && (
-                  <span className={TEXT[meterTone(c.limits.session.percent)]}> {Math.round(c.limits.session.percent)}%</span>
-                )}
+        <span className="shrink-0 font-medium text-ink">Accounts</span>
+        {/* a phone has room for the busiest account only */}
+        <span className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap text-ink-3 sm:hidden">
+          <span className="tabular-nums">{cards.length}</span>
+          {busiest?.limits?.session && (
+            <>
+              <span>· busiest</span>
+              <span className={cn("font-medium tabular-nums", TEXT[meterTone(busiest.limits.session.percent)])}>
+                {Math.round(busiest.limits.session.percent)}%
               </span>
-            ))}
-          </span>
-        )}
-        <ChevronDown className={cn("ml-auto size-4 text-ink-3 transition-transform", collapsed && "-rotate-90")} aria-hidden />
+            </>
+          )}
+        </span>
+        <span className="flex min-w-0 items-center gap-4 overflow-hidden text-ink-3 max-sm:hidden">
+          {cards.map((c) => (
+            <span key={c.email} className="flex min-w-0 shrink items-baseline gap-1.5 whitespace-nowrap">
+              <span className="truncate">{c.email}</span>
+              {c.limits?.session && (
+                <span className={cn("font-medium tabular-nums", TEXT[meterTone(c.limits.session.percent)])}>
+                  {Math.round(c.limits.session.percent)}%
+                </span>
+              )}
+            </span>
+          ))}
+        </span>
+        <ChevronDown className={cn("ml-auto size-4 shrink-0 text-ink-3 transition-transform duration-200", collapsed && "-rotate-90")} aria-hidden />
       </button>
       {!collapsed && (
-        <div className="flex max-h-[45vh] flex-wrap gap-3 overflow-y-auto px-4 pb-3 sm:px-6">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-3">
           {cards.map((c) => (
             <AccountCardView key={c.email} card={c} now={now} />
           ))}
@@ -263,13 +288,13 @@ export function AgentUsage({ agent, compact: small = false }: { agent: Agent; co
   const stale = limits !== undefined && isStale(limits.readAt, now);
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-[12px] text-ink-3">
-        {(usage.email ?? usage.accountId) && <span className="truncate font-mono text-ink-2">{usage.email ?? usage.accountId}</span>}
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-small text-ink-3">
+        {(usage.email ?? usage.accountId) && <span className="truncate text-ink-2">{usage.email ?? usage.accountId}</span>}
         <Used session={usage.session} />
         {stale && limits && <StaleLabel readAt={limits.readAt} now={now} />}
       </span>
       {limits && (limits.session || limits.week) && (
-        <div className={cn("grid gap-3", small ? "max-w-[320px] grid-cols-2" : "sm:grid-cols-2")}>
+        <div className={cn("grid gap-x-5 gap-y-3", small ? "max-w-[320px] grid-cols-2" : "sm:grid-cols-2")}>
           {limits.session && <Meter label="5-hour" limit={limits.session} now={now} stale={stale} compact={small} />}
           {limits.week && <Meter label="Week" limit={limits.week} now={now} stale={stale} compact={small} />}
         </div>

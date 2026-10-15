@@ -20,9 +20,10 @@
  *   the keyboard, for phones where a "Move to" menu replaces dragging.
  * - Keyboard: Space picks up and drops, Escape cancels, arrows move between
  *   columns (sortableKeyboardCoordinates). Enter and a click open the card.
- * - Re-skinned through the token layer: columns are quiet sunken lanes, cards
- *   are soft white tiles with a hairline ring, the drop target gets a dashed
- *   accent outline.
+ * - Re-skinned through the token layer (ADR 0016): columns are one tone step
+ *   from the page, cards are flat surfaces on them with no outline or shadow,
+ *   only the card being dragged floats, and the column under it takes the
+ *   selection tint.
  */
 
 import type {
@@ -48,7 +49,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { createContext, type HTMLAttributes, type ReactNode, useContext, useMemo, useRef, useState } from "react";
+import { createContext, type HTMLAttributes, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import tunnel from "tunnel-rat";
 import { cn } from "@/lib/utils";
@@ -105,8 +106,8 @@ export const KanbanBoard = ({ id, children, className }: KanbanBoardProps) => {
   return (
     <div
       className={cn(
-        "relative flex size-full min-h-40 flex-col rounded-xl bg-canvas text-xs",
-        isOver && "outline-2 outline-offset-[-2px] outline-accent outline-dashed",
+        "relative flex size-full min-h-40 flex-col rounded-md bg-canvas text-small transition-colors duration-150",
+        isOver && "bg-accent-tint",
         className,
       )}
       data-over={isOver || undefined}
@@ -162,11 +163,11 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
         }}
         aria-roledescription="Task card"
         ref={setNodeRef}
-        className="rounded-lg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className="rounded-md outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <div
           className={cn(
-            "cursor-grab rounded-lg bg-surface p-3 text-ink shadow-card transition-shadow hover:shadow-raised",
+            "cursor-grab rounded-md bg-surface p-3.5 text-ink transition-colors duration-150 hover:bg-hover",
             isDragging && "pointer-events-none cursor-grabbing opacity-40",
             className,
           )}
@@ -176,7 +177,7 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
       </div>
       {activeCardId === id && (
         <t.In>
-          <div className={cn("cursor-grabbing rounded-lg bg-surface p-3 text-ink shadow-overlay", className)}>
+          <div className={cn("cursor-grabbing rounded-md bg-surface p-3.5 text-ink shadow-float", className)}>
             {children ?? <p className="m-0 text-sm font-medium">{name}</p>}
           </div>
         </t.In>
@@ -219,7 +220,7 @@ export const KanbanCards = <T extends KanbanItemProps = KanbanItemProps>({
 export type KanbanHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 export const KanbanHeader = ({ className, ...props }: KanbanHeaderProps) => (
-  <div className={cn("m-0 px-3 pt-2.5 pb-2 text-[13px] font-medium", className)} {...props} />
+  <div className={cn("m-0 px-3.5 pt-2.5 pb-2 text-small font-medium", className)} {...props} />
 );
 
 export type KanbanMove<T> = { item: T; from: string; to: string };
@@ -255,6 +256,9 @@ const collision: CollisionDetection = (args) => {
   return hits.length ? hits : closestCorners(args);
 };
 
+// A mask, not a fill: the last 3rem of the visible lanes fade to show there is more to scroll.
+const FADE = "linear-gradient(to right, #000 calc(100% - 3rem), transparent)"; // taste-skill-ignore: a scroll-edge mask, not a coloured fill
+
 export const KanbanProvider = <
   T extends KanbanItemProps = KanbanItemProps,
   C extends KanbanColumnProps = KanbanColumnProps,
@@ -273,6 +277,23 @@ export const KanbanProvider = <
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const droppedAt = useRef(0);
   const [overColumn, setOverColumn] = useState<string | null>(null);
+  // Switchboard: when columns run past the right edge (a tablet), that edge fades, so the
+  // sideways scroll shows itself; at the end of the scroll the fade goes.
+  const lanes = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = lanes.current;
+    if (!el) return;
+    const measure = () => setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    el.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      observer.disconnect();
+      el.removeEventListener("scroll", measure);
+    };
+  }, []);
 
   const mouse = useSensor(MouseSensor, { activationConstraint: { distance: 5 } });
   const touch = useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } });
@@ -354,7 +375,11 @@ export const KanbanProvider = <
         {...props}
       >
         {lane}
-        <div className={cn("relative grid size-full auto-cols-fr grid-flow-col gap-3", className)}>
+        <div
+          ref={lanes}
+          className={cn("relative grid size-full auto-cols-fr grid-flow-col gap-3", className)}
+          style={more ? { maskImage: FADE, WebkitMaskImage: FADE } : undefined}
+        >
           {columns.map((column) => children(column))}
         </div>
         {typeof window !== "undefined" &&

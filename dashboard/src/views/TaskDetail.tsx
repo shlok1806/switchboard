@@ -79,7 +79,7 @@ export function TaskDetail({ number }: { number: number }) {
 
   if (!task) {
     return (
-      <div className="p-6 text-[14px] text-ink-2">
+      <div className="p-6 text-body text-ink-2">
         No Task #{number}. <a href={href({ view: "tasks" })} className="text-accent-ink hover:underline">Back to the Board</a>
       </div>
     );
@@ -95,14 +95,14 @@ export function TaskDetail({ number }: { number: number }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-6xl gap-6 px-4 py-5 sm:px-6 sm:py-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-10">
-        <div className="flex min-w-0 flex-col gap-6">
-          <header className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2 text-[13px] text-ink-3">
-              <StatusPill tone={COLUMN_TONE[col]} className="h-6 text-[12.5px]">
+      <div className="mx-auto grid max-w-6xl gap-8 px-[var(--gutter)] pt-6 pb-12 sm:pt-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-12">
+        <div className="flex min-w-0 flex-col gap-8">
+          <header className="rise flex flex-col gap-4">
+            <div className="flex flex-wrap items-center gap-2 text-small text-ink-3">
+              <StatusPill tone={COLUMN_TONE[col]} className="h-6 text-small">
                 {COLUMN_LABEL[col]}
               </StatusPill>
-              <span className="font-mono">#{task.number}</span>
+              <span className="tabular-nums">#{task.number}</span>
               {task.parent && (
                 <span className="inline-flex min-w-0 items-center gap-1">
                   in <TaskLink number={task.parent} title={taskByNumber.get(task.parent)?.title} className="min-w-0 text-ink-2" />
@@ -112,12 +112,12 @@ export function TaskDetail({ number }: { number: number }) {
                 GitHub <ExternalLink className="size-3.5" aria-hidden />
               </a>
             </div>
-            <h1 className="text-[22px] leading-tight font-semibold tracking-tight text-ink [overflow-wrap:anywhere] sm:text-[26px]">{task.title}</h1>
+            <h1 className="max-w-[var(--column)] text-title font-semibold text-ink [overflow-wrap:anywhere] sm:text-display">{task.title}</h1>
             <IssueBody text={task.description} />
             {labels.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {labels.map((l) => (
-                  <span key={l} className="rounded-full bg-hover px-2 py-0.5 text-[12px] text-ink-2">
+                  <span key={l} className="rounded-sm bg-hover px-2 text-small leading-6 text-ink-2">
                     {l}
                   </span>
                 ))}
@@ -129,11 +129,11 @@ export function TaskDetail({ number }: { number: number }) {
             <Section title="Steps" action={<Progress done={steps.done} total={steps.total} noun="" />}>
               <ul className="flex flex-col gap-2">
                 {task.steps.map((s) => (
-                  <li key={s.index} className="flex items-start gap-2.5 text-[14px]">
+                  <li key={s.index} className="flex items-start gap-2.5 text-body">
                     {s.done ? (
                       <CircleCheck className="mt-0.5 size-4 shrink-0 text-green" aria-label="Done" />
                     ) : (
-                      <Circle className="mt-0.5 size-4 shrink-0 text-ink-4" aria-label="Not done" />
+                      <Circle className="mt-0.5 size-4 shrink-0 text-ink-3" aria-label="Not done" />
                     )}
                     <span className={s.done ? "text-ink-3 line-through" : "text-ink"}>{s.text}</span>
                   </li>
@@ -153,13 +153,13 @@ export function TaskDetail({ number }: { number: number }) {
                     <li key={n}>
                       <a
                         href={href({ view: "task", number: n })}
-                        className="flex min-h-10 items-center gap-3 rounded-lg px-2.5 hover:bg-hover"
+                        className="flex min-h-10 items-center gap-3 rounded-md px-2.5 hover:bg-hover"
                       >
-                        <span className="min-w-0 flex-1 truncate text-[14px] text-ink">
-                          <span className="font-mono text-[12.5px] text-ink-3">#{n}</span> {s.title}
+                        <span className="min-w-0 flex-1 truncate text-body text-ink">
+                          <span className="text-small text-ink-3 tabular-nums">#{n}</span> {s.title}
                         </span>
                         {sp.total > 0 && <Progress done={sp.done} total={sp.total} noun="" />}
-                        <StatusPill tone={COLUMN_TONE[columnOf(s)]} className="h-5 px-2 text-[11.5px]">
+                        <StatusPill tone={COLUMN_TONE[columnOf(s)]} className="h-5 px-2 text-small">
                           {COLUMN_LABEL[columnOf(s)]}
                         </StatusPill>
                       </a>
@@ -170,16 +170,16 @@ export function TaskDetail({ number }: { number: number }) {
             </Section>
           )}
 
-          <section className="flex flex-col gap-3">
+          <section className="rise flex flex-col gap-3 [--i:2]">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-[15px] font-medium text-ink">Timeline</h2>
+              <h2 className="text-lead font-semibold text-ink">Timeline</h2>
               <SegmentedControl options={SCOPES} value={scope} onChange={setScope} />
             </div>
             {timeline.length === 0 ? (
-              <p className="text-[14px] text-ink-3">Nothing yet</p>
+              <p className="text-body text-ink-3">Nothing yet</p>
             ) : (
               <ol className="relative flex flex-col">
-                <span aria-hidden className="absolute top-3 bottom-3 left-[4px] w-px bg-line" />
+                <span aria-hidden className="absolute top-3 bottom-3 left-[3px] w-[3px] rounded-full bg-hover-2" />
                 {timeline.map((e) => (
                   <TimelineItem key={e.id} event={e} threshold={threshold} />
                 ))}
@@ -188,30 +188,31 @@ export function TaskDetail({ number }: { number: number }) {
           </section>
         </div>
 
-        {/* On a phone the Claim card leads only when a Stale Claim needs a Takeover. */}
-        <aside
-          className={cn(
-            "flex min-w-0 flex-col gap-4 lg:sticky lg:top-8 lg:order-none lg:self-start",
-            task.claim?.stale && "order-first",
-          )}
-        >
-          <Section title={task.claim?.stale ? "Stale Claim" : "Claim"} tone={task.claim?.stale ? "alert" : undefined} bodyClassName="flex flex-col gap-3">
+        {/* On a phone the aside's parts join the page's column, so the Claim card alone
+            leads when a Stale Claim needs a Takeover; the rest stays after the Task. */}
+        <aside className="rise flex min-w-0 flex-col gap-4 [--i:1] max-lg:contents lg:sticky lg:top-8 lg:self-start">
+          <Section
+            title={task.claim?.stale ? "Stale Claim" : "Claim"}
+            tone={task.claim?.stale ? "alert" : undefined}
+            className={cn(task.claim?.stale && "max-lg:order-first")}
+            bodyClassName="flex flex-col gap-3"
+          >
             {task.claim ? (
               <>
                 <div className="flex flex-wrap items-center gap-2">
                   {task.claim.holder.kind === "agent" ? (
                     <AgentLink id={task.claim.holder.agentId} agent={holderAgent} />
                   ) : (
-                    <span className="text-[13px] font-medium text-ink">{task.claim.holder.person}</span>
+                    <span className="text-body font-medium text-ink">{task.claim.holder.person}</span>
                   )}
                   {holderAgent && <PresencePill presence={holderAgent.presence} />}
                 </div>
-                <p className="text-[12.5px] text-ink-3">Claimed {ago(task.claim.claimedAt)}</p>
+                <p className="text-small text-ink-3">Claimed {ago(task.claim.claimedAt)}</p>
                 <TakeoverAction task={task} />
               </>
             ) : (
               <>
-                <p className="text-[13px] text-ink-3">
+                <p className="text-small text-ink-3">
                   {task.status === "done" ? (
                     "Done"
                   ) : can.claims ? (
@@ -228,7 +229,7 @@ export function TaskDetail({ number }: { number: number }) {
           {blocked.length > 0 && (
             <Section title="Blocked by" tone="alert" bodyClassName="flex flex-col gap-2">
               {blocked.map((b) => (
-                <TaskLink key={b!.number} number={b!.number} title={b!.title} className="text-[13.5px] text-ink" />
+                <TaskLink key={b!.number} number={b!.number} title={b!.title} className="text-body text-ink" />
               ))}
             </Section>
           )}
@@ -238,7 +239,7 @@ export function TaskDetail({ number }: { number: number }) {
               {task.branch && (
                 <Snippet defaultValue="switch">
                   <SnippetHeader>
-                    <span className="flex items-center gap-1.5 text-[12.5px] font-medium">
+                    <span className="flex items-center gap-1.5 text-small font-medium">
                       <GitBranch className="size-3.5" aria-hidden /> Branch
                     </span>
                     <SnippetCopyButton value={`git fetch && git switch ${task.branch}`} aria-label="Copy command" />
@@ -249,8 +250,8 @@ export function TaskDetail({ number }: { number: number }) {
                 </Snippet>
               )}
               {task.pr && (
-                <p className="flex items-center gap-1.5 text-[13px] text-ink-2">
-                  <GitPullRequest className="size-3.5" aria-hidden /> PR <span className="font-mono">#{task.pr}</span>
+                <p className="flex items-center gap-1.5 text-small text-ink-2">
+                  <GitPullRequest className="size-3.5" aria-hidden /> PR <span className="tabular-nums">#{task.pr}</span>
                 </p>
               )}
             </section>
@@ -273,22 +274,22 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
       <span aria-hidden className={cn("relative z-10 mt-1.5 size-[9px] rounded-full ring-4 ring-page", DOT[e.type] ?? "bg-ink-4")} />
       <div className="flex min-w-0 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-[13px] font-medium text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
+          <span className="text-body font-medium text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
           {e.actor.kind === "agent" ? (
             <AgentLink id={e.actor.agentId} agent={agentById.get(e.actor.agentId)} />
           ) : (
-            <span className="text-[13px] text-ink-2">{e.actor.kind === "person" ? e.actor.person : "GitHub"}</span>
+            <span className="text-small text-ink-2">{e.actor.kind === "person" ? e.actor.person : "GitHub"}</span>
           )}
           <CaptureIcon event={e} />
-          <time className="ml-auto font-mono text-[11.5px] text-ink-3 tabular-nums" title={clock(e.at)}>
+          <time className="ml-auto text-small text-ink-3 tabular-nums" title={clock(e.at)}>
             {ago(e.at)}
           </time>
         </div>
         {e.type === "push" || e.type === "merge" || e.type === "takeover" ? (
           <>
-            <p className="text-[13.5px] text-ink-2">{summarize(e)}</p>
+            <p className="max-w-[68ch] text-body text-ink-2">{summarize(e)}</p>
             <Reasoning>
-              <ReasoningTrigger className="text-[12.5px] text-ink-3">
+              <ReasoningTrigger className="text-small text-ink-3">
                 {e.type === "push" || e.type === "merge" ? `${e.payload.files.length} ${e.payload.files.length === 1 ? "file" : "files"}` : "Hand-off"}
               </ReasoningTrigger>
               <ReasoningContent contentClassName="mt-2 max-w-none">
@@ -297,11 +298,11 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
             </Reasoning>
           </>
         ) : (
-          <p className={cn("text-[13.5px] leading-snug", e.type === "update" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
+          <p className={cn("max-w-[68ch] text-body leading-snug", e.type === "update" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
         )}
         {asked.length > 0 && (
           <Reasoning>
-            <ReasoningTrigger className="text-[12.5px] text-ink-3">
+            <ReasoningTrigger className="text-small text-ink-3">
               <span className="flex items-center gap-2">
                 Verdicts <VerdictTally verdicts={verdicts} />
               </span>

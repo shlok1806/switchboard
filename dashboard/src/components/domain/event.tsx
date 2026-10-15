@@ -15,8 +15,8 @@ import { href } from "@/lib/router";
 
 const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   update: "text-ink",
-  directive: "text-accent-ink",
-  "directive.delivery": "text-accent-ink",
+  directive: "text-ink",
+  "directive.delivery": "text-ink-2",
   takeover: "text-red",
   push: "text-green",
   merge: "text-green",
@@ -33,8 +33,8 @@ function Actor({ event, agentById, compact }: { event: ChannelEvent; agentById: 
   if (a.kind === "agent")
     return <AgentLink id={a.agentId} agent={agentById.get(a.agentId)} nicknameClassName={compact ? "hidden sm:inline" : undefined} />;
   if (a.kind === "person")
-    return <span className="truncate text-[13px] font-medium text-ink">{a.person}</span>;
-  return <span className="text-[13px] font-medium text-ink-2">GitHub</span>;
+    return <span className="truncate text-body font-medium text-ink">{a.person}</span>;
+  return <span className="text-body font-medium text-ink-2">GitHub</span>;
 }
 
 /** One message in the live feed: who, what, and when, like a chat line. */
@@ -74,8 +74,8 @@ export function EventRow({
           }
         }}
         className={cn(
-          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-lg px-3 text-left outline-none transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
-          continued ? "py-1.5" : "pt-3 pb-1.5",
+          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-md px-3 text-left outline-none transition-colors duration-150 hover:bg-inset focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+          continued ? "py-1.5" : "pt-3.5 pb-1.5",
           selected && "bg-accent-tint hover:bg-accent-tint",
         )}
       >
@@ -88,35 +88,38 @@ export function EventRow({
                 <Actor event={event} agentById={agentById} compact />
                 {event.type === "directive" && (
                   <>
-                    <ArrowRight className="size-3.5 shrink-0 text-ink-4" aria-label="to" />
+                    <ArrowRight className="size-3.5 shrink-0 text-ink-3" aria-label="to" />
                     <AgentLink id={event.payload.to} agent={agentById.get(event.payload.to)} showNickname={false} />
                   </>
                 )}
               </span>
               <span className="flex min-w-0 items-center gap-2">
-                <span className="text-[12px] text-ink-3">{EVENT_TYPE_LABEL[event.type]}</span>
+                <span className="text-small text-ink-3">{EVENT_TYPE_LABEL[event.type]}</span>
                 {event.type === "proxy.raw" && <RawBadge />}
-                {task && <TaskLink number={task.number} className="shrink-0 text-[12px]" />}
+                {task && <TaskLink number={task.number} className="shrink-0 text-small text-ink-3" />}
               </span>
             </div>
             <span className="flex h-5 shrink-0 items-center gap-2">
               <VerdictTally verdicts={verdicts} />
               <CaptureIcon event={event} />
-              <time className="font-mono text-[11.5px] text-ink-3 tabular-nums" dateTime={event.at} title={clock(event.at)}>
+              <time className="text-small whitespace-nowrap text-ink-3 tabular-nums" dateTime={event.at} title={clock(event.at)}>
                 {ago(event.at)}
               </time>
             </span>
           </div>
           <p
             className={cn(
-              "line-clamp-2 min-w-0 text-[13.5px] leading-snug text-ink-2",
+              "line-clamp-2 max-w-[68ch] min-w-0 text-body leading-normal text-ink-2",
               TONE[event.type],
               isMessage && "text-ink",
-              event.type === "directive" && "text-accent-ink",
-              (event.type === "command" || event.type === "tool.call" || event.type === "file.edit") && "font-mono text-[12.5px]",
+              event.type === "directive" && "font-medium",
             )}
           >
-            {summarize(event)}
+            {event.type === "command" || event.type === "tool.call" || event.type === "file.edit" ? (
+              <code className="font-mono text-small">{summarize(event)}</code> // taste-skill-ignore: a command, tool argument or path is literal code
+            ) : (
+              summarize(event)
+            )}
           </p>
         </div>
       </div>
@@ -141,8 +144,8 @@ export function toolSteps(calls: ToolCall[]): ToolStep[] {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <dt className="text-[12px] text-ink-3">{label}</dt>
-      <dd className="min-w-0 text-[13px] text-ink">{children}</dd>
+      <dt className="text-small text-ink-3">{label}</dt>
+      <dd className="min-w-0 text-body text-ink">{children}</dd>
     </div>
   );
 }
@@ -154,7 +157,7 @@ function WakeBody({ event }: { event: Extract<ChannelEvent, { type: "wake" }> })
   const delivered = [...event.payload.events, ...event.payload.directives];
   return (
     <div className="flex flex-col gap-2.5">
-      <p className="text-[13.5px] leading-relaxed text-ink">
+      <p className="max-w-[68ch] text-body leading-relaxed text-ink">
         The Agent was idle, so its wrapper typed what was waiting for its next turn as one prompt, which started a
         turn. Its Person did not write that prompt.
       </p>
@@ -166,10 +169,10 @@ function WakeBody({ event }: { event: Extract<ChannelEvent, { type: "wake" }> })
               <li key={id}>
                 <a
                   href={href({ view: "feed", event: id })}
-                  className="flex min-w-0 flex-col gap-0.5 rounded-lg bg-inset px-3 py-2 transition-colors hover:bg-hover"
+                  className="flex min-w-0 flex-col gap-0.5 rounded-md bg-hover px-3 py-2.5 transition-colors hover:bg-hover-2"
                 >
-                  <span className="text-[12px] text-ink-3">{woken ? EVENT_TYPE_LABEL[woken.type] : "Event"}</span>
-                  <span className="truncate text-[13px] text-ink">{woken ? summarize(woken) : id}</span>
+                  <span className="text-small text-ink-3">{woken ? EVENT_TYPE_LABEL[woken.type] : "Event"}</span>
+                  <span className="truncate text-body text-ink">{woken ? summarize(woken) : id}</span>
                 </a>
               </li>
             );
@@ -188,14 +191,14 @@ export function EventBody({ event }: { event: ChannelEvent }) {
       return (
         <div className="flex flex-col gap-3">
           <dl className="grid grid-cols-2 gap-3">
-            <Field label="Branch"><span className="font-mono text-[12px]">{event.payload.branch}</span></Field>
-            <Field label="Commit"><span className="font-mono text-[12px]">{event.payload.commit.slice(0, 7)}</span></Field>
+            <Field label="Branch"><code className="font-mono text-small">{event.payload.branch}</code></Field>{/* taste-skill-ignore: a branch name is code */}
+            <Field label="Commit"><code className="font-mono text-small">{event.payload.commit.slice(0, 7)}</code></Field>{/* taste-skill-ignore: a commit hash is code */}
           </dl>
           {event.type === "push" && event.payload.commits.length > 1 && (
             <ul className="flex flex-col gap-1">
               {event.payload.commits.map((c) => (
-                <li key={c.sha} className="flex min-w-0 gap-2 text-[12.5px] text-ink-2">
-                  <span className="shrink-0 font-mono text-[12px] text-ink-3">{c.sha.slice(0, 7)}</span>
+                <li key={c.sha} className="flex min-w-0 gap-2 text-small text-ink-2">
+                  <code className="shrink-0 font-mono text-small text-ink-3">{c.sha.slice(0, 7)}</code>{/* taste-skill-ignore: a commit hash is code */}
                   <span className="truncate">{c.message}</span>
                 </li>
               ))}
@@ -204,7 +207,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
           {event.payload.files.map((f) => (
             <FileDiff key={f.path} file={f} />
           ))}
-          {event.payload.truncationNote && <p className="text-[12px] text-ink-3">{event.payload.truncationNote}</p>}
+          {event.payload.truncationNote && <p className="text-small text-ink-3">{event.payload.truncationNote}</p>}
         </div>
       );
     case "proxy.digest":
@@ -213,11 +216,11 @@ export function EventBody({ event }: { event: ChannelEvent }) {
       return (
         <div className="flex flex-col gap-3">
           <dl className="grid grid-cols-3 gap-3">
-            <Field label="Model"><span className="font-mono text-[12px]">{p.model}</span></Field>
+            <Field label="Model"><span className="text-body">{p.model}</span></Field>
             <Field label="Tokens in"><span className="tabular-nums">{compact(p.inputTokens)}</span></Field>
             <Field label="Tokens out"><span className="tabular-nums">{compact(p.outputTokens)}</span></Field>
           </dl>
-          <p className="rounded-lg bg-inset px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-ink">{p.reply}</p>
+          <p className="rounded-md bg-hover px-3.5 py-3 text-body leading-relaxed text-ink">{p.reply}</p>
           {p.toolCalls.length > 0 && (
             <ToolChips
               animate={false}
@@ -228,16 +231,16 @@ export function EventBody({ event }: { event: ChannelEvent }) {
           )}
           {event.type === "proxy.raw" && (
             <Reasoning>
-              <ReasoningTrigger className="text-[12.5px] font-medium">Model context (raw)</ReasoningTrigger>
+              <ReasoningTrigger className="text-small font-medium">Model context (raw)</ReasoningTrigger>
               <ReasoningContent contentClassName="mt-2">
-                <pre className="max-h-64 overflow-auto rounded-lg bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-ink-2">
+                <pre /* taste-skill-ignore: raw model context */ className="max-h-64 overflow-auto rounded-md bg-hover p-3 font-mono text-small leading-relaxed whitespace-pre-wrap text-ink-2">
                   {event.payload.context}
                 </pre>
               </ReasoningContent>
             </Reasoning>
           )}
           {p.maskedSecrets > 0 && (
-            <p className="text-[12px] text-ink-3">
+            <p className="text-small text-ink-3">
               {p.maskedSecrets} {p.maskedSecrets === 1 ? "secret" : "secrets"} masked
             </p>
           )}
@@ -264,13 +267,13 @@ export function EventBody({ event }: { event: ChannelEvent }) {
       const { command, exitCode } = event.payload;
       return (
         <div className="flex flex-col gap-3">
-          <pre className="overflow-x-auto rounded-lg bg-inset px-3 py-2.5 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink">
+          <pre /* taste-skill-ignore: a shell command */ className="overflow-x-auto rounded-md bg-hover px-3 py-2.5 font-mono text-small leading-relaxed whitespace-pre-wrap text-ink">
             $ {command}
           </pre>
           {exitCode !== undefined && (
             <dl className="grid grid-cols-2 gap-3">
               <Field label="Exit code">
-                <span className={cn("font-mono text-[12px] tabular-nums", exitCode === 0 ? "text-green" : "text-red")}>{exitCode}</span>
+                <span className={cn("text-body font-medium tabular-nums", exitCode === 0 ? "text-green" : "text-red")}>{exitCode}</span>
               </Field>
             </dl>
           )}
@@ -281,22 +284,22 @@ export function EventBody({ event }: { event: ChannelEvent }) {
       return <WakeBody event={event} />;
     case "directive":
       return (
-        <div className="flex flex-col gap-3 rounded-lg bg-inset p-3">
+        <div className="flex flex-col gap-3 rounded-md bg-hover p-4">
           <dl className="grid grid-cols-2 gap-3">
             <Field label="From">
               {event.actor.kind === "person" ? event.actor.person : "-"}
             </Field>
             <Field label="To"><AgentLink id={event.payload.to} showNickname={false} /></Field>
           </dl>
-          <p className="text-[13.5px] leading-relaxed font-medium whitespace-pre-wrap text-accent-ink">{event.payload.text}</p>
+          <p className="max-w-[60ch] text-lead leading-relaxed font-medium whitespace-pre-wrap text-ink">{event.payload.text}</p>
         </div>
       );
     case "takeover":
       return (
-        <div className="flex flex-col gap-3 rounded-lg bg-inset p-3">
+        <div className="flex flex-col gap-3 rounded-md bg-hover p-4">
           <dl className="grid grid-cols-2 gap-3">
-            <Field label="From"><span className="font-mono text-[12px]">{holderName(event.payload.from)}</span></Field>
-            <Field label="To"><span className="font-mono text-[12px]">{holderName(event.payload.to)}</span></Field>
+            <Field label="From"><span className="tabular-nums">{holderName(event.payload.from)}</span></Field>
+            <Field label="To"><span className="tabular-nums">{holderName(event.payload.to)}</span></Field>
           </dl>
           <Field label="Steps completed">
             {event.payload.stepsCompleted.length ? (
@@ -315,8 +318,8 @@ export function EventBody({ event }: { event: ChannelEvent }) {
     case "task.create":
       return (
         <div className="flex flex-col gap-2">
-          <p className="text-[13.5px] leading-relaxed text-ink">{event.payload.title}</p>
-          <a href={event.payload.url} target="_blank" rel="noreferrer" className="self-start text-[12.5px] text-accent-ink hover:underline">
+          <p className="max-w-[68ch] text-body leading-relaxed text-ink">{event.payload.title}</p>
+          <a href={event.payload.url} target="_blank" rel="noreferrer" className="self-start text-small text-accent-ink underline-offset-4 hover:underline">
             Issue on GitHub
           </a>
         </div>
@@ -326,7 +329,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-1.5">
             {event.payload.fields.map((f) => (
-              <span key={f} className="rounded-full bg-hover px-2 py-0.5 text-[12px] text-ink-2">
+              <span key={f} className="rounded-sm bg-hover px-2 py-0.5 text-small text-ink-2">
                 {TASK_FIELD_LABEL[f]}
               </span>
             ))}
@@ -334,7 +337,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
         </div>
       );
     default:
-      return <p className="text-[13.5px] leading-relaxed text-ink">{summarize(event)}</p>;
+      return <p className="max-w-[68ch] text-body leading-relaxed text-ink">{summarize(event)}</p>;
   }
 }
 
@@ -362,18 +365,18 @@ export function EventDetail({
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
   const unrelayed = event.type !== "directive" ? unrelayedReason(event.type) : null;
   return (
-    <article className="flex flex-col gap-5">
+    <article className="flex flex-col gap-6">
       <header className="flex items-start gap-3">
         <ActorAvatar actor={event.actor} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <Actor event={event} agentById={agentById} />
-            <span className="text-[12.5px] text-ink-3">{EVENT_TYPE_LABEL[event.type]}</span>
+            <span className="text-small text-ink-3">{EVENT_TYPE_LABEL[event.type]}</span>
             <CaptureChip event={event} />
             {event.type === "proxy.raw" && <RawBadge />}
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-3">
-            <time className="font-mono tabular-nums" dateTime={event.at}>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-small text-ink-3">
+            <time className="tabular-nums" dateTime={event.at}>
               {clock(event.at)} · {ago(event.at)}
             </time>
             {task && <TaskLink number={task.number} title={task.title} className="min-w-0 text-ink-2" />}
@@ -384,7 +387,7 @@ export function EventDetail({
             type="button"
             onClick={onClose}
             aria-label="Close Event"
-            className="-mt-1 -mr-2 grid size-8 shrink-0 place-items-center rounded-md text-ink-3 hover:bg-hover hover:text-ink"
+            className="-mt-1 -mr-2 grid size-9 shrink-0 place-items-center rounded-md text-ink-3 transition-colors hover:bg-hover hover:text-ink"
           >
             <X className="size-4" aria-hidden />
           </button>
@@ -392,12 +395,12 @@ export function EventDetail({
       </header>
       <EventBody event={event} />
       <section className="flex flex-col gap-2.5">
-        <h3 className="flex items-center justify-between text-[13px] font-medium text-ink">
+        <h3 className="flex items-center justify-between text-body font-medium text-ink">
           Verdicts
           {event.type !== "directive" && unrelayed === null && verdictsLive && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span tabIndex={0} className="rounded-full bg-hover px-2 py-0.5 font-mono text-[11.5px] font-normal text-ink-3">
+                <span tabIndex={0} className="rounded-sm bg-hover px-2 py-0.5 text-small font-normal text-ink-3 tabular-nums">
                   threshold {threshold.toFixed(2)}
                 </span>
               </TooltipTrigger>
@@ -406,16 +409,16 @@ export function EventDetail({
           )}
         </h3>
         {event.type === "directive" ? (
-          <p className="rounded-lg bg-inset px-3 py-2.5 text-[13px] text-ink-3">
-            No Verdict: a Directive always reaches <span className="font-mono text-[12.5px] text-ink-2">{event.payload.to}</span>, labelled
+          <p className="rounded-md bg-hover px-3.5 py-3 text-small text-ink-3">
+            No Verdict: a Directive always reaches <span className="font-medium text-ink-2">{event.payload.to}</span>, labelled
             as from {event.actor.kind === "person" ? event.actor.person : "its sender"}.
           </p>
         ) : unrelayed !== null ? (
-          <p className="rounded-lg bg-inset px-3 py-2.5 text-[13px] text-ink-3">{unrelayed}</p>
+          <p className="rounded-md bg-hover px-3.5 py-3 text-small text-ink-3">{unrelayed}</p>
         ) : verdictsLive ? (
           <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} woken={woken} />
         ) : (
-          <p className="rounded-lg bg-inset px-3 py-2.5 text-[13px] text-ink-3">
+          <p className="rounded-md bg-hover px-3.5 py-3 text-small text-ink-3">
             Arrives with the Relay (<IssueLink capability="verdicts" />).
           </p>
         )}

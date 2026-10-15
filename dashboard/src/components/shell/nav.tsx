@@ -55,12 +55,24 @@ function Badge({ n, label, alert }: { n: number; label: string; alert?: boolean 
       aria-label={label}
       title={label}
       className={cn(
-        "min-w-[18px] rounded-full px-1.5 text-center font-mono text-[11px] leading-[18px] tabular-nums",
-        alert ? "bg-red text-on-accent" : "bg-hover-2 text-ink-3",
+        "min-w-5 rounded-full px-1.5 text-center text-small leading-5 font-medium tabular-nums",
+        alert ? "bg-red-tint text-red" : "text-ink-3",
       )}
     >
       {n}
     </span>
+  );
+}
+
+/** The mark: two dots joined, a switchboard's patch cord. */
+export function Mark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden className={cn("size-6 shrink-0 text-ink", className)}>
+      <rect width="24" height="24" rx="4" fill="currentColor" />
+      <circle cx="8" cy="15" r="2.4" fill="var(--page)" />
+      <circle cx="16" cy="9" r="2.4" fill="var(--action)" />
+      <path d="M8 15 C 8 10, 16 14, 16 9" fill="none" stroke="var(--page)" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -69,7 +81,7 @@ export function ViewTabs({ route }: { route: Route }) {
   const current = viewOf(route);
   const badges = useBadges();
   return (
-    <nav aria-label="Views" className="flex h-full items-stretch gap-1">
+    <nav aria-label="Views" className="flex items-center gap-0.5">
       {VIEWS.map((v) => {
         const on = v.id === current;
         const b = badges[v.id];
@@ -79,14 +91,12 @@ export function ViewTabs({ route }: { route: Route }) {
             href={href({ view: v.id })}
             aria-current={on ? "page" : undefined}
             className={cn(
-              "relative flex items-center gap-2 rounded-md px-3 text-[14px] transition-colors",
-              on ? "font-medium text-ink" : "text-ink-3 hover:text-ink",
+              "flex h-9 items-center gap-1.5 rounded-md px-3 text-body transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+              on ? "bg-inset font-medium text-ink" : "text-ink-3 hover:bg-hover hover:text-ink",
             )}
           >
-            <v.icon className="size-4" aria-hidden strokeWidth={1.75} />
             {v.title}
             {b && <Badge {...b} />}
-            {on && <span aria-hidden className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-accent" />}
           </a>
         );
       })}
@@ -101,7 +111,7 @@ export function TabBar({ route }: { route: Route }) {
   return (
     <nav
       aria-label="Views"
-      className="fixed inset-x-0 bottom-0 z-40 grid h-[var(--tabbar-h)] grid-cols-4 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur"
+      className="fixed inset-x-0 bottom-0 z-40 grid h-[var(--tabbar-h)] grid-cols-4 bg-inset pb-[env(safe-area-inset-bottom)]"
     >
       {VIEWS.map((v) => {
         const on = v.id === current;
@@ -111,12 +121,12 @@ export function TabBar({ route }: { route: Route }) {
             key={v.id}
             href={href({ view: v.id })}
             aria-current={on ? "page" : undefined}
-            className={cn("flex flex-col items-center justify-center gap-1 text-[11.5px]", on ? "font-medium text-accent-ink" : "text-ink-3")}
+            className={cn("flex flex-col items-center justify-center gap-1 text-small", on ? "font-medium text-ink" : "text-ink-3")}
           >
             <span className="relative">
               <v.icon className="size-5" aria-hidden strokeWidth={on ? 2 : 1.75} />
               {b?.alert && (
-                <span aria-label={b.label} className="absolute -top-1 -right-2 min-w-4 rounded-full bg-red px-1 text-center font-mono text-[10px] leading-4 text-on-accent">
+                <span aria-label={b.label} className="absolute -top-1.5 -right-3 min-w-5 rounded-full bg-red px-1 text-center text-small leading-5 font-medium text-on-red tabular-nums">
                   {b.n}
                 </span>
               )}
@@ -135,7 +145,7 @@ export function SearchButton({ onClick, compact }: { onClick: () => void; compac
       type="button"
       onClick={onClick}
       aria-label="Search"
-      className={cn("grid size-9 place-items-center rounded-md text-ink-2 hover:bg-hover", className)}
+      className={cn("grid size-10 place-items-center rounded-md text-ink-2 transition-colors hover:bg-hover hover:text-ink", className)}
     >
       <Search className="size-[18px]" aria-hidden />
     </button>
@@ -148,11 +158,11 @@ export function SearchButton({ onClick, compact }: { onClick: () => void; compac
       <button
         type="button"
         onClick={onClick}
-        className="hidden h-8 w-56 items-center gap-2 rounded-md border border-line bg-inset px-2.5 text-[13px] text-ink-3 transition-colors hover:border-line-strong hover:text-ink-2 lg:flex"
+        className="hidden h-9 w-60 items-center gap-2 rounded-md bg-inset px-3 text-small text-ink-3 transition-colors hover:bg-hover hover:text-ink-2 lg:flex"
       >
         <Search className="size-3.5" aria-hidden />
         Search
-        <kbd className="ml-auto rounded border border-line bg-surface px-1 font-mono text-[11px] leading-4">⌘K</kbd>
+        <kbd className="ml-auto rounded-sm bg-surface px-1.5 text-small leading-5 text-ink-3">⌘K</kbd>
       </button>
     </>
   );
@@ -175,8 +185,8 @@ export function ConnectionDot() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span tabIndex={0} className="grid size-8 place-items-center rounded-md outline-none">
-          <span aria-hidden className={cn("size-2 rounded-full", live ? "bg-green" : "bg-orange")} />
+        <span tabIndex={0} className="grid size-10 place-items-center rounded-md outline-accent focus-visible:outline-2">
+          <span aria-hidden className={cn("size-2 rounded-full", live ? "bg-state-live" : "bg-orange")} />
           <span className="sr-only">{live ? "Connected" : "Reconnecting"}</span>
         </span>
       </TooltipTrigger>
@@ -202,7 +212,7 @@ export function initials(name: string) {
 function Avatar({ login, demo }: { login: string; demo: boolean }) {
   const [failed, setFailed] = useState(false);
   const initialsTile = (
-    <span className="grid size-8 place-items-center rounded-full bg-accent-tint text-[12px] font-semibold text-accent-ink">
+    <span className="grid size-8 place-items-center rounded-full bg-hover-2 text-small font-semibold text-ink">
       {initials(login)}
     </span>
   );
@@ -215,7 +225,7 @@ function Avatar({ login, demo }: { login: string; demo: boolean }) {
       width={32}
       height={32}
       onError={() => setFailed(true)}
-      className="size-8 rounded-full bg-accent-tint object-cover"
+      className="size-8 rounded-full bg-hover-2 object-cover"
     />
   );
 }
@@ -230,24 +240,24 @@ export function AccountMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" aria-label={`Account: ${me}`} className="rounded-full outline-offset-2">
+        <button type="button" aria-label={`Account: ${me}`} className="ml-1 rounded-full outline-accent outline-offset-2 focus-visible:outline-2">
           <Avatar login={me} demo={isMock} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sideOffset={8} className="w-56">
         <DropdownMenuLabel className="flex flex-col gap-0.5 font-normal">
-          <span className="text-[14px] font-medium text-ink">{me}</span>
-          <span className="text-[12px] text-ink-3">
+          <span className="text-body font-medium text-ink">{me}</span>
+          <span className="text-small text-ink-3">
             {mine} {mine === 1 ? "Agent" : "Agents"} running{isMock ? " · demo data" : ""}
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="py-1 text-[11.5px] font-normal text-ink-3">Theme</DropdownMenuLabel>
+        <DropdownMenuLabel className="py-1 text-small font-normal text-ink-3">Theme</DropdownMenuLabel>
         {THEMES.map((t) => (
           <DropdownMenuItem key={t.id} onSelect={() => set(t.id)}>
             <t.icon className="size-4 text-ink-3" aria-hidden />
             <span className="flex-1">{t.label}</span>
-            {choice === t.id && <Check className="size-4 text-accent-ink" aria-label="Current" />}
+            {choice === t.id && <Check className="size-4 text-ink" aria-label="Current" />}
           </DropdownMenuItem>
         ))}
         {!isMock && (

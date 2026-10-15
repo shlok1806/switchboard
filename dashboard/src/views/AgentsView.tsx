@@ -1,32 +1,26 @@
 import { PendingApproval } from "@/components/domain/approval";
 import { AgentBrief, ContextWindow } from "@/components/domain/context";
 import { useMemo } from "react";
-import type { Agent, Presence, Task } from "@shared/index";
-import { modelLabel } from "@shared/index";
+import type { Agent, Cli, Presence, Task } from "@shared/index";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCapabilities, useChannel } from "@/data/store";
 import { IssueLink, Pending } from "@/components/domain/pending";
-import { Status, StatusIndicator, StatusLabel } from "@/components/kibo-ui/status";
 import { AccountLabel, ModelLabel, PresenceDot, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
-import { AgentUsage } from "@/components/domain/usage";
+import { AgentUsage, AccountsPanel } from "@/components/domain/usage";
+import { PageHead } from "@/components/shell/page-head";
 import { CLI_LABEL, PRESENCE_LABEL, ago } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
-const KIBO_STATUS: Record<Presence, "online" | "degraded" | "offline"> = {
-  live: "online",
-  idle: "degraded",
-  gone: "offline",
-};
-
 const ORDER: Record<Presence, number> = { live: 0, idle: 1, gone: 2 };
 
+/** Presence as its dot and its name. */
 export function PresenceStatus({ presence }: { presence: Presence }) {
   return (
-    <Status status={KIBO_STATUS[presence]} className="h-6 gap-1.5 border-0 bg-transparent px-0 text-[13px] font-medium text-ink">
-      <StatusIndicator />
-      <StatusLabel>{PRESENCE_LABEL[presence]}</StatusLabel>
-    </Status>
+    <span className="inline-flex h-6 items-center gap-2 text-body font-medium text-ink">
+      <PresenceDot presence={presence} />
+      {PRESENCE_LABEL[presence]}
+    </span>
   );
 }
 
@@ -45,6 +39,13 @@ export function useClaimsOf() {
   }, [tasks]);
 }
 
+const CLI_TONE: Record<Cli, string> = { "claude-code": "bg-cli-claude", codex: "bg-cli-codex", gemini: "bg-cli-gemini" };
+
+/** The colour of an Agent's CLI (the canvas spec's colour per CLI), as a small square beside its name. */
+export function CliSwatch({ agent, className }: { agent: Agent; className?: string }) {
+  return <span aria-hidden title={CLI_LABEL[agent.cli]} className={cn("inline-block size-2 shrink-0 rounded-[2px]", CLI_TONE[agent.cli], className)} />;
+}
+
 export function AgentsView() {
   const { agents } = useChannel();
   const claimsOf = useClaimsOf();
@@ -58,7 +59,7 @@ export function AgentsView() {
       <Pending title={can.agents ? "No Agents yet" : "Agents are not on this Channel yet"} className="h-full">
         {can.agents ? (
           <>
-            Run <code className="font-mono text-ink-2">switchboard run claude</code> to add one.
+            Run <code className="font-mono text-ink-2">switchboard run claude</code> to add one. {/* taste-skill-ignore: a command */}
           </>
         ) : (
           <>
@@ -70,149 +71,113 @@ export function AgentsView() {
   }
 
   const n = (p: Presence) => agents.filter((a) => a.presence === p).length;
+  const groups = (["live", "idle", "gone"] as const).filter((p) => n(p) > 0);
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-8">
-        <div className="flex items-center gap-4 text-[13px] text-ink-2" aria-label="Presence counts">
-          {(["live", "idle", "gone"] as const).map((p) => (
-            <span key={p} className="inline-flex items-center gap-1.5">
-              <PresenceDot presence={p} />
-              <span className="tabular-nums text-ink">{n(p)}</span> {PRESENCE_LABEL[p]}
+      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-[var(--gutter)] pt-6 pb-12 sm:pt-8">
+        <PageHead
+          title="Agents"
+          summary={
+            <span className="inline-flex flex-wrap items-center gap-x-4 gap-y-1 tabular-nums" aria-label="Presence counts">
+              {(["live", "idle", "gone"] as const).map((p) => (
+                <span key={p} className="inline-flex items-center gap-2">
+                  <PresenceDot presence={p} />
+                  <span>
+                    <span className="text-ink">{n(p)}</span> {PRESENCE_LABEL[p]}
+                  </span>
+                </span>
+              ))}
             </span>
-          ))}
+          }
+        />
+        <div className="rise [--i:1]">
+          <AccountsPanel />
         </div>
 
-        {/* desktop: a table */}
-        <div className="hidden overflow-x-auto rounded-xl border border-line bg-surface md:block">
-          <table className="w-full min-w-[1000px] table-fixed border-collapse text-left">
-            <colgroup>
-              <col className="w-[25%]" />
-              <col className="w-[20%]" />
-              <col className="w-[9%]" />
-              <col className="w-[9%]" />
-              <col className="w-[9%]" />
-              <col className="w-[15%]" />
-            </colgroup>
-            <thead>
-              <tr className="border-b border-line text-[12.5px] text-ink-3">
-                {["Agent", "Context window", "Person", "CLI", "Proxy", "Claims"].map((h) => (
-                  <th key={h} className="px-4 py-2.5 font-normal">
-                    {h}
-                  </th>
+        {groups.map((p, gi) => (
+          <section key={p} aria-label={PRESENCE_LABEL[p]} className="rise flex flex-col gap-1" style={{ ["--i" as string]: gi + 2 }}>
+            <h2 className="flex items-baseline gap-2 pb-1 text-body text-ink-3">
+              {PRESENCE_LABEL[p]} <span className="tabular-nums">{n(p)}</span>
+            </h2>
+            {/* desk: the column headings, once per group */}
+            <div aria-hidden className="hidden grid-cols-[minmax(0,1fr)_12rem_16rem] gap-6 pb-1 text-small text-ink-3 lg:grid">
+              <span>Agent</span>
+              <span>Context window</span>
+              <span>Claims</span>
+            </div>
+            {/* rows reach past the column by their own padding, so their text sits on it */}
+            <ul className="-mx-3 flex flex-col">
+              {sorted
+                .filter((a) => a.presence === p)
+                .map((a) => (
+                  <AgentRow key={a.id} agent={a} held={claimsOf.get(a.id) ?? []} />
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((a) => {
-                const held = claimsOf.get(a.id) ?? [];
-                return (
-                  <tr
-                    key={a.id}
-                    onClick={() => go({ view: "agent", id: a.id })}
-                    className={cn("cursor-pointer align-top border-b border-line-soft transition-colors last:border-0 hover:bg-hover", a.presence === "gone" && "text-ink-3")}
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <PresenceDot presence={a.presence} />
-                        <div className="flex min-w-0 flex-col">
-                          <a
-                            href={href({ view: "agent", id: a.id })}
-                            onClick={(e) => e.stopPropagation()}
-                            className="truncate font-mono text-[13px] text-ink hover:text-accent-ink"
-                          >
-                            {a.id}
-                          </a>
-                          <span className="flex min-w-0 items-center gap-2 text-[12.5px] text-ink-3" title={`Last seen ${ago(a.lastSeenAt)}`}>
-                            <span className="truncate">{a.nickname ?? ago(a.lastSeenAt)}</span>
-                            {a.account && !a.usage?.email && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
-                            {a.model && <ModelLabel model={a.model} effort={a.effort} className="flex min-w-0 shrink items-center gap-1" />}
-                          </span>
-                          <PendingApproval agent={a} className="mt-2" />
-                          <div className="pt-2"><AgentBrief agent={a} /></div>
-                          {a.usage && (
-                            <div className="pt-1.5">
-                              <AgentUsage agent={a} compact />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 align-top"><ContextWindow agent={a} /></td>
-                    <td className="px-4 py-3 text-[13.5px] text-ink-2">{a.person}</td>
-                    <td className="px-4 py-3 text-[13.5px] text-ink-2">{CLI_LABEL[a.cli]}</td>
-                    <td className="px-4 py-3">
-                      <ProxyMode agent={a} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <ClaimCell agent={a} tasks={held} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* phone: a list */}
-        <ul className="flex flex-col divide-y divide-line-soft overflow-hidden rounded-xl border border-line bg-surface md:hidden">
-          {sorted.map((a) => {
-            const held = claimsOf.get(a.id) ?? [];
-            return (
-              <li key={a.id}>
-                <div
-                  role="link"
-                  tabIndex={0}
-                  onClick={() => go({ view: "agent", id: a.id })}
-                  onKeyDown={(e) => e.key === "Enter" && go({ view: "agent", id: a.id })}
-                  className="flex cursor-pointer items-start gap-3 px-4 py-3 active:bg-hover"
-                >
-                  <PresenceDot presence={a.presence} className="mt-1" />
-                  <div className="flex min-w-0 flex-1 flex-col gap-1">
-                    <ContextWindow agent={a} />
-                    <div className="flex min-w-0 items-center justify-between gap-2">
-                      <span className="truncate font-mono text-[13px] text-ink">{a.id}</span>
-                      <ProxyMode agent={a} />
-                    </div>
-                    <span className="truncate text-[12.5px] text-ink-3">
-                      {a.nickname ? `${a.nickname} · ` : ""}
-                      {CLI_LABEL[a.cli]}
-                      {a.account && !a.usage?.email ? ` · ${a.account}` : ""}
-                      {a.model ? ` · ${modelLabel(a.model)}` : ""}
-                    </span>
-                    <PendingApproval agent={a} className="my-1.5" />
-                    <AgentBrief agent={a} />
-                    {a.usage && <AgentUsage agent={a} compact />}
-                    {held.length > 0 && <ClaimCell agent={a} tasks={held} />}
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+            </ul>
+          </section>
+        ))}
       </div>
     </div>
   );
 }
 
-function ProxyMode({ agent }: { agent: Agent }) {
-  return agent.proxyMode === "raw" ? <RawBadge /> : <span className="text-[13px] text-ink-3">Digest</span>;
+function AgentRow({ agent: a, held }: { agent: Agent; held: Task[] }) {
+  return (
+    <li>
+      <div
+        role="link"
+        tabIndex={0}
+        onClick={() => go({ view: "agent", id: a.id })}
+        onKeyDown={(e) => e.key === "Enter" && go({ view: "agent", id: a.id })}
+        className={cn(
+          "grid cursor-pointer gap-x-6 gap-y-4 rounded-md px-3 py-4 transition-colors duration-150 hover:bg-inset focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent lg:grid-cols-[minmax(0,1fr)_12rem_16rem]",
+          a.presence === "gone" && "opacity-75",
+        )}
+      >
+        <div className="flex min-w-0 flex-col gap-2">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+            <a
+              href={href({ view: "agent", id: a.id })}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex min-w-0 items-center gap-2 text-lead font-medium text-ink tabular-nums underline-offset-4 hover:underline"
+            >
+              <CliSwatch agent={a} />
+              <span className="truncate">{a.id}</span>
+            </a>
+            {a.nickname && <span className="text-body text-ink-2">{a.nickname}</span>}
+            {a.proxyMode === "raw" && <RawBadge />}
+          </div>
+          <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-small text-ink-3" title={`Last seen ${ago(a.lastSeenAt)}`}>
+            <span>{CLI_LABEL[a.cli]}</span>
+            <span>{a.person}</span>
+            {a.account && !a.usage?.email && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
+            {a.model && <ModelLabel model={a.model} effort={a.effort} className="flex min-w-0 shrink items-center gap-1" />}
+          </span>
+          <PendingApproval agent={a} />
+          <AgentBrief agent={a} compact />
+          {a.usage && <AgentUsage agent={a} compact />}
+        </div>
+        <ContextWindow agent={a} compact />
+        <ClaimCell agent={a} tasks={held} />
+      </div>
+    </li>
+  );
 }
 
 function ClaimCell({ agent, tasks }: { agent: Agent; tasks: Task[] }) {
-  if (!tasks.length) return <span className="text-[13px] text-ink-3">None</span>;
+  if (!tasks.length) return <span className="text-small text-ink-3 max-lg:hidden">No Claim</span>;
   const [first, ...rest] = tasks;
   const stale = tasks.some((t) => t.claim?.stale) && agent.presence === "gone";
   return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <TaskLink number={first.number} title={first.title} className="min-w-0 text-[13px] text-ink-2" />
+    <span className="flex min-w-0 items-start gap-2">
+      <TaskLink number={first.number} title={first.title} className="min-w-0 text-body text-ink-2" />
       {rest.length > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
               onClick={(e) => e.stopPropagation()}
-              className="h-5 shrink-0 rounded-full bg-hover px-1.5 font-mono text-[11.5px] text-ink-2"
+              className="h-6 shrink-0 rounded-sm bg-hover px-1.5 text-small font-medium text-ink-2 tabular-nums"
               aria-label={`${tasks.length} Claims: ${tasks.map((t) => `#${t.number}`).join(", ")}`}
             >
               +{rest.length}

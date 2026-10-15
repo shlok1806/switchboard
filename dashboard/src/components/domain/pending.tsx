@@ -7,7 +7,7 @@ const REPO_ISSUES = "https://github.com/shlok1806/switchboard/issues/";
 export function IssueLink({ capability }: { capability: keyof Capabilities }) {
   const n = CAPABILITY_ISSUE[capability];
   return (
-    <a href={`${REPO_ISSUES}${n}`} target="_blank" rel="noreferrer" className="font-mono text-accent-ink hover:underline">
+    <a href={`${REPO_ISSUES}${n}`} target="_blank" rel="noreferrer" className="text-accent-ink tabular-nums underline-offset-4 hover:underline">
       #{n}
     </a>
   );
@@ -17,8 +17,8 @@ export function IssueLink({ capability }: { capability: keyof Capabilities }) {
 export function Pending({ title, children, className = "" }: { title: string; children: ReactNode; className?: string }) {
   return (
     <div className={`flex flex-col items-center justify-center gap-1.5 px-6 py-10 text-center ${className}`}>
-      <p className="text-[13.5px] font-medium text-ink">{title}</p>
-      <p className="max-w-sm text-[12.5px] leading-relaxed text-ink-3">{children}</p>
+      <p className="text-body font-medium text-ink">{title}</p>
+      <p className="max-w-sm text-small leading-relaxed text-ink-3">{children}</p>
     </div>
   );
 }

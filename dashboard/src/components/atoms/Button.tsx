@@ -1,34 +1,31 @@
-"use client";
-
 import type { ButtonHTMLAttributes } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
-const filledShadow = "shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]";
-
-/* Switchboard: 8px radius, calm fills from the token layer, not pills. Originally pill-shaped by default - the app's core button style. Explicit symmetric
- * padding (not a fixed height) so the top/bottom spacing is always equal. */
+/*
+ * One button shape on the whole Dashboard: the one radius, flat fills, no shadow.
+ * `action` is the tangerine primary and appears once per screen at most; `primary`
+ * is solid ink for a strong control that is not the screen's main action;
+ * `secondary` is a tone step; `ghost` shows only on hover. A disabled `action` or
+ * `primary` falls back to the secondary tone step, not a faded slab of colour.
+ */
 export const buttonVariants = cva(
-  `inline-flex items-center justify-center font-medium select-none
-   transition-[transform,background-color,opacity] duration-150 ease-out
-   active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none`,
+  `inline-flex items-center justify-center rounded-md font-medium select-none whitespace-nowrap
+   transition-[transform,background-color,color,opacity] duration-150 ease-out
+   active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none
+   focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent`,
   {
     variants: {
       variant: {
-        primary: `bg-ink text-canvas hover:opacity-90 dark:bg-ink dark:text-canvas ${filledShadow}`,
-        secondary: "bg-surface text-ink shadow-btn hover:bg-inset aria-expanded:bg-hover",
-        ghost: "bg-hover-2 text-ink hover:bg-line-strong",
-        accent: `bg-accent text-on-accent hover:bg-accent-ink ${filledShadow}`,
-        success: `bg-green text-white hover:brightness-95 ${filledShadow}`,
-        /* transparent until hovered - for dense toolbars/action rows */
-        quiet: "text-ink hover:bg-hover",
+        action: "bg-action text-on-action hover:bg-action-hover disabled:bg-hover-2 disabled:text-ink-3 disabled:opacity-100",
+        primary: "bg-ink text-page hover:bg-ink-2 disabled:bg-hover-2 disabled:text-ink-3 disabled:opacity-100",
+        secondary: "bg-inset text-ink hover:bg-hover-2 aria-expanded:bg-hover-2",
+        ghost: "text-ink-2 hover:bg-hover hover:text-ink",
       },
       size: {
-        /* compact toolbar pill - fixed height, lighter weight */
-        xs: "h-7 rounded-md px-2.5 text-[12px] font-normal leading-none gap-1",
-        /* canonical action pill - 27px tall, roomy sides */
-        sm: "h-8 px-3 text-[13px] leading-none rounded-lg gap-1.5",
-        md: "h-9 px-4 text-sm leading-none rounded-lg gap-2",
+        xs: "h-7 px-2.5 text-small gap-1",
+        sm: "h-8 px-3 text-small gap-1.5",
+        md: "h-10 px-4 text-body gap-2",
       },
     },
     defaultVariants: { variant: "secondary", size: "md" },

@@ -117,6 +117,15 @@ export const agents: Agent[] = [
     canReceiveInterrupts: true,
     lastSeenAt: ago(4),
     startedAt: ago(60 * 52),
+    // shlok's own Claude Code prompt, held by its wrapper, so shlok can deny it here (ADR 0014).
+    approval: {
+      id: "prompt-2",
+      tool: "Bash",
+      detail: "rm -rf web/node_modules && npm ci",
+      reason: "Reinstall dependencies from the lockfile",
+      openedAt: ago(25),
+      deniable: true,
+    },
   },
   {
     context: { readAt: ago(4), tokens: 219640, window: 258400, task: "Document the Channel", brief: "Document the Channel and how Agents receive Directives.", activity: "Updating the examples", cwd: "/work/switchboard/docs", branch: "docs/channel" },
@@ -171,6 +180,14 @@ export const agents: Agent[] = [
     canReceiveInterrupts: true,
     lastSeenAt: ago(2),
     startedAt: ago(60 * 31),
+    // A permission prompt waiting at dev's terminal (ADR 0013), so the Dashboard shows one.
+    approval: {
+      id: "prompt-1",
+      tool: "Bash",
+      detail: "npm test -- web/src/api/retry.test.ts",
+      reason: "Run the new retry tests",
+      openedAt: ago(40),
+    },
   },
   {
     id: A.shlokCodexOld,

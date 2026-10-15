@@ -54,7 +54,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   }
 
   const getStateBadge = () => {
-    const baseClasses = "px-2 py-0.5 rounded-full text-[11.5px] font-medium"
+    const baseClasses = "px-2 py-0.5 rounded-full text-small font-medium"
     switch (state) {
       case "input-streaming":
         return (
@@ -127,7 +127,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-card bg-surface shadow-card",
+        "overflow-hidden rounded-md bg-inset",
         className
       )}
     >
@@ -135,11 +135,11 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
         <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            className="bg-surface h-auto w-full justify-between rounded-b-none px-3 py-2 font-normal hover:bg-inset"
+            className="h-auto w-full justify-between rounded-b-none bg-inset px-3 py-2 font-normal hover:bg-hover"
           >
             <div className="flex items-center gap-2">
               {getStateIcon()}
-              <span className="font-mono text-[12.5px] font-medium">
+              <span className="font-mono text-small font-medium">{/* taste-skill-ignore: a tool name is code */}
                 {toolPart.type}
               </span>
               {getStateBadge()}
@@ -149,17 +149,16 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
         </CollapsibleTrigger>
         <CollapsibleContent
           className={cn(
-            "border-border border-t",
-            "data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
+                        "data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
           )}
         >
-          <div className="bg-surface space-y-3 p-3">
+          <div className="space-y-3 bg-inset p-3 pt-0">
             {input && Object.keys(input).length > 0 && (
               <div>
                 <h4 className="text-muted-foreground mb-2 text-sm font-medium">
                   Input
                 </h4>
-                <div className="bg-inset rounded-[6px] border border-line p-2 font-mono text-[12px]">
+                <div className="rounded-md bg-hover p-2 font-mono text-small">{/* taste-skill-ignore: tool input is code */}
                   {Object.entries(input).map(([key, value]) => (
                     <div key={key} className="mb-1">
                       <span className="text-muted-foreground">{key}:</span>{" "}
@@ -175,7 +174,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
                 <h4 className="text-muted-foreground mb-2 text-sm font-medium">
                   Output
                 </h4>
-                <div className="bg-inset max-h-60 overflow-auto rounded-[6px] border border-line p-2 font-mono text-[12px]">
+                <div className="max-h-60 overflow-auto rounded-md bg-hover p-2 font-mono text-small">{/* taste-skill-ignore: tool output is code */}
                   <pre className="whitespace-pre-wrap">
                     {formatValue(output)}
                   </pre>
@@ -186,7 +185,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
             {state === "output-error" && toolPart.errorText && (
               <div>
                 <h4 className="mb-2 text-sm font-medium text-red">Error</h4>
-                <div className="bg-background rounded border border-red/30 p-2 text-sm">
+                <div className="rounded-md bg-red-tint p-2 text-sm text-red">
                   {toolPart.errorText}
                 </div>
               </div>
@@ -199,8 +198,8 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
             )}
 
             {toolCallId && (
-              <div className="text-muted-foreground border-t border-line pt-2 text-xs">
-                <span className="font-mono">Call ID: {toolCallId}</span>
+              <div className="text-muted-foreground pt-1 text-xs">
+                Call ID <code className="font-mono">{toolCallId}</code>{/* taste-skill-ignore: an id */}
               </div>
             )}
           </div>

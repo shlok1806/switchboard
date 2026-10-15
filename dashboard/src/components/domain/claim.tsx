@@ -71,11 +71,11 @@ function AgentOption({ agent }: { agent: Agent }) {
   return (
     <>
       <Bot className="size-4 text-ink-3" aria-hidden />
-      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{agent.id}</span>
+      <span className="min-w-0 flex-1 truncate text-small tabular-nums">{agent.id}</span>
       <span
         aria-label={agent.presence === "live" ? "Live" : "Idle"}
         role="img"
-        className={cn("size-1.5 shrink-0 rounded-full", agent.presence === "live" ? "bg-green" : "bg-orange")}
+        className={cn("size-1.5 shrink-0 rounded-full", agent.presence === "live" ? "bg-state-live" : "bg-state-idle")}
       />
     </>
   );
@@ -87,7 +87,7 @@ export function ClaimForMeItem({ me, onPick }: { me: string; onPick: () => void 
     <DropdownMenuItem onSelect={onPick} className="min-h-9">
       <UserRound className="size-4 text-ink-3" aria-hidden />
       <span className="flex-1">Me</span>
-      <span className="text-[12.5px] text-ink-3">{me}</span>
+      <span className="text-small text-ink-3">{me}</span>
     </DropdownMenuItem>
   );
 }
@@ -120,7 +120,7 @@ export function ClaimAction({ task }: { task: Task }) {
   return (
     <div className="flex w-full items-stretch">
       <Button
-        variant="accent"
+        variant="action"
         size="sm"
         className={cn("flex-1", mine.length > 0 && "rounded-r-none")}
         disabled={busy}
@@ -132,10 +132,10 @@ export function ClaimAction({ task }: { task: Task }) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
-              variant="accent"
+              variant="action"
               size="sm"
               aria-label="Claim for one of your Agents"
-              className="rounded-l-none border-l border-on-accent/25 px-2"
+              className="ml-0.5 rounded-l-none px-2"
               disabled={busy}
             >
               <ChevronDown className="size-4" aria-hidden />
@@ -153,5 +153,5 @@ export function ClaimAction({ task }: { task: Task }) {
 }
 
 export function ClaimForLabel({ children = "Claim for" }: { children?: ReactNode }) {
-  return <DropdownMenuLabel className="text-[12px] font-normal text-ink-3">{children}</DropdownMenuLabel>;
+  return <DropdownMenuLabel className="text-small font-normal text-ink-3">{children}</DropdownMenuLabel>;
 }

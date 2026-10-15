@@ -1,8 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/albert-sans";
 @import "@fontsource-variable/geist-mono";
-@import "./app/beautifui/foundation.css";
 @import "./styles/tokens.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -10,13 +9,19 @@
 /* ── base ─────────────────────────────────────────────────── */
 
 @layer base {
-  /* Tailwind v4 borders default to currentColor; every hairline here is the line token. */
+  /* Tailwind v4 borders default to currentColor; the few lines left (tables, fields) are the line token. */
   *,
   ::before,
   ::after,
   ::backdrop {
     border-color: var(--line);
   }
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 html,
@@ -26,11 +31,9 @@ body {
 
 body {
   background: var(--page);
-  background-image: none;
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 14px;
-  letter-spacing: -0.005em;
+  font-size: var(--text-body);
   line-height: 1.5;
 }
 
@@ -38,17 +41,47 @@ body {
   min-height: 100dvh;
 }
 
+::selection {
+  background: var(--accent-tint);
+  color: var(--ink);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+a {
+  text-underline-position: from-font;
+  text-decoration-skip-ink: auto;
+  text-underline-offset: 3px;
+}
+
+:focus-visible {
+  outline-color: var(--accent);
+}
+
 .tabular {
   font-variant-numeric: tabular-nums;
 }
 
-/*
- * Scroll bars stay visible, thin and quiet, so a Person can always see there
- * is more below or beside.
- */
+/* A theme switch swaps every token at once: freeze transitions for one clean repaint. */
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
+}
+
+/* Scroll bars stay visible, thin and quiet, so a Person can always see there is more. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-color: var(--hover-2) transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
@@ -58,7 +91,7 @@ body {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--line-strong);
+  background: var(--hover-2);
   border: 3px solid transparent;
   border-radius: 999px;
   background-clip: padding-box;
@@ -67,8 +100,51 @@ body {
   background-color: var(--ink-4);
 }
 
-/* A new feed row fades in; no slide. */
+/* ── motion ───────────────────────────────────────────────── */
+
+/* A new feed row rises into place. */
 @keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.row-in {
+  animation: row-in var(--dur-slow) var(--ease-out) both;
+}
+
+/* A view's parts arrive in order: the head, then the content. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 420ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
   from {
     opacity: 0;
   }
@@ -76,8 +152,61 @@ body {
     opacity: 1;
   }
 }
-.row-in {
-  animation: row-in var(--dur-base) var(--ease-out) both;
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* pixel-grid loader: brighten plateau, staggered per cell */
+@keyframes pixel-on {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  18%,
+  42% {
+    opacity: 1;
+  }
+  62% {
+    opacity: 0.15;
+  }
+}
+
+/* A Live Agent's dot breathes once every few seconds: the only thing on a screen that moves at rest. */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.breathe {
+  animation: breathe 2.8s var(--ease-in-out) infinite;
+}
+
+/* A loading placeholder fades gently in and out, slower than a Live dot so the two never read alike.
+   Reduced motion stops it (the block at the end), leaving a still tone step. */
+@keyframes loading-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.loading-pulse {
+  animation: loading-pulse 1.8s var(--ease-in-out) infinite;
 }
 
 @keyframes collapsible-down {
