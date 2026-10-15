@@ -853,7 +853,10 @@ describe("the Proxy Capture", () => {
     upstream?.close();
   });
 
-  const proxyEvents = async (id: string) => (await agentEvents(id)).filter((e) => e.capture === "proxy");
+  // Proxy Events only: a model the Proxy Capture saw is also an `agent.model` Event
+  // with the proxy Capture (ADR 0010), reported apart from the Digest and in no set order.
+  const proxyEvents = async (id: string) =>
+    (await agentEvents(id)).filter((e) => e.type === "proxy.digest" || e.type === "proxy.raw");
 
   it("shows the model each Agent runs on: configured at start, then what its requests ask for", async () => {
     // Started with --model: that is all the Channel knows until the first request.
@@ -2598,7 +2601,10 @@ describe("switchboard run codex and gemini", () => {
     const SSE_SHA = createHash("sha256").update(RESPONSES_SSE).digest("hex");
     const GEMINI_SHA = createHash("sha256").update(GEMINI_SSE).digest("hex");
     const CODE_ASSIST_SHA = createHash("sha256").update(CODE_ASSIST_SSE).digest("hex");
-    const proxyEvents = async (id: string) => (await agentEvents(id)).filter((e) => e.capture === "proxy");
+    // Proxy Events only: a model the Proxy Capture saw is also an `agent.model` Event
+    // with the proxy Capture (ADR 0010), reported apart from the Digest and in no set order.
+    const proxyEvents = async (id: string) =>
+      (await agentEvents(id)).filter((e) => e.type === "proxy.digest" || e.type === "proxy.raw");
 
     beforeAll(async () => {
       wsSha = createHash("sha256")
@@ -3010,10 +3016,13 @@ describe("switchboard host", () => {
       cwd,
       "--max-permission-mode",
       "acceptEdits",
+      "--max-agents",
+      "1",
       "--repo",
       github.repo,
     );
     expect(stdout).toContain(`e2e/${HOST} is installed for ${github.repo}`);
+    expect(stdout).toContain("Agents at once: at most 1");
     const plist = await readFile(join(scratch, "LaunchAgents", "dev.switchboard.host.plist"), "utf8");
     expect(plist).toContain("<string>host</string>\n      <string>run</string>");
     expect(plist).toContain("<key>ProcessType</key>\n    <string>Background</string>");
@@ -3075,6 +3084,18 @@ describe("switchboard host", () => {
       spawn: spawn?.id,
       agent: agentId,
     });
+  });
+
+  it("refuses a spawn past its own cap on Agents at once, whatever the Channel's allows", async () => {
+    const response = await asPerson("e2e", "/api/agents/spawn", {
+      method: "POST",
+      body: JSON.stringify({ host: HOST, cli: "claude-code", cwd }),
+    });
+    expect(response.status).toBe(502);
+    expect(((await response.json()) as { reason: string }).reason).toBe(
+      `e2e/${HOST} could not start the Agent: this Host runs at most 1 Agent at once`,
+    );
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
   });
 
   it("resumes an Agent whose CLI crashes, in the same session", async () => {
@@ -3146,6 +3167,31 @@ describe("switchboard host", () => {
       await waitFor("the wrapper to end", async () => ((await hostedAgents()).length === 0 ? true : undefined));
     } finally {
       await rm(untrusted, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resume an Agent whose folder its Person has since taken off the Host's", async () => {
+    await stopHost();
+    const settings = join(hostDir(), "host.json");
+    const installed = await readFile(settings, "utf8");
+    const narrowed = join(cwd, "narrowed");
+    await mkdir(narrowed);
+    const agent = "e2e/claude/0000aaaa";
+    try {
+      await writeFile(settings, JSON.stringify({ ...JSON.parse(installed), roots: [narrowed] }));
+      await writeFile(
+        join(hostDir(), "agents.json"),
+        JSON.stringify([{ agent, sessionId: randomUUID(), cwd, permissionMode: "default" }]),
+      );
+      await startHost();
+      await waitForSupervisor(new RegExp(`not starting ${agent}: ${cwd} is not under this Host's folders`));
+      expect(await hostedAgents()).toEqual([]);
+      expect(await agentLog(agent)).toBe("");
+    } finally {
+      await stopHost();
+      await writeFile(settings, installed);
+      await rm(narrowed, { recursive: true, force: true });
+      await startHost();
     }
   });
 

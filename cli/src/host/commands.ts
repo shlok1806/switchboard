@@ -1,6 +1,6 @@
 // The Host commands (ADR 0015):
 //
-//   switchboard host install [--name N] [--root DIR]... [--max-permission-mode M] [--repo R]
+//   switchboard host install [--name N] [--root DIR]... [--max-permission-mode M] [--max-agents N] [--repo R]
 //   switchboard host uninstall
 //   switchboard host run       (what the LaunchAgent runs; tests run it directly)
 //   switchboard host status
@@ -35,11 +35,13 @@ import { type Config, configDir, readConfig } from "../config";
 import { matchAgents } from "../rename";
 import {
   CappedLog,
+  DEFAULT_MAX_AGENTS,
   HOST_LOG_MAX_BYTES,
   type HostedAgent,
   hostDir,
   hostLogPath,
   launchdLogPath,
+  MAX_MAX_AGENTS,
   pidPath,
   readAgents,
   readSettings,
@@ -50,7 +52,7 @@ import { installLaunchAgent, LAUNCH_AGENT_LABEL, launchAgentLoaded, plistPath, u
 import { HostSupervisor } from "./supervisor";
 
 export const HOST_USAGE = `Usage:
-  switchboard host install [--name <name>] [--root <folder>]... [--max-permission-mode <mode>] [--repo <owner>/<repo>]
+  switchboard host install [--name <name>] [--root <folder>]... [--max-permission-mode <mode>] [--max-agents <n>] [--repo <owner>/<repo>]
   switchboard host uninstall
   switchboard host run
   switchboard host status`;
@@ -125,6 +127,7 @@ async function install(args: string[]): Promise<number> {
       name: { type: "string" },
       root: { type: "string", multiple: true },
       "max-permission-mode": { type: "string" },
+      "max-agents": { type: "string" },
       repo: { type: "string" },
     },
   });
@@ -140,6 +143,10 @@ async function install(args: string[]): Promise<number> {
   });
   if (roots.length === 0) throw new CommandError("Name at least one folder Agents may run in with --root.");
   const maxPermissionMode = mode(values["max-permission-mode"], "--max-permission-mode") ?? DEFAULT_PERMISSION_MODE;
+  const maxAgents = values["max-agents"] === undefined ? DEFAULT_MAX_AGENTS : Number(values["max-agents"]);
+  if (!Number.isInteger(maxAgents) || maxAgents < 1 || maxAgents > MAX_MAX_AGENTS) {
+    throw new CommandError(`--max-agents must be a whole number from 1 to ${MAX_MAX_AGENTS}.`);
+  }
   const { client, repo } = await channelFor(config, values.repo);
   const { host } = await client.request<HostResponse>("/api/hosts", {
     method: "POST",
@@ -147,7 +154,7 @@ async function install(args: string[]): Promise<number> {
   });
   // The limits this machine keeps are the ones typed here, not the Channel's answer:
   // the Host checks every spawn against them (ADR 0017).
-  writeSettings({ name, repo, roots, maxPermissionMode });
+  writeSettings({ name, repo, roots, maxPermissionMode, maxAgents });
   const plist = await installLaunchAgent({
     node: process.execPath,
     cli: realpathSync(process.argv[1] ?? ""),
@@ -163,6 +170,7 @@ async function install(args: string[]): Promise<number> {
   console.log(`${host.id} is installed for ${repo}.`);
   console.log(`  Starts Agents under: ${roots.join(", ")}`);
   console.log(`  Permission mode: at most "${maxPermissionMode}"`);
+  console.log(`  Agents at once: at most ${maxAgents}`);
   console.log(`  LaunchAgent: ${plist}`);
   console.log(`  Log: ${hostLogPath()}`);
   return 0;
@@ -255,6 +263,7 @@ async function status(): Promise<number> {
   console.log(`Host ${config?.person ?? "?"}/${settings.name} for ${settings.repo}`);
   console.log(`  Folders: ${settings.roots.join(", ")}`);
   console.log(`  Permission mode: at most "${settings.maxPermissionMode}"`);
+  console.log(`  Agents at once: at most ${settings.maxAgents}`);
   console.log(`  LaunchAgent: ${(await launchAgentLoaded()) ? `loaded (${plistPath()})` : "not loaded"}`);
   console.log(`  Supervisor: ${pid === null ? "not running" : `running (pid ${pid})`}; log ${hostLogPath()}`);
   if (config !== null) {
