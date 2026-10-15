@@ -28,8 +28,10 @@ export function hostIdFor(person: PersonName, name: string): HostId {
 /**
  * Claude Code's permission modes, strictest first. A Host starts Agents in at most the
  * mode it was installed with (`--max-permission-mode`), and refuses a looser one.
+ * `dontAsk` denies every tool not allowed beforehand, so nothing waits on a prompt;
+ * Claude Code 2.1.300 lists `default` as `manual` and still takes `default`.
  */
-export const PERMISSION_MODES = ["plan", "default", "acceptEdits", "auto", "bypassPermissions"] as const;
+export const PERMISSION_MODES = ["plan", "dontAsk", "default", "acceptEdits", "auto", "bypassPermissions"] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
 /** The mode a Host allows when it was installed without `--max-permission-mode`, and a spawn's default. */
