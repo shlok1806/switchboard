@@ -186,7 +186,8 @@ export function place(list: Group[], saved: Record<string, Point>): Map<AgentId,
           const p = slot(origin, g.agents.length, i);
           if (free(g, p)) at = p;
         }
-        // Boxed in on every side: start a frame of its own below everything instead.
+        // Boxed in on every side: put it in the open space below everything. It still belongs
+        // to its group, so the group's frame stretches down to hold it, across any frame between.
         at ??= slot(opening(frameSize(1)), 1, 0);
         out.set(a.id, at);
       }

@@ -9,6 +9,8 @@ import type {
   Holder,
   Host,
   HostsResponse,
+  MemoryQuery,
+  MemoryResponse,
   PersonAction,
   SpawnAgentRequest,
   StreamMessage,
@@ -23,6 +25,8 @@ import {
   cleanNickname,
   holderName,
   hostIdFor,
+  noteFromEvent,
+  MAX_MEMORY_LIMIT,
   permissionModeWithin,
   sameNickname,
   underRoots,
@@ -61,7 +65,7 @@ export class MockChannelSource implements ChannelSource {
     roots: ["/work/switchboard"],
     maxPermissionMode: "acceptEdits",
     live: true,
-    registeredAt: new Date(T0).toISOString(),
+    registeredAt: new Date(T0 - 12 * 86_400_000).toISOString(),
     lastSeenAt: new Date(T0).toISOString(),
   };
   private tasks: Task[] = clone(seedTasks);
@@ -377,9 +381,33 @@ export class MockChannelSource implements ChannelSource {
   async hosts(): Promise<HostsResponse> {
     await new Promise((r) => setTimeout(r, 120));
     const running = this.agents.filter((a) => a.host !== undefined && a.presence !== "gone").length;
-    // The other Persons' Hosts the demo Agents run on; a Person starts Agents only on their own.
-    const others = (["maya/maya-mbp", "dev/devbox"] as const).map((id): Host => ({ ...this.host, id, person: id.split("/")[0]!, name: id.split("/")[1]! }));
+    // The other Persons' Hosts the demo Agents run on (a Person starts Agents only on their
+    // own), and a laptop of shlok's that has been Offline for two days.
+    const host = (id: `${string}/${string}`, roots: string[], extra: Partial<Host> = {}): Host => ({ ...this.host, id, person: id.split("/")[0]!, name: id.split("/")[1]!, roots, ...extra });
+    const twoDays = new Date(T0 - 2 * 86_400_000).toISOString();
+    const others = [
+      host("shlok/laptop", ["/Users/shlok/code"], { live: false, lastSeenAt: twoDays, registeredAt: new Date(T0 - 40 * 86_400_000).toISOString(), maxPermissionMode: "default" }),
+      host("maya/maya-mbp", ["/Users/maya/src/app", "/Users/maya/src/design"], { maxPermissionMode: "default" }),
+      host("dev/devbox", ["/home/dev/app"], { maxPermissionMode: "auto" }),
+    ];
     return clone({ hosts: [this.host, ...others], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
+  }
+
+  /** Like the Worker: newest first, or every word of `q` in the text or a path, newest first. */
+  async memory(query: MemoryQuery): Promise<MemoryResponse> {
+    await new Promise((r) => setTimeout(r, 120));
+    const words = (query.q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+    const limit = Math.min(query.limit ?? 20, MAX_MEMORY_LIMIT);
+    const notes = this.events
+      .map(noteFromEvent)
+      .filter((n) => n !== null)
+      .filter((n) => (query.tag ? n.tags.includes(query.tag) : true))
+      .filter((n) => (query.task !== undefined ? n.task === query.task : true))
+      .filter((n) => (query.author ? n.author === query.author : true))
+      .filter((n) => (query.before !== undefined ? n.seq < query.before : true))
+      .filter((n) => words.every((w) => `${n.text} ${(n.files ?? []).join(" ")}`.toLowerCase().includes(w)))
+      .reverse();
+    return clone({ notes: notes.slice(0, limit), ...(notes.length > limit ? { more: true as const } : {}) });
   }
 
   /** Like the Worker and the Host: checked, then an Agent that registers a moment later. */

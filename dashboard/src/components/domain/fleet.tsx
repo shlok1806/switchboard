@@ -63,12 +63,25 @@ export function groupByPerson(lines: Line[], me: string): [string, Line[]][] {
   return [...m.entries()].sort(([a], [b]) => (a === me ? -1 : b === me ? 1 : a.localeCompare(b)));
 }
 
-/** A Person's group line: who, where and what time it is for them. */
-export function GroupLine({ person, me, zone, count }: { person: string; me: string; zone?: string; count: number }) {
+/** A Person's group line: who, where and what time it is for them, and how many lines follow. */
+export function GroupLine({
+  person,
+  me,
+  zone,
+  count,
+  noun = ["Agent", "Agents"],
+}: {
+  person: string;
+  me: string;
+  zone?: string;
+  count: number;
+  /** What the count counts, singular and plural. */
+  noun?: [string, string];
+}) {
   return (
     <p className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
       <span className="font-semibold text-ink">{person}</span>
-      {[person === me && "you", zone && `${zoneCity(zone)} ${localTime(Date.now(), zone)}`, `${count} ${count === 1 ? "Agent" : "Agents"}`]
+      {[person === me && "you", zone && `${zoneCity(zone)} ${localTime(Date.now(), zone)}`, `${count} ${count === 1 ? noun[0] : noun[1]}`]
         .filter(Boolean)
         .join(" · ")}
     </p>

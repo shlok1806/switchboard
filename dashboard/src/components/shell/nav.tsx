@@ -5,7 +5,7 @@
  * reaches them. The only coloured count is the number of lines that need you.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Check, Columns3, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
+import { Bot, BookOpen, Check, Columns3, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,7 +22,7 @@ import { signOut } from "@/lib/session";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "compare";
+export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "compare" | "memory" | "hosts";
 
 /** The views, in the order the keys show them. The icon is for the command palette only. */
 export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
@@ -31,6 +31,8 @@ export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
   { id: "tasks", title: "Tasks", icon: SquareKanban },
   { id: "canvas", title: "Canvas", icon: Workflow },
   { id: "feed", title: "Activity", icon: MessagesSquare },
+  { id: "memory", title: "Memory", icon: BookOpen },
+  { id: "hosts", title: "Hosts", icon: Server },
   { id: "compare", title: "Compare", icon: Columns3 },
 ];
 

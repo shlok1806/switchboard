@@ -10,7 +10,7 @@ import type { Agent, AgentId, ChannelSnapshot, StreamMessage, Task } from "@shar
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
-import { CanvasView } from "@/views/CanvasView";
+import { CanvasView, shortTitle } from "@/views/CanvasView";
 
 function agent(id: string, extra: Partial<Agent> = {}): Agent {
   return {
@@ -128,6 +128,26 @@ describe("the canvas", () => {
     }
   });
 
+  it("frames a phone afresh instead of using a camera saved on a desktop", async () => {
+    window.localStorage.setItem("switchboard.canvas.shlok1806/app", JSON.stringify({ positions: {}, camera: { x: -900, y: -600, k: 2 } }));
+    render(<CanvasView />, { wrapper: channel([lead, child]) });
+    await node(/^planner/);
+    expect(currentZoom()).toBe(2);
+    cleanup();
+
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    try {
+      render(<CanvasView />, { wrapper: channel([lead, child]) });
+      await node(/^planner/);
+      expect(currentZoom()).not.toBe(2);
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    }
+    // The desktop's camera is still there for its next visit.
+    expect(JSON.parse(window.localStorage.getItem("switchboard.canvas.shlok1806/app")!).camera).toEqual({ x: -900, y: -600, k: 2 });
+  });
+
   it("puts the nodes in frame order, so Tab moves through the canvas the way it reads", async () => {
     // maya's Agent joined first, but the signed-in Person's frame comes first.
     const { container } = render(<CanvasView />, { wrapper: channel([maya, child, lead]) });
@@ -200,3 +220,12 @@ describe("the canvas", () => {
 function currentZoom(): number {
   return Number.parseInt(screen.getByText(/^\d+%$/).textContent ?? "100", 10) / 100;
 }
+
+describe("a node's Task line", () => {
+  it("cuts a long title at a word, and a first word too long for the line where the line ends", () => {
+    expect(shortTitle("Fix the login redirect")).toBe("Fix the login redirect");
+    expect(shortTitle("Move the settings form onto the new validation")).toBe("Move the settings form");
+    const word = "Internationalizationoftheapp";
+    expect(shortTitle(`${word} strings`)).toBe(word.slice(0, 26));
+  });
+});

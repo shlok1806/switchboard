@@ -5,7 +5,7 @@
  * and memory the narrow one; below 640px they stack in that order.
  */
 import { useMemo, useState } from "react";
-import type { Agent, ChannelEvent, EventType, MemoryTag, Person, Task } from "@shared/index";
+import type { Agent, ChannelEvent, EventType, Person, Task } from "@shared/index";
 import { noteFromEvent } from "@shared/index";
 import { buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
@@ -18,7 +18,7 @@ import { PageHead } from "@/components/shell/page-head";
 import { SectionHead } from "@/components/shell/section";
 import { useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { actorName, elapsed, holderName, localTime, summarize, zoneCity } from "@/lib/format";
+import { TAG_LABEL, actorName, elapsed, holderName, localTime, summarize, zoneCity } from "@/lib/format";
 import { isMine, needsQueue, type QueueItem } from "@/lib/queue";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -40,7 +40,6 @@ const QUIET: ReadonlySet<EventType> = new Set<EventType>([
   "terminal.attached",
 ]);
 
-const TAG_LABEL: Record<MemoryTag, string> = { decision: "Decision", fact: "Fact", "dead-end": "Dead end", question: "Question", files: "Files" };
 
 export function NowView() {
   const { agents, tasks, events, snapshot } = useChannel();
@@ -502,7 +501,7 @@ function Memory({ events, now }: { events: ChannelEvent[]; now: number }) {
           {notes.slice(0, 3).map((n) => (
             <li key={n.id} className="border-b border-rule py-3">
               <p className="max-w-[72ch] text-row break-words text-ink">{n.text}</p>
-              <p className="mt-1 text-label text-ink-3">
+              <p className="mt-1 text-small text-ink-3">
                 <span className="font-semibold text-ink-2">{n.tags.map((t) => TAG_LABEL[t]).join(", ")}</span>
                 {" · "}
                 {(() => {
