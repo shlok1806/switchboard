@@ -3,7 +3,7 @@
 // model's text, each tool call with its main argument, results cut short), and redacts
 // every page before it leaves the machine. Redaction is always on: no setting skips it.
 
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import type { Cli, TranscriptEntry, TranscriptKind, TranscriptResponse } from "../../shared/src/index";
 import { cleanTranscriptText, TRANSCRIPT_PAGE_BYTES } from "../../shared/src/index";
 import { MASK, maskSecrets } from "./proxy/mask";
@@ -229,11 +229,30 @@ export function transcriptPage(entries: readonly Raw[], from: number): Omit<Tran
   return { from, entries: page, ...(n < entries.length ? { next: n } : {}), redacted };
 }
 
-/** A page of the session in `path`, a `cli` session file, from entry `from`. */
-export async function readTranscriptPage(
-  cli: Cli,
-  path: string,
-  from: number,
-): Promise<Omit<TranscriptResponse, "agent">> {
-  return transcriptPage(condense(cli, await readFile(path, "utf8")), from);
+/**
+ * Reads pages of one session's transcript, one read at a time. The condensed entries are
+ * kept while the file's size and modification time stay the same, so paging through a
+ * long session parses its file once, not once a page.
+ */
+export class TranscriptReader {
+  private cached: { path: string; size: number; mtimeMs: number; entries: Raw[] } | null = null;
+  private queue: Promise<unknown> = Promise.resolve();
+
+  constructor(private readonly cli: Cli) {}
+
+  /** A page of the session in `path` from entry `from`, after every read asked before it. */
+  page(path: string, from: number): Promise<Omit<TranscriptResponse, "agent">> {
+    const result = this.queue.then(async () => transcriptPage(await this.entries(path), from));
+    this.queue = result.catch(() => {});
+    return result;
+  }
+
+  private async entries(path: string): Promise<Raw[]> {
+    const { size, mtimeMs } = await stat(path);
+    const known = this.cached;
+    if (known?.path === path && known.size === size && known.mtimeMs === mtimeMs) return known.entries;
+    const entries = condense(this.cli, await readFile(path, "utf8"));
+    this.cached = { path, size, mtimeMs, entries };
+    return entries;
+  }
 }

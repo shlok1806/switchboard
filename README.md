@@ -369,8 +369,14 @@ through `GET /api/agents/:id/transcript?from=<entry>`.
 - The Channel asks the session's wrapper for the page and passes it on. It stores none of
   it, only a `transcript.read` Event saying who read whose transcript.
 - The wrapper always redacts the page before it leaves your machine: every secret the Proxy
-  Capture recognises, `.env`-style values and `Authorization` and `Cookie` headers. No
-  setting turns this off, and it removes only the secrets it recognises.
+  Capture recognises, passwords in URLs, `.env`-style values and `Authorization` and
+  `Cookie` headers. Terminal escape sequences are removed first, so a coloured key is still
+  found. No setting turns this off, and it removes only the secrets it recognises.
+- It does not redact absolute paths (which show your home folder and user name), email
+  addresses, or secrets in another encoding, such as base64. Anyone on the Channel can
+  read them.
+- One person at a time reads an Agent's transcript. A second read while one is waiting
+  gets 429 and can try again a moment later.
 - Only a running session can be read: a Gone Agent's transcript cannot. Do not run a session
   you need kept private on a shared Channel.
 - A Claude Code Agent is reminded to write notes: once at the end of a turn that changed

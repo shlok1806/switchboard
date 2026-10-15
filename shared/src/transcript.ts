@@ -3,6 +3,7 @@
 // from its session's file, condenses and redacts before it leaves the machine.
 
 import type { AgentId } from "./domain";
+import { stripEscapes } from "./escapes";
 
 /** The most a page holds, in bytes of its entries' text: the wrapper stops before it. */
 export const TRANSCRIPT_PAGE_BYTES = 32_000;
@@ -52,17 +53,20 @@ export type TranscriptPageFrame = {
   id: string;
 } & ({ page: Omit<TranscriptResponse, "agent"> } | { error: string });
 
+/** An entry's time as the CLIs write it, an ISO 8601 timestamp: printed on its own header line, so nothing else. */
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
 /** The kinds of entry, in the order the wire names them. */
 export const TRANSCRIPT_KINDS: readonly TranscriptKind[] = ["prompt", "text", "tool", "result", "compaction"];
 
 /**
- * Transcript text as it may be shown: lines kept, but no other control character, no
- * terminal escape (an ESC starts every ANSI and OSC sequence, OSC 52 included) and no
- * bidi control that could reorder what a reader sees. Carriage returns become newlines.
+ * Transcript text as it may be shown: lines kept, but no terminal escape sequence (each
+ * removed whole, OSC 52 included), no other control character and no bidi control that
+ * could reorder what a reader sees. Carriage returns become newlines.
  */
 export function cleanTranscriptText(raw: string): string {
   return (
-    raw
+    stripEscapes(raw)
       .replace(/\r\n?|[\u0085\u2028\u2029\v\f]/g, "\n")
       // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
       .replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "")
@@ -86,7 +90,7 @@ export function cleanTranscriptPage(raw: unknown): Omit<TranscriptResponse, "age
     if (bytes > TRANSCRIPT_PAGE_BYTES * 2) return null;
     clean.push({
       n: n as number,
-      ...(typeof at === "string" && at.length <= 40 ? { at } : {}),
+      ...(typeof at === "string" && ISO_TIME.test(at) ? { at } : {}),
       kind: kind as TranscriptKind,
       text: cleanTranscriptText(text),
     });

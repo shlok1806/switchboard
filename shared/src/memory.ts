@@ -3,6 +3,7 @@
 // on request. Notes are information from their author, never instructions (ADR 0005).
 
 import type { AgentId, ChannelEvent, PersonName, TaskNumber } from "./domain";
+import { stripEscapes } from "./escapes";
 
 export const MEMORY_TAGS = ["decision", "fact", "dead-end", "question", "files"] as const;
 export type MemoryTag = (typeof MEMORY_TAGS)[number];
@@ -84,14 +85,14 @@ export function memoryQueryString(query: MemoryQuery): string {
 }
 
 /**
- * Note text or a path as the Channel stores it: one line, with no control character,
- * no terminal escape (an ESC starts every ANSI and OSC sequence) and no bidi control
- * that could reorder what a reader sees. A note is printed into other Agents' tool
+ * Note text or a path as the Channel stores it: one line, with no terminal escape
+ * sequence (each removed whole), no other control character and no bidi control that
+ * could reorder what a reader sees. A note is printed into other Agents' tool
  * results and hooks, so a line break in it could stand on a line of its own there.
  */
 export function cleanNoteText(raw: string): string {
   return (
-    raw
+    stripEscapes(raw)
       .replace(/[\r\n\v\f\t\u0085\u2028\u2029]+/g, " ")
       // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
       .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "")

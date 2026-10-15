@@ -59,7 +59,7 @@ import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
 import { SessionContextReader } from "./session-context";
 import { channelCheckout, GitError } from "./task-worktree";
-import { readTranscriptPage } from "./transcript";
+import { TranscriptReader } from "./transcript";
 import { readAccount } from "./usage/limits";
 import { UsageSchedule } from "./usage/schedule";
 import { SessionTally } from "./usage/session";
@@ -289,6 +289,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   };
   // Another session on the Channel reads this one's transcript (ADR 0019): read from the
   // session file, condensed and always redacted here, before it leaves the machine.
+  const transcripts = new TranscriptReader(adapter.cli);
   const transcribed = async (message: TranscriptRequestMessage) => {
     const reply = (answer: { page: Omit<TranscriptResponse, "agent"> } | { error: string }) => {
       const frame: TranscriptPageFrame = { type: "transcript.page", agent: message.agent, id: message.id, ...answer };
@@ -300,7 +301,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         reply({ error: "The session has not written its transcript yet." });
         return;
       }
-      const page = await readTranscriptPage(adapter.cli, path, message.from);
+      const page = await transcripts.page(path, message.from);
       log(`sent transcript entries ${message.from}+${page.entries.length}, ${page.redacted} redacted`);
       reply({ page });
     } catch (error) {

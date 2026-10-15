@@ -275,10 +275,10 @@ export function buildHistoryIndexes(
 }
 
 /** The answer to a scoped history read whose index is not built yet: it is built on a later day. */
-/** A transcript page, or why there is none: no such Agent, Gone, no wrapper, or no answer in time. */
+/** A transcript page, or why there is none: no such Agent, Gone, already being read, no wrapper, or no answer in time. */
 export type TranscriptResult =
   | { ok: true; page: TranscriptResponse }
-  | { ok: false; status: 400 | 403 | 404 | 409 | 502 | 503 | 504; reason: string };
+  | { ok: false; status: 400 | 403 | 404 | 409 | 429 | 502 | 503 | 504; reason: string };
 
 export type IndexPending = { pending: HistoryIndex };
 
@@ -484,9 +484,9 @@ export class Channel extends DurableObject<Env> {
       waitUntil: (work) => this.ctx.waitUntil(work),
     });
     this.wakes = new Wakes({ sql: ctx.storage.sql, append: (event) => this.append(event) });
-    const transcriptWait = Number((env as { TRANSCRIPT_WAIT_SECONDS?: string }).TRANSCRIPT_WAIT_SECONDS);
+    const transcriptWait = Number(env.TRANSCRIPT_WAIT_SECONDS);
     this.transcriptWaitMs = transcriptWait > 0 ? transcriptWait * 1000 : TRANSCRIPT_WAIT_MS;
-    const wait = Number((env as { HOST_SPAWN_WAIT_SECONDS?: string }).HOST_SPAWN_WAIT_SECONDS);
+    const wait = Number(env.HOST_SPAWN_WAIT_SECONDS);
     this.hosts = new Hosts({
       sql: ctx.storage.sql,
       append: (event) => this.append(event),
@@ -940,6 +940,14 @@ export class Channel extends DurableObject<Env> {
     }
     const who = this.claims.resolve(caller);
     if (!who.ok) return who;
+    // One read at a time per Agent: each makes its wrapper read and redact the whole session file.
+    if ([...this.transcriptReads.values()].some((read) => read.agent === id)) {
+      return {
+        ok: false,
+        status: 429,
+        reason: `${id}'s transcript is being read for someone else right now. Try again in a moment.`,
+      };
+    }
     const request = crypto.randomUUID();
     const answered = new Promise<Omit<TranscriptResponse, "agent"> | string | null>((resolve) => {
       const timer = setTimeout(() => {

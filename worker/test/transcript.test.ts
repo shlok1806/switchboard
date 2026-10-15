@@ -158,7 +158,8 @@ describe("Reading a transcript", () => {
     ];
     await wrapper("alice", agent, (request) => page(request, entries as TranscriptEntry[]));
     const clean = await (await call(transcriptPath(agent), "bob")).json<TranscriptResponse>();
-    expect(clean.entries[0]?.text).toBe("ok]52;c;cm0gLXJm [31mred[0m\nnextline");
+    // Escape sequences go whole: no body of one is left for a reader.
+    expect(clean.entries[0]?.text).toBe("ok red\nnextline");
 
     for (const bad of [[{ n: -1, kind: "text", text: "x" }], [{ n: 0, kind: "secret", text: "x" }], [{ n: 0 }]]) {
       entries = bad;
@@ -188,6 +189,31 @@ describe("Reading a transcript", () => {
     expect(silent.status).toBe(504);
     expect((await silent.json<ErrorResponse>()).reason).toMatch(/did not send its transcript in time/);
     expect(await reads()).toEqual([]);
+  });
+
+  it("reads one Agent's transcript once at a time, and others alongside it", async () => {
+    const agent = await register("alice");
+    const other = await register("dave");
+    // Alice's wrapper answers only when the test says so.
+    const asked = await wrapper("alice", agent, () => undefined);
+    await wrapper("dave", other, (request) => page(request));
+
+    const first = call(transcriptPath(agent), "bob");
+    await waitFor(() => (asked.length > 0 ? true : undefined));
+    const second = await call(transcriptPath(agent, 3), "carol");
+    expect(second.status).toBe(429);
+    expect(((await second.json()) as { reason: string }).reason).toContain("Try again in a moment");
+    // Another Agent's transcript is read meanwhile.
+    expect((await call(transcriptPath(other), "carol")).status).toBe(200);
+
+    asked.send(page(asked[0] as TranscriptRequestMessage));
+    expect((await first).status).toBe(200);
+    // Once answered, the next read goes through.
+    expect(asked).toHaveLength(1);
+    const third = call(transcriptPath(agent, 3), "carol");
+    await waitFor(() => (asked.length > 1 ? true : undefined));
+    asked.send(page(asked[1] as TranscriptRequestMessage));
+    expect((await third).status).toBe(200);
   });
 
   it("takes a page only from the read Agent's own wrapper, for the read it asked", async () => {

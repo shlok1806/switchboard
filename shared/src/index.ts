@@ -7,6 +7,7 @@ export * from "./channel";
 export * from "./claims";
 export * from "./directives";
 export * from "./domain";
+export * from "./escapes";
 export * from "./hooks";
 export * from "./hosts";
 export * from "./memory";
