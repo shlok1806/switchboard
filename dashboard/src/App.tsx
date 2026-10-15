@@ -1,11 +1,9 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronLeft } from "lucide-react";
-import { AccountMenu, ConnectionDot, Mark, SearchButton, TabBar, ViewTabs } from "@/components/shell/nav";
+import { PhoneBar, TabBar, TopBar } from "@/components/shell/nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Banner, BannerAction, BannerClose, BannerIcon, BannerTitle } from "@/components/kibo-ui/banner";
 import LoadingState from "@/components/primitives/LoadingState";
 import { Button } from "@/components/atoms/Button";
 import { CommandPalette } from "@/components/domain/palette";
@@ -28,7 +26,7 @@ function ViewFallback() {
   return (
     <div className="flex flex-col gap-2 p-4" aria-busy="true">
       {[0, 1, 2, 3, 4].map((i) => (
-        <Skeleton key={i} className="h-11 bg-inset" />
+        <Skeleton key={i} className="h-11 bg-panel" />
       ))}
     </div>
   );
@@ -61,29 +59,6 @@ function useInterruptToasts() {
   );
 }
 
-function StaleBanner() {
-  const { tasks } = useChannel();
-  const stale = tasks.filter((t) => t.claim?.stale);
-  if (!stale.length) return null;
-  const first = stale[0];
-  return (
-    <Banner className="gap-3 bg-red-tint px-[var(--gutter)] py-1.5 text-red" key={stale.map((t) => t.number).join()}>
-      <BannerIcon icon={AlertTriangle} className="border-0 bg-transparent p-0 text-red" />
-      <BannerTitle className="min-w-0 truncate text-small font-medium">
-        {stale.length === 1 ? `#${first.number} has a Stale Claim` : `${stale.length} Stale Claims`}
-      </BannerTitle>
-      <BannerAction
-        variant="ghost"
-        className="h-8 px-3 text-small font-medium text-red hover:bg-red/10 hover:text-red"
-        onClick={() => go(stale.length === 1 ? { view: "task", number: first.number } : { view: "tasks" })}
-      >
-        Review
-      </BannerAction>
-      <BannerClose variant="ghost" className="size-8 text-red hover:bg-red/10 hover:text-red" />
-    </Banner>
-  );
-}
-
 function Center({ children }: { children: React.ReactNode }) {
   return <div className="flex min-h-dvh items-center justify-center bg-page p-4">{children}</div>;
 }
@@ -96,24 +71,26 @@ function Loading() {
   );
 }
 
-/** Where you are, when you are inside a Task or an Agent: the way back, on the content's left edge. */
+/** Where you are, inside a Task or an Agent: the way back, as a quiet trail over the page head. */
 function Crumb({ route, taskTitle }: { route: Route; taskTitle?: string }) {
   if (route.view !== "task" && route.view !== "agent") return null;
-  const parent = route.view === "task" ? { label: "Board", to: href({ view: "tasks" }) } : { label: "Agents", to: href({ view: "agents" }) };
+  const parent = route.view === "task" ? { label: "Tasks", to: href({ view: "tasks" }) } : { label: "Agents", to: href({ view: "agents" }) };
   return (
-    // The same box as the detail views (max-w-6xl, gutter inside), so the crumb starts on their column.
-    <nav aria-label="Breadcrumb" className="mx-auto flex h-10 w-full max-w-6xl shrink-0 items-center gap-1.5 px-[var(--gutter)] text-small">
-      <a href={parent.to} className="-ml-1 inline-flex items-center gap-1 text-ink-3 transition-colors hover:text-ink">
-        <ChevronLeft className="size-4" aria-hidden />
+    <nav aria-label="Breadcrumb" className="flex min-h-10 w-full shrink-0 items-end gap-1.5 px-[var(--gutter)] text-small text-ink-3">
+      <a href={parent.to} className="hover:text-ink">
         {parent.label}
       </a>
-      <span aria-hidden className="text-ink-3">/</span>
+      <span aria-hidden>/</span>
       {route.view === "task" ? (
-        <span className="min-w-0 truncate text-ink-2">
-          <span className="tabular-nums">#{route.number}</span> {taskTitle}
+        <span className="min-w-0 [overflow-wrap:anywhere] text-ink-2">
+          #{route.number} {taskTitle}
         </span>
       ) : (
-        <span className="min-w-0 truncate text-ink-2">{route.id}</span>
+        <>
+          <span>{route.id.split("/")[0]}</span>
+          <span aria-hidden>/</span>
+          <code className="min-w-0 [overflow-wrap:anywhere] text-ink-2">{route.id}</code>
+        </>
       )}
     </nav>
   );
@@ -131,13 +108,10 @@ export default function App() {
   if (state.status === "error")
     return (
       <Center>
-        <div className="flex w-full max-w-sm flex-col gap-5 rounded-md bg-inset p-6">
-          <div className="flex gap-3">
-            <AlertTriangle className="mt-0.5 size-5 shrink-0 text-red" aria-hidden />
-            <div className="flex min-w-0 flex-col gap-1">
-              <p className="text-lead font-medium">Could not reach the Channel</p>
-              <p className="text-small break-words text-ink-3">{state.error}</p>
-            </div>
+        <div className="flex w-full max-w-sm flex-col gap-5 border-t border-rule-2 pt-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h1 className="text-title font-semibold">Could not reach the Channel</h1>
+            <p className="text-small break-words text-ink-3">{state.error}</p>
           </div>
           <div className="flex justify-end gap-2">
             <Button size="sm" onClick={() => void signOut()}>
@@ -156,30 +130,13 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={500}>
       <div className="flex h-dvh flex-col bg-page">
-        <header className="flex h-[var(--header-h)] shrink-0 items-center gap-6 bg-page px-[var(--gutter)]">
-          <a
-            href={href({ view: "feed" })}
-            aria-label={`Switchboard ${repo}`}
-            className="flex min-w-0 items-center gap-2.5"
-            title={repo}
-          >
-            <Mark />
-            {/* Between a phone and a wide desk the tabs need the room: the mark alone stays. */}
-            <span className="flex min-w-0 items-baseline gap-2 md:hidden lg:flex">
-              <span className="text-lead font-semibold tracking-[-0.02em] text-ink">Switchboard</span>
-              <span className="truncate text-small text-ink-3 max-[400px]:hidden">{repo}</span>
-            </span>
-          </a>
-          {!mobile && <ViewTabs route={route} />}
-          <div className="ml-auto flex items-center gap-1">
-            <SearchButton onClick={() => setPalette(true)} compact={mobile} />
-            <ConnectionDot />
-            <AccountMenu />
-          </div>
-        </header>
-        {route.view !== "tasks" && <StaleBanner />}
+        {mobile ? (
+          <PhoneBar repo={repo} onSearch={() => setPalette(true)} />
+        ) : (
+          <TopBar route={route} repo={repo} onSearch={() => setPalette(true)} />
+        )}
         <Crumb route={route} taskTitle={route.view === "task" ? taskByNumber.get(route.number)?.title : undefined} />
-        <main className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] md:pb-0">
+        <main className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] sm:pb-0">
           <Suspense fallback={<ViewFallback />}>
             {route.view === "feed" && <FeedView selected={route.event} />}
             {route.view === "tasks" && <TasksView />}
@@ -197,7 +154,7 @@ export default function App() {
       <Toaster
         position={mobile ? "top-center" : "bottom-right"}
         offset={{ bottom: "24px", right: "24px" }}
-        mobileOffset={{ top: "calc(var(--header-h) + 8px)" }}
+        mobileOffset={{ top: "calc(var(--topbar-h) + 8px)" }}
         closeButton
       />
     </TooltipProvider>

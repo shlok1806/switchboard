@@ -11,7 +11,6 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { CAPTURE_LABEL, VERDICT_LABEL, VERDICT_OPTIONS } from "@/lib/format";
 import { go } from "@/lib/router";
 import { PageHead } from "@/components/shell/page-head";
-import { AccountsPanel } from "@/components/domain/usage";
 
 // How many more Events each scroll to the top shows.
 const SHOW = 250;
@@ -91,15 +90,8 @@ export function FeedView({ selected }: { selected?: string }) {
       <div className="mx-auto flex w-full max-w-[var(--column)] min-w-0 flex-col gap-5">
         <PageHead
           title="Activity"
-          summary={
-            <span className="tabular-nums">
-              {live} {live === 1 ? "Agent" : "Agents"} live · {open} open {open === 1 ? "Task" : "Tasks"} · {events.length} Events
-            </span>
-          }
+          facts={[`${live} ${live === 1 ? "Agent" : "Agents"} live`, `${open} open ${open === 1 ? "Task" : "Tasks"}`, `${events.length} Events`]}
         />
-        <div className="rise [--i:1]">
-          <AccountsPanel />
-        </div>
       </div>
     </div>
   );
@@ -107,7 +99,7 @@ export function FeedView({ selected }: { selected?: string }) {
   const filterBar = (
     <div className="shrink-0 px-[var(--gutter)] pb-4">
       {/* Lines up with the feed and the composer below it. */}
-      <div className="rise mx-auto flex w-full max-w-[var(--column)] min-w-0 flex-wrap items-center gap-1.5 [--i:2] md:flex-nowrap md:overflow-x-auto">
+      <div className="mx-auto flex w-full max-w-[var(--column)] min-w-0 flex-wrap items-center gap-1.5 md:flex-nowrap md:overflow-x-auto">
         <FilterSelect
           label="Person"
           value={filters.person}
@@ -178,11 +170,11 @@ export function FeedView({ selected }: { selected?: string }) {
         <div className="mx-auto flex max-w-[var(--column)] flex-col items-start gap-1 px-[var(--gutter)] py-10">
           <p className="text-body text-ink">{loadingOlder ? "Looking through older Events" : "Nothing matches these filters"}</p>
           {olderBefore !== undefined && !loadingOlder && (
-            <button type="button" onClick={showOlder} className="text-small text-accent-ink underline-offset-4 hover:underline">
+            <button type="button" onClick={showOlder} className="text-small text-ink underline-offset-4 hover:underline">
               Look through older Events
             </button>
           )}
-          <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="text-small text-accent-ink underline-offset-4 hover:underline">
+          <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="text-small text-ink underline-offset-4 hover:underline">
             Clear filters
           </button>
         </div>
@@ -192,14 +184,14 @@ export function FeedView({ selected }: { selected?: string }) {
               <li className="flex h-10 items-center px-3 text-small text-ink-3" aria-live="off">
                 {loadingOlder ? (
                   <span className="inline-flex items-center gap-2">
-                    <span aria-hidden className="breathe size-1.5 rounded-full bg-ink-3" />
+                    <span aria-hidden className="size-1.5 rounded-full bg-ink-3" />
                     Loading older Events
                   </span>
                 ) : (
                   <button
                     type="button"
                     onClick={showOlder}
-                    className="inline-flex h-8 items-center rounded-md bg-inset px-3 text-ink-2 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+                    className="inline-flex h-8 items-center rounded-md bg-inset px-3 text-ink-2 transition-colors hover:bg-inset-2 hover:text-ink"
                   >
                     Show older Events
                   </button>
@@ -291,7 +283,7 @@ export function FeedView({ selected }: { selected?: string }) {
           <ResizableHandle />
           <ResizablePanel id="event" defaultSize="42" minSize="28" className="min-h-0">
             {/* Keyed per Event, so a newly picked Event opens at its top. */}
-            <div key={selectedEvent?.id} className="h-full overflow-y-auto bg-inset px-6 py-6">
+            <div key={selectedEvent?.id} className="h-full overflow-y-auto bg-panel px-6 py-6">
               {detail}
             </div>
           </ResizablePanel>

@@ -7,7 +7,7 @@ const REPO_ISSUES = "https://github.com/shlok1806/switchboard/issues/";
 export function IssueLink({ capability }: { capability: keyof Capabilities }) {
   const n = CAPABILITY_ISSUE[capability];
   return (
-    <a href={`${REPO_ISSUES}${n}`} target="_blank" rel="noreferrer" className="text-accent-ink tabular-nums underline-offset-4 hover:underline">
+    <a href={`${REPO_ISSUES}${n}`} target="_blank" rel="noreferrer" className="text-ink tabular-nums underline-offset-4 hover:underline">
       #{n}
     </a>
   );

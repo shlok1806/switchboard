@@ -5,7 +5,8 @@ import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { ClaimForAgentItems, ClaimForLabel, ClaimForMeItem, claimable, useClaims } from "@/components/domain/claim";
 import { NewTaskButton } from "@/components/domain/new-task";
 import { IssueLink, Pending } from "@/components/domain/pending";
-import { COLUMN_LABEL, columnOf, type Column } from "@/components/domain/task";
+import { COLUMN_GLYPH, COLUMN_LABEL, columnOf, type Column } from "@/components/domain/task";
+import { Glyph } from "@/components/domain/state";
 import { decideMove, heldByMe } from "@/components/domain/moves";
 import { FilterSelect } from "@/components/domain/filters";
 import { TakeoverAction } from "@/components/domain/takeover";
@@ -17,7 +18,7 @@ import {
   KanbanProvider,
   type KanbanMove,
 } from "@/components/kibo-ui/kanban";
-import { AlertTriangle, Ban, Bot, Ellipsis, GitPullRequest, Info, ListTree, Loader2, MoveRight, UserRound, X } from "lucide-react";
+import { Ellipsis, GitPullRequest, Info, ListTree, Loader2, MoveRight, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { initials } from "@/components/shell/nav";
 import {
@@ -32,7 +33,6 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { holderName } from "@/lib/format";
 import { go } from "@/lib/router";
 import { PageHead } from "@/components/shell/page-head";
-import { AccountsPanel } from "@/components/domain/usage";
 import { cn } from "@/lib/utils";
 
 /* Left to right the way work flows. Stale Claims are a lane above the board. */
@@ -172,26 +172,15 @@ export function TasksView() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-col gap-5 px-[var(--gutter)] pt-6 pb-4 sm:pt-8">
         <PageHead
-          title="Board"
-          summary={
-            <span className="tabular-nums">
-              {count("open")} open · {count("claimed")} claimed · {count("review")} in review · {count("done")} done
-            </span>
-          }
+          title="Tasks"
+          facts={[`${count("open")} open`, `${count("claimed")} claimed`, `${count("review")} in review`, `${count("done")} done`]}
           actions={<NewTaskButton />}
         />
-        <div className="rise [--i:1]">
-          <AccountsPanel />
-        </div>
       </div>
       {/* Quick filters, as on a Jira board */}
-      <div className="rise flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-[var(--gutter)] pb-3 [--i:2] max-sm:gap-1 md:flex-nowrap md:overflow-x-auto">
-        <Toggle on={filters.mine} onClick={() => set("mine")(!filters.mine)} label="Mine">
-          <UserRound className="size-3.5" aria-hidden />
-        </Toggle>
-        <Toggle on={filters.blocked} onClick={() => set("blocked")(!filters.blocked)} label="Blocked">
-          <Ban className="size-3.5" aria-hidden />
-        </Toggle>
+      <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-[var(--gutter)] pb-3 max-sm:gap-1 md:flex-nowrap md:overflow-x-auto">
+        <Toggle on={filters.mine} onClick={() => set("mine")(!filters.mine)} label="Mine" />
+        <Toggle on={filters.blocked} onClick={() => set("blocked")(!filters.blocked)} label="Blocked" />
         <FilterSelect label="Person" value={filters.person} onChange={set("person")} allLabel="Any Person" options={persons.map((p) => ({ value: p, label: p }))} />
         {can.agents && (
           <FilterSelect
@@ -272,21 +261,12 @@ export function TasksView() {
   );
 }
 
-/* A column's state as colour and shape (ADR 0016): Stale is a triangle, In review a diamond. */
-const COLUMN_DOT: Record<Column, string> = {
-  stale: "size-2.5 bg-state-stale [clip-path:var(--shape-stale)]",
-  open: "size-2 rounded-full border-[1.5px] border-state-idle",
-  claimed: "size-2 rounded-full bg-state-queued",
-  review: "size-2.5 bg-state-review [clip-path:var(--shape-review)]",
-  done: "size-2 rounded-full bg-state-done",
-};
-
 function ColumnDot({ column }: { column: Column }) {
-  return <span aria-hidden className={cn("shrink-0", COLUMN_DOT[column])} />;
+  return <Glyph state={COLUMN_GLYPH[column]} />;
 }
 
-/** A quick filter. On a phone only its icon shows; the name stays for screen readers and on hover. */
-function Toggle({ on, onClick, label, children }: { on: boolean; onClick: () => void; label: string; children: ReactNode }) {
+/** A quick filter, as a chip (design.md): the current one has an ink border. */
+function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
   return (
     <button
       type="button"
@@ -294,26 +274,25 @@ function Toggle({ on, onClick, label, children }: { on: boolean; onClick: () => 
       onClick={onClick}
       title={label}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-small transition-colors focus-visible:outline-2 focus-visible:outline-accent max-md:px-2.5 max-sm:px-2",
-        on ? "bg-accent-tint font-medium text-accent-ink" : "bg-inset text-ink-2 hover:bg-hover hover:text-ink",
+        "inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-[var(--r)] border px-2 text-label font-medium transition-colors duration-[var(--dur)]",
+        on ? "border-ink text-ink" : "border-rule text-ink-2 hover:border-ink-3 hover:text-ink",
       )}
     >
-      {children}
-      <span className="max-md:sr-only">{label}</span>
+      {label}
     </button>
   );
 }
 
 function StaleLane({ count, children }: { count: number; children: ReactNode }) {
   return (
-    <section aria-label="Stale Claims" className="mb-3 flex flex-col rounded-md bg-red-tint p-2">
-      <header className="flex items-center gap-2 px-1.5 pb-1 text-body font-medium text-red">
-        <AlertTriangle className="size-4" aria-hidden />
+    <section aria-label="Stale Claims" className="mb-3 flex flex-col border-y border-rule-2 py-2">
+      <header className="flex items-center gap-2 px-1.5 pb-1 text-row font-semibold text-signal">
+        <Glyph state="stale" />
         Stale Claim
-        <span className="tabular-nums opacity-80">{count}</span>
+        <span className="tabular-nums">{count}</span>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button type="button" aria-label="About Stale Claims" className="grid size-8 place-items-center rounded-md opacity-70 transition-opacity hover:opacity-100">
+            <button type="button" aria-label="About Stale Claims" className="grid size-8 place-items-center rounded-[var(--r)] text-ink-3 transition-colors hover:bg-paper-2 hover:text-ink">
               <Info className="size-3.5" aria-hidden />
             </button>
           </TooltipTrigger>
@@ -430,28 +409,26 @@ function TaskCard({
 
   return (
     <article className="flex flex-col gap-3 text-body leading-snug">
-      <p className={cn("line-clamp-3 break-words font-medium", done ? "font-normal text-ink-3" : "text-ink")}>{task.title}</p>
+      <p className={cn("break-words font-medium", done ? "font-normal text-ink-3" : "text-ink")}>{task.title}</p>
 
       {(labels.length > 0 || blockers.length > 0 || blockedAfterClaim.length > 0) && (
         <ul className="flex flex-wrap gap-1" aria-label="Labels and flags">
           {blockers.length > 0 && (
             <li>
-              <Flag tone="red" hint={`Blocked by ${blockers.map((n) => `#${n}`).join(", ")}`}>
-                <Ban className="size-3" aria-hidden />
-                {blockers.map((n) => `#${n}`).join(" ")}
+              <Flag hint={`Blocked by ${blockers.map((n) => `#${n}`).join(", ")}`}>
+                Blocked by {blockers.map((n) => `#${n}`).join(" ")}
               </Flag>
             </li>
           )}
           {blockedAfterClaim.length > 0 && (
             <li>
-              <Flag tone="orange" hint={`Claimed, then blocked by ${blockedAfterClaim.map((n) => `#${n}`).join(", ")}. The Claim stays held.`}>
-                <Ban className="size-3" aria-hidden />
-                {blockedAfterClaim.map((n) => `#${n}`).join(" ")}
+              <Flag hint={`Claimed, then blocked by ${blockedAfterClaim.map((n) => `#${n}`).join(", ")}. The Claim stays held.`}>
+                Blocked by {blockedAfterClaim.map((n) => `#${n}`).join(" ")}
               </Flag>
             </li>
           )}
           {labels.map((l) => (
-            <li key={l} className="rounded-sm bg-hover px-1.5 text-small leading-6 text-ink-3">
+            <li key={l} className="rounded-[var(--r)] border border-rule px-1.5 text-label leading-[22px] text-ink-3">
               {l}
             </li>
           ))}
@@ -492,18 +469,13 @@ function TaskCard({
               <TooltipTrigger asChild>
                 <span
                   className={cn(
-                    "relative grid size-7 shrink-0 place-items-center rounded-full text-small font-semibold",
-                    task.claim?.stale ? "bg-red-tint text-red" : mine ? "bg-ink text-page" : "bg-hover-2 text-ink-2",
+                    "relative grid size-7 shrink-0 place-items-center rounded-[var(--r)] text-small font-semibold",
+                    mine ? "bg-ink text-paper" : "bg-paper-3 text-ink-2",
                   )}
                   aria-label={`Held by ${holderName(h)}`}
                   role="img"
                 >
                   {initials(person ?? "?")}
-                  {h.kind === "agent" && (
-                    <span className="absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full bg-hover-2 text-ink-2 ring-2 ring-surface">
-                      <Bot className="size-2.5" strokeWidth={2.2} />
-                    </span>
-                  )}
                 </span>
               </TooltipTrigger>
               <TooltipContent>{holderName(h)}</TooltipContent>
@@ -516,16 +488,12 @@ function TaskCard({
   );
 }
 
-function Flag({ tone, hint, children }: { tone: "red" | "orange"; hint: string; children: ReactNode }) {
+/** A blocked flag: the blocking Tasks in words, in ink. */
+function Flag({ hint, children }: { hint: string; children: ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span
-          className={cn(
-            "inline-flex items-center gap-1 rounded-sm px-1.5 text-small leading-6 font-medium tabular-nums",
-            tone === "red" ? "bg-red-tint text-red" : "bg-orange-tint text-orange",
-          )}
-        >
+        <span className="inline-flex items-center gap-1 rounded-[var(--r)] border border-rule-2 px-1.5 text-label leading-6 font-medium text-ink tabular-nums">
           {children}
           <span className="sr-only">{hint}</span>
         </span>
@@ -541,8 +509,8 @@ function StepMeter({ done, total }: { done: number; total: number }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex items-center gap-1.5 tabular-nums">
-          <span aria-hidden className="h-1.5 w-8 overflow-hidden rounded-full bg-track">
-            <span className={cn("block h-full rounded-full", done === total ? "bg-green" : "bg-accent")} style={{ width: `${(done / total) * 100}%` }} />
+          <span aria-hidden className="h-1 w-8 overflow-hidden bg-rule">
+            <span className="block h-full bg-ink-2" style={{ width: `${(done / total) * 100}%` }} />
           </span>
           {done}/{total}
           <span className="sr-only">Steps done</span>

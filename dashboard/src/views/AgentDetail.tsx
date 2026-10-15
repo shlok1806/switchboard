@@ -14,7 +14,8 @@ import { OlderRow } from "@/components/domain/older";
 import { useScopedHistory } from "@/data/history";
 import { RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { Composer } from "@/components/domain/composer";
-import { CliSwatch, HostLabel, PresenceStatus, useClaimsOf } from "./AgentsView";
+import { HostLabel, useClaimsOf } from "./AgentsView";
+import { Glyph, State, useAgentState } from "@/components/domain/state";
 import { StopAgentButton } from "@/components/domain/start-agent";
 import { LeadButton, LeadLabel } from "@/components/domain/agent-role";
 import { CAPTURE_LABEL, CLI_LABEL, ago } from "@/lib/format";
@@ -24,10 +25,9 @@ const MODES = ["Digest", "Raw"] as const;
 const CAPTURES = ["All", "Proxy", "Hook", "Tool"] as const;
 
 import { Section } from "@/components/shell/section";
-import NumberFlow from "@number-flow/react";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AccountLabel, ActorAvatar, AgentLink, ModelLabel } from "@/components/domain/pills";
+import { AccountLabel, AgentLink, ModelLabel } from "@/components/domain/pills";
 import { AgentUsage } from "@/components/domain/usage";
 import { TerminalPanel } from "@/components/domain/terminal";
 
@@ -86,7 +86,7 @@ export function AgentDetail({ id }: { id: string }) {
   if (!agent) {
     return (
       <div className="p-6 text-body text-ink-2">
-        No Agent {id}. <a href={href({ view: "agents" })} className="text-accent-ink underline underline-offset-4">Back to Agents</a>
+        No Agent {id}. <a href={href({ view: "agents" })} className="text-ink underline underline-offset-4">Back to Agents</a>
       </div>
     );
   }
@@ -94,6 +94,7 @@ export function AgentDetail({ id }: { id: string }) {
   const held = claimsOf.get(agent.id) ?? [];
   const person = snapshot?.persons.find((p) => p.name === agent.person);
   const mine = agent.person === me;
+  const state = useAgentState(agent);
 
   const setMode = async (m: (typeof MODES)[number]) => {
     const mode: ProxyMode = m === "Raw" ? "raw" : "digest";
@@ -106,18 +107,17 @@ export function AgentDetail({ id }: { id: string }) {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto grid max-w-6xl gap-8 px-[var(--gutter)] pt-4 pb-12 sm:pt-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-12">
         <div className="flex min-w-0 flex-col gap-8">
-          <header className="rise flex items-start gap-4">
-            <ActorAvatar actor={{ kind: "agent", agentId: agent.id }} />
+          <header className="flex items-start gap-4">
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <h1 className="flex min-w-0 items-center gap-2.5 text-title font-semibold text-ink tabular-nums [overflow-wrap:anywhere]">
-                <CliSwatch agent={agent} className="size-2.5" />
-                {agent.id}
+              <h1 className="flex min-w-0 flex-wrap items-center gap-x-2.5 text-head font-semibold text-ink [overflow-wrap:anywhere]">
+                <Glyph state={state} />
+                {agent.nickname ?? agent.id}
+                <span title={`Last seen ${ago(agent.lastSeenAt)}`}>
+                  <State state={state} person={agent.person} glyph={false} className="text-row" />
+                </span>
               </h1>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-ink-3">
-                <span title={`Last seen ${ago(agent.lastSeenAt)}`}>
-                  <PresenceStatus presence={agent.presence} />
-                </span>
-                {agent.nickname && <span className="text-ink-2">{agent.nickname}</span>}
+                {agent.nickname && <code className="text-ink-2">{agent.id}</code>}
                 <span>{CLI_LABEL[agent.cli]}</span>
                 <span>{agent.person}</span>
                 {agent.host && <HostLabel host={agent.host} />}
@@ -137,9 +137,9 @@ export function AgentDetail({ id }: { id: string }) {
               <StopAgentButton agent={agent} />
             </div>
           </header>
-          <PendingApproval agent={agent} className="rise [--i:1]" />
+          <PendingApproval agent={agent} />
 
-          <div className="rise grid gap-6 rounded-md bg-inset p-4 [--i:1] sm:grid-cols-[minmax(0,1fr)_13rem] sm:gap-8">
+          <div className="grid gap-6 border-y border-rule py-4 sm:grid-cols-[minmax(0,1fr)_13rem] sm:gap-8">
             <AgentBrief agent={agent} />
             <ContextWindow agent={agent} />
           </div>
@@ -150,23 +150,18 @@ export function AgentDetail({ id }: { id: string }) {
             </Section>
           )}
 
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
-            {[
-              {
-                k: "Events",
-                // Only the Events loaded so far: counting them all would read the whole history.
-                v: <LoadedCount value={own} partial={scoped.more} />,
-              },
-              { k: "Interrupts", v: can.verdicts ? <LoadedCount value={heard.i} partial={verdictsPartial} /> : <span className="text-ink-3">-</span> },
-              { k: "Queued", v: can.verdicts ? <LoadedCount value={heard.q} partial={verdictsPartial} /> : <span className="text-ink-3">-</span> },
-              { k: "Started", v: ago(agent.startedAt) },
-            ].map((s) => (
-              <div key={s.k} className="flex flex-col-reverse gap-1">
-                <dt className="text-small text-ink-3">{s.k}</dt>
-                <dd className="flex h-8 items-center text-title leading-none font-medium text-ink tabular-nums">{s.v}</dd>
-              </div>
-            ))}
-          </dl>
+          {/* The Relay's view of this Agent, as one line of facts (design.md: never figure tiles). */}
+          <p className="text-small text-ink-3 tabular-nums">
+            <LoadedCount value={own} partial={scoped.more} /> Events
+            {can.verdicts && (
+              <>
+                {" · "}
+                <LoadedCount value={heard.i} partial={verdictsPartial} /> Interrupts{" · "}
+                <LoadedCount value={heard.q} partial={verdictsPartial} /> Queued
+              </>
+            )}
+            {" · "}started {ago(agent.startedAt)}
+          </p>
 
           <TerminalPanel key={agent.id} agent={agent} />
 
@@ -200,13 +195,13 @@ export function AgentDetail({ id }: { id: string }) {
 
         <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
           {!can.directives ? (
-            <p className="rounded-md bg-inset p-4 text-small text-ink-3">
+            <p className="rounded-md bg-panel p-4 text-small text-ink-3">
               Directives arrive with <IssueLink capability="directives" />.
             </p>
           ) : agent.presence !== "gone" ? (
             <Composer key={agent.id} defaultAgent={agent.id} />
           ) : (
-            <p className="rounded-md bg-inset p-4 text-small text-ink-3">Gone. A Directive waits until it resumes.</p>
+            <p className="rounded-md bg-panel p-4 text-small text-ink-3">Gone. A Directive waits until it resumes.</p>
           )}
 
           <RenameSection agent={agent} />
@@ -251,7 +246,7 @@ export function AgentDetail({ id }: { id: string }) {
               onChange={(m) => void setMode(m)}
               className={mine && can.proxyMode ? "w-full" : "pointer-events-none w-full opacity-60"}
             />
-            {!agent.secretMasking && <p className="text-small text-orange">Secret masking is off</p>}
+            {!agent.secretMasking && <p className="text-small text-ink">Secret masking is off</p>}
             {!can.proxyMode && (
               <p className="text-small text-ink-3">
                 Arrives with <IssueLink capability="proxyMode" />.
@@ -333,7 +328,7 @@ function RenameSection({ agent }: { agent: Agent }) {
           maxLength={MAX_NICKNAME_LENGTH}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]"
+          className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink placeholder:text-ink-3 max-md:text-[16px]"
         />
         <Button type="submit" size="sm" variant="primary" disabled={!changed || busy} className="h-9">
           Rename
@@ -355,7 +350,7 @@ function RenameSection({ agent }: { agent: Agent }) {
 function LoadedCount({ value, partial }: { value: number; partial: boolean }) {
   return (
     <span title={partial ? "Counted over the latest Events; there are older ones" : undefined}>
-      <NumberFlow value={value} />
+      {value}
       {partial && <span className="text-ink-3">+</span>}
     </span>
   );

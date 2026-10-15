@@ -3,7 +3,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { Agent, AgentId, Task } from "@shared/index";
-import { fit, lanes, nodeState, place, slotRect, zoomAt, type Point, type Rect } from "@/lib/canvas-layout";
+import { fit, lanes, place, slotRect, zoomAt, type Point, type Rect } from "@/lib/canvas-layout";
+import { needsYou, stateOf } from "@/lib/state";
 
 let n = 0;
 function agent(person: string, extra: Partial<Agent> = {}): Agent {
@@ -95,15 +96,38 @@ describe("placing nodes", () => {
   });
 });
 
-describe("node state", () => {
+describe("an Agent's state", () => {
+  const approval = { id: "p", tool: "Bash", openedAt: "", deniable: false } as Agent["approval"];
   it("shows a waiting prompt first, then a Stale Claim, then Presence", () => {
-    const needs = agent("shlok", { presence: "gone", approval: { id: "p", tool: "Bash", openedAt: "", deniable: false } as Agent["approval"] });
+    const needs = agent("shlok", { presence: "gone", approval });
     const stale = agent("shlok", { presence: "gone" });
     const gone = agent("shlok", { presence: "gone" });
-    expect(nodeState(needs, [task(1, needs, true)])).toBe("needs");
-    expect(nodeState(stale, [task(2, stale, true)])).toBe("stale");
-    expect(nodeState(gone, [])).toBe("gone");
-    expect(nodeState(agent("shlok", { presence: "idle" }), [])).toBe("idle");
+    expect(stateOf(needs, [task(1, needs, true)], "shlok")).toBe("needs");
+    expect(stateOf(stale, [task(2, stale, true)], "shlok")).toBe("stale");
+    expect(stateOf(gone, [task(3, gone)], "shlok")).toBe("gone");
+    expect(stateOf(agent("shlok", { presence: "idle" }), [], "shlok")).toBe("idle");
+    expect(stateOf(agent("shlok"), [], "shlok")).toBe("running");
+  });
+
+  it("names whose prompt it is: yours, or another Person's", () => {
+    expect(stateOf(agent("maya", { approval }), [], "shlok")).toBe("needs-other");
+    expect(stateOf(agent("maya", { approval }), [], "maya")).toBe("needs");
+  });
+
+  it("counts as needing you your own prompts and any Stale Claim, not another Person's prompt", () => {
+    const mine = agent("shlok", { approval });
+    const theirs = agent("maya", { approval });
+    const stale = agent("maya", { presence: "gone" });
+    const fleet: [Agent, Task[]][] = [
+      [mine, []],
+      [theirs, []],
+      [stale, [task(4, stale, true)]],
+      [agent("dev"), []],
+      [agent("dev", { presence: "idle" }), []],
+    ];
+    expect(needsYou(fleet.map(([a, claims]) => stateOf(a, claims, "shlok")))).toBe(2);
+    expect(needsYou(fleet.map(([a, claims]) => stateOf(a, claims, "maya")))).toBe(2);
+    expect(needsYou(fleet.map(([a, claims]) => stateOf(a, claims, "dev")))).toBe(1);
   });
 });
 

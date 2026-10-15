@@ -19,7 +19,7 @@ export type SnippetProps = ComponentProps<typeof Tabs>;
 export const Snippet = ({ className, ...props }: SnippetProps) => (
   <Tabs
     className={cn(
-      "group w-full gap-0 overflow-hidden rounded-md bg-inset",
+      "group w-full gap-0 overflow-hidden rounded-md bg-panel",
       className
     )}
     {...props}

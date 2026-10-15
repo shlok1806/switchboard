@@ -120,7 +120,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
       bodyClassName="flex flex-col gap-3"
     >
       {!watching ? (
-        <p className="text-small text-ink-3">
+        <p className="max-w-[60ch] text-small text-ink-3">
           {agent.presence === "gone"
             ? "Gone. Its terminal shows again when it resumes."
             : `The screen ${agent.person}'s wrapper shows, with secrets masked before it leaves their machine.`}
@@ -136,7 +136,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
                   {screen.cols} × {screen.rows}
                 </span>
                 {screen.prompt && (
-                  <span className="rounded-sm bg-orange-tint px-1.5 text-orange">Waiting on a dialog</span>
+                  <span className="rounded-sm bg-paper-2 px-1.5 text-ink">Waiting on a dialog</span>
                 )}
                 <span>
                   {holder === null
@@ -161,7 +161,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
               onBlur={() => setFocused(false)}
               className={cn(
                 "overflow-x-auto rounded-md bg-page p-3 font-mono text-small leading-[1.45] whitespace-pre text-ink-2" /* taste-skill-ignore: a terminal screen is literal text */,
-                canType && "cursor-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                canType && "cursor-text",
               )}
             >
               <Screen frame={screen} cursor={canType && focused} />
@@ -173,7 +173,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
               Type into it
             </Button>
           ) : keyError ? (
-            <p className="text-small text-red">{keyError}</p>
+            <p className="text-small text-ink">{keyError}</p>
           ) : key === null ? (
             <p className="text-small text-ink-3">Making this browser's key</p>
           ) : (
@@ -199,7 +199,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
                   </Snippet>
                 </>
               )}
-              {refused && <p className="text-small text-orange">{refused}</p>}
+              {refused && <p className="text-small text-ink">{refused}</p>}
               <div className="flex flex-wrap items-center gap-2">
                 {mine ? (
                   <Button size="sm" variant="secondary" className="bg-page" onClick={() => send("release", "")}>

@@ -330,7 +330,7 @@ export default function ToolChips({
             const label = <span className="shrink-0 text-small font-medium text-ink">{row.label}</span>;
             const chip = <Chip text={row.chip} mono={row.mono} inButton={expandable} onCut={expandable ? cutOf(key) : undefined} />;
             return (
-            <div key={keyOf(row, i)} style={{ animation: "fade-up 300ms cubic-bezier(0.23,1,0.32,1) both" }}>
+            <div key={keyOf(row, i)}>
               {expandable ? (
                 <button
                   type="button"
@@ -376,7 +376,7 @@ export default function ToolChips({
                           key={line.text}
                           className={`text-small leading-[1.6] [overflow-wrap:anywhere] whitespace-pre-wrap ${
                             "full" in line ? (row.mono ? "font-mono" : "") : row.detailMono ? "font-mono" : "" /* taste-skill-ignore: tool output is code */
-                          } ${"tone" in line && line.tone === "add" ? "text-green" : "text-ink-2"}`}
+                          } ${"tone" in line && line.tone === "add" ? "text-ink" : "text-ink-2"}`}
                         >
                           {breakable(line.text)}
                         </Tag>
@@ -394,7 +394,7 @@ export default function ToolChips({
       {/* file-diff chips */}
       {step >= total && diffs.length > 0 && (
         <div className="mt-3 flex max-w-full flex-wrap gap-1.5">
-          {diffs.map((d, i) => (
+          {diffs.map((d) => (
             <span
               key={d.file}
               data-diffchip
@@ -411,11 +411,10 @@ export default function ToolChips({
                 className="inline-flex h-7 max-w-full items-center gap-2 rounded-md
                   bg-hover px-2 text-small text-ink
                   transition-colors duration-100 hover:bg-hover-2"
-                style={{ animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${i * 80}ms both` }}
               >
                 <code className="min-w-0 truncate font-mono">{d.file}</code>{/* taste-skill-ignore: a file path */}
-                <span className="shrink-0 text-green tabular-nums">+{d.add}</span>
-                {d.del > 0 && <span className="shrink-0 text-red tabular-nums">−{d.del}</span>}
+                <span className="shrink-0 text-ink tabular-nums">+{d.add}</span>
+                {d.del > 0 && <span className="shrink-0 text-ink tabular-nums">−{d.del}</span>}
               </button>
 
             </span>
@@ -425,7 +424,6 @@ export default function ToolChips({
             className="inline-flex h-7 items-center rounded-md px-1.5 text-small text-ink-3
               underline decoration-transparent underline-offset-2 transition-colors duration-100
               hover:text-ink-2 hover:decoration-current"
-            style={{ animation: `fade-in 300ms ease-out ${diffs.length * 80}ms both` }}
           >
             {copy.more}
           </button>}
@@ -440,16 +438,15 @@ export default function ToolChips({
             left: preview.x,
             top: preview.top,
             bottom: preview.bottom,
-            animation: "pop-in 160ms cubic-bezier(0.23,1,0.32,1) both",
             transformOrigin: preview.top === undefined ? "bottom left" : "top left",
           }}
         >
-          <div className="flex items-center justify-between bg-inset px-3 py-2 font-mono text-small">{/* taste-skill-ignore: a diff header is code */}
+          <div className="flex items-center justify-between bg-panel px-3 py-2 font-mono text-small">{/* taste-skill-ignore: a diff header is code */}
             <span className="min-w-0 truncate text-ink-2">{preview.file}</span>
             <span className="shrink-0 tabular-nums">
-              <span className="text-green">+{diffs.find((diff) => diff.file === preview.file)?.add}</span>
+              <span className="text-ink">+{diffs.find((diff) => diff.file === preview.file)?.add}</span>
               {(diffs.find((diff) => diff.file === preview.file)?.del ?? 0) > 0 && (
-                <span className="text-red"> −{diffs.find((diff) => diff.file === preview.file)?.del}</span>
+                <span className="text-ink"> −{diffs.find((diff) => diff.file === preview.file)?.del}</span>
               )}
             </span>
           </div>
@@ -459,9 +456,9 @@ export default function ToolChips({
                 key={index}
                 className={`flex gap-2 px-2.5 whitespace-pre ${
                   line.tone === "add"
-                    ? "bg-green-tint text-green"
+                    ? "bg-paper-2 text-ink"
                     : line.tone === "del"
-                      ? "bg-red-tint text-red"
+                      ? "bg-paper-2 text-ink"
                       : "text-ink-2"
                 }`}
               >

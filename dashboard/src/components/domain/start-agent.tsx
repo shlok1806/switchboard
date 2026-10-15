@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Plus, Square } from "lucide-react";
+import { Square } from "lucide-react";
 import { toast } from "sonner";
 import type { Agent, Host, PermissionMode } from "@shared/index";
 import {
@@ -33,7 +33,7 @@ const MODE_HINT: Record<PermissionMode, string> = {
 };
 
 const FIELD =
-  "h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]";
+  "h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink placeholder:text-ink-3 max-md:text-[16px]";
 
 /** Text whose `backticked` parts are commands or paths, set as code. */
 export function WithCode({ text }: { text: string }) {
@@ -126,8 +126,8 @@ export function StartAgentButton() {
   if (!supported) return null;
   return (
     <>
-      <Button variant="action" size="sm" onClick={() => setOpen(true)} className="gap-1">
-        <Plus className="size-4" aria-hidden /> <span>Start an Agent</span>
+      <Button variant="primary" onClick={() => setOpen(true)}>
+        Start an Agent
       </Button>
       <Dialog open={open} onOpenChange={(next) => (busy && !next ? undefined : setOpen(next))}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
@@ -220,7 +220,7 @@ export function StartAgentForm({
           </DialogDescription>
         </DialogHeader>
         <p className="text-body text-ink-2">Install one on the machine, naming the folders its Agents may work in:</p>
-        <code className="block rounded-md bg-inset px-3 py-2 font-mono text-small text-ink [overflow-wrap:anywhere]">
+        <code className="block rounded-md bg-panel px-3 py-2 font-mono text-small text-ink [overflow-wrap:anywhere]">
           switchboard host install --root ~/code/your-repo
         </code>
         <DialogFooter>
@@ -277,7 +277,7 @@ export function StartAgentForm({
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
           placeholder="Fix the login redirect, then open a PR."
-          className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]"
+          className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink placeholder:text-ink-3 max-md:text-[16px]"
         />
       </Field>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
@@ -303,7 +303,7 @@ export function StartAgentForm({
         </p>
       )}
       {problem && (
-        <p role="alert" className="text-small text-red">
+        <p role="alert" className="text-small text-ink">
           <WithCode text={problem} />
         </p>
       )}

@@ -50,8 +50,8 @@ export function FilterSelect({
   return (
     <label
       className={cn(
-        "relative inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md pr-7 pl-3 text-small max-sm:pr-6 max-sm:pl-2.5 transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent",
-        on ? "bg-accent-tint font-medium text-accent-ink" : "bg-inset text-ink-2 hover:bg-hover hover:text-ink",
+        "relative inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md pr-7 pl-3 text-small max-sm:pr-6 max-sm:pl-2.5 transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus",
+        on ? "bg-paper-3 font-medium text-ink" : "bg-inset text-ink-2 hover:bg-inset-2 hover:text-ink",
       )}
     >
       <select

@@ -1,3 +1,4 @@
+import { Glyph } from "@/components/domain/state";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { Agent, AgentId, Task } from "@shared/index";
@@ -71,12 +72,9 @@ function AgentOption({ agent }: { agent: Agent }) {
   return (
     <>
       <Bot className="size-4 text-ink-3" aria-hidden />
-      <span className="min-w-0 flex-1 truncate text-small tabular-nums">{agent.id}</span>
-      <span
-        aria-label={agent.presence === "live" ? "Live" : "Idle"}
-        role="img"
-        className={cn("size-1.5 shrink-0 rounded-full", agent.presence === "live" ? "bg-state-live" : "bg-state-idle")}
-      />
+      <code className="min-w-0 flex-1 text-small [overflow-wrap:anywhere]">{agent.id}</code>
+      <Glyph state={agent.presence === "live" ? "running" : "idle"} />
+      <span className="sr-only">{agent.presence === "live" ? "Live" : "Idle"}</span>
     </>
   );
 }

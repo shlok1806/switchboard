@@ -41,13 +41,13 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   const getStateIcon = () => {
     switch (state) {
       case "input-streaming":
-        return <Loader2 className="h-4 w-4 animate-spin text-accent" />
+        return <Loader2 className="h-4 w-4 animate-spin text-ink" />
       case "input-available":
-        return <Settings className="h-4 w-4 text-orange" />
+        return <Settings className="h-4 w-4 text-ink" />
       case "output-available":
-        return <CheckCircle className="h-4 w-4 text-green" />
+        return <CheckCircle className="h-4 w-4 text-ink" />
       case "output-error":
-        return <XCircle className="h-4 w-4 text-red" />
+        return <XCircle className="h-4 w-4 text-ink" />
       default:
         return <Settings className="text-muted-foreground h-4 w-4" />
     }
@@ -61,7 +61,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-accent-tint text-accent-ink"
+              "bg-paper-3 text-ink"
             )}
           >
             Processing
@@ -72,7 +72,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-orange-tint text-orange"
+              "bg-paper-2 text-ink"
             )}
           >
             Ready
@@ -83,7 +83,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-green-tint text-green"
+              "bg-paper-2 text-ink"
             )}
           >
             Completed
@@ -94,7 +94,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-red-tint text-red"
+              "bg-paper-2 text-ink"
             )}
           >
             Error
@@ -105,7 +105,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-inset text-ink-2"
+              "bg-panel text-ink-2"
             )}
           >
             Pending
@@ -127,7 +127,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-md bg-inset",
+        "overflow-hidden rounded-md bg-panel",
         className
       )}
     >
@@ -135,7 +135,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
         <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            className="h-auto w-full justify-between rounded-b-none bg-inset px-3 py-2 font-normal hover:bg-hover"
+            className="h-auto w-full justify-between rounded-b-none bg-panel px-3 py-2 font-normal hover:bg-hover"
           >
             <div className="flex items-center gap-2">
               {getStateIcon()}
@@ -152,7 +152,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
                         "data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
           )}
         >
-          <div className="space-y-3 bg-inset p-3 pt-0">
+          <div className="space-y-3 bg-panel p-3 pt-0">
             {input && Object.keys(input).length > 0 && (
               <div>
                 <h4 className="text-muted-foreground mb-2 text-sm font-medium">
@@ -184,8 +184,8 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
 
             {state === "output-error" && toolPart.errorText && (
               <div>
-                <h4 className="mb-2 text-sm font-medium text-red">Error</h4>
-                <div className="rounded-md bg-red-tint p-2 text-sm text-red">
+                <h4 className="mb-2 text-sm font-medium text-ink">Error</h4>
+                <div className="rounded-md bg-paper-2 p-2 text-sm text-ink">
                   {toolPart.errorText}
                 </div>
               </div>

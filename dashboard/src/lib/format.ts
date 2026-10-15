@@ -89,6 +89,17 @@ export function ago(iso: string, now = Date.now()): string {
   return rtf.format(Math.round(s / 86400), "day");
 }
 
+/** How long since `iso`, short and without "ago": "26 s", "52 min", "1 h 10", "3 d". */
+export function elapsed(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 && h < 10 ? `${h} h ${String(m % 60).padStart(2, "0")}` : `${h} h`;
+  return `${Math.floor(h / 24)} d`;
+}
+
 export function clock(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
@@ -332,4 +343,13 @@ function wokenFor(queued: number, directives: number): string {
     ...(directives > 0 ? [`${directives} ${directives === 1 ? "Directive" : "Directives"}`] : []),
   ];
   return parts.length > 0 ? parts.join(" and ") : "nothing";
+}
+
+/** The time of day in a Person's time zone, as 15:02; an unknown zone gives "". */
+export function localTime(at: number | Date, timeZone: string): string {
+  try {
+    return new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone });
+  } catch {
+    return "";
+  }
 }

@@ -66,7 +66,7 @@ function highlight(text: string): ReactNode[] {
     if (idx > last) nodes.push(<span key={k++}>{text.slice(last, idx)}</span>);
     let color: string;
     let weight: number | undefined;
-    if (/^["'`]/.test(t) || /^\d/.test(t)) color = "var(--orange)"; // string / number
+    if (/^["'`]/.test(t) || /^\d/.test(t)) color = "var(--link)"; // string / number
     else if (KEYWORDS.has(t)) color = "var(--accent-ink)"; // keyword / import / conditional
     else { color = "var(--ink)"; weight = 500; } // function call
     nodes.push(<span key={k++} style={{ color, fontWeight: weight }}>{t}</span>);
@@ -160,7 +160,7 @@ export default function CodeBlock({
   const removed = diff.filter((r) => r.type === "del").length;
 
   return (
-    <div className={`${className} overflow-hidden rounded-md bg-inset`}>
+    <div className={`${className} overflow-hidden rounded-md bg-panel`}>
       {/* header - file · (diff stat | copy) */}
       <div className="flex h-11 items-center gap-2 bg-hover px-4 text-small">
         <span className="inline-flex min-w-0 items-center gap-[7px]">
@@ -170,8 +170,8 @@ export default function CodeBlock({
 
         {isDiff ? (
           <span className="ml-auto inline-flex items-center gap-2 text-small font-medium leading-none tabular-nums">
-            <span className="text-green">+{added}</span>
-            <span className="text-red">-{removed}</span>
+            <span className="text-ink">+{added}</span>
+            <span className="text-ink">-{removed}</span>
           </span>
         ) : (
           <button
@@ -180,7 +180,7 @@ export default function CodeBlock({
             onClick={copy}
             className={`-mr-1 ml-auto flex h-6 items-center gap-1 rounded-md px-1.5 text-small
               font-medium transition-colors duration-100 hover:bg-hover
-              ${copied ? "text-green" : "text-ink-3 hover:text-ink"}`}
+              ${copied ? "text-ink" : "text-ink-3 hover:text-ink"}`}
           >
             {copied ? (
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
@@ -193,7 +193,7 @@ export default function CodeBlock({
       </div>
 
       {/* body - equal 12px inset on top / left / right; lines wrap */}
-      <div className="py-3 font-mono text-small leading-[1.65] text-ink-2">{/* taste-skill-ignore: a code body */}
+      <div className="py-3 text-small leading-[1.65] text-ink-2">
         {isDiff ? (
           <div className="relative">
             <span className="pointer-events-none absolute inset-y-0 left-5 w-0.5 bg-hover" />
@@ -206,13 +206,13 @@ export default function CodeBlock({
                 <div
                   key={i}
                   className={`relative grid grid-cols-[20px_minmax(0,1fr)] items-start
-                    ${add ? "bg-green-tint" : del ? "bg-red-tint" : ""}`}
+                    ${add ? "bg-paper-2" : del ? "bg-paper-2" : ""}`}
                 >
                   {(add || del) && (
                     <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: add ? "var(--green)" : HATCH }} />
                   )}
-                  <span className={`select-none text-center text-small ${add ? "text-green" : del ? "text-red" : "text-ink-3"}`}>{num ?? ""}</span>
-                  <code className="pr-3 pl-1 break-words whitespace-pre-wrap">
+                  <span className={`select-none text-center text-small tabular-nums ${add ? "text-ink" : del ? "text-ink" : "text-ink-3"}`}>{num ?? ""}</span>
+                  <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">{/* taste-skill-ignore: a code line */}
                     <Pieces pieces={r.pieces} />
                   </code>
                 </div>
@@ -224,8 +224,8 @@ export default function CodeBlock({
             <span className="pointer-events-none absolute inset-y-0 left-5 w-0.5 bg-hover" />
             {lines.map((line, i) => (
               <div key={i} className="grid grid-cols-[20px_minmax(0,1fr)] items-start">
-                <span className="select-none text-center text-small text-ink-3">{i + 1}</span>
-                <code className="pr-3 pl-1 break-words whitespace-pre-wrap">{highlight(line)}</code>
+                <span className="select-none text-center text-small tabular-nums text-ink-3">{i + 1}</span>
+                <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">{/* taste-skill-ignore: a code line */}{highlight(line)}</code>
               </div>
             ))}
           </div>

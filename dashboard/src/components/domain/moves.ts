@@ -1,6 +1,7 @@
 import type { Agent, AgentId, Holder, PersonName, Task } from "@shared/index";
 import { holderName } from "@/lib/format";
-import { COLUMN_LABEL, type Column } from "./task";
+import { COLUMN_GLYPH, COLUMN_LABEL, columnOf, type Column } from "./task";
+import type { GlyphState } from "@/lib/state";
 
 /**
  * What dropping a card on another column asks the Channel to do. Only two moves
@@ -15,6 +16,16 @@ export type Move = { kind: "claim" } | { kind: "release" } | { kind: "refuse"; r
 export function heldByMe(holder: Holder, me: PersonName, agentById: Map<AgentId, Agent>): boolean {
   if (holder.kind === "person") return holder.person === me;
   return agentById.get(holder.agentId)?.person === me || holder.agentId.split("/")[0] === me;
+}
+
+/**
+ * One Task's glyph. A Task in review is filled when it is yours to review (someone else
+ * finished it) and hollow when it is someone else's review (you or your Agent finished it).
+ */
+export function taskGlyph(t: Task, me: PersonName, agentById: Map<AgentId, Agent>): GlyphState {
+  const column = columnOf(t);
+  if (column === "review" && t.claim && heldByMe(t.claim.holder, me, agentById)) return "review-other";
+  return COLUMN_GLYPH[column];
 }
 
 export function decideMove(

@@ -50,13 +50,13 @@ export function SignInScreen({
             <p className="text-body break-all text-ink-3">{repo}</p>
           </div>
         </header>
-        <div className="flex flex-col gap-4 rounded-md bg-inset p-6">
+        <div className="flex flex-col gap-4 rounded-md bg-panel p-6">
           <p className="text-center text-body leading-relaxed text-ink-2">
             Use a GitHub account with write access to this repo.
           </p>
           {notConfigured ? (
             <p role="status" className="flex items-start gap-2 text-small text-ink-2">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-orange" aria-hidden />
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-ink" aria-hidden />
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="font-medium text-ink">GitHub App not configured</span>
                 <span className="break-words text-ink-3">{notConfigured}</span>
@@ -64,7 +64,7 @@ export function SignInScreen({
             </p>
           ) : (
             problem && (
-              <p role="alert" className="flex items-start gap-2 text-small text-red">
+              <p role="alert" className="flex items-start gap-2 text-small text-ink">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
                 {problem}
               </p>
@@ -88,10 +88,10 @@ export function SignInScreen({
         {onDevSignIn && (
           <form
             onSubmit={devSubmit}
-            className="flex flex-col gap-3 rounded-md bg-orange-tint p-4"
+            className="flex flex-col gap-3 rounded-md bg-paper-2 p-4"
             aria-label="Dev sign-in"
           >
-            <span className="text-small font-medium text-orange">Dev sign-in, local only</span>
+            <span className="text-small font-medium text-ink">Dev sign-in, local only</span>
             <div className="flex gap-2">
               <input
                 name="login"
@@ -102,7 +102,7 @@ export function SignInScreen({
                 value={login}
                 onChange={(e) => setLogin(e.target.value)}
                 placeholder="github-login"
-                className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none transition-colors placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]"
+                className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink transition-colors placeholder:text-ink-3 max-md:text-[16px]"
               />
               <Button type="submit" variant="secondary" size="md" disabled={!login.trim()}>
                 Sign in

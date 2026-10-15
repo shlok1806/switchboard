@@ -18,15 +18,15 @@ const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   update: "text-ink",
   directive: "text-ink",
   "directive.delivery": "text-ink-2",
-  takeover: "text-red",
-  push: "text-green",
-  merge: "text-green",
-  "task.review": "text-green",
-  "claim.refused": "text-orange",
-  "task.create": "text-green",
-  "task.reopen": "text-orange",
-  "task.remove": "text-red",
-  "mirror.failed": "text-orange",
+  takeover: "text-ink",
+  push: "text-ink",
+  merge: "text-ink",
+  "task.review": "text-ink",
+  "claim.refused": "text-ink",
+  "task.create": "text-ink",
+  "task.reopen": "text-ink-2",
+  "task.remove": "text-ink",
+  "mirror.failed": "text-ink",
 };
 
 function Actor({ event, agentById, compact }: { event: ChannelEvent; agentById: Map<AgentId, Agent>; compact?: boolean }) {
@@ -34,7 +34,7 @@ function Actor({ event, agentById, compact }: { event: ChannelEvent; agentById: 
   if (a.kind === "agent")
     return <AgentLink id={a.agentId} agent={agentById.get(a.agentId)} nicknameClassName={compact ? "hidden sm:inline" : undefined} />;
   if (a.kind === "person")
-    return <span className="truncate text-body font-medium text-ink">{a.person}</span>;
+    return <span className="min-w-0 [overflow-wrap:anywhere] text-body font-medium text-ink">{a.person}</span>;
   return <span className="text-body font-medium text-ink-2">GitHub</span>;
 }
 
@@ -62,7 +62,7 @@ export function EventRow({
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
   const isMessage = event.type === "update" || event.type === "directive" || event.type === "memory.note";
   return (
-    <li className={cn("list-none", fresh && "row-in")}>
+    <li className={cn("list-none", fresh && "row-fresh")}>
       <div
         role="button"
         tabIndex={0}
@@ -75,9 +75,9 @@ export function EventRow({
           }
         }}
         className={cn(
-          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-md px-3 text-left outline-none transition-colors duration-150 hover:bg-inset focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-md px-3 text-left transition-colors duration-150 hover:bg-hover focus-visible:-outline-offset-2",
           continued ? "py-1.5" : "pt-3.5 pb-1.5",
-          selected && "bg-accent-tint hover:bg-accent-tint",
+          selected && "bg-paper-3 hover:bg-paper-3",
         )}
       >
         {continued ? <span aria-hidden /> : <ActorAvatar actor={event.actor} />}
@@ -110,7 +110,7 @@ export function EventRow({
           </div>
           <p
             className={cn(
-              "line-clamp-2 max-w-[68ch] min-w-0 text-body leading-normal text-ink-2",
+              "line-clamp-2 max-w-[60ch] min-w-0 text-body leading-normal text-ink-2",
               TONE[event.type],
               isMessage && "text-ink",
               event.type === "directive" && "font-medium",
@@ -161,7 +161,7 @@ function WakeBody({ event }: { event: Extract<ChannelEvent, { type: "wake" }> })
   const byId = useEventsById(delivered);
   return (
     <div className="flex flex-col gap-2.5">
-      <p className="max-w-[68ch] text-body leading-relaxed text-ink">
+      <p className="max-w-[60ch] text-body leading-relaxed text-ink">
         The Agent was idle, so its wrapper typed what was waiting for its next turn as one prompt, which started a
         turn. Its Person did not write that prompt.
       </p>
@@ -176,7 +176,7 @@ function WakeBody({ event }: { event: Extract<ChannelEvent, { type: "wake" }> })
                   className="flex min-w-0 flex-col gap-0.5 rounded-md bg-hover px-3 py-2.5 transition-colors hover:bg-hover-2"
                 >
                   <span className="text-small text-ink-3">{woken ? EVENT_TYPE_LABEL[woken.type] : "Event"}</span>
-                  <span className="truncate text-body text-ink">{woken ? summarize(woken) : id}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere] text-body text-ink">{woken ? summarize(woken) : id}</span>
                 </a>
               </li>
             );
@@ -203,7 +203,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
               {event.payload.commits.map((c) => (
                 <li key={c.sha} className="flex min-w-0 gap-2 text-small text-ink-2">
                   <code className="shrink-0 font-mono text-small text-ink-3">{c.sha.slice(0, 7)}</code>{/* taste-skill-ignore: a commit hash is code */}
-                  <span className="truncate">{c.message}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{c.message}</span>
                 </li>
               ))}
             </ul>
@@ -277,7 +277,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
           {exitCode !== undefined && (
             <dl className="grid grid-cols-2 gap-3">
               <Field label="Exit code">
-                <span className={cn("text-body font-medium tabular-nums", exitCode === 0 ? "text-green" : "text-red")}>{exitCode}</span>
+                <span className="text-body font-medium text-ink tabular-nums">{exitCode}</span>
               </Field>
             </dl>
           )}
@@ -322,8 +322,8 @@ export function EventBody({ event }: { event: ChannelEvent }) {
     case "task.create":
       return (
         <div className="flex flex-col gap-2">
-          <p className="max-w-[68ch] text-body leading-relaxed text-ink">{event.payload.title}</p>
-          <a href={event.payload.url} target="_blank" rel="noreferrer" className="self-start text-small text-accent-ink underline-offset-4 hover:underline">
+          <p className="max-w-[60ch] text-body leading-relaxed text-ink">{event.payload.title}</p>
+          <a href={event.payload.url} target="_blank" rel="noreferrer" className="self-start text-small text-ink underline-offset-4 hover:underline">
             Issue on GitHub
           </a>
         </div>
@@ -341,7 +341,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
         </div>
       );
     default:
-      return <p className="max-w-[68ch] text-body leading-relaxed text-ink">{summarize(event)}</p>;
+      return <p className="max-w-[60ch] text-body leading-relaxed text-ink">{summarize(event)}</p>;
   }
 }
 

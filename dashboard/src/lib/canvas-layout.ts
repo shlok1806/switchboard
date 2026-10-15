@@ -31,15 +31,6 @@ export interface Rect extends Point {
   h: number;
 }
 
-export type NodeState = "needs" | "stale" | "live" | "idle" | "gone";
-
-/** What a node shows first: a prompt waiting on a Person, then a Stale Claim, then Presence. */
-export function nodeState(agent: Agent, claims: Task[]): NodeState {
-  if (agent.approval) return "needs";
-  if (agent.presence === "gone" && claims.some((t) => t.claim?.stale)) return "stale";
-  return agent.presence;
-}
-
 /** Every Task each Agent holds, oldest Claim first. */
 export function claimsByAgent(tasks: Task[]): Map<AgentId, Task[]> {
   const m = new Map<AgentId, Task[]>();
