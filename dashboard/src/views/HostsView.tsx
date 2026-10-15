@@ -7,10 +7,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Agent, Host, HostsResponse, Person } from "@shared/index";
 import { Chip } from "@/components/atoms/Chip";
-import { GroupLine, shortName } from "@/components/domain/fleet";
+import { GroupLine, byPerson, shortName } from "@/components/domain/fleet";
 import { Pending } from "@/components/domain/pending";
 import { StartAgentButton } from "@/components/domain/start-agent";
 import { Glyph, State, useAgentStates } from "@/components/domain/state";
+import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { useChannel, useMe, useStore } from "@/data/store";
@@ -73,7 +74,9 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
       <Pending title="Could not read the Hosts" className="h-full">
         {problem}
       </Pending>
-    ) : null;
+    ) : (
+      <p className="px-[var(--gutter)] pt-5 text-row text-ink-3">Reading the Hosts</p>
+    );
   }
   if (response === null) {
     return (
@@ -102,7 +105,10 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
   ];
   const shown = all.filter((h) => filter === "all" || (filter === "live" && h.live) || (filter === "offline" && !h.live) || (filter === "mine" && h.person === me));
   const byPerson = groupHosts(shown, me);
-  const selected = shown.find((h) => h.id === selectedId) ?? shown[0];
+  // The Host a link names, even one the chips hide; else the first shown, beside the list only.
+  const named = all.find((h) => h.id === selectedId);
+  const selected = named ?? (mobile ? undefined : shown[0]);
+  const close = () => go({ view: "hosts" });
   const zones = new Map((snapshot?.persons ?? []).map((p: Person) => [p.name, p.timeZone]));
 
   return (
@@ -111,7 +117,7 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
         <PageHead
           title="Hosts"
           facts={[
-            `${all.length} for ${persons} ${persons === 1 ? "Person" : "People"}`,
+            `${all.length} ${all.length === 1 ? "Host" : "Hosts"} for ${persons} ${persons === 1 ? "Person" : "People"}`,
             `${live} live`,
             `${response.running} of ${response.cap} Agents running on Hosts`,
           ]}
@@ -130,6 +136,11 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
           </span>
         </div>
 
+        {problem && (
+          <p role="alert" className="text-small text-ink-2">
+            Could not refresh the Hosts: {problem}
+          </p>
+        )}
         {shown.length === 0 ? (
           <p className="border-t border-rule py-6 text-row text-ink-3">No Host matches.</p>
         ) : mobile ? (
@@ -171,17 +182,15 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
           </table>
         )}
       </div>
-      {!mobile && selected && <Inspector host={selected} agents={onHost(selected)} />}
+      {selected && <Inspector key={selected.id} host={selected} agents={onHost(selected)} onClose={mobile ? close : undefined} />}
     </div>
   );
 }
 
-/** Hosts by Person, you first, then by name; Live before Offline inside a group. */
+/** Hosts by Person, you first; Live before Offline inside a group, then by name. */
 export function groupHosts(hosts: Host[], me: string): [string, Host[]][] {
-  const m = new Map<string, Host[]>();
-  for (const h of hosts) m.set(h.person, [...(m.get(h.person) ?? []), h]);
-  for (const group of m.values()) group.sort((a, b) => Number(b.live) - Number(a.live) || a.name.localeCompare(b.name));
-  return [...m.entries()].sort(([a], [b]) => (a === me ? -1 : b === me ? 1 : a.localeCompare(b)));
+  const ordered = [...hosts].sort((a, b) => Number(b.live) - Number(a.live) || a.name.localeCompare(b.name));
+  return byPerson(ordered, me, (h) => h.person);
 }
 
 function HostGroupLine({ person, me, zone, count }: { person: string; me: string; zone?: string; count: number }) {
@@ -257,11 +266,16 @@ function Row({ host: h, agents, selected }: { host: Host; agents: Agent[]; selec
   );
 }
 
-/** A Host on a phone: state and last seen; the name and its mode; what runs on it and where. */
+/** A Host on a phone: state and last seen; the name and its mode; what runs on it and where. It opens the Host's sheet. */
 function StackedHost({ host: h, agents }: { host: Host; agents: Agent[] }) {
   return (
-    <li className="flex flex-col gap-1.5 border-b border-rule px-3 py-3">
-      <span className="flex items-center justify-between gap-3 text-row">
+    <li>
+      <button
+        type="button"
+        onClick={() => go({ view: "hosts", host: h.id })}
+        className="flex w-full flex-col gap-1.5 border-b border-rule px-3 py-3 text-left hover:bg-paper-2 focus-visible:-outline-offset-2"
+      >
+      <span className="flex w-full items-center justify-between gap-3 text-row">
         <HostState host={h} />
         <span className="text-ink-3 tabular-nums">{h.live ? "now" : ago(h.lastSeenAt)}</span>
       </span>
@@ -269,14 +283,15 @@ function StackedHost({ host: h, agents }: { host: Host; agents: Agent[] }) {
         <span className={cn("block text-row font-semibold [overflow-wrap:anywhere]", h.live ? "text-ink" : "text-ink-2")}>{h.name}</span>
         <span className="block text-small text-ink-3">{MODE_LABEL[h.maxPermissionMode]}</span>
       </span>
-      <AgentsOn agents={agents} />
+      <span className={cn("text-row [overflow-wrap:anywhere]", agents.length ? "text-ink" : "text-ink-3")}>{agents.length ? agents.map(shortName).join(", ") : "No Agents"}</span>
       <Folders roots={h.roots} />
+      </button>
     </li>
   );
 }
 
 /** The selected Host, read without leaving the list. */
-function Inspector({ host: h, agents }: { host: Host; agents: Agent[] }) {
+function Inspector({ host: h, agents, onClose }: { host: Host; agents: Agent[]; onClose?: () => void }) {
   const me = useMe();
   const states = useAgentStates();
   const mine = h.person === me;
@@ -285,13 +300,16 @@ function Inspector({ host: h, agents }: { host: Host; agents: Agent[] }) {
     h.live ? "Live now: it can start and stop Agents." : `Offline, last seen ${ago(h.lastSeenAt)}. It starts nothing until it comes back.`,
   ].join(" ");
   return (
-    <aside aria-label={`${h.name}, in the inspector`} className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-6 overflow-y-auto border-l border-rule px-5 pt-5 pb-12">
+    <InspectorFrame label={`${h.name}, in the inspector`} onClose={onClose}>
       <div className="flex flex-col gap-2">
-        <h2 className="flex flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
-          <Glyph state={h.live ? "running" : "gone"} />
-          {h.name}
-          <State state={h.live ? "running" : "gone"} word={h.live ? "Live" : "Offline"} glyph={false} />
-        </h2>
+        <div className="flex items-start gap-2">
+          <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
+            <Glyph state={h.live ? "running" : "gone"} />
+            {h.name}
+            <State state={h.live ? "running" : "gone"} word={h.live ? "Live" : "Offline"} glyph={false} />
+          </h2>
+          <SheetClose onClose={onClose} />
+        </div>
         <p className="text-row text-ink-2">{fact}</p>
         {!h.live && mine && (
           <p className="text-small text-ink-3">
@@ -331,6 +349,6 @@ function Inspector({ host: h, agents }: { host: Host; agents: Agent[] }) {
           </dd>
         </dl>
       </Section>
-    </aside>
+    </InspectorFrame>
   );
 }

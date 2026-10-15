@@ -3,9 +3,9 @@
 // Tasks and who started whom; a click opens an Agent; a dragged node stays where it
 // was put, across a reload and when another Agent joins.
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentId, ChannelSnapshot, StreamMessage, Task } from "@shared/index";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChannelSource } from "@/data/source";
@@ -137,15 +137,30 @@ describe("the canvas", () => {
 
     const width = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    // A phone's viewport, as the canvas measures it: happy-dom lays nothing out.
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private report: ResizeObserverCallback) {}
+      observe() {
+        this.report([{ contentRect: { width: 390, height: 640 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    });
     try {
       render(<CanvasView />, { wrapper: channel([lead, child]) });
       await node(/^planner/);
-      expect(currentZoom()).not.toBe(2);
+      // Two nodes side by side are wider than a phone: the canvas zooms out to fit them.
+      await waitFor(() => expect(currentZoom()).toBeLessThan(1));
+      // and keeps that as the phone's own camera.
+      await waitFor(() => expect(JSON.parse(window.localStorage.getItem("switchboard.canvas.shlok1806/app")!).phoneCamera).toBeDefined());
     } finally {
       Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+      vi.unstubAllGlobals();
     }
+    const saved = JSON.parse(window.localStorage.getItem("switchboard.canvas.shlok1806/app")!);
+    expect(Math.round(saved.phoneCamera.k * 100)).toBe(Math.round(currentZoom() * 100));
     // The desktop's camera is still there for its next visit.
-    expect(JSON.parse(window.localStorage.getItem("switchboard.canvas.shlok1806/app")!).camera).toEqual({ x: -900, y: -600, k: 2 });
+    expect(saved.camera).toEqual({ x: -900, y: -600, k: 2 });
   });
 
   it("puts the nodes in frame order, so Tab moves through the canvas the way it reads", async () => {

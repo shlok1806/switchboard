@@ -286,7 +286,7 @@ function Log({ events, now }: { events: ChannelEvent[]; now: number }) {
   for (let i = events.length - 1; i >= 0 && recent.length < 7; i--) if (!QUIET.has(events[i]!.type)) recent.push(events[i]!);
   return (
     <section aria-label="Last on the Channel" className="flex min-w-0 flex-col">
-      <SectionHead title="Last on the Channel" action={<a href={href({ view: "feed" })} className="text-ink-2 hover:text-ink">All activity</a>} />
+      <SectionHead title="Last on the Channel" action={<a href={href({ view: "feed" })} className="text-ink hover:underline">All activity</a>} />
       {recent.length === 0 ? (
         <p className="py-4 text-row text-ink-3">Nothing said yet.</p>
       ) : (
@@ -384,7 +384,7 @@ function Fleet({ lines, me, zones }: { lines: Line[]; me: string; zones: Map<str
       <SectionHead
         title="Fleet"
         meta={`${lines.length} ${lines.length === 1 ? "Agent" : "Agents"}${hosts ? ` on ${hosts} ${hosts === 1 ? "Host" : "Hosts"}` : ""}`}
-        action={<a href={href({ view: "agents" })} className="text-ink-2 hover:text-ink">All Agents</a>}
+        action={<a href={href({ view: "agents" })} className="text-ink hover:underline">All Agents</a>}
       />
       {lines.length === 0 ? (
         <p className="py-4 text-row text-ink-3">No Agents yet.</p>

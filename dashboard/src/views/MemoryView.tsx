@@ -2,7 +2,8 @@
  * The Memory view: the notes Agents leave for each other (ADR 0019), newest first, or the
  * best matches for a search. Each note is its text at reading width, then who left it, on
  * which Task, about which files and when. Tags narrow the list; older notes load a page at
- * a time. A new note reloads the first page.
+ * a time, except for a search, whose best matches the Worker ranks and does not page. A new
+ * note reloads the first page.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MemoryNote, MemoryTag } from "@shared/index";
@@ -28,7 +29,7 @@ export function MemoryView() {
   const { events } = useChannel();
   const [tag, setTag] = useState<MemoryTag | null>(null);
   const [find, setFind] = useState("");
-  const q = useSettled(find.trim(), 250);
+  const q = searchable(useSettled(find, 250));
   const [loaded, setLoaded] = useState<Loaded | null | undefined>(undefined);
   const [problem, setProblem] = useState<string>();
   const [older, setOlder] = useState(false);
@@ -54,7 +55,8 @@ export function MemoryView() {
 
   const loadOlder = () => {
     const last = loaded?.notes.at(-1);
-    if (!loaded || !last) return;
+    // A search is ranked, not ordered by seq: paging it by seq would skip and repeat notes.
+    if (!loaded || !last || q) return;
     const ask = asked.current;
     setOlder(true);
     store.source
@@ -91,7 +93,7 @@ export function MemoryView() {
             "Agents leave them with memory_note",
           ]}
         />
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
           <div role="group" aria-label="Tag" className="flex flex-wrap gap-1.5">
             <Chip on={tag === null} onClick={() => setTag(null)}>
               All
@@ -102,14 +104,14 @@ export function MemoryView() {
               </Chip>
             ))}
           </div>
-          <label className="ml-auto flex items-center gap-2 text-small text-ink-3 max-sm:ml-0 max-sm:w-full">
-            <span>Find</span>
+          <label className="ml-auto flex flex-col gap-1 text-small text-ink-3 max-sm:ml-0 max-sm:w-full">
+            Find
             <input
               type="search"
               value={find}
               onChange={(e) => setFind(e.target.value)}
-              placeholder="words or a file path"
-              className="h-[30px] w-60 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:flex-1 max-sm:text-[16px]"
+              placeholder="retries client.ts"
+              className="h-[30px] w-60 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:w-full max-sm:text-[16px]"
             />
           </label>
         </div>
@@ -130,7 +132,15 @@ export function MemoryView() {
             {notes.map((n) => (
               <Note key={n.id} note={n} />
             ))}
-            {loaded.more && <OlderRow loading={older} onClick={loadOlder} what="notes" />}
+            {loaded.more &&
+              (q ? (
+                // The Worker ranks a search's matches, so there is no older page of them to ask for.
+                <li className="py-3 text-small text-ink-3">
+                  The best {notes.length} matches. Narrow the search for more.
+                </li>
+              ) : (
+                <OlderRow loading={older} onClick={loadOlder} what="notes" />
+              ))}
           </ol>
         )}
       </div>
@@ -159,7 +169,7 @@ export function Note({ note: n }: { note: MemoryNote }) {
         <span className="font-semibold text-ink-2">{n.tags.map((t) => TAG_LABEL[t]).join(", ")}</span>
         {" · "}
         {author ? (
-          <a href={href({ view: "agent", id: author.id })} className="text-ink-2 hover:underline">
+          <a href={href({ view: "agent", id: author.id })} className="text-ink hover:underline">
             {n.person}/{shortName(author)}
           </a>
         ) : (
@@ -168,7 +178,7 @@ export function Note({ note: n }: { note: MemoryNote }) {
         {n.task !== undefined && (
           <>
             {" on "}
-            <a href={href({ view: "task", number: n.task })} className="text-ink-2 hover:underline">
+            <a href={href({ view: "task", number: n.task })} className="text-ink hover:underline">
               #{n.task}
               {task && ` ${task.title}`}
             </a>
@@ -181,6 +191,15 @@ export function Note({ note: n }: { note: MemoryNote }) {
       </p>
     </li>
   );
+}
+
+/**
+ * A search the Worker can run: its words are runs of letters, digits and underscores, and a
+ * search with none is refused. Anything else is no search at all.
+ */
+export function searchable(find: string): string {
+  const q = find.trim();
+  return /[\p{L}\p{N}_]/u.test(q) ? q : "";
 }
 
 /** `value` once it has stopped changing for `ms`: a search asked once per pause, not per key. */

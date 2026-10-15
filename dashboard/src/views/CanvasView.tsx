@@ -377,13 +377,15 @@ export function CanvasView({ selected }: { selected?: string }) {
     if (viewRepo === repo) saveView(repo, view);
   }, [repo, viewRepo, view]);
 
+  // The viewport is on the page only once there are Agents: measure it from then on.
+  const empty = agents.length === 0;
   useEffect(() => {
     const el = viewport.current;
     if (!el) return;
     const observer = new ResizeObserver(([entry]) => setSize({ w: entry.contentRect.width, h: entry.contentRect.height }));
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [empty]);
 
   // A phone sees every frame at once and zooms in from there; a desktop starts readable, at 100%.
   const firstView = useCallback(

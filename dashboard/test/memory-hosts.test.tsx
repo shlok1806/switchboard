@@ -1,14 +1,16 @@
 // @vitest-environment happy-dom
 // The Memory and Hosts views, used as a Person would: Memory reads the notes Agents left,
-// narrows them by tag and pages back through older ones; Hosts lists each machine that
-// starts Agents, yours first, says which are Live and what runs on each.
+// searches and narrows them by tag, and pages back through older ones; Hosts lists each
+// machine that starts Agents, yours first, says which are Live and what runs on each; on a
+// phone, the Hosts and Agents inspectors open as a sheet from the row.
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Agent, AgentId, ChannelSnapshot, Host, HostsResponse, MemoryNote, MemoryQuery, MemoryResponse } from "@shared/index";
+import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, Host, HostsResponse, MemoryNote, MemoryQuery, MemoryResponse, StreamMessage } from "@shared/index";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
+import { AgentsView } from "@/views/AgentsView";
 import { HostsView } from "@/views/HostsView";
 import { MemoryView } from "@/views/MemoryView";
 
@@ -23,6 +25,9 @@ const scout = {
   startedAt: "2026-10-15T09:00:00.000Z",
 } as unknown as Agent;
 
+let push: (m: StreamMessage) => void = () => {};
+const event = (e: Partial<ChannelEvent>) => ({ type: "event", event: { at: "2026-10-15T10:00:00.000Z", ...e } }) as unknown as StreamMessage;
+
 function channel(extra: Partial<ChannelSource>) {
   const source = {
     me: "shlok",
@@ -30,7 +35,10 @@ function channel(extra: Partial<ChannelSource>) {
     snapshot: async () =>
       ({ channel: { repo: "shlok1806/app" }, persons: [], agents: [scout], tasks: [], events: [], verdicts: [], cursor: 0 }) as unknown as ChannelSnapshot,
     hosts: async () => null,
-    subscribe: () => () => {},
+    subscribe: (_cursor: number, onMessage: (m: StreamMessage) => void) => {
+      push = onMessage;
+      return () => {};
+    },
     ...extra,
   } as unknown as ChannelSource;
   const store = new ChannelStore(source);
@@ -75,6 +83,41 @@ describe("the Memory view", () => {
     fireEvent.click(screen.getByRole("button", { name: "Decision" }));
     expect(await screen.findByText("Retries stay at three.")).toBeTruthy();
     expect(screen.queryByText("Users API pages by 50.")).toBeNull();
+  });
+
+  it("asks once a search settles, ranks it as the Worker does, and offers no older page of it", async () => {
+    const asked: MemoryQuery[] = [];
+    const memory = async (q: MemoryQuery): Promise<MemoryResponse> => {
+      asked.push(q);
+      // The Worker's rank, not seq: the older note is the better match.
+      if (q.q) return { notes: [note(4, "Retries retry GETs only."), note(11, "Retries live in client.ts.")], more: true };
+      return { notes: [note(12, "Users API pages by 50.")], more: true };
+    };
+    render(<MemoryView />, { wrapper: channel({ memory }) });
+    await screen.findByText("Users API pages by 50.");
+
+    const find = screen.getByRole("searchbox", { name: "Find" });
+    for (const typed of ["r", "re", "retries"]) fireEvent.change(find, { target: { value: typed } });
+    const best = await screen.findByText("Retries retry GETs only.");
+    expect(asked.filter((q) => q.q !== undefined).map((q) => q.q)).toEqual(["retries"]);
+    const list = best.closest("ol")!;
+    expect(within(list).getAllByRole("listitem")[0]!.textContent).toContain("Retries retry GETs only.");
+    expect(screen.getByText(/best 2 matches/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show older notes" })).toBeNull();
+
+    // Punctuation alone is no search: the Worker would refuse it, so the latest notes come back.
+    fireEvent.change(find, { target: { value: "--" } });
+    expect(await screen.findByText("Users API pages by 50.")).toBeTruthy();
+    expect(asked.at(-1)?.q).toBeUndefined();
+  });
+
+  it("reads the first page again when an Agent leaves a new note", async () => {
+    let notes = [note(12, "Users API pages by 50.")];
+    render(<MemoryView />, { wrapper: channel({ memory: async () => ({ notes }) }) });
+    await screen.findByText("Users API pages by 50.");
+    notes = [note(13, "Settings validate on submit."), ...notes];
+    act(() => push(event({ id: "e13", seq: 13, type: "memory.note", actor: { kind: "agent", agentId: scout.id } } as Partial<ChannelEvent>)));
+    expect(await screen.findByText("Settings validate on submit.")).toBeTruthy();
   });
 
   it("says so when the Channel's Worker has no memory", async () => {
@@ -123,8 +166,72 @@ describe("the Hosts view", () => {
     expect(screen.queryByText("maya-mbp")).toBeNull();
   });
 
+  it("shows the Host a link names even when the chips hide it", async () => {
+    render(<HostsView selected="maya/maya-mbp" />, { wrapper: channel({ hosts: async () => response }) });
+    await screen.findByRole("complementary", { name: "maya-mbp, in the inspector" });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /^Mine/ })));
+    expect(screen.getByRole("complementary", { name: "maya-mbp, in the inspector" })).toBeTruthy();
+  });
+
+  it("reads the Hosts again when one comes online", async () => {
+    let online = false;
+    const hosts = async () => ({ ...response, hosts: response.hosts.map((h) => (online && h.name === "laptop" ? { ...h, live: true } : h)) });
+    render(<HostsView />, { wrapper: channel({ hosts }) });
+    const liveChip = () => screen.getByRole("button", { name: /^Live/ }).textContent;
+    await screen.findByRole("heading", { name: "Hosts" });
+    await waitFor(() => expect(liveChip()).toBe("Live2"));
+    online = true;
+    act(() => push(event({ id: "h1", seq: 20, type: "host.online", payload: { host: "shlok/laptop" } } as Partial<ChannelEvent>)));
+    await waitFor(() => expect(liveChip()).toBe("Live3"));
+  });
+
+  it("stacks the Hosts on a phone, and a tap opens the Host as a sheet that Escape closes", async () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    try {
+      window.location.hash = "#/hosts";
+      const { container } = render(<HostsView />, { wrapper: channel({ hosts: async () => response }) });
+      const studio = await screen.findByRole("button", { name: /studio/ });
+      expect(container.querySelector("table")).toBeNull();
+      // Nothing is open until a row is tapped.
+      expect(screen.queryByRole("dialog")).toBeNull();
+      fireEvent.click(studio);
+      expect(window.location.hash).toBe(`#/hosts/${encodeURIComponent("shlok/studio")}`);
+      cleanup();
+
+      render(<HostsView selected="shlok/studio" />, { wrapper: channel({ hosts: async () => response }) });
+      const sheet = await screen.findByRole("dialog", { name: "studio, in the inspector" });
+      expect(document.activeElement).toBe(sheet);
+      fireEvent.keyDown(sheet, { key: "Escape" });
+      expect(window.location.hash).toBe("#/hosts");
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    }
+  });
+
   it("says so when the Channel's Worker has no Hosts", async () => {
     render(<HostsView />, { wrapper: channel({}) });
     expect(await screen.findByText("Hosts are not on this Channel yet")).toBeTruthy();
+  });
+});
+
+describe("the Agents view on a phone", () => {
+  it("opens a tapped Agent as a sheet over the list, and gives focus back to its row on Escape", async () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    try {
+      render(<AgentsView />, { wrapper: channel({}) });
+      const row = await screen.findByRole("button", { name: /scout/ });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      row.focus();
+      fireEvent.click(row);
+      const sheet = screen.getByRole("dialog", { name: "scout, in the inspector" });
+      expect(document.activeElement).toBe(sheet);
+      fireEvent.keyDown(sheet, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(document.activeElement).toBe(row);
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    }
   });
 });

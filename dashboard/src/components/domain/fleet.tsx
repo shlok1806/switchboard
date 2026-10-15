@@ -57,11 +57,14 @@ const cliShort = (a: Agent) => a.id.split("/")[1] ?? CLI_LABEL[a.cli];
 /** How long the Agent has run; a waiting prompt's own age is on its Ask. */
 export const since = (a: Agent) => a.startedAt;
 
-export function groupByPerson(lines: Line[], me: string): [string, Line[]][] {
-  const m = new Map<string, Line[]>();
-  for (const l of lines) m.set(l.agent.person, [...(m.get(l.agent.person) ?? []), l]);
+/** Items by whose they are, you first, then the other Persons by name; each group keeps the items' order. */
+export function byPerson<T>(items: T[], me: string, personOf: (item: T) => string): [string, T[]][] {
+  const m = new Map<string, T[]>();
+  for (const item of items) m.set(personOf(item), [...(m.get(personOf(item)) ?? []), item]);
   return [...m.entries()].sort(([a], [b]) => (a === me ? -1 : b === me ? 1 : a.localeCompare(b)));
 }
+
+export const groupByPerson = (lines: Line[], me: string) => byPerson(lines, me, (l) => l.agent.person);
 
 /** A Person's group line: who, where and what time it is for them, and how many lines follow. */
 export function GroupLine({
@@ -108,28 +111,52 @@ export function contextPercent(a: Agent): number | undefined {
   return c?.tokens !== undefined && c.window ? Math.round((c.tokens / c.window) * 100) : undefined;
 }
 
-/** A line on a phone: state and age; the name and its context; the Task. It opens the Agent. */
-export function StackedRow({ line, model = true }: { line: Line; /** False where the row has no room for the model. */ model?: boolean }) {
+/**
+ * A line on a phone: state and age; the name and its context; the Task. It opens the Agent,
+ * or, given `onOpen`, the view's inspector as a sheet.
+ */
+export function StackedRow({
+  line,
+  model = true,
+  onOpen,
+}: {
+  line: Line;
+  /** False where the row has no room for the model. */
+  model?: boolean;
+  onOpen?: () => void;
+}) {
   const { agent: a, state } = line;
   const percent = contextPercent(a);
+  const body = (
+    <>
+      <span className="flex w-full items-center justify-between gap-3 text-row">
+        <State state={state} person={a.person} />
+        <span className="text-ink-3 tabular-nums">{elapsed(since(a))}</span>
+      </span>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="block text-row font-semibold [overflow-wrap:anywhere] text-ink">{shortName(a)}</span>
+          <Secondary agent={a} model={model} />
+        </span>
+        {percent !== undefined && <span className="shrink-0 text-row text-ink tabular-nums">{percent}%</span>}
+      </span>
+      <span className="text-row text-ink-2">
+        {line.claims[0] ? `#${line.claims[0].number} ${line.claims[0].title}` : <span className="text-ink-3">No Claim</span>}
+      </span>
+    </>
+  );
+  const row = "flex w-full flex-col gap-1 border-b border-rule px-3 py-3 text-left hover:bg-paper-2 hover:no-underline focus-visible:-outline-offset-2";
   return (
     <li>
-      <a href={href({ view: "agent", id: a.id })} className="flex flex-col gap-1 border-b border-rule px-3 py-3 hover:bg-paper-2 hover:no-underline">
-        <span className="flex items-center justify-between gap-3 text-row">
-          <State state={state} person={a.person} />
-          <span className="text-ink-3 tabular-nums">{elapsed(since(a))}</span>
-        </span>
-        <span className="flex items-start justify-between gap-3">
-          <span className="min-w-0">
-            <span className="block text-row font-semibold [overflow-wrap:anywhere] text-ink">{shortName(a)}</span>
-            <Secondary agent={a} model={model} />
-          </span>
-          {percent !== undefined && <span className="shrink-0 text-row text-ink tabular-nums">{percent}%</span>}
-        </span>
-        <span className="text-row text-ink-2">
-          {line.claims[0] ? `#${line.claims[0].number} ${line.claims[0].title}` : <span className="text-ink-3">No Claim</span>}
-        </span>
-      </a>
+      {onOpen ? (
+        <button type="button" onClick={onOpen} className={row}>
+          {body}
+        </button>
+      ) : (
+        <a href={href({ view: "agent", id: a.id })} className={row}>
+          {body}
+        </a>
+      )}
     </li>
   );
 }

@@ -15,6 +15,7 @@ import { StartAgentButton, useHostsSupported } from "@/components/domain/start-a
 import { GroupLine, Secondary, StackedRow, agentName, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
 import { Glyph, State, useNeedsYou } from "@/components/domain/state";
 import { AgentUsage } from "@/components/domain/usage";
+import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
@@ -36,6 +37,8 @@ export function AgentsView() {
   const [filter, setFilter] = useState<Filter>("all");
   const [find, setFind] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
+  // On a phone the picked Agent opens as a sheet over the list, and only when a row is tapped.
+  const [sheet, setSheet] = useState<string | null>(null);
 
   const lines = useLines();
   const needYou = useNeedsYou();
@@ -87,6 +90,7 @@ export function AgentsView() {
   ];
   const selected = shown.find((l) => l.agent.id === picked) ?? shown[0];
   const byPerson = groupByPerson(shown, me);
+  const sheetLine = lines.find((l) => l.agent.id === sheet);
   const zones = new Map((snapshot?.persons ?? []).map((p: Person) => [p.name, p.timeZone]));
 
   return (
@@ -131,7 +135,7 @@ export function AgentsView() {
                 <GroupLine person={person} me={me} zone={zones.get(person)} count={group.length} />
                 <ul>
                   {group.map((l) => (
-                    <StackedRow key={l.agent.id} line={l} />
+                    <StackedRow key={l.agent.id} line={l} onOpen={() => setSheet(l.agent.id)} />
                   ))}
                 </ul>
               </li>
@@ -165,6 +169,7 @@ export function AgentsView() {
         )}
       </div>
       {!mobile && selected && <Inspector line={selected} />}
+      {mobile && sheetLine && <Inspector key={sheetLine.agent.id} line={sheetLine} onClose={() => setSheet(null)} />}
     </div>
   );
 }
@@ -238,7 +243,7 @@ function Row({ line, selected, onSelect }: { line: Line; selected: boolean; onSe
 }
 
 /** The selected Agent, read without leaving the list. */
-function Inspector({ line }: { line: Line }) {
+function Inspector({ line, onClose }: { line: Line; onClose?: () => void }) {
   const { agent: a, state, claims } = line;
   const me = useMe();
   const { agents } = useChannel();
@@ -255,13 +260,16 @@ function Inspector({ line }: { line: Line }) {
     .filter(Boolean)
     .join(" ");
   return (
-    <aside aria-label={`${agentName(a)}, in the inspector`} className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-6 overflow-y-auto border-l border-rule px-5 pt-5 pb-12">
+    <InspectorFrame label={`${agentName(a)}, in the inspector`} onClose={onClose}>
       <div className="flex flex-col gap-2">
-        <h2 className="flex flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
-          <Glyph state={state} />
-          {agentName(a)}
-          <State state={state} person={a.person} glyph={false} />
-        </h2>
+        <div className="flex items-start gap-2">
+          <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
+            <Glyph state={state} />
+            {agentName(a)}
+            <State state={state} person={a.person} glyph={false} />
+          </h2>
+          <SheetClose onClose={onClose} />
+        </div>
         <p className="text-row text-ink-2">{fact}</p>
         <div className="flex flex-wrap gap-2 pt-1">
           <a href={href({ view: "agent", id: a.id })} className={buttonVariants({ variant: "primary" })}>
@@ -331,6 +339,6 @@ function Inspector({ line }: { line: Line }) {
           )}
         </dl>
       </Section>
-    </aside>
+    </InspectorFrame>
   );
 }

@@ -31,7 +31,7 @@ export function Steps({ task, as }: { task: Task; as?: "h2" | "h3" }) {
         </>
       }
       action={
-        <a href={href({ view: "task", number: task.number })} className="text-ink-2 hover:text-ink">
+        <a href={href({ view: "task", number: task.number })} className="text-ink hover:underline">
           Open the Task
         </a>
       }

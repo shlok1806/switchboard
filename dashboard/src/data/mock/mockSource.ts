@@ -393,10 +393,14 @@ export class MockChannelSource implements ChannelSource {
     return clone({ hosts: [this.host, ...others], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
   }
 
-  /** Like the Worker: newest first, or every word of `q` in the text or a path, newest first. */
+  /**
+   * Like the Worker: newest first, or for a search, notes holding every word of `q` as a whole
+   * word, best match first (more of the words in a shorter note), as its full-text rank does.
+   */
   async memory(query: MemoryQuery): Promise<MemoryResponse> {
     await new Promise((r) => setTimeout(r, 120));
-    const words = (query.q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+    const tokens = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+    const words = query.q === undefined ? [] : tokens(query.q);
     const limit = Math.min(query.limit ?? 20, MAX_MEMORY_LIMIT);
     const notes = this.events
       .map(noteFromEvent)
@@ -405,8 +409,14 @@ export class MockChannelSource implements ChannelSource {
       .filter((n) => (query.task !== undefined ? n.task === query.task : true))
       .filter((n) => (query.author ? n.author === query.author : true))
       .filter((n) => (query.before !== undefined ? n.seq < query.before : true))
-      .filter((n) => words.every((w) => `${n.text} ${(n.files ?? []).join(" ")}`.toLowerCase().includes(w)))
-      .reverse();
+      .map((n) => {
+        const have = tokens(`${n.text} ${(n.files ?? []).join(" ")}`);
+        const hits = words.map((w) => have.filter((t) => t === w).length);
+        return { n, hit: hits.every((h) => h > 0), score: hits.reduce((x, y) => x + y, 0) / Math.sqrt(have.length) };
+      })
+      .filter((m) => m.hit)
+      .sort((a, b) => (words.length > 0 ? b.score - a.score : 0) || b.n.seq - a.n.seq)
+      .map((m) => m.n);
     return clone({ notes: notes.slice(0, limit), ...(notes.length > limit ? { more: true as const } : {}) });
   }
 
