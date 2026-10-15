@@ -14,6 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { MAX_APPROVAL_DETAIL_LENGTH, MAX_APPROVAL_REASON_LENGTH, type PendingApproval } from "../../shared/src/index";
+import type { HeldHook } from "./hooks/capture";
 import type { ClaudeHookInput } from "./hooks/summarize";
 import { maskSecrets } from "./proxy/mask";
 
@@ -90,6 +91,18 @@ export class ApprovalReporter {
     void this.flush();
   }
 
+  /**
+   * The wrapper no longer holds prompt `id`'s hook, which is still open: show it
+   * afresh, under a new ID, as one only the terminal can answer.
+   */
+  lapsed(id: string): void {
+    if (this.wanted?.id !== id) return;
+    const { deniable: _, ...prompt } = this.wanted;
+    this.wanted = { ...prompt, id: randomUUID() };
+    this.options.log(`the prompt can no longer be denied from the Channel: ${prompt.tool}`);
+    void this.flush();
+  }
+
   /** The Agent registered again: the Channel dropped any prompt it held, so say it afresh. */
   registered(): void {
     this.told = undefined;
@@ -131,33 +144,49 @@ export class ApprovalReporter {
  * dialog in charge, and nothing here can answer allow.
  */
 export class DenyGate {
-  private held: { id: string; answer: (text: string) => void } | null = null;
+  private held: { id: string; hook: HeldHook } | null = null;
 
-  /** Holds the hook of prompt `id`; resolves to what the hook prints. */
-  hold(id: string): Promise<string> {
+  /** `lapsed` hears of a held prompt whose hook ended without a deny reaching it. */
+  constructor(private readonly lapsed: (id: string) => void = () => {}) {}
+
+  /** Holds `hook`, the hook of prompt `id`. */
+  hold(id: string, hook: HeldHook): void {
     this.release();
-    return new Promise((answer) => {
-      this.held = { id, answer };
-    });
+    const held = { id, hook };
+    this.held = held;
+    hook.gone.addEventListener(
+      "abort",
+      () => {
+        if (this.held !== held) return;
+        this.held = null;
+        this.lapsed(id);
+      },
+      { once: true },
+    );
   }
 
-  /** Denies prompt `id` with `reason`, which the model reads. False when that prompt is not held. */
-  deny(id: string, reason: string): boolean {
+  /**
+   * Denies prompt `id` with `reason`, which the model reads. Resolves true once the
+   * hook printed the deny for Claude Code; false when that prompt is not held, or its
+   * hook ended before the deny reached it.
+   */
+  async deny(id: string, reason: string): Promise<boolean> {
     const held = this.held;
-    if (held?.id !== id) return false;
+    if (held?.id !== id || held.hook.gone.aborted) return false;
     this.held = null;
-    held.answer(
+    const printed = await held.hook.answer(
       JSON.stringify({
         hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "deny", message: reason } },
       }),
     );
-    return true;
+    if (!printed) this.lapsed(id);
+    return printed;
   }
 
   /** The prompt closed, or the wrapper stops: the hook ends with no decision. */
   release(): void {
     const held = this.held;
     this.held = null;
-    held?.answer("");
+    void held?.hook.answer("");
   }
 }

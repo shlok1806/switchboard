@@ -11,6 +11,9 @@ ADR 0013 shows an Agent's pending permission prompt on the Channel, read-only. I
 - **The wrapper holds Claude Code's PermissionRequest hook.** In the session settings this hook alone runs `switchboard-hook.js --hold` with a 600 s timeout. The script then waits for the wrapper's answer instead of giving up after 2 s, and gives up by itself at 590 s. The wrapper answers it:
   - with a deny, when one comes from the Channel for that prompt;
   - with no decision, when the prompt closes at the terminal (Enter, Escape, its PostToolUse, the turn's or the session's end), when another prompt replaces it, or when the wrapper stops.
+- **The wrapper knows whether the held hook is still there.** A held hook keeps its side of the socket open: it ends its input with a NUL byte instead of closing, so the wrapper sees it end however it ends, including when it gives up at 590 s or Claude Code kills it at 600 s. Once it has printed an answer for Claude Code it sends ACK.
+  - A deny counts as the prompt's answer only after that ACK. Until then the dialog stays open for the wrapper, and Interrupts and Directives keep waiting: typed into the dialog, Enter would approve it.
+  - A held hook that ends before a deny reaches it leaves the prompt to the terminal. The wrapper reports the prompt again under a new ID, not deniable, so the Channel records `approval.closed`, then `approval.pending`, and refuses a deny for the old ID.
 - **Every failure is no decision.** The script exiting or timing out, the wrapper restarting, a dropped WebSocket and a refused call all leave Claude Code's own dialog in charge. Nothing on this path can produce `allow`, `updatedInput` or `updatedPermissions`.
 - **The prompt says whether it can be denied.** The wrapper reports `deniable: true` on a pending approval it holds. Only the Claude Code adapter holds; Codex's and Gemini CLI's prompts are never deniable. The Worker refuses a deny for a prompt that is not deniable.
 - **`POST /api/agents/:id/approval/deny`** with `{ id, message? }`:
@@ -19,7 +22,7 @@ ADR 0013 shows an Agent's pending permission prompt on the Channel, read-only. I
   - Otherwise it records an `approval.denied` Event (the ID and the message, by that Person), marks the prompt denied, and sends `approval.deny` to the attached wrapper only.
   - The message is at most 1000 characters.
 - **What the Agent reads:** "Denied by <Person> from the Switchboard Channel.", then the Person's message when there is one.
-- **The prompt then closes the usual way.** The wrapper treats a deny it delivered as the prompt's answer, so the Channel gets `null` and records `approval.closed`. A deny that arrives after the prompt closed is logged and dropped.
+- **The prompt then closes the usual way.** The wrapper treats a deny the hook printed as the prompt's answer, so the Channel gets `null` and records `approval.closed`. A deny that arrives after the prompt closed, or after its hook ended, is logged and dropped.
 - **The Dashboard** shows Deny on the card only to the Agent's own Person, with an optional message, and only for a deniable prompt.
 - The Relay never considers `approval.denied`.
 

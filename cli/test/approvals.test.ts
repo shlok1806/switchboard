@@ -1,9 +1,15 @@
 // Pending approvals (ADR 0013): what the wrapper tells the Channel about the permission
 // prompt its CLI shows, and when.
 
-import { describe, expect, it } from "vitest";
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PendingApproval } from "../../shared/src/index";
 import { ApprovalReporter, DenyGate, pendingApproval } from "../src/approvals";
+import { type HeldHook, HookCapture } from "../src/hooks/capture";
 import type { ClaudeHookInput } from "../src/hooks/summarize";
 import { InterruptTyper } from "../src/interrupts";
 
@@ -100,24 +106,157 @@ describe("DenyGate", () => {
       hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "deny", message } },
     });
 
+  /** A held hook: `printed` is whether it says it printed its answer. */
+  function heldHook(printed = true) {
+    const lapse = new AbortController();
+    const answers: string[] = [];
+    const hook: HeldHook = {
+      gone: lapse.signal,
+      answer: async (text) => {
+        answers.push(text);
+        return printed && !lapse.signal.aborted;
+      },
+    };
+    return { hook, answers, end: () => lapse.abort() };
+  }
+
   it("answers the held hook with a deny for its own prompt only", async () => {
     const gate = new DenyGate();
-    const hook = gate.hold("p1");
-    expect(gate.deny("p0", "no")).toBe(false);
-    expect(gate.deny("p1", "Not now.")).toBe(true);
-    expect(await hook).toBe(denied("Not now."));
+    const { hook, answers } = heldHook();
+    gate.hold("p1", hook);
+    expect(await gate.deny("p0", "no")).toBe(false);
+    expect(await gate.deny("p1", "Not now.")).toBe(true);
+    expect(answers).toEqual([denied("Not now.")]);
     // Once: the prompt is no longer held.
-    expect(gate.deny("p1", "Not now.")).toBe(false);
+    expect(await gate.deny("p1", "Not now.")).toBe(false);
   });
 
   it("ends a hook with no decision when its prompt closes or another takes its place", async () => {
     const gate = new DenyGate();
-    const first = gate.hold("p1");
-    const second = gate.hold("p2");
-    expect(await first).toBe("");
+    const first = heldHook();
+    const second = heldHook();
+    gate.hold("p1", first.hook);
+    gate.hold("p2", second.hook);
+    expect(first.answers).toEqual([""]);
     gate.release();
-    expect(await second).toBe("");
-    expect(gate.deny("p2", "late")).toBe(false);
+    expect(second.answers).toEqual([""]);
+    expect(await gate.deny("p2", "late")).toBe(false);
+  });
+
+  it("refuses a deny once the held hook ended on its own, and says the prompt lapsed", async () => {
+    const lapsed: string[] = [];
+    const gate = new DenyGate((id) => lapsed.push(id));
+    const { hook, answers, end } = heldHook();
+    gate.hold("p1", hook);
+    // The hook gave up, or Claude Code killed it at its timeout.
+    end();
+    expect(lapsed).toEqual(["p1"]);
+    expect(await gate.deny("p1", "Too late.")).toBe(false);
+    expect(answers).toEqual([]);
+  });
+
+  it("does not count a deny the hook never printed", async () => {
+    const lapsed: string[] = [];
+    const gate = new DenyGate((id) => lapsed.push(id));
+    gate.hold("p1", heldHook(false).hook);
+    expect(await gate.deny("p1", "Not now.")).toBe(false);
+    expect(lapsed).toEqual(["p1"]);
+  });
+});
+
+describe("ApprovalReporter, a prompt whose hold lapsed", () => {
+  it("shows the prompt afresh, under a new ID, as one only the terminal answers", async () => {
+    const sent: (PendingApproval | null)[] = [];
+    const reporter = new ApprovalReporter({
+      deniable: true,
+      log: () => {},
+      send: async (approval) => {
+        sent.push(approval);
+        return true;
+      },
+    });
+    reporter.changed({ hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "make" } });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const first = sent[0] as PendingApproval;
+    expect(first.deniable).toBe(true);
+    reporter.lapsed("someone-else");
+    reporter.lapsed(first.id);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    const again = sent[1] as PendingApproval;
+    expect(again.id).not.toBe(first.id);
+    expect(again.deniable).toBeUndefined();
+    expect({ ...again, id: first.id }).toEqual((({ deniable: _, ...rest }) => rest)(first));
+    reporter.close();
+  });
+});
+
+describe("a held PermissionRequest hook, over the wrapper's socket", () => {
+  // The built hook script, as Claude Code runs it (`npm test` builds it first).
+  const script = fileURLToPath(new URL("../dist/switchboard-hook.js", import.meta.url));
+  const cleanups: (() => Promise<void>)[] = [];
+
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0)) await cleanup();
+  });
+
+  /** A Hook Capture that holds every PermissionRequest, and the hook it holds, once it does. */
+  async function holding() {
+    const dir = await mkdtemp(join(tmpdir(), "sb-hold-"));
+    let resolveHeld: (hook: HeldHook) => void = () => {};
+    const held = new Promise<HeldHook>((resolve) => {
+      resolveHeld = resolve;
+    });
+    const capture = await HookCapture.start({
+      dir,
+      root: dir,
+      send: () => true,
+      log: () => {},
+      hold: (input, hook) => {
+        if (input.hook_event_name !== "PermissionRequest") return false;
+        resolveHeld(hook);
+        return true;
+      },
+    });
+    let child: ChildProcess | undefined;
+    cleanups.push(async () => {
+      child?.kill();
+      await capture.close();
+      await rm(dir, { recursive: true, force: true });
+    });
+    // Claude Code runs the hook with the prompt's input on stdin.
+    child = spawn(process.execPath, [script, join(dir, "hook.sock"), "--hold"]);
+    let out = "";
+    child.stdout?.on("data", (chunk) => {
+      out += chunk;
+    });
+    const exited = new Promise<string>((resolve) => child?.on("close", () => resolve(out)));
+    child.stdin?.end(
+      JSON.stringify({ hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "make" } }),
+    );
+    return { hook: await held, child, exited };
+  }
+
+  it("counts a deny once the hook printed it for Claude Code", async () => {
+    const { hook, exited } = await holding();
+    const deny = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}';
+    expect(await hook.answer(deny)).toBe(true);
+    expect(await exited).toBe(deny);
+    expect(hook.gone.aborted).toBe(false);
+  });
+
+  it("hears that a hook killed before an answer is gone, and a later deny does not count", async () => {
+    const { hook, child, exited } = await holding();
+    // Claude Code kills the hook at its timeout; its dialog stays open.
+    child.kill("SIGKILL");
+    await exited;
+    await vi.waitFor(() => expect(hook.gone.aborted).toBe(true));
+    expect(await hook.answer("{}")).toBe(false);
+  });
+
+  it("ends the hook with no decision when it is answered with nothing", async () => {
+    const { hook, exited } = await holding();
+    expect(await hook.answer("")).toBe(false);
+    expect(await exited).toBe("");
   });
 });
 

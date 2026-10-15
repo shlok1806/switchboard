@@ -115,7 +115,9 @@ function permissionDecision(tool_name) {
   if (!hook) return new Promise(() => {});
   return new Promise((resolve) => {
     const started = Date.now();
-    const child = spawn("/bin/sh", ["-c", hook.command], { timeout: (hook.timeout ?? 60) * 1000 });
+    // Claude Code kills a hook at its timeout; FAKE_CLAUDE_HOOK_TIMEOUT_MS makes that come sooner.
+    const timeout = Number(process.env.FAKE_CLAUDE_HOOK_TIMEOUT_MS) || (hook.timeout ?? 60) * 1000;
+    const child = spawn("/bin/sh", ["-c", hook.command], { timeout });
     let out = "";
     child.stdout.on("data", (chunk) => {
       out += chunk;

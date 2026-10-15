@@ -254,7 +254,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     },
   });
   // Holds the prompt's hook, so the Agent's own Person can deny it from the Channel (ADR 0014).
-  const denyGate = adapter.remoteDeny ? new DenyGate() : null;
+  // A held hook that ends before a deny reaches it leaves the prompt to the terminal.
+  const denyGate = adapter.remoteDeny ? new DenyGate((id) => approvals.lapsed(id)) : null;
   // Shows the permission prompt the CLI waits on to the Channel (ADR 0013).
   const approvals = new ApprovalReporter({
     deniable: denyGate !== null,
@@ -395,12 +396,17 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       }
       if (message.type === "directive.interrupt" && message.agent === agentId) void directed(message);
       if (message.type === "approval.deny" && message.agent === agentId) {
-        if (denyGate?.deny(message.id, denyReason(message.person, message.message))) {
-          log(`permission prompt denied from the Channel by ${message.person}`);
-          typer.permissionAnswered();
-        } else {
-          log(`a deny from ${message.person} came after its permission prompt closed`);
-        }
+        const { person } = message;
+        const denied = denyGate?.deny(message.id, denyReason(person, message.message)) ?? Promise.resolve(false);
+        void denied.then((printed) => {
+          // The dialog is answered only once Claude Code has the deny: until then typing still waits.
+          if (printed) {
+            log(`permission prompt denied from the Channel by ${person}`);
+            typer.permissionAnswered();
+          } else {
+            log(`a deny from ${person} did not reach the permission prompt: it closed, or its hook ended`);
+          }
+        });
       }
     },
     (connected) => {
@@ -569,11 +575,11 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         ...(denyGate === null
           ? {}
           : {
-              hold: (input) => {
+              hold: (input, hook) => {
                 const open = approvals.open;
-                return input.hook_event_name === "PermissionRequest" && open !== null
-                  ? denyGate.hold(open.id)
-                  : undefined;
+                if (input.hook_event_name !== "PermissionRequest" || open === null) return false;
+                denyGate.hold(open.id, hook);
+                return true;
               },
             }),
       });

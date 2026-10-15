@@ -2006,6 +2006,58 @@ describe("Permission prompts on the Channel (ADR 0013, ADR 0014)", () => {
     expect(mine.map((e) => e.type)).toEqual(["approval.pending", "approval.denied", "approval.closed"]);
   }, 60_000);
 
+  it("leaves the prompt to the terminal once its held hook ends unanswered: a late deny is refused, typing still waits", async () => {
+    // Claude Code kills the hook at its timeout, sooner here; the dialog stays open.
+    const short = new Terminal(["run", "claude"], { ...INTERRUPT_ENV, FAKE_CLAUDE_HOOK_TIMEOUT_MS: "1500" });
+    const sid = (await short.started()).agentEnv;
+    await waitForPresence(sid, "live");
+    await short.attached(sid);
+    const approvalOf = (deniable: boolean) =>
+      waitFor("the pending approval", async () => {
+        const approval = (await agents()).find((a) => a.id === sid)?.approval;
+        return approval !== undefined && (approval.deniable === true) === deniable ? approval : undefined;
+      });
+
+    short.type("permission Bash\r");
+    await short.waitForOutput(/FAKE-CLAUDE asking permission for Bash/);
+    const held = await approvalOf(true);
+    await short.waitForOutput(/FAKE-CLAUDE hook PermissionRequest exit=null/);
+    // Shown afresh as a prompt only the terminal can answer.
+    const shown = await approvalOf(false);
+    expect(shown.id).not.toBe(held.id);
+    expect(shown.tool).toBe(held.tool);
+    const late = await asPerson("e2e", approvalDenyPath(sid as AgentId), {
+      method: "POST",
+      body: JSON.stringify({ id: held.id, message: "Too late." }),
+    });
+    expect(late.status).toBe(409);
+
+    // A Directive must not be typed into the open dialog, where Enter would approve it.
+    await new Promise((resolve) => setTimeout(resolve, QUIET_SECONDS * 1000));
+    const seen = short.output.length;
+    const sent = await sendDirective("e2e", sid, "Rebase onto main first.");
+    expect(sent.status).toBe(201);
+    const directive = ((await sent.json()) as { event: ChannelEvent }).event.id;
+    expect(
+      await waitFor("the Directive's delivery", async () =>
+        (await api<HistoryResponse>("/api/events")).events.find(
+          (e): e is Extract<ChannelEvent, { type: "directive.delivery" }> =>
+            e.type === "directive.delivery" && e.payload.directive === directive,
+        ),
+      ),
+    ).toMatchObject({ payload: { delivered: "queue", reason: "dialog-open" } });
+    expect(short.output.slice(seen)).not.toMatch(/FAKE-CLAUDE (pasted|permission answered)/);
+
+    // The Person answers at the terminal, and the prompt closes on the Channel.
+    short.type("1\r");
+    await short.waitForOutput(/FAKE-CLAUDE permission answered "1"/);
+    await waitFor("the prompt to close", async () =>
+      (await agents()).find((a) => a.id === sid)?.approval === undefined ? true : undefined,
+    );
+    short.type("quit\r");
+    await short.exited;
+  }, 60_000);
+
   it("ends the held hook with no decision when the Person answers at the terminal", async () => {
     term.type("permission Bash\r");
     await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash/);
