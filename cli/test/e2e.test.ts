@@ -230,11 +230,12 @@ class Terminal {
   }
 
   /** The fake agent CLI's report of what it was started with. */
-  async started(): Promise<{ args: string[]; sessionId: string; agentEnv: string }> {
+  async started(): Promise<{ args: string[]; sessionId: string; agentEnv: string; parentEnv: string[] }> {
     const args = JSON.parse((await this.waitForOutput(/FAKE-CLAUDE args=(\[.*\])/))[1] ?? "[]") as string[];
     const sessionId = (await this.waitForOutput(/FAKE-CLAUDE session=([\w-]+)/))[1] ?? "";
     const agentEnv = (await this.waitForOutput(/FAKE-CLAUDE agent=(\S*)/))[1] ?? "";
-    return { args, sessionId, agentEnv };
+    const parentEnv = JSON.parse((await this.waitForOutput(/FAKE-CLAUDE parent=(\[.*\])/))[1] ?? "[]") as string[];
+    return { args, sessionId, agentEnv, parentEnv };
   }
 }
 
@@ -437,8 +438,14 @@ describe("switchboard run claude", () => {
   let firstSession = "";
 
   it("registers the Agent, keeps the terminal interactive and tracks Presence", async () => {
-    const term = new Terminal(["run", "claude", "--nickname", "scout", "--model", "opus"]);
-    const { args, sessionId, agentEnv } = await term.started();
+    // Started from inside another Claude Code session, as an Agent starting an Agent would.
+    const term = new Terminal(["run", "claude", "--nickname", "scout", "--model", "opus"], {
+      CLAUDECODE: "1",
+      CLAUDE_CODE_CHILD_SESSION: "1",
+      CLAUDE_CODE_SESSION_ID: randomUUID(),
+      CLAUDE_PID: "1",
+    });
+    const { args, sessionId, agentEnv, parentEnv } = await term.started();
     firstSession = sessionId;
     firstId = `e2e/claude/${sessionId.slice(0, 4)}`;
 
@@ -447,6 +454,8 @@ describe("switchboard run claude", () => {
     expect(args[0]).toBe("--settings");
     expect(args.slice(2)).toEqual(["--session-id", sessionId, "--model", "opus"]);
     expect(agentEnv).toBe(firstId);
+    // A new top-level session: nothing of the parent's reaches it.
+    expect(parentEnv).toEqual([]);
     expect(term.output).toContain(`${firstId} is on the Channel`);
 
     const agent = await waitFor("the Agent", async () => (await agents()).find((a) => a.id === firstId));
@@ -3078,6 +3087,27 @@ describe("switchboard host", () => {
     });
     const args = JSON.parse(/FAKE-CLAUDE args=(\[.*\])/.exec(resumed ?? "")?.[1] ?? "[]") as string[];
     expect(args).toEqual(expect.arrayContaining(["--resume", sessionId]));
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
+  });
+
+  it("resumes an Agent whose wrapper is killed, which node-pty reports as exit code 0 with a signal", async () => {
+    // The process under the pty is the wrapper, `<node> <cli> run ...`; the fake CLI is below it.
+    const parentOf = async (pid: number) => {
+      const { stdout } = await promisify(execFile)("ps", ["-o", "ppid=,command=", "-p", String(pid)]);
+      const [, ppid = "0", command = ""] = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim()) ?? [];
+      return { ppid: Number(ppid), command };
+    };
+    let pid = Number([...(await agentLog(agentId)).matchAll(/FAKE-CLAUDE pid=(\d+)/g)].at(-1)?.[1]);
+    for (let up = await parentOf(pid); !/ run claude/.test(up.command); up = await parentOf(pid)) {
+      expect(up.ppid, "the wrapper above the fake CLI").toBeGreaterThan(1);
+      pid = up.ppid;
+    }
+    process.kill(pid, "SIGKILL");
+    await waitForSupervisor(new RegExp(`${agentId} crashed \\(signal 9\\); resuming it`));
+    await waitFor("the session resumed again", async () => {
+      const runs = (await agentLog(agentId)).split("[host]").filter((run) => run.includes("FAKE-CLAUDE args="));
+      return runs.length === 3 ? true : undefined;
+    });
     expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
   });
 

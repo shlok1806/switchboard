@@ -5,7 +5,9 @@
 //   agents.json     the Agents the Host runs, to resume them after a crash or a reboot
 //                   (session ID, folder, Nickname, model and mode; never the brief)
 //   host.pid        the running supervisor's process ID
-//   host.log        the supervisor's own log
+//   host.log        the supervisor's own log, capped at 5 MB with one rotation
+//   launchd.log     what launchd caught on the supervisor's stdout and stderr: only
+//                   what it said before host.log opened, such as why it would not start
 //   logs/<agent>.log  each Agent's raw terminal output, capped at 20 MB with one rotation
 
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -51,7 +53,14 @@ export function hostLogPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(hostDir(env), "host.log");
 }
 
-function agentsPath(env: NodeJS.ProcessEnv): string {
+export function launchdLogPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(hostDir(env), "launchd.log");
+}
+
+/** The supervisor's own log is cut over to `host.log.1` past this size. */
+export const HOST_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
+export function agentsPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(hostDir(env), "agents.json");
 }
 
@@ -60,9 +69,12 @@ export function agentLogPath(agent: AgentId, env: NodeJS.ProcessEnv = process.en
   return join(hostDir(env), "logs", `${agent.replaceAll("/", "-")}.log`);
 }
 
+/** Writes `text` whole or not at all: to a temporary file, then renamed over `path`. */
 function writePrivate(path: string, text: string): void {
   mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
-  writeFileSync(path, text, { mode: 0o600 });
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, text, { mode: 0o600 });
+  renameSync(temporary, path);
 }
 
 export function readSettings(env: NodeJS.ProcessEnv = process.env): HostSettings | null {
@@ -86,13 +98,40 @@ export function writeSettings(settings: HostSettings, env: NodeJS.ProcessEnv = p
   writePrivate(settingsPath(env), `${JSON.stringify(settings, null, 2)}\n`);
 }
 
-export function readAgents(env: NodeJS.ProcessEnv = process.env): HostedAgent[] {
-  try {
-    const parsed = JSON.parse(readFileSync(agentsPath(env), "utf8")) as unknown;
-    return Array.isArray(parsed) ? (parsed as HostedAgent[]) : [];
-  } catch {
-    return [];
+/** One entry of `agents.json`, if it has every field with its type. */
+function hostedAgent(value: unknown): HostedAgent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { agent, sessionId, cwd, nickname, model, permissionMode } = value as Record<string, unknown>;
+  if (typeof agent !== "string" || agent.split("/").length !== 3) return null;
+  if (typeof sessionId !== "string" || typeof cwd !== "string" || !isPermissionMode(permissionMode)) return null;
+  if ((nickname !== undefined && typeof nickname !== "string") || (model !== undefined && typeof model !== "string")) {
+    return null;
   }
+  return {
+    agent: agent as AgentId,
+    sessionId,
+    cwd,
+    ...(nickname === undefined ? {} : { nickname }),
+    ...(model === undefined ? {} : { model }),
+    permissionMode,
+  };
+}
+
+/**
+ * The Agents the Host runs. No file means none. A file that cannot be read throws
+ * rather than reading as none, so it is never overwritten with fewer Agents.
+ */
+export function readAgents(env: NodeJS.ProcessEnv = process.env): HostedAgent[] {
+  let text: string;
+  try {
+    text = readFileSync(agentsPath(env), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const parsed = JSON.parse(text) as unknown;
+  if (!Array.isArray(parsed)) throw new Error(`${agentsPath(env)} is not a list`);
+  return parsed.map(hostedAgent).filter((a): a is HostedAgent => a !== null);
 }
 
 export function writeAgents(agents: readonly HostedAgent[], env: NodeJS.ProcessEnv = process.env): void {

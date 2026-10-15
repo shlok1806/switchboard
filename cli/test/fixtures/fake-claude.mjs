@@ -244,6 +244,9 @@ async function modelTurn(prompt, subagentModel) {
 console.log(`FAKE-CLAUDE args=${JSON.stringify(args)}`);
 console.log(`FAKE-CLAUDE mcp=${mcpConfig ?? ""}`);
 console.log(`FAKE-CLAUDE agent=${process.env.SWITCHBOARD_AGENT_ID ?? ""}`);
+// What a parent Claude Code session would have left in the environment.
+const PARENT_ENV = ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID"];
+console.log(`FAKE-CLAUDE parent=${JSON.stringify(PARENT_ENV.filter((name) => process.env[name] !== undefined))}`);
 console.log(`FAKE-CLAUDE session=${sessionId}`);
 console.log(`FAKE-CLAUDE pid=${process.pid}`);
 runHooks("SessionStart", { source: flagValue("--resume") ? "resume" : "startup" });

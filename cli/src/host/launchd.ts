@@ -1,5 +1,7 @@
 // The LaunchAgent that keeps `switchboard host run` going (ADR 0015): started at
 // login, restarted when it dies, as a background process with no window or Dock icon.
+// It is restarted only after a crash: `host run` exits 0 when a restart cannot help
+// (not logged in, not installed, another supervisor running), so launchd does not loop.
 // launchd gives a job an almost empty environment, so the plist records PATH and the
 // config directory as they were when the Person installed it.
 //
@@ -18,7 +20,7 @@ export interface LaunchAgentSpec {
   /** The Node binary, then the CLI's entry script: `<node> <cli> host run`. */
   node: string;
   cli: string;
-  /** Where the supervisor's stdout and stderr go. */
+  /** Where the supervisor's stdout and stderr go: only what it says before its own capped log opens. */
   logPath: string;
   workingDirectory: string;
   /** What launchd's empty environment needs: PATH, the config directory, HOME. */
@@ -56,7 +58,12 @@ export function launchAgentPlist(spec: LaunchAgentSpec): string {
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+      <key>SuccessfulExit</key>
+      <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
     <key>ProcessType</key>
     ${string("Background")}
     <key>StandardOutPath</key>
