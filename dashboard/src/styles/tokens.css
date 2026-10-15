@@ -1,5 +1,5 @@
 /*
- * Switchboard's design system (ADR 0015). Every colour, size, radius and
+ * Switchboard's design system (ADR 0016). Every colour, size, radius and
  * elevation the Dashboard uses is a token here, and the canvas (docs/canvas-design-spec.md)
  * inherits the same tokens: an Agent node is a surface, a Task frame is an inset field,
  * an edge is an ink line, and a node's state is one of the status tokens below.

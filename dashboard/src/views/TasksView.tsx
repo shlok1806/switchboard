@@ -272,7 +272,7 @@ export function TasksView() {
   );
 }
 
-/* A column's state as colour and shape (ADR 0015): Stale is a triangle, In review a diamond. */
+/* A column's state as colour and shape (ADR 0016): Stale is a triangle, In review a diamond. */
 const COLUMN_DOT: Record<Column, string> = {
   stale: "size-2.5 bg-state-stale [clip-path:var(--shape-stale)]",
   open: "size-2 rounded-full border-[1.5px] border-state-idle",

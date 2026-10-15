@@ -20,7 +20,7 @@
  *   the keyboard, for phones where a "Move to" menu replaces dragging.
  * - Keyboard: Space picks up and drops, Escape cancels, arrows move between
  *   columns (sortableKeyboardCoordinates). Enter and a click open the card.
- * - Re-skinned through the token layer (ADR 0015): columns are one tone step
+ * - Re-skinned through the token layer (ADR 0016): columns are one tone step
  *   from the page, cards are flat surfaces on them with no outline or shadow,
  *   only the card being dragged floats, and the column under it takes the
  *   selection tint.

@@ -7,7 +7,7 @@ a header comment where it was changed. No GPL or AGPL code is included.
 ## Design
 
 The look is Switchboard's own: the design system in `src/styles/tokens.css`
-(ADR 0015, light and dark) that every vendored component reads. Vendored
+(ADR 0016, light and dark) that every vendored component reads. Vendored
 components are re-skinned through those tokens only.
 
 ## Source code copied into this repo
