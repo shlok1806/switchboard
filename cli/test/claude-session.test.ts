@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { planSession, projectDir } from "../src/claude-session";
+import { planSession, projectDir, withSessionId } from "../src/claude-session";
 import { takeNickname } from "../src/run";
 
 const NEW = "11111111-2222-4333-8444-555555555555";
@@ -23,12 +23,15 @@ describe("planSession", () => {
       args: ["--session-id", NEW, "--model", "opus"],
       sessionId: NEW,
       resumed: false,
+      picked: true,
     });
   });
 
   it("uses a session ID the Person gave", async () => {
     expect(await plan(["--session-id", OLD])).toMatchObject({ kind: "known", sessionId: OLD, resumed: false });
     expect(await plan([`--session-id=${OLD}`])).toMatchObject({ kind: "known", sessionId: OLD });
+    // The Person's own: never swapped for another.
+    expect(await plan(["--session-id", OLD])).not.toHaveProperty("picked");
   });
 
   it("keeps the session ID of a resumed session", async () => {
@@ -43,6 +46,7 @@ describe("planSession", () => {
       args: ["--resume", OLD, "--fork-session", "--session-id", NEW],
       sessionId: NEW,
       resumed: false,
+      picked: true,
     });
   });
 
@@ -72,6 +76,20 @@ describe("planSession", () => {
   it("runs --help and --version without a session", async () => {
     expect(await plan(["--help"])).toEqual({ kind: "none", args: ["--help"] });
     expect(await plan(["-v"])).toEqual({ kind: "none", args: ["-v"] });
+  });
+});
+
+describe("withSessionId", () => {
+  it("changes the --session-id we picked, and only that", () => {
+    expect(withSessionId(["--resume", OLD, "--session-id", NEW, "-p", NEW], NEW, OLD)).toEqual([
+      "--resume",
+      OLD,
+      "--session-id",
+      OLD,
+      "-p",
+      NEW,
+    ]);
+    expect(() => withSessionId(["-p", NEW], NEW, OLD)).toThrow(/No --session-id/);
   });
 });
 

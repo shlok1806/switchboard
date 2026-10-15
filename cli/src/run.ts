@@ -41,7 +41,7 @@ import { AgentLink, type AgentSession } from "./agent-link";
 import { ApprovalReporter, DenyGate } from "./approvals";
 import { type ChannelChoice, ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ChannelClient, ChannelError, targetOf } from "./channel-client";
-import { claudeConfigDir, projectDir } from "./claude-session";
+import { claudeConfigDir, projectDir, withSessionId } from "./claude-session";
 import type { CliAdapter, ProxyRoute, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
@@ -619,24 +619,35 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   process.once("exit", () => sessionTools?.dispose());
 
   if (plan.kind === "known") {
-    link = new AgentLink(client, session(plan.sessionId, plan.resumed), heartbeatMs, log, onRegistered, addForNextTurn);
-    const expected = agentIdFor(config.person, adapter.cli, plan.sessionId);
-    childEnv.SWITCHBOARD_AGENT_ID = expected;
-    watchContext(plan.sessionId);
-    watchUsage(plan.sessionId);
+    const known = new AgentLink(
+      client,
+      session(plan.sessionId, plan.resumed),
+      heartbeatMs,
+      log,
+      onRegistered,
+      addForNextTurn,
+    );
+    link = known;
     try {
-      const agent = await link.register();
+      // A session ID we picked may give an Agent ID another session has: then we pick another.
+      const agent = plan.picked ? await known.registerPicked() : await known.register();
       console.error(dim(`switchboard: ${agent.id} is on the Channel for ${repo} at ${config.url}`));
       if (agent.nicknameRefused !== undefined) console.error(`switchboard: ${agent.nicknameRefused}`);
     } catch (error) {
       if (error instanceof ChannelError && error.status !== 0) {
-        console.error(`switchboard: the Channel refused ${expected}: ${error.message}`);
+        const refused = agentIdFor(config.person, adapter.cli, known.sessionId);
+        console.error(`switchboard: the Channel refused ${refused}: ${error.message}`);
         sessionTools?.dispose();
         await stopHooks();
         return 1;
       }
       console.error(dim(`switchboard: ${(error as Error).message}. Starting anyway; will keep trying.`));
     }
+    const { sessionId } = known;
+    if (sessionId !== plan.sessionId) args = withSessionId(args, plan.sessionId, sessionId);
+    childEnv.SWITCHBOARD_AGENT_ID = agentIdFor(config.person, adapter.cli, sessionId);
+    watchContext(sessionId);
+    watchUsage(sessionId);
   }
 
   const stdin = process.stdin;
