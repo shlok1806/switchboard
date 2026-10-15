@@ -126,7 +126,7 @@ export function TabBar({ route }: { route: Route }) {
             <span className="relative">
               <v.icon className="size-5" aria-hidden strokeWidth={on ? 2 : 1.75} />
               {b?.alert && (
-                <span aria-label={b.label} className="absolute -top-1.5 -right-3 min-w-5 rounded-full bg-red px-1 text-center text-small leading-5 font-medium text-white tabular-nums">
+                <span aria-label={b.label} className="absolute -top-1.5 -right-3 min-w-5 rounded-full bg-red px-1 text-center text-small leading-5 font-medium text-on-red tabular-nums">
                   {b.n}
                 </span>
               )}

@@ -63,7 +63,7 @@ export function Meter({
         </span>
       </div>
       <div
-        className={cn("overflow-hidden rounded-full bg-hover-2", small ? "h-1" : "h-1.5")}
+        className={cn("overflow-hidden rounded-full bg-track", small ? "h-1" : "h-1.5")}
         role="meter"
         aria-label={label}
         aria-valuemin={0}
@@ -72,7 +72,7 @@ export function Meter({
       >
         <div className={cn("h-full rounded-full", BAR[tone])} style={{ width: `${width}%` }} />
       </div>
-      {reset && !small && <span className="truncate text-small text-ink-3 tabular-nums">{reset}</span>}
+      {reset && !small && <span className="text-small text-pretty text-ink-3 tabular-nums">{reset}</span>}
     </div>
   );
 }
@@ -108,7 +108,7 @@ function StaleLabel({ readAt, now }: { readAt: string; now: number }) {
 /** Every limit `/usage` reported: the session, the week and each model's week. */
 function Limits({ limits, now, stale }: { limits: LimitsReading; now: number; stale: boolean }) {
   return (
-    <div className="grid gap-x-5 gap-y-4 sm:grid-cols-2">
+    <div className="grid gap-x-5 gap-y-4 @md:grid-cols-2">
       {limits.session && <Meter label="5-hour" limit={limits.session} now={now} stale={stale} />}
       {limits.week && <Meter label="Week (all models)" limit={limits.week} now={now} stale={stale} />}
       {limits.models.map((m) => (
@@ -139,10 +139,10 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
   const history = sessionHistory(card, now);
   const shared = card.agents.filter((a) => a.share > 0);
   return (
-    <article className="flex min-w-0 flex-col gap-5 rounded-md bg-inset p-4" aria-label={`Account ${card.email}`}>
+    <article className="@container flex min-w-0 flex-col gap-5 rounded-md bg-inset p-4" aria-label={`Account ${card.email}`}>
       <header className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-body font-medium break-all text-ink">{card.email}</span>
+          <span className="truncate text-body font-medium text-ink" title={card.email}>{card.email}</span>
           <span className="text-small text-ink-3">
             {card.plan ? `${card.plan[0].toUpperCase()}${card.plan.slice(1)} plan` : "Plan unknown"}
             {card.limits && ` · read ${ago(card.limits.readAt, now)}`}
@@ -268,7 +268,7 @@ export function AccountsPanel({ className }: { className?: string }) {
         <ChevronDown className={cn("ml-auto size-4 shrink-0 text-ink-3 transition-transform duration-200", collapsed && "-rotate-90")} aria-hidden />
       </button>
       {!collapsed && (
-        <div className="grid max-h-[50vh] gap-3 overflow-y-auto md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-3">
           {cards.map((c) => (
             <AccountCardView key={c.email} card={c} now={now} />
           ))}

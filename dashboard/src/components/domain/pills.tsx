@@ -10,7 +10,8 @@ import { cn } from "@/lib/utils";
 
 const SMALL = "h-6 gap-1.5 px-2 text-small";
 
-const PRESENCE_TONE = { live: "green", idle: "orange", gone: "neutral" } as const;
+// Idle is grey everywhere: the pill and the dot read the same state the same way.
+const PRESENCE_TONE = { live: "green", idle: "neutral", gone: "neutral" } as const;
 
 const PRESENCE_HINT: Record<Presence, string> = {
   live: "Live: working now",
@@ -201,7 +202,7 @@ export function TaskLink({ number, title, className }: { number: number; title?:
       className={cn("group/task inline-flex min-w-0 items-baseline gap-1.5 transition-colors hover:text-ink", className)}
     >
       <span className="text-ink-3 tabular-nums">#{number}</span>
-      {title && <span className="truncate underline-offset-4 group-hover/task:underline">{title}</span>}
+      {title && <span className="truncate underline-offset-4 group-hover/task:underline" title={title}>{title}</span>}
     </a>
   );
 }

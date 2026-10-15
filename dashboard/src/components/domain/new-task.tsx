@@ -43,7 +43,7 @@ export function NewTaskButton() {
   return (
     <>
       <Button variant="action" size="sm" onClick={() => setOpen(true)} className="gap-1">
-        <Plus className="size-4" aria-hidden /> <span className="max-sm:sr-only">New Task</span>
+        <Plus className="size-4" aria-hidden /> <span>New Task</span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-md">
@@ -71,7 +71,7 @@ export function NewTaskButton() {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="- [ ] Steps as a checklist"
-                className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink outline-none placeholder:text-ink-4 focus-visible:border-accent max-md:text-[16px]"
+                className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]"
               />
             </label>
             {problem && (

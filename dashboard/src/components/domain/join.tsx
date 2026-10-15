@@ -102,7 +102,7 @@ export function SignInScreen({
                 value={login}
                 onChange={(e) => setLogin(e.target.value)}
                 placeholder="github-login"
-                className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none transition-colors placeholder:text-ink-4 focus-visible:border-accent max-md:text-[16px]"
+                className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none transition-colors placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]"
               />
               <Button type="submit" variant="secondary" size="md" disabled={!login.trim()}>
                 Sign in

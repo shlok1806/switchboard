@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
  * One button shape on the whole Dashboard: the one radius, flat fills, no shadow.
  * `action` is the tangerine primary and appears once per screen at most; `primary`
  * is solid ink for a strong control that is not the screen's main action;
- * `secondary` is a tone step; `ghost` shows only on hover.
+ * `secondary` is a tone step; `ghost` shows only on hover. A disabled `action` or
+ * `primary` falls back to the secondary tone step, not a faded slab of colour.
  */
 export const buttonVariants = cva(
   `inline-flex items-center justify-center rounded-md font-medium select-none whitespace-nowrap
@@ -16,8 +17,8 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        action: "bg-action text-on-action hover:bg-action-hover",
-        primary: "bg-ink text-page hover:bg-ink-2",
+        action: "bg-action text-on-action hover:bg-action-hover disabled:bg-hover-2 disabled:text-ink-3 disabled:opacity-100",
+        primary: "bg-ink text-page hover:bg-ink-2 disabled:bg-hover-2 disabled:text-ink-3 disabled:opacity-100",
         secondary: "bg-inset text-ink hover:bg-hover-2 aria-expanded:bg-hover-2",
         ghost: "text-ink-2 hover:bg-hover hover:text-ink",
       },

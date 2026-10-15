@@ -32,7 +32,7 @@ export function ContextWindow({ agent, compact = false }: { agent: Agent; compac
           aria-valuemax={100}
           aria-valuenow={Math.min(100, percent)}
           aria-valuetext={`${percent.toFixed(1)}%`}
-          className="h-1.5 overflow-hidden rounded-full bg-hover-2"
+          className="h-1.5 overflow-hidden rounded-full bg-track"
         >
           <div className={`h-full rounded-full ${bar}`} style={{ width: `${Math.min(100, percent)}%` }} />
         </div>

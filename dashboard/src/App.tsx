@@ -100,8 +100,9 @@ function Crumb({ route, taskTitle }: { route: Route; taskTitle?: string }) {
   if (route.view !== "task" && route.view !== "agent") return null;
   const parent = route.view === "task" ? { label: "Board", to: href({ view: "tasks" }) } : { label: "Agents", to: href({ view: "agents" }) };
   return (
-    <nav aria-label="Breadcrumb" className="flex h-10 shrink-0 items-center gap-1.5 px-[var(--gutter)] text-small">
-      <a href={parent.to} className="inline-flex items-center gap-1 text-ink-3 transition-colors hover:text-ink">
+    // The same box as the detail views (max-w-6xl, gutter inside), so the crumb starts on their column.
+    <nav aria-label="Breadcrumb" className="mx-auto flex h-10 w-full max-w-6xl shrink-0 items-center gap-1.5 px-[var(--gutter)] text-small">
+      <a href={parent.to} className="-ml-1 inline-flex items-center gap-1 text-ink-3 transition-colors hover:text-ink">
         <ChevronLeft className="size-4" aria-hidden />
         {parent.label}
       </a>
@@ -165,7 +166,7 @@ export default function App() {
             {/* Between a phone and a wide desk the tabs need the room: the mark alone stays. */}
             <span className="flex min-w-0 items-baseline gap-2 md:hidden lg:flex">
               <span className="text-lead font-semibold tracking-[-0.02em] text-ink">Switchboard</span>
-              <span className="truncate text-small text-ink-3">{repo}</span>
+              <span className="truncate text-small text-ink-3 max-[400px]:hidden">{repo}</span>
             </span>
           </a>
           {!mobile && <ViewTabs route={route} />}

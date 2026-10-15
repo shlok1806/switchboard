@@ -193,6 +193,22 @@ a {
   animation: breathe 2.8s var(--ease-in-out) infinite;
 }
 
+/* A loading placeholder fades gently in and out, slower than a Live dot so the two never read alike.
+   Reduced motion stops it (the block at the end), leaving a still tone step. */
+@keyframes loading-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.loading-pulse {
+  animation: loading-pulse 1.8s var(--ease-in-out) infinite;
+}
+
 @keyframes collapsible-down {
   from {
     height: 0;

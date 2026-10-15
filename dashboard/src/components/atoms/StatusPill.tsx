@@ -25,7 +25,7 @@ const dotColor: Record<Tone, string> = {
   orange: "bg-orange",
   red: "bg-red",
   accent: "bg-accent",
-  neutral: "bg-ink-3",
+  neutral: "bg-state-idle",
 };
 
 export function StatusPill({

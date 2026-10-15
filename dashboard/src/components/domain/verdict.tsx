@@ -33,7 +33,7 @@ export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict
       <Tooltip>
         <TooltipTrigger asChild>
           <div
-            className="relative flex h-2 w-full overflow-visible rounded-full bg-hover-2"
+            className="relative flex h-2 w-full overflow-visible rounded-full bg-track"
             role="img"
             aria-label={ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(", ")}
           >

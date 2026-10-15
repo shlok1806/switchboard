@@ -17,13 +17,13 @@ export function PageHead({
   actions?: ReactNode;
   className?: string;
 }) {
+  // Title and actions share the first row at every width, so a phone never strands the action
+  // on a line of its own; the summary runs under both.
   return (
-    <header className={cn("rise flex min-w-0 flex-wrap items-center justify-between gap-x-6 gap-y-3", className)}>
-      <div className="flex min-w-0 flex-col gap-1">
-        <h1 className="text-title font-semibold text-ink">{title}</h1>
-        {summary && <p className="text-body text-ink-3">{summary}</p>}
-      </div>
-      {actions && <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>}
+    <header className={cn("rise grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1", className)}>
+      <h1 className="min-w-0 text-title font-semibold text-ink">{title}</h1>
+      {actions ? <div className="flex items-center gap-2">{actions}</div> : <span />}
+      {summary && <p className="col-span-2 text-body text-ink-3">{summary}</p>}
     </header>
   );
 }

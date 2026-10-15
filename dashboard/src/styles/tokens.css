@@ -52,6 +52,9 @@
   --ink-3: var(--navy-600);
   --ink-4: var(--navy-400);
 
+  /* the empty part of a meter or progress bar: a full step darker than a panel */
+  --track: var(--stone-300);
+
   /* lines: only real tables and form fields draw one */
   --line: var(--stone-200);
   --line-strong: var(--stone-300);
@@ -78,6 +81,7 @@
   --orange-tint: #fbf2e0;
   --red: #b0281f;
   --red-tint: #fcebe9;
+  --on-red: #ffffff;
 
   /* Agent states (CONTEXT.md Presence, and the canvas spec's lifecycle). The dot carries the state. */
   --state-live: var(--green);
@@ -92,7 +96,7 @@
   --state-review: var(--orange);
 
   /* Verdicts */
-  --verdict-drop: var(--stone-300);
+  --verdict-drop: var(--navy-400);
   --verdict-queue: var(--accent);
   --verdict-interrupt: var(--tangerine);
 
@@ -112,6 +116,15 @@
   --edge: var(--ink-4);
   --edge-active: var(--accent);
   --edge-conflict: var(--red);
+
+  /* State shapes: a node's state never rides on colour alone (stale red and review
+     amber collide for deuteranopia). Each shape is a clip-path for a square dot;
+     a ring (Open, Gone) is a border, not a shape. */
+  --shape-circle: circle(50% at 50% 50%);
+  --shape-stale: polygon(50% 0%, 100% 100%, 0% 100%);
+  --shape-review: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  --shape-needs: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+  --shape-errored: polygon(20% 0%, 80% 0%, 100% 20%, 100% 80%, 80% 100%, 20% 100%, 0% 80%, 0% 20%);
 
   /* tooltips sit on navy in both themes */
   --tooltip-bg: var(--navy-900);
@@ -208,9 +221,11 @@
   --orange-tint: rgb(229 180 95 / 0.13);
   --red: #f4808c;
   --red-tint: rgb(244 128 140 / 0.13);
+  --on-red: #1a0b0d;
 
   --state-needs: #ffad4d;
-  --verdict-drop: #3a4255;
+  --verdict-drop: #5d6680;
+  --track: #343c4f;
 
   --cli-claude: #e08a64;
   --cli-codex: #4cc39d;
@@ -256,6 +271,7 @@
   --color-orange-tint: var(--orange-tint);
   --color-red: var(--red);
   --color-red-tint: var(--red-tint);
+  --color-on-red: var(--on-red);
   --color-state-live: var(--state-live);
   --color-state-needs: var(--state-needs);
   --color-state-needs-dot: var(--state-needs-dot);
@@ -263,7 +279,20 @@
   --color-state-gone: var(--state-gone);
   --color-state-queued: var(--state-queued);
   --color-state-errored: var(--state-errored);
+  --color-state-stale: var(--state-stale);
+  --color-state-done: var(--state-done);
+  --color-state-review: var(--state-review);
+  --color-canvas-bg: var(--canvas-bg);
+  --color-canvas-grid: var(--canvas-grid);
+  --color-node-bg: var(--node-bg);
+  --color-node-selected: var(--node-selected);
+  --color-frame-bg: var(--frame-bg);
+  --color-frame-label: var(--frame-label);
+  --color-edge: var(--edge);
+  --color-edge-active: var(--edge-active);
+  --color-edge-conflict: var(--edge-conflict);
   --color-verdict-drop: var(--verdict-drop);
+  --color-track: var(--track);
   --color-verdict-queue: var(--verdict-queue);
   --color-verdict-interrupt: var(--verdict-interrupt);
   --color-cli-claude: var(--cli-claude);

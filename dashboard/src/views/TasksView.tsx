@@ -229,8 +229,8 @@ export function TasksView() {
           pointerDrag={!mobile}
           className={cn(
             "min-h-0",
-            // A phone shows one column at a time and scrolls sideways between them.
-            mobile ? "snap-x snap-mandatory auto-cols-[calc(100%-40px)] overflow-x-auto pb-3" : "auto-cols-[minmax(220px,1fr)] pb-6",
+            // A phone shows one column at a time and scrolls sideways between them; a tablet too narrow for four columns scrolls as well.
+            mobile ? "snap-x snap-mandatory auto-cols-[calc(100%-40px)] overflow-x-auto pb-3" : "auto-cols-[minmax(220px,1fr)] overflow-x-auto pb-6",
           )}
           lane={
             can.claims && stale.length > 0 ? (
@@ -272,16 +272,17 @@ export function TasksView() {
   );
 }
 
+/* A column's state as colour and shape (ADR 0015): Stale is a triangle, In review a diamond. */
 const COLUMN_DOT: Record<Column, string> = {
-  stale: "bg-red",
-  open: "border-[1.5px] border-ink-4",
-  claimed: "bg-accent",
-  review: "bg-orange",
-  done: "bg-green",
+  stale: "size-2.5 bg-state-stale [clip-path:var(--shape-stale)]",
+  open: "size-2 rounded-full border-[1.5px] border-state-idle",
+  claimed: "size-2 rounded-full bg-state-queued",
+  review: "size-2.5 bg-state-review [clip-path:var(--shape-review)]",
+  done: "size-2 rounded-full bg-state-done",
 };
 
 function ColumnDot({ column }: { column: Column }) {
-  return <span aria-hidden className={cn("size-2 shrink-0 rounded-full", COLUMN_DOT[column])} />;
+  return <span aria-hidden className={cn("shrink-0", COLUMN_DOT[column])} />;
 }
 
 /** A quick filter. On a phone only its icon shows; the name stays for screen readers and on hover. */
@@ -540,7 +541,7 @@ function StepMeter({ done, total }: { done: number; total: number }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex items-center gap-1.5 tabular-nums">
-          <span aria-hidden className="h-1.5 w-8 overflow-hidden rounded-full bg-hover-2">
+          <span aria-hidden className="h-1.5 w-8 overflow-hidden rounded-full bg-track">
             <span className={cn("block h-full rounded-full", done === total ? "bg-green" : "bg-accent")} style={{ width: `${(done / total) * 100}%` }} />
           </span>
           {done}/{total}

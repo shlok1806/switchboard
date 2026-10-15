@@ -97,16 +97,17 @@ export function AgentsView() {
 
         {groups.map((p, gi) => (
           <section key={p} aria-label={PRESENCE_LABEL[p]} className="rise flex flex-col gap-1" style={{ ["--i" as string]: gi + 2 }}>
-            <h2 className="flex items-baseline gap-2 px-3 pb-1 text-body text-ink-3">
+            <h2 className="flex items-baseline gap-2 pb-1 text-body text-ink-3">
               {PRESENCE_LABEL[p]} <span className="tabular-nums">{n(p)}</span>
             </h2>
             {/* desk: the column headings, once per group */}
-            <div aria-hidden className="hidden grid-cols-[minmax(0,1fr)_12rem_16rem] gap-6 px-3 pb-1 text-small text-ink-3 lg:grid">
+            <div aria-hidden className="hidden grid-cols-[minmax(0,1fr)_12rem_16rem] gap-6 pb-1 text-small text-ink-3 lg:grid">
               <span>Agent</span>
               <span>Context window</span>
               <span>Claims</span>
             </div>
-            <ul className="flex flex-col">
+            {/* rows reach past the column by their own padding, so their text sits on it */}
+            <ul className="-mx-3 flex flex-col">
               {sorted
                 .filter((a) => a.presence === p)
                 .map((a) => (
@@ -151,7 +152,6 @@ function AgentRow({ agent: a, held }: { agent: Agent; held: Task[] }) {
             <span>{a.person}</span>
             {a.account && !a.usage?.email && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
             {a.model && <ModelLabel model={a.model} effort={a.effort} className="flex min-w-0 shrink items-center gap-1" />}
-            <span>{a.proxyMode === "raw" ? "Raw proxy" : "Digest proxy"}</span>
           </span>
           <PendingApproval agent={a} />
           <AgentBrief agent={a} compact />
