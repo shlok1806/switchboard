@@ -3093,7 +3093,7 @@ describe("switchboard host", () => {
     });
     expect(response.status).toBe(502);
     expect(((await response.json()) as { reason: string }).reason).toBe(
-      `e2e/${HOST} could not start the Agent: this Host runs at most 1 Agent at once`,
+      `${HOST} could not start the Agent: this Host runs at most 1 Agent at once`,
     );
     expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
   });
@@ -3161,7 +3161,7 @@ describe("switchboard host", () => {
       });
       expect(response.status).toBe(502);
       expect(((await response.json()) as { reason: string }).reason).toBe(
-        `e2e/${HOST} could not start the Agent: the folder is not trusted: run claude there once`,
+        `${HOST} could not start the Agent: the folder is not trusted: run claude there once`,
       );
       await waitForSupervisor(/spawn \S+ failed: the folder is not trusted/);
       await waitFor("the wrapper to end", async () => ((await hostedAgents()).length === 0 ? true : undefined));

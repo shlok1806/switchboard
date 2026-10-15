@@ -6,14 +6,33 @@ import type {
   ChannelEvent,
   ChannelSnapshot,
   Holder,
+  Host,
+  HostsResponse,
   PersonAction,
+  SpawnAgentRequest,
   StreamMessage,
   Task,
   Verdict,
   VerdictProbabilities,
 } from "@shared/index";
-import { cleanNickname, holderName, sameNickname } from "@shared/index";
-import { ALL_CAPABILITIES, type ChannelSource, type ClaimResult, type ConnectionState } from "../source";
+import {
+  DEFAULT_HOST_AGENTS_LIVE_CAP,
+  DEFAULT_PERMISSION_MODE,
+  agentIdFor,
+  cleanNickname,
+  holderName,
+  hostIdFor,
+  permissionModeWithin,
+  sameNickname,
+  underRoots,
+} from "@shared/index";
+import {
+  ALL_CAPABILITIES,
+  type ChannelSource,
+  type ClaimResult,
+  type ConnectionState,
+  type SpawnResult,
+} from "../source";
 import { accounts, ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
 import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
@@ -29,6 +48,17 @@ export class MockChannelSource implements ChannelSource {
   readonly capabilities = ALL_CAPABILITIES;
   readonly isMock = true;
   private agents: Agent[] = clone(seedAgents);
+  /** The demo Person's one Host, as `switchboard host install` would register it. */
+  private host: Host = {
+    id: hostIdFor(ME, "studio"),
+    person: ME,
+    name: "studio",
+    roots: ["/work/switchboard"],
+    maxPermissionMode: "acceptEdits",
+    live: true,
+    registeredAt: new Date(T0).toISOString(),
+    lastSeenAt: new Date(T0).toISOString(),
+  };
   private tasks: Task[] = clone(seedTasks);
   private events: ChannelEvent[] = [];
   private verdicts: Verdict[] = [];
@@ -320,6 +350,93 @@ export class MockChannelSource implements ChannelSource {
     this.record(makeEvent("claim.release", person(this.me), null, { holder: h }, { at, task: number }), undefined, true);
     this.emit({ type: "task", task });
     return { ok: true, task: clone(task) };
+  }
+
+  async hosts(): Promise<HostsResponse> {
+    await new Promise((r) => setTimeout(r, 120));
+    const running = this.agents.filter((a) => a.host !== undefined && a.presence !== "gone").length;
+    return clone({ hosts: [this.host], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
+  }
+
+  /** Like the Worker and the Host: checked, then an Agent that registers a moment later. */
+  async spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult> {
+    await new Promise((r) => setTimeout(r, 900));
+    const host = this.host;
+    if (request.host !== undefined && request.host !== host.name) {
+      return { ok: false, reason: `You have no Host named ${request.host}. Run \`switchboard host install\` on it.` };
+    }
+    if (!underRoots(request.cwd, host.roots)) {
+      return { ok: false, reason: `${request.cwd} is not under ${host.name}'s folders (${host.roots.join(", ")}).` };
+    }
+    const mode = request.permissionMode ?? DEFAULT_PERMISSION_MODE;
+    if (!permissionModeWithin(mode, host.maxPermissionMode)) {
+      return { ok: false, reason: `${host.name} starts Agents in at most the "${host.maxPermissionMode}" permission mode.` };
+    }
+    const at = new Date().toISOString();
+    const me = person(this.me);
+    const spawn = makeEvent(
+      "agent.spawn",
+      me,
+      null,
+      {
+        host: host.id,
+        cli: request.cli,
+        cwd: request.cwd,
+        permissionMode: mode,
+        ...(request.nickname ? { nickname: request.nickname } : {}),
+        ...(request.model ? { model: request.model } : {}),
+        ...(request.brief ? { brief: request.brief } : {}),
+      },
+      { at },
+    );
+    this.record(spawn, undefined, true);
+    const sessionId = crypto.randomUUID();
+    const agent: Agent = {
+      id: agentIdFor(this.me, request.cli, sessionId),
+      person: this.me,
+      cli: request.cli,
+      presence: "live",
+      startedAt: at,
+      lastSeenAt: at,
+      proxyMode: "digest",
+      secretMasking: true,
+      canReceiveInterrupts: true,
+      host: host.id,
+      ...(request.nickname ? { nickname: request.nickname } : {}),
+      ...(request.model ? { model: request.model } : {}),
+      // What its session reports once it starts: the brief's first line is its task.
+      context: {
+        readAt: at,
+        cwd: request.cwd,
+        ...(request.brief ? { task: request.brief.split("\n")[0], brief: request.brief } : {}),
+      },
+    };
+    this.agents.push(agent);
+    this.emit({ type: "agent", agent: clone(agent) });
+    this.record(
+      makeEvent("agent.spawned", agentActor(agent.id), null, { spawn: spawn.id, host: host.id, agent: agent.id }, { at }),
+      undefined,
+      true,
+    );
+    return { ok: true, answer: { ok: true, spawn: spawn.id, host: host.id, agent: clone(agent) } };
+  }
+
+  async stopAgent(id: AgentId): Promise<ActionResult> {
+    await new Promise((r) => setTimeout(r, 400));
+    const agent = this.agents.find((a) => a.id === id);
+    if (!agent) return { ok: false, reason: `No Agent ${id} on this Channel.` };
+    if (agent.person !== this.me) return { ok: false, reason: `${id} is ${agent.person}'s Agent. Only its own Person may stop it.` };
+    if (agent.host === undefined) return { ok: false, reason: `${id} runs in a terminal, not on a Host. Stop it there.` };
+    if (agent.presence === "gone") return { ok: false, reason: `${id} is Gone already.` };
+    const at = new Date().toISOString();
+    this.record(makeEvent("agent.stop", person(this.me), null, { agent: id, host: agent.host }, { at }), undefined, true);
+    // Like a real Host: the session takes a moment to end, then the Agent goes Gone.
+    setTimeout(() => {
+      agent.presence = "gone";
+      agent.lastSeenAt = new Date().toISOString();
+      this.emit({ type: "agent", agent: clone(agent) });
+    }, 1500);
+    return { ok: true };
   }
 
   async createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }> {

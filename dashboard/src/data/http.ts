@@ -12,11 +12,15 @@ import type {
   ChannelSnapshot,
   ErrorResponse,
   HistoryResponse,
+  HostsResponse,
   PersonsResponse,
   JoinResponse,
   Person,
   PersonAction,
   RelayResponse,
+  SpawnAgentRequest,
+  SpawnAgentResponse,
+  StopAgentResponse,
   StreamMessage,
   TaskActionResponse,
   TaskListResponse,
@@ -24,8 +28,8 @@ import type {
   ClaimRefusal,
   Verdict,
 } from "@shared/index";
-import { LIVE_PING, MAX_HISTORY_LIMIT, approvalDenyPath, claimPath, nicknamePath, releasePath } from "@shared/index";
-import type { Capabilities, ChannelSource, ClaimResult, ConnectionState } from "./source";
+import { LIVE_PING, MAX_HISTORY_LIMIT, agentPath, approvalDenyPath, claimPath, nicknamePath, releasePath } from "@shared/index";
+import type { Capabilities, ChannelSource, ClaimResult, ConnectionState, SpawnResult } from "./source";
 
 /**
  * What the Worker on main can do today: join, Events, Updates, the stream (#5),
@@ -294,6 +298,36 @@ export class HttpChannelSource implements ChannelSource {
     }
   }
 
+  async hosts(): Promise<HostsResponse | null> {
+    const { status, body } = await this.call<HostsResponse>("/api/hosts");
+    // A Worker from before Hosts (ADR 0015): the Dashboard leaves them out.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as HostsResponse;
+  }
+
+  async spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult> {
+    try {
+      const { status, body } = await this.call<SpawnAgentResponse>("/api/agents/spawn", {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      if (status < 400 && body && "spawn" in body) return { ok: true, answer: body };
+      return { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
+  async stopAgent(agent: AgentId): Promise<ActionResult> {
+    try {
+      const { status, body } = await this.call<StopAgentResponse>(`${agentPath(agent)}/stop`, { method: "POST" });
+      return status < 400 ? { ok: true } : { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
   async act(action: PersonAction): Promise<ActionResult> {
     const route = (() => {
       switch (action.type) {
@@ -321,6 +355,11 @@ export class HttpChannelSource implements ChannelSource {
       return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
     }
   }
+}
+
+/** The Worker's reason for a refusal, or its HTTP status when it gave none. */
+function reasonOf(body: unknown, status: number): string {
+  return body && typeof body === "object" && "reason" in body ? String(body.reason) : `HTTP ${status}`;
 }
 
 /** Separates the Relay's Verdict Events from the rest, keeping order. */
