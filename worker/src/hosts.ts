@@ -15,6 +15,13 @@
 // - The Agents Hosts run, and the spawns still starting, are capped per Channel.
 // - A stop is recorded (`agent.stop`) and sent to the Host that runs the Agent. The
 //   Agent goes Gone the usual way, when its wrapper ends the session.
+//
+// The folders and mode kept here are advisory (ADR 0017). The same Person's session
+// that spawns can re-register the Host with wider ones, so a stolen session could
+// widen them first. `switchboard host run` MUST re-check every spawn against its own
+// install-time configuration on the machine (the folder after realpath, under its
+// local roots; the mode no looser than its local maximum) and never trust this copy.
+// `host_spawns` rows are never pruned: one short row per spawn, next to its Event.
 
 import type {
   Actor,
