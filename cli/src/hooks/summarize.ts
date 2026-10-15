@@ -32,6 +32,10 @@ export interface ClaudeHookInput {
   tool_response?: unknown;
   /** Where the session's transcript is, which the wrapper reads for usage (ADR 0011). */
   transcript_path?: string;
+  /** A Stop hook's: true when the model is already continuing because a Stop hook blocked. */
+  stop_hook_active?: boolean;
+  /** A PreCompact hook's: "auto" when Claude Code compacts on its own, "manual" for /compact. */
+  trigger?: string;
 }
 
 /** The hooks the wrapper installs, and the Claude Code hook names they listen on. */

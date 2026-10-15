@@ -31,6 +31,8 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   "command",
   "turn.end",
   "presence",
+  // Shared memory reaches every Agent in its next turn's digest instead (ADR 0019).
+  "memory.note",
   // About names, not work (ADR 0009).
   "agent.rename",
   "agent.model",

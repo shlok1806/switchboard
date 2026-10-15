@@ -59,7 +59,7 @@ export function EventRow({
   continued?: boolean;
 }) {
   const task = event.task !== undefined ? taskByNumber.get(event.task) : undefined;
-  const isMessage = event.type === "update" || event.type === "directive";
+  const isMessage = event.type === "update" || event.type === "directive" || event.type === "memory.note";
   return (
     <li className={cn("list-none", fresh && "row-in")}>
       <div

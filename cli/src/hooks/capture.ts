@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentId, HookCaptureMessage, HookCaptureReply, HookEvent } from "../../../shared/src/index";
 import { MAX_HOOK_EVENTS_PER_MESSAGE, MAX_HOOK_TEXT_LENGTH, truncate } from "../../../shared/src/index";
 import { DIALOG_HOOKS, DIALOG_TOOLS } from "../interrupts";
+import { MEMORY_HOOKS } from "../memory";
 import { CONTEXT_HOOKS } from "../next-turn";
 import type { SessionSettings } from "../session-settings";
 import { ShellEdits, shellCallKey, shellDir } from "./shell-edits";
@@ -134,6 +135,13 @@ export interface HookCaptureOptions {
    * answers with a deny from the Channel or with nothing (ADR 0014).
    */
   hold?: (input: ClaudeHookInput, hook: HeldHook) => boolean;
+  /**
+   * A hook's whole answer, printed as is, or null to answer as usual. The memory
+   * nudges block a Stop or a PreCompact this way (ADR 0019). Reads only this machine.
+   */
+  decide?: (input: ClaudeHookInput) => Promise<string | null>;
+  /** Called with the Hook Events each hook made, as they are recorded. */
+  onEvents?: (events: readonly HookEvent[]) => void;
   /** Wraps the text for a hook's answer the way the agent CLI reads it. Plain text by default. */
   answer?: (hook: string | undefined, text: string) => string;
   /** The hook command's program and script. Defaults to this Node and the built hook script. */
@@ -241,7 +249,7 @@ export class HookCapture {
       command: `${this.command()} --hold`,
       timeout: HELD_HOOK_TIMEOUT_SECONDS,
     };
-    const names = [...new Set<string>([...CAPTURED_HOOKS, ...CONTEXT_HOOKS, ...DIALOG_HOOKS])];
+    const names = [...new Set<string>([...CAPTURED_HOOKS, ...CONTEXT_HOOKS, ...DIALOG_HOOKS, ...MEMORY_HOOKS])];
     // PreToolUse: the dialog tools, and the shell, whose changes are worked out around it.
     const matchers: Record<string, string> = { PostToolUse: "*", PreToolUse: [...DIALOG_TOOLS, "Bash"].join("|") };
     return {
@@ -328,6 +336,11 @@ export class HookCapture {
       if (each.hook_event_name === "PostToolUse") await this.shellChanges(key);
     }
     if (this.options.hold?.(input, held)) return held.text;
+    const decided = await this.options.decide?.(input).catch((error: Error) => {
+      this.options.log(`hook answer failed: ${error.message}`);
+      return null;
+    });
+    if (decided !== undefined && decided !== null) return decided;
     const context = this.options.context?.(input.hook_event_name) ?? "";
     return this.options.answer ? this.options.answer(input.hook_event_name, context) : context;
   }
@@ -336,6 +349,7 @@ export class HookCapture {
   private record(drafts: HookEventDraft[]): void {
     const events = drafts.map((draft) => ({ id: randomUUID(), ...draft }) as HookEvent);
     if (events.length === 0) return;
+    this.options.onEvents?.(events);
     if (this.agent) this.enqueue(events);
     else this.unsent.push(...events);
   }

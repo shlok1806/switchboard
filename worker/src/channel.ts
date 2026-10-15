@@ -31,9 +31,11 @@ import type {
   InterruptAttached,
   InterruptMessage,
   InterruptResult,
+  MemoryQuery,
   PendingApproval,
   Person,
   PersonName,
+  PostNoteRequest,
   ProxyCaptureReply,
   ProxyMode,
   RegisterAgentRequest,
@@ -50,6 +52,7 @@ import {
   DEFAULT_GONE_AFTER_SECONDS,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
   DEFAULT_LEAD_AGENTS_LIVE_CAP,
+  DEFAULT_MEMORY_NOTES_PER_DAY,
   hostIdFor,
   LIVE_PING,
   LIVE_PONG,
@@ -65,6 +68,7 @@ import { DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directive
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { DEFAULT_SPAWN_WAIT_MS, type HostRefusal, Hosts, type SpawnResult } from "./hosts";
+import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
@@ -212,6 +216,8 @@ export class Channel extends DurableObject<Env> {
   private readonly access: Access;
   /** Each Issue's one status comment (issue #2). */
   private readonly status: StatusComments;
+  /** The notes Agents write for each other (ADR 0019). */
+  private readonly memory: Memory;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -228,6 +234,12 @@ export class Channel extends DurableObject<Env> {
     ctx.storage.sql.exec(HOOK_CAPTURE_SCHEMA);
     ctx.storage.sql.exec(RELAY_SCHEMA);
     ctx.storage.sql.exec(DIRECTIVES_SCHEMA);
+    ctx.storage.sql.exec(MEMORY_SCHEMA);
+    const notesPerDay = Number(env.MEMORY_NOTES_PER_DAY);
+    this.memory = new Memory(
+      ctx.storage.sql,
+      Number.isInteger(notesPerDay) && notesPerDay >= 0 ? notesPerDay : DEFAULT_MEMORY_NOTES_PER_DAY,
+    );
     // Answer keepalive pings without waking the object from hibernation.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(LIVE_PING, LIVE_PONG));
     this.alarms = new Alarms(ctx.storage);
@@ -725,6 +737,45 @@ export class Channel extends DurableObject<Env> {
     // The holder's Update shows as the last Update in the Issue's status comment.
     if (task !== undefined) this.ctx.waitUntil(this.claims.updated(who.acting, task));
     return { ok: true, event };
+  }
+
+  /**
+   * Agent `caller.agent` writes a note for the Channel (ADR 0019). Only Agents write
+   * notes; a Person speaks with an Update or a Directive. Without a Task, the note is
+   * about the Task the Agent works on now.
+   */
+  writeNote(caller: Caller, note: PostNoteRequest): NoteResult | ClaimRefusal {
+    if (caller.agent === undefined) {
+      return {
+        ok: false,
+        status: 403,
+        reason: "Only Agents write notes. A Person tells the Channel with an Update, or an Agent with a Directive.",
+      };
+    }
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    const admitted = this.memory.admit();
+    if (!admitted.ok) return admitted;
+    const nickname = this.agents.find(caller.agent)?.nickname;
+    const task = note.task ?? this.currentTask(caller.agent) ?? undefined;
+    const event = this.append({
+      type: "memory.note",
+      actor: who.acting.actor,
+      capture: who.acting.capture,
+      payload: {
+        text: note.text,
+        tags: note.tags,
+        ...(note.files === undefined ? {} : { files: note.files }),
+        ...(nickname === undefined ? {} : { nickname }),
+      },
+      ...(task === undefined ? {} : { task }),
+    });
+    return { ok: true, note: this.memory.keep(event) };
+  }
+
+  /** The Channel's notes, for any Person or Agent on it (ADR 0019). */
+  readMemory(query: MemoryQuery): MemoryReadResult {
+    return this.memory.read(query);
   }
 
   /** Events with `seq` greater than `after`, oldest first. */

@@ -71,6 +71,10 @@ export const SWITCHBOARD_TOOLS = [
   "agent_spawn",
   "agent_stop",
   "send_directive",
+  // ADR 0019: shared memory.
+  "memory_note",
+  "memory_recent",
+  "memory_search",
 ] as const;
 
 export type SwitchboardTool = (typeof SWITCHBOARD_TOOLS)[number];

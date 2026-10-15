@@ -62,6 +62,7 @@ export const HISTORY: Beat[] = [
   beat(-236, "session.start", MG, null, { cwd: "~/code/app", resumed: false, source: "startup" }),
   beat(-230, "step.complete", SO, "tool", { step: 1, text: "Add ApiError class" }, { task: 13 }),
   beat(-200, "update", SO, "tool", { text: "ApiError is in web/src/api/errors.ts. Throwing it from the client next." }, { task: 13 }),
+  beat(-195, "memory.note", SO, "tool", { text: "Every client failure is an ApiError from web/src/api/errors.ts. Never throw a plain Error from web/src/api.", tags: ["decision"], files: ["web/src/api/errors.ts"] }, { task: 13 }),
   beat(-185, "task.done", person("maya"), null, { closedOnGitHub: true }, { task: 9 }),
   beat(-181, "merge", { kind: "github" }, null, { into: "main", pr: 21, branch: "task/10-ci", commit: "e81b0c4", files: [{ path: ".github/workflows/web.yml", additions: 12, deletions: 0, hunks: [] }] }, { task: 10 }),
   beat(-120, "presence", SO, null, { presence: "gone" }),
@@ -149,6 +150,7 @@ export const LIVE: Beat[] = [
   beat(5, "tool.call", D, "hook", { tool: "Edit", arg: "web/src/api/client.ts", ok: true }, { task: 16 }),
   beat(6.5, "step.complete", S, "tool", { step: 2, text: "Update callers in web/src/api" }, { task: 12, turn: "shlok-t88", effect: { kind: "step", task: 12, step: 2 } }),
   beat(7.2, "update", S, "tool", { text: "Renamed getJson to request in web/src/api. Callers in web/src/pages still import getJson until the next push." }, { task: 12, turn: "shlok-t88" }),
+  beat(7.5, "memory.note", S, "tool", { text: "Keeping getJson as an alias of request breaks tree-shaking in the pages bundle. Rename the callers instead.", tags: ["dead-end"], files: ["web/src/api/client.ts"] }, { task: 12, turn: "shlok-t88" }),
   beat(7.8, "turn.end", S, "hook", { turn: 88 }, { turn: "shlok-t88" }),
   beat(9, "command", S, "hook", { command: "git push origin task/12-rename-getjson" }, { task: 12 }),
   named(

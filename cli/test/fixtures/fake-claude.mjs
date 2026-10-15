@@ -27,6 +27,14 @@
 //         -> one Bash tool call: its PreToolUse hooks, then the command, run for real
 //            in the current directory (`\n` in it is a line break), then PostToolUse
 //   end   -> ends the turn the Person's line started (the Stop hook), leaving it at its prompt
+//   end again
+//         -> the model stops again after a Stop hook blocked it (`stop_hook_active`)
+//   precompact <auto|manual>
+//         -> Claude Code is about to compact the context (the PreCompact hook)
+//   compacted
+//         -> the context was compacted: SessionStart with source "compact"
+//   usage <model> <tokens>
+//         -> one model reply in the transcript, on <model>, with <tokens> of context
 //   busy <seconds>
 //         -> works for a while, printing as it goes, like a long model turn
 //   permission <tool>
@@ -322,9 +330,24 @@ async function answer(command) {
     console.log("FAKE-CLAUDE prompted");
   }
   if (command === "work") console.log("FAKE-CLAUDE working on it");
-  if (command === "end") {
-    runHooks("Stop", { stop_hook_active: false });
+  if (command === "end" || command === "end again") {
+    runHooks("Stop", { stop_hook_active: command === "end again" });
     console.log("FAKE-CLAUDE turn ended");
+  }
+  const precompact = /^precompact (auto|manual)$/.exec(command);
+  if (precompact) {
+    runHooks("PreCompact", { trigger: precompact[1], custom_instructions: "" });
+    console.log("FAKE-CLAUDE precompact done");
+  }
+  if (command === "compacted") {
+    runHooks("SessionStart", { source: "compact" });
+    console.log("FAKE-CLAUDE compacted");
+  }
+  const usage = /^usage (\S+) (\d+)$/.exec(command);
+  if (usage) {
+    const message = { model: usage[1], usage: { input_tokens: Number(usage[2]) }, content: [] };
+    appendFileSync(transcript, `${JSON.stringify({ type: "assistant", message })}\n`);
+    console.log("FAKE-CLAUDE usage written");
   }
   const busy = /^busy (\d+(?:\.\d+)?)$/.exec(command);
   if (busy) {

@@ -144,6 +144,8 @@ export function summarize(e: ChannelEvent): string {
       return e.payload.text;
     case "directive":
       return e.payload.text;
+    case "memory.note":
+      return `${e.payload.tags.join(", ")}: ${e.payload.text}`;
     case "directive.delivery":
       return e.payload.delivered === "interrupt"
         ? `Directive from ${e.payload.from} typed into the session right away`
@@ -267,6 +269,7 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "step.complete": "Step",
   update: "Update",
   directive: "Directive",
+  "memory.note": "Note",
   "directive.delivery": "Directive delivery",
   wake: "Wake",
   takeover: "Takeover",
@@ -301,6 +304,8 @@ export function unrelayedReason(type: EventType): string | null {
     case "proxy.raw":
     case "proxy.digest":
       return "Not relayed: model context and replies stay on the Dashboard.";
+    case "memory.note":
+      return "Not relayed: a note reaches every Agent in its next turn's digest.";
     default:
       return "Not relayed (lifecycle Event).";
   }

@@ -15,6 +15,8 @@
 // - Directives: a Person's message to this Agent. The Channel pushes each over the
 //   WebSocket and hands any the wrapper has not acknowledged over in the next
 //   register or heartbeat answer, like Deliveries.
+// - Notes other Agents wrote to the Channel's shared memory (ADR 0019): a digest, from
+//   the memory inbox (memory.ts). Notes never wake an Agent.
 //
 // Everything from the Channel is short structured facts, framed as information,
 // never as instructions (ADR 0005). The one exception is a Directive, framed as
@@ -67,6 +69,9 @@ export interface NextTurnItems {
 }
 
 export class NextTurn {
+  /** `memory` hands over the digest of notes the Agent has not been shown. */
+  constructor(private readonly memory?: { take(): string }) {}
+
   private readonly lostClaims = new Map<string, LostClaim>();
   private readonly deliveries = new Map<string, Delivery>();
   private readonly directives = new Map<string, DirectiveDelivery>();
@@ -136,6 +141,8 @@ export class NextTurn {
       parts.push(directivesNotice([...this.directives.values()].sort((a, b) => a.seq - b.seq)));
       this.directives.clear();
     }
+    const notes = this.memory?.take() ?? "";
+    if (notes !== "") parts.push(notes);
     return parts.length === 0 ? "" : `${parts.join("\n\n")}\n`;
   }
 }
