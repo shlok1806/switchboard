@@ -1,7 +1,8 @@
 # Canvas Dashboard design spec
 
-Status: draft for discussion. Nothing here is decided; each call below that changes the
-model needs its own ADR before it is built.
+Status: draft for discussion. The points under [Decided](#decided) are Shlok's
+decisions and the rest of the spec follows them. Every other call is a proposal for Shlok,
+and any that changes the model needs its own ADR before it is built.
 
 The Dashboard is becoming a canvas: Agents as nodes, edges for who started whom and who
 reads whom, frames for Tasks and their worktrees, controls on the nodes themselves, a
@@ -15,10 +16,11 @@ CONTEXT.md yet, and this spec uses working names for them:
 - **Host supervisor**: a long-lived process on a Person's machine that starts, stops and
   queues that Person's Agents on request, instead of the Person running
   `switchboard run` by hand.
-- **Lead**: an Agent a Person has given the right to direct and start other Agents, as
-  sketched in issue #101 (the Orchestrator role).
-- **Memory note**: a piece of shared memory that outlives the session that wrote it and
-  that other sessions can read.
+- **Lead**: a role a Person grants an Agent, letting it send Directives to, start and
+  stop the Agents in its own subtree, within a per-Channel cap (see Decided; grew out of
+  issue #101, the Orchestrator role).
+- **Memory note**: a short note an Agent writes with the `memory_note` tool, which
+  outlives the session that wrote it and reaches other sessions (see Decided).
 
 ## Clean room
 
@@ -36,6 +38,33 @@ from nodeterm's.
 - The app was not launched. Behaviour that only shows when the app runs (animations,
   exact spacing, colours) is out of scope, and Switchboard's look comes from its own
   design system.
+
+## Decided
+
+Shlok has decided these points. They override anything in nodeterm's model and any
+earlier call in this spec.
+
+1. **Leads can instruct.** ADR 0005 ("Agents inform each other; only People instruct") is
+   being superseded, as step 2 of the build. A Person grants an Agent a role such as
+   "lead". A lead may send Directives to, start and stop the Agents in its own subtree,
+   within a per-Channel cap, and every such action is audited as an Event. Agents
+   outside a lead's subtree still treat its messages as information.
+2. **Any session can read any transcript on the Channel.** Every session, Agents
+   included, may pull any transcript on the Channel, and anyone with write access to the
+   repo can read them all. The CLI always redacts secrets before a transcript leaves the
+   machine.
+3. **Memory notes.** Agents write them with `memory_note`, tagged `decision`, `fact`,
+   `dead-end`, `question` or `files`, nudged by the Stop and PreCompact hooks. They reach
+   Agents as a digest pushed at the start of each turn, capped at about 1 to 2k tokens and
+   scoped to the whole Channel for now, and on demand through `memory_search` and
+   `memory_recent`. Sticky notes on the canvas map to memory notes.
+4. **The live terminal can be watched and taken over.** The Agent's owner, and anyone
+   the owner allows (per Agent, or as a standing setting), can type into it, and typing
+   counts as Person input. It is called "attach", because Takeover already means moving
+   a Stale Claim.
+5. **Spawns run only on the requester's own registered hosts.** A start request, from a
+   Person or a lead, only ever runs on a host its requester registered. Claude Code ships
+   first; Codex and Gemini CLI follow behind CLI-neutral interfaces.
 
 ---
 
@@ -229,7 +258,8 @@ act as another by naming it.
   Reading and a Usage Reading.
 - A **Task** is a GitHub Issue. A **Claim** is the one holder of a Task, and claiming
   creates the Task's branch and worktree (ADR 0006). Stale Claims never expire (ADR 0002).
-- **Updates** inform. **Directives** instruct, and only a Person sends them (ADR 0005).
+- **Updates** inform. **Directives** instruct. Today only a Person sends them (ADR
+  0005); once Decided 1 lands, a lead may also send them within its subtree.
   The **Relay** decides per Event and per Agent whether it is dropped, queued or sent as
   an Interrupt, and a **Wake** starts an idle Agent's turn for what waits for it.
 - Agent tokens act only for their own Agent (ADR 0007).
@@ -240,10 +270,14 @@ Three differences drive most calls below:
    sessions. In Switchboard, Agents, Claims and Events already exist; the canvas draws
    them. Positions are view state.
 2. **The machines are elsewhere.** A web page on the Worker cannot open a shell on a
-   Person's laptop. Anything that starts or types into a session goes through that
-   Person's wrapper or host supervisor, and only for that Person.
-3. **Information never becomes instruction.** nodeterm lets a linked agent read another's
-   full transcript. ADR 0005 forbids raw text from one Agent's context reaching another.
+   Person's laptop. Anything that starts or types into a session goes through the
+   wrapper or host supervisor on the machine where it runs. A spawn only ever runs on a
+   host its requester registered (Decided 5), and typing is limited to the owner and
+   whoever the owner allows (Decided 4).
+3. **Authority comes from a Person's grant.** In nodeterm any agent that opened another
+   can steer it. In Switchboard an Agent's messages carry instruction weight only when a
+   Person made it a lead and the target is in its subtree (Decided 1); reading, by
+   contrast, is open to every session on the Channel (Decided 2).
 
 ### Scope: two canvases, one model
 
@@ -253,7 +287,8 @@ filtered:
 
 - **Channel canvas**: every Agent with a Claim or an Update on the Channel, every
   Person's. Controls on another Person's Agent are limited to what any Person may already
-  do (rename, a Directive, a Takeover of a Stale Claim).
+  do (rename, a Directive, a Takeover of a Stale Claim), plus attaching when its owner
+  allows it.
 - **My fleet**: all of my own Agents across Channels, including ones not on any Channel
   Task, with every control. Nobody else sees this view.
 
@@ -263,7 +298,11 @@ sends Events at all, is a model decision for an ADR, not a canvas detail.
 ### Feature calls
 
 **Keep** means build it with the same behaviour. **Adapt** means build the idea in
-Switchboard's model. **Drop** means do not build it.
+Switchboard's model. **Drop** means do not build it. A call marked with a Decided number
+follows that decision. Every other call is a proposal for Shlok, including the larger
+ones: the canvas only draws Switchboard's data and creates nothing of its own, there are
+no plain shell nodes, frames are Task frames, the board follows Claims, and starts wait
+on Tasks rather than turn ends.
 
 #### Node kinds
 
@@ -271,11 +310,11 @@ Switchboard's model. **Drop** means do not build it.
 | --- | --- | --- |
 | Agent node | Adapt | The node is an Agent: Agent ID, Nickname, Presence, model, Account Label, context meter and the Task it holds, from data the Dashboard already has (ADR 0009 to 0012). |
 | Status badge from hooks (running, needs you, done) | Keep | The wrapper already sees the same hooks; "needs you" is the pending permission prompt proposed in PR #107 (ADR 0013). |
-| Approve and deny on the node | Adapt | Only the Agent's own Person, as proposed in PR #109 (ADR 0014), never another Person or a lead. |
+| Approve and deny on the node | Adapt | The Agent's own Person, as proposed in PR #109 (ADR 0014). Whether someone the owner allows to attach may also answer is a proposal for Shlok, since answering a prompt and typing it are the same act. |
 | Plain terminal node | Drop | Nothing in Switchboard runs a bare shell, and a hosted page opening shells on laptops is remote code execution by design. |
-| Live terminal of an Agent | Adapt | A read-only mirror of the Agent's terminal, streamed by its wrapper, shown in the node or a side panel. Masked like the brief (ADR 0012) before it leaves the laptop. |
-| Typing into the live terminal | Adapt | Only the Agent's own Person, and it counts as that Person typing. Call it "attach" or "take the keyboard", not Takeover, which already means moving a Stale Claim. |
-| Sticky note | Adapt | Becomes the Memory note: shared memory with an author, visible on the canvas, readable by linked Agents through a tool. Agent-written notes are information, framed like any other Agent output. |
+| Live terminal of an Agent | Keep (Decided 4) | Anyone on the Channel can watch it, streamed by the Agent's wrapper and shown in the node or a side panel, with secrets redacted before it leaves the laptop. |
+| Typing into the live terminal | Adapt (Decided 4) | "Attach": the owner, and anyone the owner allows per Agent or as a standing setting, can type, and it counts as Person input. Not called Takeover, which already means moving a Stale Claim. |
+| Sticky note | Adapt (Decided 3) | Becomes the memory note: shown on the canvas with its author and tag, and delivered through the turn-start digest and `memory_search`/`memory_recent`. |
 | Subagent cards | Keep | The Proxy Capture already tells the main thread from subagents (ADR 0010); showing them as small child cards is cheap and useful. |
 | Image and video nodes | Drop | Nothing on a Channel produces media worth a node; a link in an Update is enough. |
 | Web viewer node | Drop | A pull request or preview opens in its own tab; embedding arbitrary pages in a hosted Dashboard adds risk for little gain. |
@@ -301,7 +340,7 @@ Switchboard's model. **Drop** means do not build it.
 | Feature | Call | Why |
 | --- | --- | --- |
 | Opened-by edge | Adapt | Becomes "started by": recorded when the host supervisor starts an Agent for a Person or a lead, as a field on the Agent at registration. Agents started by hand have no parent and no edge. |
-| Context link | Adapt | Becomes a read subscription: the linked Agent's Updates and structured Events reach this Agent with a Queue Verdict, and a tool returns its recent Updates and Memory notes. Never its transcript (ADR 0005). People still see everything on the Dashboard. |
+| Context link | Adapt | Reading needs no link: any session may pull any transcript on the Channel (Decided 2). A link becomes a hint instead: the linked Agent's Updates reach this Agent with a Queue Verdict, and the edge shows who is following whom. A proposal for Shlok. |
 | Link created automatically for started Agents | Keep | The parent almost always needs its children's Updates; it should not have to ask. |
 | Dependency edge, dashed then solid | Keep | A clear picture of what waits on what, for queued starts below. |
 | Edge between two Agents on one file | Adapt | New for Switchboard: the Relay already detects two Agents touching one file; draw it as a temporary conflict edge. |
@@ -337,17 +376,17 @@ shows them. Until it exists, an Agent is only Live, Idle or Gone.
 | Dropped | Adapt | Already Presence Gone. The node shows Gone and its Stale Claim; resuming is the Person's, on their machine or through their supervisor. |
 | Last turn errored | Keep | The wrapper sits on the model traffic and the Stop hook, so it can tell an errored turn; it should show on the node and notify the starter. |
 | Interrupted | Keep | A Person stopping a turn is worth showing so a waiting start is not mistaken for stuck. |
-| Run-now | Adapt | A control on a queued start, for the starting Person, or a lead within its limits. It never skips a Person's own Claim rules. |
+| Run-now | Adapt | A control on a queued start, for the starting Person, or a lead within its subtree and cap. It never skips a Person's own Claim rules. |
 | Request IDs on start | Keep | A lead or a page retrying a start must not start two Agents. |
 
 #### Linked context and memory
 
 | Feature | Call | Why |
 | --- | --- | --- |
-| Read another session's summary, transcript or terminal | Drop for Agents, keep for People | ADR 0005: Agents get structured facts and Updates, never raw context. People can open any Agent's live terminal and Proxy Events on the Dashboard as today. |
-| Pull, not push | Keep | Matches the Queue Verdict: linked material waits for the next turn and wakes no one. |
-| Linked sticky notes as context | Adapt | Memory notes linked to an Agent, or to its Task, are offered at the start of its turns. |
-| Memory across sessions | Adapt | New: a Memory note belongs to a Channel or to a Person's fleet, so a resumed or new Agent reads what an earlier one learned. Notes from Agents stay information; notes from People may be marked as standing Directives. |
+| Read another session's summary, transcript or terminal | Keep (Decided 2) | Any session, Agents included, can pull any transcript on the Channel on demand, already redacted by the CLI. People see all of them on the Dashboard. |
+| Pull, not push | Adapt (Decided 3) | Transcripts are pulled; memory notes are pushed, as a capped turn-start digest of about 1 to 2k tokens. |
+| Linked sticky notes as context | Adapt (Decided 3) | Notes are Channel-wide for now, not per link; every Agent's digest draws from all of them. |
+| Memory across sessions | Keep (Decided 3) | Agents write notes with `memory_note` (tags `decision`, `fact`, `dead-end`, `question`, `files`), nudged at Stop and PreCompact, so a resumed or new Agent starts from what an earlier one learned. |
 
 #### Board and issue-bound sessions
 
@@ -359,7 +398,7 @@ shows them. Until it exists, an Agent is only Live, Idle or Gone.
 | Drag a card between columns | Drop | Status follows Claims, Updates and pull requests; a drag that disagreed with the Claim would be a lie. |
 | Due date, priority, members, card comments | Drop | GitHub owns labels and the Issue's discussion; Switchboard adds nothing there. |
 | Agents moving their own cards | Drop | `claim`, Updates and `finish_task` already move the Task. |
-| Start an Agent on an Issue | Keep | This is a Claim made at start: the supervisor starts an Agent that claims the Task. |
+| Start an Agent on an Issue | Keep | This is a Claim made at start: the supervisor on one of the requester's own hosts (Decided 5) starts an Agent that claims the Task. Claude Code first. |
 | Prompt carries only the reference, Issue text is untrusted | Keep | Issue bodies are written by anyone with access; the same frame should wrap them. |
 | Never close the Issue, never post unasked | Adapt | Switchboard closes Issues through `finish_task` and writes as the App (ADR 0007), so the rule becomes: Agents never write to GitHub outside Switchboard's tools. |
 | Done is the human's move | Adapt | Merging the pull request is the human's move; the Task closes from that. |
@@ -373,8 +412,8 @@ shows them. Until it exists, an Agent is only Live, Idle or Gone.
 | Question unanswered for 15 minutes | Adapt | Shown to the owning Person first, on the node and in the feed; the lead hears only after the wait, because it cannot answer for the Person. |
 | Notice choices (retry, reassign, skip, stop) | Keep | A lead needs the same short menu, as controls on the node and as tools. |
 | Agent-to-agent messages | Adapt | Addressed Updates (issue #64): information, framed as such, with the Relay deciding the Verdict. Rate limits already exist as the Wake limit. |
-| Messaging switch off by default | Adapt | Not needed as a switch: ADR 0005 already makes Agent messages harmless as instructions. |
-| Messages from a lead with instruction weight | Adapt | Only if issue #101 decides a lead may send Directives; then they carry the Person's name as granter and the Person can always override. |
+| Messaging switch off by default | Adapt | Replaced by the grant: messages carry instruction weight only from a lead to its subtree, so ordinary Agent messages need no switch. |
+| Messages from a lead with instruction weight | Keep (Decided 1) | A lead sends Directives to the Agents in its own subtree, within the per-Channel cap. Each one is an audited Event naming the lead and the Person who granted the role, and that Person can always override. |
 | People messaging an Agent from the board | Keep | That is a Directive, sent from the node or the card. |
 | Outcome reports | Adapt | Becomes an Update with an outcome when a Task is finished or released, so the canvas and any waiting start read it. |
 | Verify panel | Adapt | A lead (or a Person) starts reviewer Agents on a Task's pull request, each read-only, and a judge whose verdict is an Update on the Task. Later, after the supervisor. |
@@ -385,10 +424,10 @@ shows them. Until it exists, an Agent is only Live, Idle or Gone.
 | --- | --- | --- |
 | Per-node identity | Keep | Already the Agent token (ADR 0007); the canvas adds nothing an Agent token can do for another Agent. |
 | Confirm before stop and before typing | Keep | Stopping an Agent loses its uncommitted work; ask, and record the stop as an Event. |
-| Settings allowlist for agents | Adapt | A lead's powers are a list a Person grants per Channel; nothing on it lets it widen itself. |
+| Settings allowlist for agents | Adapt (Decided 1) | A lead's powers come from a role a Person grants, bounded by its subtree and the per-Channel cap; nothing it can do widens either. |
 | Live cursors and facepile | Drop | The Channel's feed already shows who is doing what; cursors are a lot of state for a little warmth. |
 | Who is watching a terminal | Keep | When a Person attaches to an Agent's terminal, everyone sees who is attached. |
-| Several people typing into one terminal | Drop | Only the owning Person types; others send Directives. |
+| Several people typing into one terminal | Adapt (Decided 4) | The owner and whoever the owner allows can attach and type; each keystroke counts as that Person's input and everyone sees who is attached. |
 | Several projects in tabs | Adapt | Becomes the Channel switcher; my fleet spans Channels. |
 | Dictation, notch, phone app, command palette | Drop | Outside the Dashboard's job for now. |
 
@@ -397,7 +436,7 @@ shows them. Until it exists, an Agent is only Live, Idle or Gone.
 | Agent state | Node |
 | --- | --- |
 | Live, working | Status dot and "running", the latest activity line, the context meter, its Task's frame around it. |
-| Live, needs its Person | "Needs you", with approve and deny for its own Person only. Other People see the label and no buttons. |
+| Live, needs its Person | "Needs you", with approve and deny for its own Person. Other People see the label, and those allowed to attach can answer in the terminal. |
 | Idle | Dimmed dot and "idle", with what is Queued for it and when it will be Woken. |
 | Gone with a Claim | "Gone", the Stale Claim on its frame and a Takeover control for People. |
 | Gone without a Claim | Faded, folded into its Person's lane after a while. |
@@ -409,13 +448,17 @@ shows them. Until it exists, an Agent is only Live, Idle or Gone.
 
 ### Questions for ADRs
 
+The Decided points still need their ADRs written (Decided 1 supersedes ADR 0005). Open
+beyond them:
+
 1. Whether a Person's hidden Agents send Events to any Channel, and who can see them.
 2. The host supervisor: its API, how a hosted page reaches it (through the wrapper's
    existing socket to the Worker, never an open port), and what a start request holds.
-3. The lead role (issue #101): which controls it gets, whether its messages carry
-   instruction weight, and how a Person revokes it.
-4. Memory notes: where they live, who may write them, and how notes from People differ
-   from notes from Agents.
-5. The live terminal: what the wrapper streams, how it is masked, and how typing from the
-   Dashboard is authenticated as the owning Person.
-6. Whether context links change Relay Verdicts, or only add a read tool.
+   Decided 5 fixes where spawns run.
+3. The lead role: the size and shape of the per-Channel cap, and how a Person revokes a
+   role mid-run.
+4. The live terminal: what the wrapper streams, and how a keystroke from the Dashboard is
+   authenticated as the Person who typed it.
+5. Whether context links change Relay Verdicts, or are only drawn.
+6. Whether someone allowed to attach may also answer permission prompts with the
+   approve and deny buttons.
