@@ -26,6 +26,9 @@ export interface ChannelState {
   verdictsByEvent: Map<string, Verdict[]>;
   /** Event ids that arrived live in this session, for enter animations. */
   fresh: Set<string>;
+  /** Set while the Channel has Events older than `events` to page back to: the `seq` to page back from. */
+  olderBefore?: number;
+  loadingOlder: boolean;
 }
 
 type Listener = () => void;
@@ -41,6 +44,7 @@ export class ChannelStore {
     events: [],
     verdictsByEvent: new Map(),
     fresh: new Set(),
+    loadingOlder: false,
   };
   private listeners = new Set<Listener>();
   private messageListeners = new Set<(m: StreamMessage) => void>();
@@ -84,10 +88,19 @@ export class ChannelStore {
       .snapshot()
       .then((snap) => {
         if (cancelled) return;
-        const { events, verdicts, agents, tasks, accounts = [], ...rest } = snap;
+        const { events, verdicts, agents, tasks, accounts = [], olderBefore, ...rest } = snap;
         const byEvent = new Map<string, Verdict[]>();
         for (const v of verdicts) byEvent.set(v.event, [...(byEvent.get(v.event) ?? []), v]);
-        this.set({ status: "ready", snapshot: rest, events, agents, accounts, tasks, verdictsByEvent: byEvent });
+        this.set({
+          status: "ready",
+          snapshot: rest,
+          events,
+          agents,
+          accounts,
+          tasks,
+          verdictsByEvent: byEvent,
+          olderBefore,
+        });
         stop = this.source.subscribe(snap.cursor, (m) => this.apply(m), (connection) => this.set({ connection }));
       })
       .catch((e: unknown) => {
@@ -97,6 +110,29 @@ export class ChannelStore {
       cancelled = true;
       stop?.();
     };
+  }
+
+  /** Loads the page of Events before the oldest one loaded, if the Channel has older ones. */
+  async loadOlder(): Promise<void> {
+    const before = this.state.olderBefore;
+    if (before === undefined || this.state.loadingOlder) return;
+    this.set({ loadingOlder: true });
+    try {
+      const page = await this.source.olderEvents(before);
+      const s = this.state;
+      const known = new Set(s.events.map((e) => e.id));
+      const byEvent = new Map(s.verdictsByEvent);
+      for (const v of page.verdicts) byEvent.set(v.event, [v, ...(byEvent.get(v.event) ?? [])]);
+      this.set({
+        events: [...page.events.filter((e) => !known.has(e.id)), ...s.events],
+        verdictsByEvent: byEvent,
+        olderBefore: page.olderBefore,
+        loadingOlder: false,
+      });
+    } catch {
+      // Scrolling up again tries again.
+      this.set({ loadingOlder: false });
+    }
   }
 
   private apply(m: StreamMessage) {

@@ -62,24 +62,28 @@ export function lastUpdate(
   since: string,
 ): { text: string; at: string } | undefined {
   const value = holder.kind === "agent" ? holder.agentId : holder.person;
-  const who = "type = 'update' AND actor_kind = ? AND actor_id = ?";
-  const row =
+  const onTask = sql
+    .exec<PayloadRow>(
+      `SELECT payload, at FROM events INDEXED BY events_updates_by_actor_task
+       WHERE type = 'update' AND actor_kind = ? AND actor_id = ? AND task = ? ORDER BY seq DESC LIMIT 1`,
+      holder.kind,
+      value,
+      task,
+    )
+    .toArray()[0];
+  // Events are stored in time order, so only the holder's newest Update can be from
+  // after `since`: one row, where filtering on `at` in SQL would read all of them.
+  const newest =
+    onTask ??
     sql
       .exec<PayloadRow>(
-        `SELECT payload, at FROM events WHERE ${who} AND task = ? ORDER BY seq DESC LIMIT 1`,
+        `SELECT payload, at FROM events INDEXED BY events_updates_by_actor
+         WHERE type = 'update' AND actor_kind = ? AND actor_id = ? ORDER BY seq DESC LIMIT 1`,
         holder.kind,
         value,
-        task,
-      )
-      .toArray()[0] ??
-    sql
-      .exec<PayloadRow>(
-        `SELECT payload, at FROM events WHERE ${who} AND at >= ? ORDER BY seq DESC LIMIT 1`,
-        holder.kind,
-        value,
-        since,
       )
       .toArray()[0];
+  const row = onTask ?? (newest !== undefined && newest.at >= since ? newest : undefined);
   return row === undefined ? undefined : { text: (JSON.parse(row.payload) as { text: string }).text, at: row.at };
 }
 

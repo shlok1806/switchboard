@@ -55,6 +55,11 @@ export class MockChannelSource implements ChannelSource {
     });
   }
 
+  /** The simulated Channel's snapshot holds its whole history. */
+  async olderEvents(): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">> {
+    return { events: [], verdicts: [] };
+  }
+
   subscribe(_cursor: number, onMessage: (m: StreamMessage) => void, onState: (s: ConnectionState) => void) {
     this.listeners.add(onMessage);
     onState("connecting");

@@ -16,6 +16,7 @@ import type {
   HistoryResponse,
   JoinRequest,
   JoinResponse,
+  PersonsResponse,
   PostUpdateResponse,
   RelayResponse,
 } from "../../shared/src/index";
@@ -65,7 +66,9 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
     if (tail === null || tail < 1 || tail > MAX_HISTORY_LIMIT) {
       return fail(400, `"tail" must be between 1 and ${MAX_HISTORY_LIMIT}.`);
     }
-    const events = await channel.latestEvents(tail);
+    const before = intParam(url, "before", Number.MAX_SAFE_INTEGER);
+    if (before === null) return fail(400, '"before" must be a non-negative integer.');
+    const events = await channel.latestEvents(tail, before);
     return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? 0 });
   }
   const after = intParam(url, "after", 0);
@@ -109,6 +112,7 @@ async function handleStream(request: Request, url: URL, channel: ChannelStub, ca
 const ROUTES = new Set([
   "POST /api/join",
   "GET /api/events",
+  "GET /api/persons",
   "GET /api/relay",
   "POST /api/updates",
   "GET /api/stream",
@@ -191,6 +195,8 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       return handleJoin(request, channel, caller);
     case "GET /api/events":
       return handleHistory(inner, channel);
+    case "GET /api/persons":
+      return json<PersonsResponse>({ persons: await channel.listPersons() });
     case "GET /api/relay":
       return json<RelayResponse>({ relay: relaySettings(env) });
     case "POST /api/updates":

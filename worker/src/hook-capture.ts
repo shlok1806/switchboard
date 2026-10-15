@@ -41,6 +41,7 @@ export const HOOK_CAPTURE_SCHEMA = `
     last_seq INTEGER NOT NULL,
     PRIMARY KEY (agent, path)
   );
+  CREATE INDEX IF NOT EXISTS touched_files_by_recency ON touched_files (agent, last_seq);
 `;
 
 type TouchedFileRow = {
@@ -163,6 +164,13 @@ function rowToTouchedFile(row: TouchedFileRow): TouchedFile {
 }
 
 export class HookCapture {
+  /**
+   * Each Agent's touched files once read, kept in step by `touch`, the table's only
+   * writer. The Relay reads every live Agent's files for nearly every Event it
+   * considers, so they come from memory, not from `touched_files`, while this object lives.
+   */
+  private readonly touched = new Map<AgentId, TouchedFile[]>();
+
   constructor(private readonly host: HookCaptureHost) {}
 
   /** Handles one message from a wrapper's WebSocket, sent by `person`. */
@@ -206,10 +214,14 @@ export class HookCapture {
 
   /** The files Agent `id` has edited, most recently edited first. */
   touchedFiles(id: AgentId): TouchedFile[] {
-    return this.host.sql
+    const known = this.touched.get(id);
+    if (known !== undefined) return known;
+    const files = this.host.sql
       .exec<TouchedFileRow>("SELECT * FROM touched_files WHERE agent = ? ORDER BY last_seq DESC", id)
       .toArray()
       .map(rowToTouchedFile);
+    this.touched.set(id, files);
+    return files;
   }
 
   private touch(actor: ChannelEvent["actor"], event: Extract<ChannelEvent, { type: "file.edit" }>): void {
@@ -225,5 +237,13 @@ export class HookCapture {
       event.at,
       event.seq,
     );
+    const known = this.touched.get(actor.agentId);
+    if (known === undefined) return;
+    const { path } = event.payload;
+    const before = known.find((f) => f.path === path);
+    const file: TouchedFile = before
+      ? { ...before, edits: before.edits + 1, lastEditedAt: event.at }
+      : { path, edits: 1, firstEditedAt: event.at, lastEditedAt: event.at };
+    this.touched.set(actor.agentId, [file, ...known.filter((f) => f.path !== path)]);
   }
 }

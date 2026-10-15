@@ -121,6 +121,7 @@ export function createEventsTable(sql: SqlStorage): void {
     CREATE INDEX IF NOT EXISTS events_code ON events (seq) WHERE type IN ('push', 'merge');
     CREATE INDEX IF NOT EXISTS events_updates_by_task ON events (task, seq) WHERE type = 'update';
     CREATE INDEX IF NOT EXISTS events_updates_by_actor ON events (actor_kind, actor_id, seq) WHERE type = 'update';
+    CREATE INDEX IF NOT EXISTS events_updates_by_actor_task ON events (actor_kind, actor_id, task, seq) WHERE type = 'update';
   `);
 }
 
@@ -629,12 +630,18 @@ export class Channel extends DurableObject<Env> {
       .map(rowToEvent);
   }
 
-  /** The latest `count` Events, oldest first. */
-  latestEvents(count: number): ChannelEvent[] {
+  /** The latest `count` Events with `seq` below `before`, oldest first. */
+  latestEvents(count: number, before = Number.MAX_SAFE_INTEGER): ChannelEvent[] {
     return this.ctx.storage.sql
-      .exec<EventRow>("SELECT * FROM (SELECT * FROM events ORDER BY seq DESC LIMIT ?) ORDER BY seq", count)
+      .exec<EventRow>("SELECT * FROM events WHERE seq < ? ORDER BY seq DESC LIMIT ?", before, count)
       .toArray()
+      .reverse()
       .map(rowToEvent);
+  }
+
+  /** Every Person who has joined the Channel. */
+  listPersons(): Person[] {
+    return this.ctx.storage.sql.exec<PersonRow>("SELECT * FROM persons ORDER BY name").toArray().map(rowToPerson);
   }
 
   /**
