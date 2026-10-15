@@ -19,6 +19,7 @@ import { StartAgentButton } from "@/components/domain/start-agent";
 import { Glyph, State, useAgentStates, useNeedsYou } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { PageHead } from "@/components/shell/page-head";
+import { Section } from "@/components/shell/section";
 import { useChannel, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -29,6 +30,7 @@ import {
   edgePoints,
   fit,
   frameRect,
+  MIN_ZOOM,
   groups as groupOrder,
   place,
   zoomAt,
@@ -81,6 +83,21 @@ function age(a: Agent, state: AgentState): string {
   return elapsed(a.startedAt);
 }
 
+/**
+ * A Task's title cut at a word to fit a node's line, never with an ellipsis (design.md); the
+ * whole title is in the node's label and the inspector.
+ */
+export function shortTitle(title: string, max = 26): string {
+  if (title.length <= max) return title;
+  const words = title.split(/\s+/);
+  let out = words[0]!;
+  for (const w of words.slice(1)) {
+    if (out.length + 1 + w.length > max) break;
+    out += ` ${w}`;
+  }
+  return out;
+}
+
 /** A frame's name: the Host, or the Person's terminals for Agents started by hand. */
 const frameName = (g: Group) => (g.host ? hostName(g.host) : "terminals");
 
@@ -96,6 +113,7 @@ const Node = memo(function Node({
   repo,
   at,
   selected,
+  filtered,
   muted,
   onPointerDown,
   onSelect,
@@ -107,7 +125,9 @@ const Node = memo(function Node({
   repo?: string;
   at: Point;
   selected: boolean;
-  /** Left out by the filter, or Gone with nothing held: drawn quieter. */
+  /** Left out by the filter: not drawn, and out of the Tab order, but keeping its place. */
+  filtered: boolean;
+  /** Gone with nothing held: drawn quieter. */
   muted: boolean;
   onPointerDown: (e: ReactPointerEvent<HTMLElement>, id: AgentId) => void;
   onSelect: (id: AgentId) => void;
@@ -119,20 +139,22 @@ const Node = memo(function Node({
   return (
     <div
       data-node={agent.id}
+      hidden={filtered}
       onPointerDown={(e) => onPointerDown(e, agent.id)}
       style={{ left: at.x, top: at.y, width: NODE_W, height: NODE_H }}
       className={cn(
         "group absolute rounded-[var(--r)] border border-rule-2 bg-paper transition-opacity duration-[var(--dur)] select-none hover:bg-paper-2",
         state === "needs" || state === "needs-other" || state === "stale" ? "border-2 border-signal" : undefined,
         selected && "outline-2 outline-offset-2 outline-ink outline-solid",
-        muted && "opacity-55",
+        // Gone with nothing held: only its outline goes quiet, its words stay readable.
+        muted && "border-rule",
       )}
     >
       {/* The whole node selects it; the controls sit above this. */}
       <button
         type="button"
         aria-pressed={selected}
-        aria-label={`${name(agent)}, ${agent.person}'s ${CLI_LABEL[agent.cli]} Agent, ${stateWord(state, agent.person)}`}
+        aria-label={`${name(agent)}, ${agent.person}'s ${CLI_LABEL[agent.cli]} Agent, ${stateWord(state, agent.person)}${task ? `, #${task.number} ${task.title}` : ""}`}
         onClick={() => onSelect(agent.id)}
         onFocus={(e) => onFocus(e, agent.id)}
         className="absolute inset-0 cursor-grab rounded-[var(--r)] active:cursor-grabbing"
@@ -143,7 +165,9 @@ const Node = memo(function Node({
           <span className={cn("min-w-0 flex-1 truncate text-row font-semibold", state === "gone" ? "text-ink-3" : "text-ink")}>{shortName(agent)}</span>
           {agent.role === "lead" && <span className="shrink-0 rounded-[var(--r)] border border-rule-2 px-1.5 text-ink-3">lead</span>}
         </span>
-        <span className="min-w-0 truncate text-ink-3">{task ? `#${task.number} ${task.title}` : "No Claim"}</span>
+        <span className="min-w-0 whitespace-nowrap text-ink-3" title={task?.title}>
+          {task ? `#${task.number} ${shortTitle(task.title)}` : "No Claim"}
+        </span>
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums">
           <span className={needsPerson(state) ? "font-semibold text-signal" : "font-medium text-ink"}>{stateWord(state, agent.person)}</span>
           <span aria-hidden>·</span>
@@ -160,7 +184,7 @@ const Node = memo(function Node({
         </span>
         <span className="pointer-events-auto mt-auto flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
           {asking?.deniable && !asking.deniedBy && <DenyAction agent={agent} id={asking.id} tool={asking.tool} size="sm" />}
-          {state === "stale" && task && <TakeoverAction task={task} line />}
+          {state === "stale" && task && <TakeoverAction task={task} line size="sm" />}
           {review !== undefined && repo && (
             <a href={`https://github.com/${repo}/pull/${review}`} target="_blank" rel="noreferrer" className={buttonVariants({ size: "sm" })}>
               Review PR #{review}
@@ -175,7 +199,11 @@ const Node = memo(function Node({
   );
 });
 
-/** A Host's frame: a rule-2 outline with its name and Person on the top rule. */
+/**
+ * A Host's frame: a rule-2 outline with its name and Person on the top rule. design.md puts
+ * the Host's capacity there ("shlok · 3 of 8"), but a Host does not report how many Agents
+ * it may run, only the Channel's cap across all Hosts, so the frame counts its Agents.
+ */
 function Frame({ group, rect, me }: { group: Group; rect: Rect; me: string }) {
   return (
     <div data-ground data-frame={group.key} style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} className="absolute rounded-[var(--r)] border border-rule-2">
@@ -183,7 +211,6 @@ function Frame({ group, rect, me }: { group: Group; rect: Rect; me: string }) {
         <span className="font-semibold text-ink">{frameName(group)}</span>
         <span className="text-ink-3 tabular-nums">
           {group.person === me ? `${group.person} (you)` : group.person} · {group.agents.length} {group.agents.length === 1 ? "Agent" : "Agents"}
-          {!group.host && " started by hand"}
         </span>
       </span>
     </div>
@@ -240,6 +267,11 @@ function Minimap({ frames, camera, size, onMove }: { frames: Rect[]; camera: Cam
 /** The open Agent (design.md's inspector): who and where, its Ask, its Task's Steps, and where it runs. */
 function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; state: AgentState; tasks: Task[]; sheet: boolean; onClose: () => void }) {
   const me = useMe();
+  const root = useRef<HTMLElement>(null);
+  // On a phone the inspector is a sheet over the canvas: it takes focus when it opens.
+  useEffect(() => {
+    if (sheet) root.current?.focus();
+  }, [sheet, agent.id]);
   const { agents } = useChannel();
   const parent = agent.parent ? agents.find((a) => a.id === agent.parent) : undefined;
   const children = agents.filter((a) => a.parent === agent.id);
@@ -254,7 +286,16 @@ function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; stat
     .join(" ");
   return (
     <aside
+      ref={root}
+      role={sheet ? "dialog" : undefined}
+      tabIndex={sheet ? -1 : undefined}
       aria-label={`${name(agent)} on the canvas`}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
       className={cn(
         "flex min-h-0 flex-col gap-5 overflow-y-auto bg-paper",
         sheet ? "absolute inset-x-0 bottom-0 z-10 max-h-[60%] border-t border-rule-2 p-4" : "w-[320px] shrink-0 border-l border-rule pl-5",
@@ -278,14 +319,11 @@ function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; stat
           </a>
         </div>
       </div>
-      {agent.approval && agent.presence !== "gone" && <PendingApproval agent={agent} />}
+      {agent.approval && agent.presence !== "gone" && <PendingApproval agent={agent} openLink={false} />}
       {tasks.map((t) => (
-        <Steps key={t.number} task={t} />
+        <Steps key={t.number} task={t} as="h3" />
       ))}
-      <section aria-labelledby="inspector-where" className="flex flex-col gap-3">
-        <h3 id="inspector-where" className="border-b border-rule-2 pb-2 text-title font-semibold text-ink">
-          Where
-        </h3>
+      <Section title="Where" as="h3">
         <Facts
           rows={[
             ["Host", agent.host ? hostName(agent.host) : "a terminal", !agent.host && "started by hand"],
@@ -294,7 +332,7 @@ function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; stat
             ["Started by", parent ? shortName(parent) : agent.person, parent && "a lead"],
           ]}
         />
-      </section>
+      </Section>
     </aside>
   );
 }
@@ -344,8 +382,13 @@ export function CanvasView({ selected }: { selected?: string }) {
     return () => observer.disconnect();
   }, []);
 
+  // A phone sees every frame at once and zooms in from there; a desktop starts readable, at 100%.
+  const firstView = useCallback(
+    () => fit(bounds(allRects), size.w, size.h, mobile ? MIN_ZOOM : FIRST_ZOOM, mobile ? 16 : 32, "start"),
+    [allRects, size, mobile],
+  );
   // The first time there is room and nodes, frame them all. After that the camera moves only when the Person moves it.
-  const camera = view.camera ?? (size.w ? fit(bounds(allRects), size.w, size.h, FIRST_ZOOM, 32, "start") : { x: 0, y: 0, k: 1 });
+  const camera = view.camera ?? (size.w ? firstView() : { x: 0, y: 0, k: 1 });
   const setCamera = useCallback(
     (next: Camera | ((c: Camera) => Camera)) => {
       setView((v) => {
@@ -356,8 +399,8 @@ export function CanvasView({ selected }: { selected?: string }) {
     [camera],
   );
   useEffect(() => {
-    if (!view.camera && size.w && allRects.length) setView((v) => (v.camera ? v : { ...v, camera: fit(bounds(allRects), size.w, size.h, FIRST_ZOOM, 32, "start") }));
-  }, [view.camera, size, allRects]);
+    if (!view.camera && size.w && allRects.length) setView((v) => (v.camera ? v : { ...v, camera: firstView() }));
+  }, [view.camera, size, allRects, firstView]);
   const fitAll = () => setCamera(fit(bounds(allRects), size.w, size.h));
   const zoomBy = (factor: number) => setCamera((c) => zoomAt(c, factor, { x: size.w / 2, y: size.h / 2 }));
   const centerOn = (p: Point) => setCamera((c) => ({ ...c, x: size.w / 2 - p.x * c.k, y: size.h / 2 - p.y * c.k }));
@@ -534,7 +577,7 @@ export function CanvasView({ selected }: { selected?: string }) {
           </Chip>
         </div>
         <span className="text-small font-medium text-ink-2 max-sm:hidden">Laid out by Host</span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2 max-sm:ml-0">
           <Button onClick={fitAll}>Fit</Button>
           <Button onClick={() => setView({ positions: {} })}>Reset layout</Button>
           <StartAgentButton />
@@ -585,7 +628,7 @@ export function CanvasView({ selected }: { selected?: string }) {
                 {agents.map((a) => {
                   const from = a.parent ? at.get(a.parent) : undefined;
                   const to = at.get(a.id);
-                  if (!from || !to) return null;
+                  if (!from || !to || !shown(a) || !agents.some((p) => p.id === a.parent && shown(p))) return null;
                   const active = selected === a.id || selected === a.parent;
                   return (
                     <polyline
@@ -616,7 +659,8 @@ export function CanvasView({ selected }: { selected?: string }) {
                       repo={snapshot?.channel.repo}
                       at={at.get(a.id) ?? ORIGIN}
                       selected={selected === a.id}
-                      muted={!shown(a) || (state === "gone" && !claims.has(a.id))}
+                      filtered={!shown(a)}
+                      muted={state === "gone" && !claims.has(a.id)}
                       onPointerDown={onNodeDown}
                       onSelect={onNodeSelect}
                       onFocus={onNodeFocus}

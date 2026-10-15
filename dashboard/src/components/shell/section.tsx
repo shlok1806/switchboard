@@ -25,6 +25,7 @@ export function Section({
   children,
   className,
   bodyClassName,
+  as,
 }: {
   title: ReactNode;
   meta?: ReactNode;
@@ -32,10 +33,12 @@ export function Section({
   children: ReactNode;
   className?: string;
   bodyClassName?: string;
+  /** The heading level, so a section inside another titled region never skips one. */
+  as?: "h2" | "h3";
 }) {
   return (
     <section className={cn("flex min-w-0 flex-col", className)}>
-      <SectionHead title={title} meta={meta} action={action} />
+      <SectionHead title={title} meta={meta} action={action} as={as} />
       <div className={cn("pt-3", bodyClassName)}>{children}</div>
     </section>
   );

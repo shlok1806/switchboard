@@ -121,27 +121,34 @@ function slot(origin: Point, n: number, i: number): Point {
   return { x: origin.x + FRAME_PAD + (i % cols) * (NODE_W + GAP), y: origin.y + FRAME_TOP + Math.floor(i / cols) * (NODE_H + GAP) };
 }
 
+function intersects(a: Rect, b: Rect, gap = 0): boolean {
+  return a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+}
+
 /**
- * A position for every Agent: its `saved` one if it has one, else the first free slot of
- * its frame. Frames sit in rows, left to right; a frame with no saved node on a canvas that
- * already has some opens below everything placed, so it never lands inside another.
+ * A position for every Agent: its `saved` one if it has one, else a free slot of its frame.
+ * On a canvas with nothing saved, frames sit in rows, left to right. Once positions are
+ * saved, nothing drawn moves: a new Agent joins its siblings in the first slot of their
+ * grid that keeps its frame clear of every other frame, and a frame with no saved node
+ * opens below everything drawn.
  */
 export function place(list: Group[], saved: Record<string, Point>): Map<AgentId, Point> {
   const out = new Map<AgentId, Point>();
-  const taken: Rect[] = [];
   for (const g of list)
     for (const a of g.agents) {
       const p = saved[a.id];
-      if (p) {
-        out.set(a.id, p);
-        taken.push(nodeRect(p));
-      }
+      if (p) out.set(a.id, p);
     }
-  const anySaved = taken.length > 0;
-  const below = anySaved ? Math.max(...taken.map((r) => r.y + r.h)) + FRAME_PAD + FRAME_GAP : 0;
-  // Where each frame starts when nothing is saved, and where a new frame opens when something is.
+  const anySaved = out.size > 0;
+  const nodesOf = (g: Group) => g.agents.flatMap((a) => (out.has(a.id) ? [out.get(a.id)!] : []));
+  /** Every other frame as drawn so far. */
+  const othersOf = (g: Group) => list.flatMap((h) => (h === g ? [] : [frameRect(nodesOf(h))].filter((r): r is Rect => r !== null)));
+  const free = (g: Group, p: Point) =>
+    !list.some((h) => nodesOf(h).some((q) => overlaps(nodeRect(q), nodeRect(p)))) &&
+    !othersOf(g).some((r) => intersects(r, frameRect([...nodesOf(g), p])!, FRAME_GAP));
+
+  // Where each frame starts on a fresh canvas.
   const flow = { x: 0, y: 0, row: 0 };
-  const fresh = { x: 0, y: below, row: 0 };
   const next = (cursor: typeof flow, size: { w: number; h: number }): Point => {
     if (cursor.x > 0 && cursor.x + size.w > ROW_WIDTH) {
       cursor.x = 0;
@@ -153,20 +160,45 @@ export function place(list: Group[], saved: Record<string, Point>): Map<AgentId,
     cursor.row = Math.max(cursor.row, size.h);
     return at;
   };
+  // Where a new frame opens on a drawn canvas: below everything, as it is when first needed.
+  let below: typeof flow | null = null;
+  const opening = (size: { w: number; h: number }) => {
+    if (below === null) {
+      const drawn = bounds(list.flatMap((h) => [frameRect(nodesOf(h))].filter((r): r is Rect => r !== null)));
+      below = { x: 0, y: drawn ? drawn.y + drawn.h + FRAME_GAP : 0, row: 0 };
+    }
+    return next(below, size);
+  };
+
   for (const g of list) {
     const size = frameSize(g.agents.length);
     const home = next(flow, size);
     const missing = g.agents.filter((a) => !out.has(a.id));
     if (missing.length === 0) continue;
-    const hasSaved = g.agents.some((a) => out.has(a.id));
-    const origin = hasSaved || !anySaved ? home : next(fresh, size);
+    const siblings = nodesOf(g);
+    if (siblings.length > 0) {
+      // Beside its siblings: their frame's own grid, from its top left, as far down as it takes.
+      const box = frameRect(siblings)!;
+      const origin = { x: box.x, y: box.y };
+      for (const a of missing) {
+        let at: Point | undefined;
+        for (let i = 0; at === undefined && i < 400; i++) {
+          const p = slot(origin, g.agents.length, i);
+          if (free(g, p)) at = p;
+        }
+        // Boxed in on every side: start a frame of its own below everything instead.
+        at ??= slot(opening(frameSize(1)), 1, 0);
+        out.set(a.id, at);
+      }
+      continue;
+    }
+    const origin = anySaved ? opening(size) : home;
     let i = 0;
     for (const a of missing)
       for (;; i++) {
         const p = slot(origin, g.agents.length, i);
-        if (!taken.some((r) => overlaps(r, nodeRect(p)))) {
+        if (free(g, p)) {
           out.set(a.id, p);
-          taken.push(nodeRect(p));
           i++;
           break;
         }

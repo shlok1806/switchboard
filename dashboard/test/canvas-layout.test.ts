@@ -109,6 +109,36 @@ describe("placing nodes", () => {
     expect(after.get(dev.id)!.y).toBeGreaterThan(bottom);
   });
 
+  it("a new Agent joins beside its siblings after an earlier frame has grown", () => {
+    const box = agent("ana", { host: "ana/box" as HostId });
+    const studio = Array.from({ length: 4 }, () => agent("shlok", { host: "shlok/studio" as HostId }));
+    const first = [...studio, box];
+    const saved = Object.fromEntries(place(groups(first, [], "shlok"), {}));
+    const joinedStudio = agent("shlok", { host: "shlok/studio" as HostId });
+    const joinedBox = agent("ana", { host: "ana/box" as HostId });
+    const now = [...first, joinedStudio, joinedBox];
+    const list = groups(now, [], "shlok");
+    const at = place(list, saved);
+    for (const a of first) expect(at.get(a.id)).toEqual(saved[a.id]);
+    expectNoOverlap(at);
+    const frames = list.map((g) => frameRect(g.agents.map((a) => at.get(a.id)!))!);
+    for (let i = 0; i < frames.length; i++)
+      for (let j = i + 1; j < frames.length; j++) expect(apart(frames[i]!, frames[j]!), `frames ${i} and ${j}`).toBe(true);
+    // Each newcomer sits inside the frame drawn around its siblings before it joined.
+    const inside = (p: Point, r: Rect) => p.x >= r.x && p.y >= r.y && p.x + 212 <= r.x + r.w && p.y + 128 <= r.y + r.h;
+    for (const [joined, siblings] of [
+      [joinedStudio, studio],
+      [joinedBox, [box]],
+    ] as const) {
+      const own = frameRect([...siblings.map((a) => at.get(a.id)!), at.get(joined.id)!])!;
+      expect(inside(at.get(joined.id)!, own)).toBe(true);
+      // Next to its siblings: within one row or column of their frame, not across the canvas.
+      const before = frameRect(siblings.map((a) => at.get(a.id)!))!;
+      expect(at.get(joined.id)!.x).toBeLessThan(before.x + before.w + 212 + 48);
+      expect(at.get(joined.id)!.y).toBeLessThan(before.y + before.h + 128 + 48);
+    }
+  });
+
   it("lays a large frame out in rows of three, and wraps a row of frames", () => {
     const many = Array.from({ length: 9 }, () => agent("shlok"));
     const at = place(groups(many, [], "shlok"), {});
@@ -161,6 +191,11 @@ describe("the camera", () => {
     const large = fit({ x: 0, y: 0, w: 4000, h: 3000 }, 1000, 800, 0.85);
     expect(large.k).toBe(0.85);
     expect(large.y).toBe(40);
+    // From the top left, without a floor, as a phone first sees it: all of it, zoomed out.
+    const phone = fit({ x: 0, y: 0, w: 4000, h: 3000 }, 390, 600, undefined, 16, "start");
+    expect(phone.k).toBeLessThan(0.85);
+    expect(phone.x).toBe(16);
+    expect(phone.y).toBe(16);
     // Fitting without a floor zooms out instead.
     expect(fit({ x: 0, y: 0, w: 4000, h: 3000 }, 1000, 800).k).toBeLessThan(0.85);
   });

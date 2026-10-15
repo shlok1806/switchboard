@@ -371,7 +371,6 @@ function DirectiveForm({ agent, events, inputRef }: { agent: Agent; events: Chan
   );
 }
 
-
 /** The account it runs under (ADR 0011): who, its limits and what this session used. */
 function Account({ agent }: { agent: Agent }) {
   const { accounts, snapshot } = useChannel();

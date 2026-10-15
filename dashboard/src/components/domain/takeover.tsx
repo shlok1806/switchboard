@@ -13,7 +13,19 @@ import { cn } from "@/lib/utils";
  * holder (themselves or one of their own Live or Idle Agents) and confirms in a
  * dialog; the Channel's answer, or its refusal, comes back as a toast.
  */
-export function TakeoverAction({ task, compact = false, line = false }: { task: Task; compact?: boolean; /** A queue line's primary action, naming the Task. */ line?: boolean }) {
+export function TakeoverAction({
+  task,
+  compact = false,
+  line = false,
+  size,
+}: {
+  task: Task;
+  compact?: boolean;
+  /** A queue line's primary action, naming the Task. */
+  line?: boolean;
+  /** Overrides the size the other two set, as on a canvas node. */
+  size?: "xs" | "sm" | "md";
+}) {
   const store = useStore();
   const me = useMe();
   const { agents } = useChannel();
@@ -49,7 +61,7 @@ export function TakeoverAction({ task, compact = false, line = false }: { task: 
     <>
       <Button
         variant={compact || line ? "primary" : "action"}
-        size={line ? "md" : compact ? "xs" : "sm"}
+        size={size ?? (line ? "md" : compact ? "xs" : "sm")}
         className={compact || line ? undefined : "w-full"}
         onClick={(e) => {
           e.stopPropagation();

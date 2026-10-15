@@ -10,13 +10,14 @@ import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
 /** A Task the Agent holds, with its Steps: done, the one it is on, and the rest. */
-export function Steps({ task }: { task: Task }) {
+export function Steps({ task, as }: { task: Task; as?: "h2" | "h3" }) {
   const blockedBy = task.claim?.blockedBy ?? [];
   // A Stale or blocked Claim is not working on any Step, so none is shown in progress.
   const halted = task.claim?.stale === true || blockedBy.length > 0;
   const next = halted ? -1 : task.steps.findIndex((s) => !s.done);
   return (
     <Section
+      as={as}
       title={
         <a href={href({ view: "task", number: task.number })} className="hover:underline">
           #{task.number} {task.title}

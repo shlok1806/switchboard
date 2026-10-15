@@ -137,6 +137,7 @@ export const agents: Agent[] = [
     person: "shlok",
     cli: "codex",
     parent: A.shlokClaude,
+    host: "shlok/studio",
     account: "work",
     model: "gpt-5-codex",
     presence: "idle",

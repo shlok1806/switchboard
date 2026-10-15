@@ -90,16 +90,42 @@ afterEach(cleanup);
 describe("the canvas", () => {
   it("draws every Agent with its state and Task, a frame for where it runs, and an edge from a lead", async () => {
     const { container } = render(<CanvasView />, { wrapper: channel([lead, child, maya]) });
-    expect(await node(/^planner, shlok's Claude Code Agent, Running$/)).toBeTruthy();
+    expect(await node(/^planner, shlok's Claude Code Agent, Running, #12 Fix the login redirect$/)).toBeTruthy();
     expect(await node(/^shlok\/codex\/bbbb, shlok's Codex Agent, Running$/)).toBeTruthy();
     expect(await node(/^maya\/claude\/cccc, maya's Claude Code Agent, Gone$/)).toBeTruthy();
     expect(screen.getByText("#12 Fix the login redirect")).toBeTruthy();
     expect([...container.querySelectorAll("[data-edge]")].map((p) => p.getAttribute("data-edge"))).toEqual([`${lead.id} ${child.id}`]);
     // One frame for each Person's hand-started Agents, the signed-in Person's first.
-    expect([...container.querySelectorAll("[data-frame]")].map((e) => e.textContent)).toEqual([
-      "terminalsshlok (you) · 2 Agents started by hand",
-      "terminalsmaya · 1 Agent started by hand",
-    ]);
+    const frames = [...container.querySelectorAll("[data-frame]")];
+    expect(frames.map((f) => f.querySelector("span > span:first-child")?.textContent)).toEqual(["terminals", "terminals"]);
+    expect(frames[0]!.textContent).toContain("shlok (you)");
+    expect(frames[0]!.textContent).toContain("2 Agents");
+    expect(frames[1]!.textContent).toContain("1 Agent");
+  });
+
+  it("puts an Agent a Host started in that Host's frame", async () => {
+    const onStudio = agent("shlok/claude/eeee", { host: "shlok/studio" as Agent["host"] });
+    const { container } = render(<CanvasView />, { wrapper: channel([onStudio, maya]) });
+    await node(/^shlok\/claude\/eeee/);
+    const studio = container.querySelector(`[data-frame="shlok/studio"]`)!;
+    expect(studio.querySelector("span > span:first-child")?.textContent).toBe("studio");
+    expect(studio.textContent).toContain("1 Agent");
+    expect(studio.textContent).not.toContain("by hand");
+  });
+
+  it("opens an Agent on a phone as a sheet that takes focus and closes on Escape", async () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    try {
+      window.location.hash = `#/canvas/${encodeURIComponent(child.id)}`;
+      render(<CanvasView selected={child.id} />, { wrapper: channel([lead, child]) });
+      const sheet = await screen.findByRole("dialog", { name: /shlok\/codex\/bbbb/ });
+      expect(document.activeElement).toBe(sheet);
+      fireEvent.keyDown(within(sheet).getByRole("link", { name: "Open the terminal" }), { key: "Escape" });
+      expect(window.location.hash).toBe("#/canvas");
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    }
   });
 
   it("puts the nodes in frame order, so Tab moves through the canvas the way it reads", async () => {
