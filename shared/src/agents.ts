@@ -227,6 +227,10 @@ export interface RegisterAgentRequest {
   /** The latest usage reading (ADR 0011). Omitted keeps the Channel's. */
   usage?: ReportedUsage;
   context?: AgentContext;
+  /** The name of the caller's Host that runs this session (ADR 0015); omitted for a terminal. */
+  host?: string;
+  /** The spawn request this session answers: the `agent.spawn` Event's ID, from the Host. */
+  spawn?: string;
 }
 
 /** `POST /api/agents` and `POST /api/agents/:id/heartbeat` answer with the Agent. */

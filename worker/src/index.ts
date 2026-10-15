@@ -4,6 +4,7 @@
 //   /<owner>/<repo>                 the Dashboard (the static site's index.html)
 //   /r/<owner>/<repo>/api/...       the Channel API, admitted by the Channel
 //   /auth/...                       sign-in with GitHub (auth-api.ts)
+//   /r/<owner>/<repo>/api/hosts...  Hosts, and starting and stopping Agents (hosts-api.ts)
 //   POST /api/github/webhook        GitHub's deliveries, routed by their repository
 //
 // Everything under /r/ needs a credential: a Person session or an Agent token
@@ -28,6 +29,7 @@ import { handleBranchRoute, matchBranchRoute } from "./branches-api";
 import type { Caller } from "./claims";
 import { handleClaimRoute, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
+import { HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } from "./hosts-api";
 import { fail, json, readJson } from "./http";
 import { relaySettings } from "./relay/relay";
 import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
@@ -101,10 +103,14 @@ async function handleStream(request: Request, url: URL, channel: ChannelStub, ca
   }
   const after = url.searchParams.get("after");
   if (after !== null && !/^\d+$/.test(after)) return fail(400, '"after" must be a non-negative integer.');
+  // A Host's socket (ADR 0015): one of its Person's own Hosts, never an Agent's.
+  const host = url.searchParams.get("host");
+  if (host !== null && caller.agent !== undefined) return fail(403, HOST_AGENT_REFUSED);
   // The Durable Object only ever sees the admitted Person and Agent, never a credential.
   const target = new URL("https://channel/stream");
   target.searchParams.set("person", caller.person);
   if (caller.agent !== undefined) target.searchParams.set("agent", caller.agent);
+  if (host !== null) target.searchParams.set("host", host);
   if (after !== null) target.searchParams.set("after", after);
   return channel.fetch(target, { headers: { Upgrade: "websocket" } });
 }
@@ -145,9 +151,11 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const claimRoute = matchClaimRoute(request.method, path);
   const branchRoute = matchBranchRoute(request.method, path);
   const takeoverTask = matchTakeoverRoute(request.method, path);
+  const hostRoute = matchHostRoute(request.method, path);
   if (
     !ROUTES.has(route) &&
     !taskRoute &&
+    hostRoute === null &&
     agentRoute === null &&
     claimRoute === null &&
     branchRoute === null &&
@@ -167,6 +175,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   };
 
   if (caller.agent !== undefined) {
+    if (hostRoute !== null) return fail(403, HOST_AGENT_REFUSED);
     const allowed =
       AGENT_ROUTES.has(route) ||
       (taskRoute && request.method === "GET") ||
@@ -185,6 +194,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   }
 
   if (taskRoute) return handleTaskRoute(request, inner, channel, caller);
+  if (hostRoute !== null) return handleHostRoute(hostRoute, request, channel, caller);
   if (agentRoute !== null) return handleAgentRoute(agentRoute, request, channel, caller);
   if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel, caller);
   if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel, caller);
