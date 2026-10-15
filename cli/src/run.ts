@@ -67,6 +67,7 @@ import { SessionContextReader } from "./session-context";
 import { channelCheckout, GitError } from "./task-worktree";
 import { cachedAttachList } from "./terminal/attach-keys";
 import { AttachGate } from "./terminal/gate";
+import { PasteGuard } from "./terminal/paste";
 import { TerminalPresence, terminalNotification } from "./terminal/presence";
 import { ScreenStream, TerminalScreen } from "./terminal/screen";
 import { TranscriptReader } from "./transcript";
@@ -337,9 +338,12 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     dialog: () => typer.dialogOpen,
   });
   let floodLoggedAt = 0;
+  // A paste a lost frame left open is ended here, or every key after it is pasted text.
+  const paste = new PasteGuard((end) => typer.personTyped(end));
   const typedFromChannel = async (frame: TerminalInputFrame) => {
     const result = await gate.check(frame);
     if (agentId === null) return;
+    if (!result.ok) paste.lost(result.limited ? undefined : result.fingerprint);
     if (!result.ok && result.limited) {
       // A flood: said once a second, and not answered frame by frame.
       if (Date.now() - floodLoggedAt >= 1000) {
@@ -363,7 +367,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       return;
     }
     // Typed as the Person's own keys are: Interrupts wait for it, and Enter is the Person's prompt.
+    paste.before(result.fingerprint);
     typer.personTyped(result.text);
+    paste.typed(result.fingerprint, result.text);
     const attaching = presence.keyTyped(result.fingerprint, result.person);
     screenStream.changed();
     if (attaching) {
@@ -895,6 +901,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   clearTimeout(trustTimer);
   screenStream.stop();
+  paste.dispose();
   screen?.dispose();
   waker?.stop();
   discovering.abort();
