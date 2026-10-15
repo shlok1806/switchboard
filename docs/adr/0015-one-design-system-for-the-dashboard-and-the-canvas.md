@@ -1,0 +1,19 @@
+# One design system for the Dashboard and the canvas
+
+The owner asked for a redesign of the Dashboard that reads as a product, not a terminal, and that the coming canvas (`docs/canvas-design-spec.md`) can inherit instead of inventing its own look. The Dashboard had grown from vendored kits (Beautiful UI's foundation, shadcn/ui, Kibo UI) each with its own radii, hairline rings, shadows and an indigo accent, and monospace type on every ID, time and count.
+
+The direction is tasteskill v2's "quiet instrument" (seed 43202005, `--sector dev-tool --tone quiet --have product-ui`): navy ink on white, one tangerine action, one typeface, slow and quiet motion. It is adapted to app screens: the landing-page hero becomes a page head per view (its name, one line about the Channel's state, its own controls), the "two-ended rows in a narrow column" become the Activity list and the grouped Agents list, and the "quiet figure lines" become the stats on an Agent's page.
+
+Every colour, size, radius and elevation is a token in `dashboard/src/styles/tokens.css`, in six layers: primitives (named only in that file), roles, status, identity, canvas, scales. Light and dark themes redefine the roles, never the components.
+
+- Roles. `page`, `surface`, `inset`, `hover`, `hover-2` and `field` for grounds; `ink` to `ink-4` for text, navy and never black; `accent` (a stronger navy) for selection, focus, links and "queued"; `action` (tangerine) for the one primary control of a screen and nowhere else. A Stale Claim's Take over is the action on its screens, so the composer's send button shows the action only while it can send.
+- Status. Text-safe `green`, `orange` and `red` with tints, and the agent states the canvas needs: `state-live`, `state-needs` (a prompt or question waiting on a Person), `state-idle`, `state-gone`, `state-queued`, `state-errored`, `state-stale`, `state-done`, `state-review`. The board's columns and an Agent's Presence dot read from these, so a node on the canvas and a card on the board show one state in one colour.
+- Identity. One hue per agent CLI (`cli-claude`, `cli-codex`, `cli-gemini`), shown as a small square beside an Agent's ID.
+- Canvas. `canvas-bg`, `canvas-grid`, `node-bg`, `node-selected`, `frame-bg`, `frame-label`, `edge`, `edge-active`, `edge-conflict`, defined now so the canvas starts on the system.
+- Scales. Five type steps (small 13px, body 15px, lead 17px, title 24px, display 32px) in Albert Sans; nothing is set below 13px. One 4px radius for every box and control; dots and avatars are round. Elevation is flat at rest: only what floats (menus, dialogs, toasts, a dragged card) casts the one `shadow-float`.
+
+Surfaces are separated by a tone step, not a rule: no hairline borders, dividers or rings on boxes. Lines remain only on form fields. Monospace (Geist Mono) is for literal code only (paths, branches, commands, tool input and output, diffs), always in a `<code>` or `<pre>`; IDs, times and counts are Albert Sans with tabular figures.
+
+The vendored components are re-skinned through these tokens. `tailwind-merge` is told the five type steps are font sizes, because it otherwise reads `text-small` as a colour and drops a button's text colour. Beautiful UI's foundation stylesheet, `shadow-plugin` and the unused Kibo `status`, shadcn `badge` and `sheet` are removed.
+
+The rules are checked, not just written: tasteskill's `lint.mjs` over `dashboard/src` reports no banned pattern, and a line that must keep one (a code face) carries `taste-skill-ignore` with its reason. Its `inspect.mjs`, run headless on every view in both themes, passes with the rules for landing pages allowed (pictures, footage, a focal hero, scroll motion, the first-screen button, kanban columns read as icon cards, the board's sideways phone scroll, a status pill read as an eyebrow).
