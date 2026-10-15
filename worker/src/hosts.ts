@@ -26,6 +26,7 @@ import type {
   EventType,
   Host,
   HostId,
+  HostSpawnedMessage,
   HostSpawnMessage,
   HostStopMessage,
   PermissionMode,
@@ -97,7 +98,7 @@ export interface HostsDeps {
   /** Whether Host `id` has a socket attached now. */
   attached(id: HostId): boolean;
   /** Sends `message` to Host `id`'s newest socket. False when it has none. */
-  sendTo(id: HostId, message: HostSpawnMessage | HostStopMessage): boolean;
+  sendTo(id: HostId, message: HostSpawnMessage | HostSpawnedMessage | HostStopMessage): boolean;
   /** Closes Host `id`'s sockets, for a Host that was removed. */
   close(id: HostId): void;
   findAgent(id: AgentId): Agent | null;
@@ -313,6 +314,9 @@ export class Hosts {
       capture: null,
       payload: { spawn, host: hostIdFor(person, name), agent: agent.id },
     });
+    // The Host stops watching the new session for Claude Code's folder trust dialog.
+    const answered: HostSpawnedMessage = { type: "host.spawned", spawn, agent: agent.id };
+    this.deps.sendTo(hostIdFor(person, name), answered);
     this.waiting.get(spawn)?.({ agent });
   }
 

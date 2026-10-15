@@ -156,6 +156,17 @@ export interface HostSpawnMessage {
   by: PersonName;
 }
 
+/**
+ * The Channel tells a Host that spawn `spawn` is answered: Agent `agent`'s wrapper
+ * registered with it once the CLI's session started, past Claude Code's folder trust
+ * dialog.
+ */
+export interface HostSpawnedMessage {
+  type: "host.spawned";
+  spawn: string;
+  agent: AgentId;
+}
+
 /** The Channel asks a Host to stop an Agent it runs. */
 export interface HostStopMessage {
   type: "host.stop";

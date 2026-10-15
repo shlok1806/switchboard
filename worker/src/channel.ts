@@ -24,6 +24,7 @@ import type {
   HookCaptureReply,
   Host,
   HostId,
+  HostSpawnedMessage,
   HostSpawnMessage,
   HostStopMessage,
   InterruptAttached,
@@ -1019,6 +1020,7 @@ function send(
     | DirectiveInterruptMessage
     | ApprovalDenyMessage
     | HostSpawnMessage
+    | HostSpawnedMessage
     | HostStopMessage,
 ): boolean {
   try {

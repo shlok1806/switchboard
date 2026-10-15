@@ -41,6 +41,13 @@ export interface AgentSession {
   secretMasking?: boolean;
   /** Whether the wrapper can type Interrupts into this session. */
   interrupts?: boolean;
+  /**
+   * The Host that started this session (ADR 0015), and the spawn it answers. The spawn
+   * is answered once the CLI's session has started (`sessionStarted`): Claude Code runs
+   * its SessionStart hook only past its folder trust dialog, which a Host never answers.
+   */
+  host?: string;
+  spawn?: string;
 }
 
 export class AgentLink {
@@ -49,6 +56,9 @@ export class AgentLink {
   private known: Agent | null = null;
   /** Whether the Channel registered the Agent once already, in this session. */
   private registered = false;
+  /** Whether the CLI's session has started, and whether the Channel has the spawn's answer. */
+  private started = false;
+  private spawnAnswered = false;
   private presence: ReportedPresence = "live";
   /** The latest usage reading (ADR 0011), and whether the Channel has yet to hear it. */
   private usage: ReportedUsage | null = null;
@@ -94,6 +104,7 @@ export class AgentLink {
     const model = known?.model ?? this.session.model;
     const effort = known?.model !== undefined ? known.effort : this.session.effort;
     const sentUsage = this.usage;
+    const answersSpawn = this.spawnUnanswered();
     const answer = await this.client.register({
       cli: this.session.cli,
       sessionId: this.session.sessionId,
@@ -107,6 +118,9 @@ export class AgentLink {
       ...(this.session.secretMasking === undefined ? {} : { secretMasking: this.session.secretMasking }),
       ...(this.session.interrupts === undefined ? {} : { interrupts: this.session.interrupts }),
       ...(sentUsage === null ? {} : { usage: sentUsage }),
+      ...(this.session.host === undefined ? {} : { host: this.session.host }),
+      // The spawn is answered once, by the first registration after the session started.
+      ...(answersSpawn ? { spawn: this.session.spawn } : {}),
       // Registered before in this session: the session goes on, it does not start again.
       ...(this.registered ? { rejoin: true } : {}),
     });
@@ -115,11 +129,27 @@ export class AgentLink {
     this.agent = agent;
     this.known = agent;
     this.registered = true;
+    if (answersSpawn) this.spawnAnswered = true;
     this.log(`registered ${agent.id}`);
     if (answer.nicknameRefused !== undefined) this.log(`Nickname not set: ${answer.nicknameRefused}`);
     this.onRegistered(agent, answer.token);
     this.handOver(answer);
     return answer.nicknameRefused === undefined ? agent : { ...agent, nicknameRefused: answer.nicknameRefused };
+  }
+
+  /**
+   * The CLI's session started (its SessionStart hook ran). A Host's spawn is answered
+   * now: by registering again within the session, or by the first registration.
+   */
+  sessionStarted(): void {
+    if (this.started) return;
+    this.started = true;
+    if (this.spawnUnanswered()) this.beat();
+  }
+
+  /** Whether the session started and its Host's spawn still waits for the answer. */
+  private spawnUnanswered(): boolean {
+    return this.session.spawn !== undefined && this.started && !this.spawnAnswered;
   }
 
   /** Starts heartbeating. Registers first on the next beat if registration has not succeeded yet. */
@@ -176,7 +206,8 @@ export class AgentLink {
 
   private async send(): Promise<void> {
     try {
-      if (!this.agent) {
+      // Registering again answers a spawn: a failed try is tried again on the next beat.
+      if (!this.agent || this.spawnUnanswered()) {
         await this.register();
         // A fresh registration is Live; say so if we are not.
         if (this.presence === "live") return;

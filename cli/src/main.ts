@@ -6,12 +6,16 @@
 //   switchboard run codex|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
 //   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
 //   switchboard whoami
+//   switchboard host install|uninstall|run|status   (ADR 0015)
+//   switchboard spawn [--host <name>] [--cwd <folder>] [...] [brief]
+//   switchboard stop <agent>
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
 import { ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig } from "./config";
+import { HOST_USAGE, hostCommand, spawnCommand, stopCommand } from "./host/commands";
 import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
 import { renameAgent } from "./rename";
@@ -24,6 +28,9 @@ const USAGE = `Usage:
   switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
   switchboard whoami
+  switchboard spawn [--host <name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--repo <owner>/<repo>] [brief...]
+  switchboard stop <agent> [--repo <owner>/<repo>]
+${HOST_USAGE.replace("Usage:\n", "")}
 
 \`login\` signs you in with GitHub (a code to enter at github.com), once: the session
 works for every Channel on that host whose repo you have write access to. The
@@ -54,7 +61,14 @@ read_channel tool.
 
 \`rename\` changes an Agent's Nickname while it runs, as everyone on the Channel sees it.
 Name the Agent by its Agent ID, the ID without your login (claude/7f3a), or its
-current Nickname; --clear removes the Nickname.`;
+current Nickname; --clear removes the Nickname.
+
+\`host install\` makes this machine a Host: a background process, run by launchd, that
+starts and stops Claude Code Agents for the Channel with no window. --root names the
+folders Agents may run in (repeat it); --max-permission-mode is the loosest mode they
+may run in (default "default"). \`spawn\` starts an Agent on one of your Hosts (--host,
+else the one you used last) in --cwd (else this folder), with the brief as its first
+prompt; \`stop\` stops one. Both work from any machine.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -139,6 +153,12 @@ async function main(argv: string[]): Promise<number> {
       return whoami();
     case "rename":
       return rename(rest);
+    case "host":
+      return hostCommand(rest);
+    case "spawn":
+      return spawnCommand(rest);
+    case "stop":
+      return stopCommand(rest);
     case "mcp":
       return runMcpServer();
     case "run": {

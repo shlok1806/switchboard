@@ -264,6 +264,12 @@ describe("starting an Agent", () => {
     expect(answer).toMatchObject({ ok: true, spawn: spawn.spawn, host: "shlok/studio" });
     expect(answer.agent?.id).toBe(registered.agent.id);
     expect(registered.agent.host).toBe("shlok/studio");
+    // The Host hears that the session started, so it stops watching for the trust dialog.
+    expect(await waitFor(() => studio.frames.find((f) => f.type === "host.spawned"))).toEqual({
+      type: "host.spawned",
+      spawn: spawn.spawn,
+      agent: registered.agent.id,
+    });
 
     const all = await events();
     const requested = all.find((e) => e.type === "agent.spawn");
@@ -438,8 +444,9 @@ describe("a Host's socket", () => {
     const studio = await FakeHost.registered("shlok", "studio");
     await studio.connect();
     await post("/api/updates", "shlok", { text: "Hello" });
-    await spawnAndStart(studio);
-    expect(studio.frames.map((f) => f.type)).toEqual(["host.spawn"]);
+    const { spawn, registered } = await spawnAndStart(studio);
+    await waitFor(() => (studio.frames.length === 2 ? true : undefined));
+    expect(studio.frames).toEqual([spawn, { type: "host.spawned", spawn: spawn.spawn, agent: registered.agent.id }]);
   });
 });
 
