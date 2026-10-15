@@ -36,7 +36,9 @@ function sameSender(prev: ChannelEvent, e: ChannelEvent) {
 export function AgentDetail({ id }: { id: string }) {
   const store = useStore();
   const me = useMe();
-  const { verdictsByEvent, snapshot, fresh } = useChannel();
+  const { verdictsByEvent, snapshot, fresh, olderBefore } = useChannel();
+  // Verdicts come with the Events they judge, so they too are only the loaded ones'.
+  const verdictsPartial = olderBefore !== undefined;
   const { agentById, taskByNumber } = useIndex();
   const claimsOf = useClaimsOf();
   const can = useCapabilities();
@@ -131,15 +133,10 @@ export function AgentDetail({ id }: { id: string }) {
               {
                 k: "Events",
                 // Only the Events loaded so far: counting them all would read the whole history.
-                v: (
-                  <span title={scoped.more ? "The latest ones; it has older Events" : undefined}>
-                    <NumberFlow value={own} />
-                    {scoped.more && <span className="text-ink-3">+</span>}
-                  </span>
-                ),
+                v: <LoadedCount value={own} partial={scoped.more} />,
               },
-              { k: "Interrupts", v: can.verdicts ? <NumberFlow value={heard.i} /> : <span className="text-[14px] text-ink-3">-</span> },
-              { k: "Queued", v: can.verdicts ? <NumberFlow value={heard.q} /> : <span className="text-[14px] text-ink-3">-</span> },
+              { k: "Interrupts", v: can.verdicts ? <LoadedCount value={heard.i} partial={verdictsPartial} /> : <span className="text-[14px] text-ink-3">-</span> },
+              { k: "Queued", v: can.verdicts ? <LoadedCount value={heard.q} partial={verdictsPartial} /> : <span className="text-[14px] text-ink-3">-</span> },
               { k: "Started", v: <span className="text-[16px]">{ago(agent.startedAt)}</span> },
             ].map((s) => (
               <div key={s.k} className="flex flex-col gap-1 rounded-xl border border-line bg-surface px-4 py-3">
@@ -326,5 +323,18 @@ function RenameSection({ agent }: { agent: Agent }) {
         </button>
       )}
     </Section>
+  );
+}
+
+/**
+ * A count over the Events loaded so far, with a "+" when the Channel has older ones:
+ * counting them all would read the whole history.
+ */
+function LoadedCount({ value, partial }: { value: number; partial: boolean }) {
+  return (
+    <span title={partial ? "Counted over the latest Events; there are older ones" : undefined}>
+      <NumberFlow value={value} />
+      {partial && <span className="text-ink-3">+</span>}
+    </span>
   );
 }

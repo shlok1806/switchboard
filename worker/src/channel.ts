@@ -122,13 +122,73 @@ export function createEventsTable(sql: SqlStorage): void {
     CREATE INDEX IF NOT EXISTS events_updates_by_task ON events (task, seq) WHERE type = 'update';
     CREATE INDEX IF NOT EXISTS events_updates_by_actor ON events (actor_kind, actor_id, seq) WHERE type = 'update';
     CREATE INDEX IF NOT EXISTS events_updates_by_actor_task ON events (actor_kind, actor_id, task, seq) WHERE type = 'update';
-    CREATE INDEX IF NOT EXISTS events_by_agent ON events (actor_id, seq) WHERE actor_kind = 'agent';
-    CREATE INDEX IF NOT EXISTS events_directives_to ON events (json_extract(payload, '$.to'), seq) WHERE type = 'directive';
-    CREATE INDEX IF NOT EXISTS events_renames_of ON events (json_extract(payload, '$.agent'), seq) WHERE type = 'agent.rename';
-    CREATE INDEX IF NOT EXISTS events_by_task ON events (task, seq) WHERE task IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS events_wakes ON events (seq) WHERE type = 'wake';
   `);
 }
+
+/**
+ * The indexes the scoped history reads need (an Agent's, a Task's, Events by Wake).
+ * Each is partial, so it writes a row only for the Events its `where` holds.
+ */
+export const HISTORY_INDEXES = [
+  { name: "events_by_agent", on: "(actor_id, seq)", where: "actor_kind = 'agent'" },
+  { name: "events_directives_to", on: "(json_extract(payload, '$.to'), seq)", where: "type = 'directive'" },
+  { name: "events_renames_of", on: "(json_extract(payload, '$.agent'), seq)", where: "type = 'agent.rename'" },
+  { name: "events_by_task", on: "(task, seq)", where: "task IS NOT NULL AND type <> 'verdict'" },
+  { name: "events_wakes", on: "(seq)", where: "type = 'wake'" },
+] as const;
+
+export type HistoryIndex = (typeof HISTORY_INDEXES)[number]["name"];
+
+/**
+ * Rows a Channel may spend building history indexes in one UTC day. Building an
+ * index writes one row per Event it covers, and Durable Objects allow 100,000 written
+ * rows a day; a Channel's own traffic used under 51,000 on its busiest day. An index
+ * that does not fit today's budget is built on a later day.
+ */
+export const INDEX_BUILD_BUDGET = 40_000;
+
+/**
+ * Builds the history indexes that fit today's budget, and returns those that exist.
+ * Counting what each missing index would cover reads the Events once, in one query.
+ */
+export function buildHistoryIndexes(
+  sql: SqlStorage,
+  today = new Date().toISOString().slice(0, 10),
+  budget = INDEX_BUILD_BUDGET,
+): Set<HistoryIndex> {
+  const existing = new Set(
+    sql
+      .exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events'")
+      .toArray()
+      .map((row) => row.name),
+  );
+  const missing = HISTORY_INDEXES.filter((index) => !existing.has(index.name));
+  if (missing.length > 0) {
+    sql.exec("CREATE TABLE IF NOT EXISTS index_builds (day TEXT PRIMARY KEY, rows INTEGER NOT NULL)");
+    let spent = sql.exec<{ rows: number }>("SELECT rows FROM index_builds WHERE day = ?", today).toArray()[0]?.rows ?? 0;
+    const sizes = sql
+      .exec<Record<string, number>>(
+        `SELECT ${missing.map((index, i) => `coalesce(sum(CASE WHEN ${index.where} THEN 1 ELSE 0 END), 0) AS n${i}`).join(", ")} FROM events`,
+      )
+      .one();
+    for (const [i, index] of missing.entries()) {
+      const rows = Number(sizes[`n${i}`] ?? 0);
+      if (spent + rows > budget) continue;
+      sql.exec(`CREATE INDEX IF NOT EXISTS ${index.name} ON events ${index.on} WHERE ${index.where}`);
+      spent += rows;
+      existing.add(index.name);
+    }
+    sql.exec(
+      "INSERT INTO index_builds (day, rows) VALUES (?, ?) ON CONFLICT (day) DO UPDATE SET rows = excluded.rows",
+      today,
+      spent,
+    );
+  }
+  return new Set(HISTORY_INDEXES.map((index) => index.name).filter((name) => existing.has(name)));
+}
+
+/** The answer to a scoped history read whose index is not built yet: it is built on a later day. */
+export type IndexPending = { pending: HistoryIndex };
 
 /** The actor's kind and its Agent ID or Person name, as `actor_kind` and `actor_id` keep them. */
 function actorColumns(actor: Actor): [string, string | null] {
@@ -197,10 +257,14 @@ export class Channel extends DurableObject<Env> {
   private readonly access: Access;
   /** Each Issue's one status comment (issue #2). */
   private readonly status: StatusComments;
+  /** The history indexes built so far (`buildHistoryIndexes`), and the UTC day they were last tried. */
+  private historyIndexes: Set<HistoryIndex>;
+  private historyIndexesDay = new Date().toISOString().slice(0, 10);
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     createEventsTable(ctx.storage.sql);
+    this.historyIndexes = buildHistoryIndexes(ctx.storage.sql);
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS persons (
         name TEXT PRIMARY KEY,
@@ -648,7 +712,9 @@ export class Channel extends DurableObject<Env> {
    * The latest `count` Events about Agent `agent` with `seq` below `before`, oldest
    * first: what it did, the Directives to it and its renames by others.
    */
-  latestEventsOfAgent(agent: AgentId, count: number, before = Number.MAX_SAFE_INTEGER): ChannelEvent[] {
+  latestEventsOfAgent(agent: AgentId, count: number, before = Number.MAX_SAFE_INTEGER): ChannelEvent[] | IndexPending {
+    const pending = this.pendingIndex("events_by_agent", "events_directives_to", "events_renames_of");
+    if (pending) return pending;
     const sql = this.ctx.storage.sql;
     const rows = [
       ...sql.exec<EventRow>(
@@ -682,11 +748,18 @@ export class Channel extends DurableObject<Env> {
       .map(rowToEvent);
   }
 
-  /** The latest `count` Events on Task `task` with `seq` below `before`, oldest first. */
-  latestEventsOfTask(task: TaskNumber, count: number, before = Number.MAX_SAFE_INTEGER): ChannelEvent[] {
+  /**
+   * The latest `count` Events on Task `task` with `seq` below `before`, oldest first.
+   * Verdicts are left out, as from the index: there are many per Event, and the
+   * Dashboard reads them with the Events they judge.
+   */
+  latestEventsOfTask(task: TaskNumber, count: number, before = Number.MAX_SAFE_INTEGER): ChannelEvent[] | IndexPending {
+    const pending = this.pendingIndex("events_by_task");
+    if (pending) return pending;
     return this.ctx.storage.sql
       .exec<EventRow>(
-        "SELECT * FROM events INDEXED BY events_by_task WHERE task = ? AND seq < ? ORDER BY seq DESC LIMIT ?",
+        `SELECT * FROM events INDEXED BY events_by_task
+         WHERE task = ? AND type <> 'verdict' AND seq < ? ORDER BY seq DESC LIMIT ?`,
         task,
         before,
         count,
@@ -694,6 +767,17 @@ export class Channel extends DurableObject<Env> {
       .toArray()
       .reverse()
       .map(rowToEvent);
+  }
+
+  /** The first named index not built yet, after trying once more if a new day's budget has begun. */
+  private pendingIndex(...names: HistoryIndex[]): IndexPending | undefined {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== this.historyIndexesDay && names.some((name) => !this.historyIndexes.has(name))) {
+      this.historyIndexesDay = today;
+      this.historyIndexes = buildHistoryIndexes(this.ctx.storage.sql, today);
+    }
+    const pending = names.find((name) => !this.historyIndexes.has(name));
+    return pending === undefined ? undefined : { pending };
   }
 
   /** The Events with these IDs, oldest first; IDs the Channel does not know are left out. */
@@ -706,7 +790,9 @@ export class Channel extends DurableObject<Env> {
   }
 
   /** The first `count` Wakes with `seq` above `after`, oldest first. */
-  wakesAfter(after: number, count: number): ChannelEvent[] {
+  wakesAfter(after: number, count: number): ChannelEvent[] | IndexPending {
+    const pending = this.pendingIndex("events_wakes");
+    if (pending) return pending;
     return this.ctx.storage.sql
       .exec<EventRow>(
         "SELECT * FROM events INDEXED BY events_wakes WHERE type = 'wake' AND seq > ? ORDER BY seq LIMIT ?",

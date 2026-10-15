@@ -62,6 +62,11 @@ async function handleJoin(request: Request, channel: ChannelStub, caller: Caller
   return json<JoinResponse>({ ok: true, person: joined });
 }
 
+/** A scoped history read the Channel cannot answer yet: its index is built on a later day. */
+function indexPending(index: string): Response {
+  return fail(503, `This history is not indexed yet (${index}). The Channel builds its indexes within a day or two.`);
+}
+
 async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> {
   const ids = url.searchParams.get("ids");
   if (ids !== null) {
@@ -89,6 +94,7 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
         : task > 0
           ? await channel.latestEventsOfTask(task as TaskNumber, tail, before)
           : await channel.latestEvents(tail, before);
+    if ("pending" in events) return indexPending(events.pending);
     return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? 0 });
   }
   const after = intParam(url, "after", 0);
@@ -99,6 +105,7 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
   const type = url.searchParams.get("type");
   if (type !== null && type !== "wake") return fail(400, '"type" can only be "wake".');
   const events = type === "wake" ? await channel.wakesAfter(after, limit) : await channel.history(after, limit);
+  if ("pending" in events) return indexPending(events.pending);
   return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? after });
 }
 

@@ -36,7 +36,7 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
   const stableScope = useMemo(() => scope, [key]);
 
   const read = useCallback(
-    async (before?: number) => {
+    async (before?: number): Promise<boolean> => {
       setPages((p) => (p.key === key ? { ...p, loading: true } : { key, events: [], loading: true }));
       try {
         const page = await store.source.scopedEvents(stableScope, before);
@@ -45,21 +45,35 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
             ? { key, events: [...page.events, ...p.events], olderBefore: page.olderBefore, loading: false }
             : p,
         );
+        return true;
       } catch {
         // Showing what is loaded is still right; "Show older" tries again.
         setPages((p) => (p.key === key ? { ...p, loading: false } : p));
+        return false;
       }
     },
     [store, stableScope, key],
   );
 
+  // The first page is what the view is about, so a failed read is tried again, a few times, backing off.
   useEffect(() => {
-    void read();
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = async (n: number) => {
+      if (cancelled || (await read())) return;
+      if (n < 3 && !cancelled) timer = setTimeout(() => void attempt(n + 1), 1000 * 2 ** n);
+    };
+    void attempt(0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [read]);
 
   const merged = useMemo(() => {
     const byId = new Map<string, ChannelEvent>();
-    if (pages.key === key) for (const e of pages.events) byId.set(e.id, e);
+    // The Channel's page for a scope may hold Events this view leaves out (a Task's Verdicts, say).
+    if (pages.key === key) for (const e of pages.events) if (matches(e)) byId.set(e.id, e);
     for (const e of events) if (matches(e)) byId.set(e.id, e);
     return [...byId.values()].sort((a, b) => a.seq - b.seq);
   }, [pages, events, matches, key]);
