@@ -117,15 +117,28 @@ function permissionDecision(tool_name) {
     const started = Date.now();
     // Claude Code kills a hook at its timeout; FAKE_CLAUDE_HOOK_TIMEOUT_MS makes that come sooner.
     const timeout = Number(process.env.FAKE_CLAUDE_HOOK_TIMEOUT_MS) || (hook.timeout ?? 60) * 1000;
-    const child = spawn("/bin/sh", ["-c", hook.command], { timeout });
+    // The kill goes to the hook's process group: a /bin/sh that forks its command
+    // (dash, on Linux) would otherwise leave the hook running with its output open.
+    const child = spawn("/bin/sh", ["-c", hook.command], { detached: true });
+    const kill = () => {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    };
+    const timer = setTimeout(kill, timeout);
+    process.on("exit", kill);
     let out = "";
     child.stdout.on("data", (chunk) => {
       out += chunk;
     });
-    child.on("close", (status) => {
+    child.on("close", (status, signal) => {
+      clearTimeout(timer);
+      process.off("exit", kill);
       out = out.trim();
       console.log(
-        `FAKE-CLAUDE hook PermissionRequest exit=${status} ms=${Date.now() - started}${out ? ` out=${out}` : ""}`,
+        `FAKE-CLAUDE hook PermissionRequest exit=${status}${signal ? ` signal=${signal}` : ""} ms=${Date.now() - started}${out ? ` out=${out}` : ""}`,
       );
       try {
         const decision = JSON.parse(out).hookSpecificOutput?.decision;
