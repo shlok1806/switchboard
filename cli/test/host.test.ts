@@ -41,7 +41,9 @@ describe("the Host's LaunchAgent", () => {
         EnvironmentVariables: { PATH: "/usr/bin:/bin", SWITCHBOARD_CONFIG_DIR: "/Users/a&b/.config/switchboard" },
         WorkingDirectory: "/Users/a&b",
         RunAtLoad: true,
-        KeepAlive: true,
+        // Restarted after a crash only: a refusal a restart cannot help exits 0.
+        KeepAlive: { SuccessfulExit: false },
+        ThrottleInterval: 30,
         ProcessType: "Background",
         StandardOutPath: "/Users/a&b/.config/switchboard/host/host.log",
         StandardErrorPath: "/Users/a&b/.config/switchboard/host/host.log",
@@ -60,5 +62,9 @@ describe("the folder trust dialog", () => {
 
   it("is not seen in a session that talks about trust", () => {
     expect(showsTrustDialog("I trust the tests more than this folder's README.")).toBe(false);
+  });
+
+  it("is not seen in a brief that quotes one of its lines", () => {
+    expect(showsTrustDialog("When Claude asks, pick 'Yes, I trust this folder' and carry on.")).toBe(false);
   });
 });

@@ -3090,6 +3090,27 @@ describe("switchboard host", () => {
     expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
   });
 
+  it("resumes an Agent whose wrapper is killed, which node-pty reports as exit code 0 with a signal", async () => {
+    // The process under the pty is the wrapper, `<node> <cli> run ...`; the fake CLI is below it.
+    const parentOf = async (pid: number) => {
+      const { stdout } = await promisify(execFile)("ps", ["-o", "ppid=,command=", "-p", String(pid)]);
+      const [, ppid = "0", command = ""] = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim()) ?? [];
+      return { ppid: Number(ppid), command };
+    };
+    let pid = Number([...(await agentLog(agentId)).matchAll(/FAKE-CLAUDE pid=(\d+)/g)].at(-1)?.[1]);
+    for (let up = await parentOf(pid); !/ run claude/.test(up.command); up = await parentOf(pid)) {
+      expect(up.ppid, "the wrapper above the fake CLI").toBeGreaterThan(1);
+      pid = up.ppid;
+    }
+    process.kill(pid, "SIGKILL");
+    await waitForSupervisor(new RegExp(`${agentId} crashed \\(signal 9\\); resuming it`));
+    await waitFor("the session resumed again", async () => {
+      const runs = (await agentLog(agentId)).split("[host]").filter((run) => run.includes("FAKE-CLAUDE args="));
+      return runs.length === 3 ? true : undefined;
+    });
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
+  });
+
   it("resumes its Agents when it starts again after it was ended", async () => {
     await stopHost();
     expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId, sessionId })]);
