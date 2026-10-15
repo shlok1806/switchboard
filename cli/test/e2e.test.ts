@@ -2294,7 +2294,12 @@ describe("A live terminal (ADR 0021)", () => {
     expect(await bob.refused(early.seq)).toMatch(/take the keyboard first|holds the keyboard/);
     await bob.take();
     // Taking the keyboard is not typing: no one is attached yet.
-    expect(bob.screens().at(-1)?.attached.some((a) => a.person === "bob")).toBe(false);
+    expect(
+      bob
+        .screens()
+        .at(-1)
+        ?.attached.some((a) => a.person === "bob"),
+    ).toBe(false);
     await bob.type("work\r");
     await waitFor("bob's line in the session", () =>
       count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined,
@@ -2407,11 +2412,18 @@ describe("A live terminal (ADR 0021)", () => {
     expect(await owner.refused(refused.seq)).toBe("carol holds the keyboard");
 
     // Ctrl+] at the terminal takes it back; carol's keys are refused now, the owner's go in.
+    // A paste she left open ends first, so the owner's keys are not pasted into it.
+    await carol.type("\x1b[200~half a paste");
+    // The wrapper takes frames in the order they come: once it refuses a take sent after the paste, it has the paste.
+    const probe = await owner.type("", { op: "take" });
+    expect(await owner.refused(probe.seq)).toBe("carol holds the keyboard");
     term.type("\x1d");
     await waitFor("the owner holding it", () => (carol.holder()?.key === null ? true : undefined));
     expect(carol.holder()).toEqual({ person: "e2e", key: null });
     const late = await carol.type("work\r");
     expect(await carol.refused(late.seq)).toBe("the owner is typing at the terminal, and holds the keyboard");
+    term.type("\r");
+    await term.waitForOutput(/FAKE-CLAUDE pasted prompt="half a paste" before="" after=""/);
     term.type("work\r");
     await waitFor("the owner's line", () => (count("FAKE-CLAUDE working on it") === before + 2 ? true : undefined));
 

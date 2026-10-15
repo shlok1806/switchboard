@@ -69,6 +69,7 @@ import { channelCheckout, GitError } from "./task-worktree";
 import { cachedAttachList } from "./terminal/attach-keys";
 import { AttachGate } from "./terminal/gate";
 import { holderOf, TerminalKeyboard } from "./terminal/keyboard";
+import { PasteGuard } from "./terminal/paste";
 import { TerminalPresence, terminalNotification } from "./terminal/presence";
 import { ScreenStream, TerminalScreen } from "./terminal/screen";
 import { TranscriptReader } from "./transcript";
@@ -330,11 +331,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     stream.send(JSON.stringify(frame));
   };
   const screenStream = new ScreenStream(sendScreen);
+  // A paste a lost frame left open is ended here, or every key after it is pasted text.
+  const paste = new PasteGuard((end) => typer.personTyped(end));
   // One typist at a time holds the keyboard: the Person here, or one Dashboard key.
   const keyboard = new TerminalKeyboard({
     idleMs: seconds(env.SWITCHBOARD_TERMINAL_HOLD_SECONDS, TERMINAL_HOLD_IDLE_MS),
     onChange: (holder, was) => {
       screenStream.changed();
+      // A key that lost the keyboard mid-paste leaves it to whoever types next: end it first.
+      if (was?.kind === "key") paste.lost(was.fingerprint);
       if (holder?.kind === "key")
         notify(
           `${holder.person} holds the keyboard from the Dashboard (key ${holder.fingerprint}): your keys are held back until they let go. Ctrl+] takes it back.`,
@@ -356,6 +361,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const typedFromChannel = async (frame: TerminalInputFrame) => {
     const result = await gate.check(frame);
     if (agentId === null) return;
+    if (!result.ok) paste.lost(result.limited ? undefined : result.fingerprint);
     if (!result.ok && result.limited) {
       // A flood: said once a second, and not answered frame by frame.
       if (Date.now() - floodLoggedAt >= 1000) {
@@ -390,6 +396,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         ? keyboard.take(result.fingerprint, result.person, frame.from)
         : keyboard.typed(result.fingerprint);
     if (busy !== null) {
+      paste.lost(result.fingerprint);
       refuse(result.fingerprint, busy);
       return;
     }
@@ -398,7 +405,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     // Typed as the Person's own keys are: Interrupts wait for it, and Enter is the Person's prompt.
     // Held back behind an Interrupt, they go only if this key still holds the keyboard then.
     const { fingerprint } = result;
+    paste.before(fingerprint);
     typer.personTyped(result.text, () => keyboard.holds(fingerprint));
+    paste.typed(fingerprint, result.text);
     const attaching = presence.keyTyped(result.fingerprint, result.person);
     screenStream.changed();
     if (attaching) {
@@ -940,6 +949,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   clearTimeout(trustTimer);
   screenStream.stop();
   keyboard.dispose();
+  paste.dispose();
   screen?.dispose();
   waker?.stop();
   discovering.abort();

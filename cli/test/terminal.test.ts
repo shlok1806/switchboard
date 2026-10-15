@@ -18,6 +18,7 @@ import {
 import { type AttachList, attachCommand, cachedAttachList, readAttachList } from "../src/terminal/attach-keys";
 import { AttachGate } from "../src/terminal/gate";
 import { holderOf, TAKE_BACK, TerminalKeyboard } from "../src/terminal/keyboard";
+import { PASTE_END, PASTE_START, PasteGuard } from "../src/terminal/paste";
 import { TerminalPresence, terminalNotification } from "../src/terminal/presence";
 import { redactLine, ScreenStream, TerminalScreen } from "../src/terminal/screen";
 
@@ -447,6 +448,32 @@ describe("the screen watchers see", () => {
     screen.dispose();
   });
 
+  it("masks a key a colour change glues to a word, split where its first row holds too little of it to know", async () => {
+    const glued = `OK\x1b[32mghp_${"A".repeat(14)}`;
+    // The terminal wraps it.
+    const wrapped = new TerminalScreen(20, 3);
+    await written(wrapped, `${glued}${"B".repeat(30)} done`);
+    expect(wrapped.snapshot().lines.join("\n")).not.toMatch(/AAAA|BBBB/);
+    wrapped.dispose();
+    // The CLI breaks it itself, indented under the first row.
+    const broken = new TerminalScreen(20, 4);
+    await written(broken, `${glued}\r\n     ${"B".repeat(30)}\r\nnext`);
+    expect(broken.snapshot().lines.join("\n")).not.toMatch(/AAAA|BBBB/);
+    expect(broken.snapshot().lines.at(-1)).toBe("next");
+    broken.dispose();
+    // Glued to a digit.
+    const digit = new TerminalScreen(20, 3);
+    await written(digit, `v2\x1b[32mghp_${"A".repeat(14)}${"B".repeat(30)} done`);
+    expect(digit.snapshot().lines.join("\n")).not.toMatch(/AAAA|BBBB/);
+    digit.dispose();
+    // Glued, then split by a second colour change and a break.
+    const both = new TerminalScreen(20, 6);
+    await written(both, `token\x1b[32msk-ant-api03-\x1b[1mQQ\r\n     ${"R".repeat(60)}\r\nnext`);
+    expect(both.snapshot().lines.join("\n")).not.toMatch(/QQ|RRRR/);
+    expect(both.snapshot().lines[0]).toBe("tokensk-ant-****");
+    both.dispose();
+  });
+
   it("masks a key a colour change glues to the word that ends the row before", async () => {
     const screen = new TerminalScreen(30, 3);
     // The colour changes exactly where the terminal wraps.
@@ -531,6 +558,63 @@ describe("the screen watchers see", () => {
     screen.dispose();
   });
 
+  it("masks a private key whose BEGIN and END lines the CLI wrapped over two rows", async () => {
+    const screen = new TerminalScreen(20, 6);
+    // Ink wraps the BEGIN and END lines at their spaces: no row is marked wrapped or full.
+    await written(
+      screen,
+      ["-----BEGIN PRIVATE", "  KEY-----", "MIIEvQIBADANBgkqhk", "-----END PRIVATE", "  KEY-----", "$ "].join("\r\n"),
+    );
+    expect(screen.snapshot().lines).toEqual([
+      "-----BEGIN PRIVATE",
+      "  KEY-----",
+      "****",
+      "-----END PRIVATE",
+      "  KEY-----",
+      "$",
+    ]);
+    screen.dispose();
+  });
+
+  it("masks a private key whose BEGIN line the CLI broke at the last column", async () => {
+    const screen = new TerminalScreen(20, 5);
+    // No END line has come: every row after the BEGIN line is masked.
+    await written(screen, ["-----BEGIN PRIVATE K", "EY-----", "MIIEvQIBADANBgkqhk", "$ "].join("\r\n"));
+    expect(screen.snapshot().lines).toEqual(["-----BEGIN PRIVATE K", "EY-----", "****", "****", "****"]);
+    screen.dispose();
+  });
+
+  it("masks a private key's body whose BEGIN line went past the scrollback, and not a short base64 line", async () => {
+    const line = (i: number) => `${"Zm9vYmFy".repeat(8).slice(0, 60)}${String(i).padStart(4, "0")}`;
+    const screen = new TerminalScreen(80, 5);
+    await written(
+      screen,
+      [
+        "-----BEGIN PRIVATE KEY-----",
+        ...Array.from({ length: 300 }, (_, i) => line(i)),
+        "-----END PRIVATE KEY-----",
+        "c0ffee12deadbeef",
+        "$ ",
+      ].join("\r\n"),
+    );
+    // The buffer holds 205 rows: the BEGIN line went out of it long ago.
+    expect(screen.snapshot().lines.join("\n")).not.toContain("Zm9v");
+    expect(screen.snapshot().lines).toEqual(["****", "****", "-----END PRIVATE KEY-----", "c0ffee12deadbeef", "$"]);
+    screen.dispose();
+  });
+
+  it("masks a block of long base64 lines anywhere, but leaves two alone", async () => {
+    const b64 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9w";
+    const three = new TerminalScreen(80, 5);
+    await written(three, ["$ cat blob", b64, b64, b64, "$ "].join("\r\n"));
+    expect(three.snapshot().lines).toEqual(["$ cat blob", "****", "****", "****", "$"]);
+    three.dispose();
+    const two = new TerminalScreen(80, 4);
+    await written(two, ["$ cat blob", b64, b64, "$ "].join("\r\n"));
+    expect(two.snapshot().lines.slice(1, 3)).toEqual([b64, b64]);
+    two.dispose();
+  });
+
   it("keeps the next line in place when a private key on one line wraps over rows", async () => {
     const screen = new TerminalScreen(30, 5);
     await written(screen, `-----BEGIN PRIVATE KEY-----${"K".repeat(40)}-----END PRIVATE KEY-----\r\nnext`);
@@ -571,6 +655,56 @@ describe("the screen watchers see", () => {
       "curl -H 'x-api-key: ****' -H 'Cookie: ****'",
     );
     expect(redactLine("Proxy-Authorization: Basic dXNlcjpwYXNz")).toBe("Proxy-Authorization: Basic ****");
+  });
+});
+
+describe("a paste from the Dashboard", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const guarded = () => {
+    const ended: string[] = [];
+    return { ended, guard: new PasteGuard((end) => ended.push(end), 2000) };
+  };
+
+  it("ends a paste whose next frame was refused, dropped in a flood, or never came", () => {
+    const { ended, guard } = guarded();
+    guard.typed("alice", `${PASTE_START}first part`);
+    guard.lost("bob");
+    expect(ended).toEqual([]);
+    guard.lost("alice");
+    expect(ended).toEqual([PASTE_END]);
+
+    guard.typed("alice", `${PASTE_START}first part`);
+    guard.lost();
+    expect(ended).toEqual([PASTE_END, PASTE_END]);
+
+    guard.typed("alice", `${PASTE_START}first part`);
+    vi.advanceTimersByTime(1500);
+    guard.typed("alice", "middle part");
+    vi.advanceTimersByTime(1500);
+    expect(ended).toHaveLength(2);
+    vi.advanceTimersByTime(600);
+    expect(ended).toHaveLength(3);
+    guard.dispose();
+  });
+
+  it("leaves a paste alone that ended, and ends one before another key types", () => {
+    const { ended, guard } = guarded();
+    guard.typed("alice", `${PASTE_START}all of it${PASTE_END}`);
+    vi.advanceTimersByTime(5000);
+    guard.typed("alice", `${PASTE_START}first part`);
+    guard.typed("alice", `last part${PASTE_END}`);
+    guard.lost("alice");
+    vi.advanceTimersByTime(5000);
+    expect(ended).toEqual([]);
+
+    guard.typed("alice", `${PASTE_START}first part`);
+    guard.before("alice");
+    expect(ended).toEqual([]);
+    guard.before("bob");
+    expect(ended).toEqual([PASTE_END]);
+    guard.dispose();
   });
 });
 
