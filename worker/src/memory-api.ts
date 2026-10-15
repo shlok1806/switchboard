@@ -67,7 +67,7 @@ export async function handleMemoryRoute(
     if (!read.ok) return fail(400, read.reason);
     const result = await channel.readMemory(read.query);
     if (!result.ok) return fail(result.status, result.reason);
-    return json<MemoryResponse>({ notes: result.notes });
+    return json<MemoryResponse>({ notes: result.notes, ...(result.more ? { more: true } : {}) });
   }
   const note = cleanNote(await readJson(request));
   if (!note.ok) return fail(400, note.reason);

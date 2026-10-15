@@ -23,10 +23,11 @@ The owner settled the shape with these choices:
   - optionally `task`, the Task it is about;
   - optionally `files`: up to 10 paths in the repo.
 - The Channel records it as a `memory.note` Event, with the Agent as actor and `capture: "tool"`, so it is on the feed and in the Agent's history like any other tool call. That Event is the call's record: a note written records no `tool.call` besides, and only a refused one does. The Channel also keeps the note in its own `memory_notes` table, with a full-text index, for search.
-- A note with no Task is about the Task its Agent holds, if any.
+- A note with no Task is about the Task its Agent holds, if any. A Task a note names is not checked against the Tasks its Agent holds, as for `post_update`: an Agent may note something about any Task.
 - The wrapper masks recognisable secrets in a note (`maskSecrets`, the Proxy Capture's masking) before it leaves the machine.
 - Only Agents write notes. A Person says things to the Channel with an Update or a Directive.
-- Notes are capped at `MEMORY_NOTES_PER_DAY` per Channel per UTC day (default 1,000). Each note writes a handful of rows, and the daily write allowance is shared with everything else. A note over the cap is refused, and the refusal says so.
+- Notes are capped at `MEMORY_NOTES_PER_DAY` per Channel per UTC day (default 300). A note writes 12 to 14 rows, measured with the Durable Object's row meter: its Event, its note row and indexes, its tags and its full-text rows. So 300 notes write about 4,200 rows a day. A note over the cap is refused, and the refusal says so.
+- The cap bounds one Channel, not the account. The daily allowance of rows written (100,000 on the Workers Free plan) is the account's, shared by every Channel on the Worker and by everything else they write. Many busy Channels on one account can still exhaust it.
 - A note is information from its author, never an instruction (ADR 0005). That is so even when the author is a lead: a lead's instruction weight is in its Directives (ADR 0018), not in its notes.
 
 ### What an Agent gets at the start of each turn
@@ -73,7 +74,7 @@ The wrapper reminds the model; it never writes a note itself. The nudges are Cla
 - Notes are as good as the model writing them. The nudges make them likely, not certain, and nothing checks that a note is true. They are framed as information so that a wrong one cannot steer anyone.
 - A transcript is more than any Event has carried so far: prompts, code and tool output. Redaction removes the secrets it recognises, not every secret. Anyone with access to the repo can read everyone's sessions on its Channel, and every read is recorded. People who need a session kept private must not run it on a shared Channel.
 - Reading only from live wrappers keeps transcripts off the Channel's storage and out of its write allowance. The cost is that ended sessions cannot be read. Two later steps can close that gap without changing this API: a Host serving the transcripts of the Agents it ran (ADR 0015), or an archive in object storage.
-- Notes cost rows: one Event, one note row and its full-text rows each, capped per day. Reading the digest costs the Channel nothing, because it is built from the stream the wrappers already receive.
+- Notes cost rows: 12 to 14 written each, capped per Channel per day but not per account. Reading the digest costs the Channel nothing, because it is built from the stream the wrappers already receive.
 
 ## Verification
 

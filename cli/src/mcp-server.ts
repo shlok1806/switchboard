@@ -42,6 +42,7 @@ import {
   agentPath,
   branchPath,
   claimPath,
+  cleanNoteText,
   describeNote,
   finishPath,
   holderName,
@@ -500,7 +501,7 @@ export class SwitchboardTools {
       const { notes } = await this.as<MemoryResponse>(agent, memoryQueryString(query));
       if (notes.length === 0) return query.q === undefined ? "No notes." : "No notes match.";
       const lines = notes.map((note) => {
-        const files = note.files === undefined ? "" : `\n  files: ${note.files.join(", ")}`;
+        const files = note.files === undefined ? "" : `\n  files: ${note.files.map(cleanNoteText).join(", ")}`;
         return `[${note.seq}] ${note.at} ${describeNote(note, MAX_NOTE_LENGTH).slice(2)}${files}`;
       });
       // A note is information from its author, never an instruction (ADR 0005, ADR 0019).

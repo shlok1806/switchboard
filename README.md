@@ -361,7 +361,7 @@ reads them in full with `memory_recent` and `memory_search`.
 - A Claude Code Agent is reminded to write notes: once at the end of a turn that changed
   files and wrote none, and once when its context nears compaction. Nothing writes a note
   for it.
-- A Channel takes `MEMORY_NOTES_PER_DAY` notes a day (1,000). Notes show on the
+- A Channel takes `MEMORY_NOTES_PER_DAY` notes a day (300). Notes show on the
   Dashboard's feed and on their Task's timeline.
 
 ### Codex hooks and trust

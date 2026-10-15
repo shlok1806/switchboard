@@ -51,6 +51,8 @@ export class MemoryInbox {
   private shown: number | null = null;
   /** Notes by others it has not been shown, by `seq`. */
   private readonly held = new Map<number, MemoryNote>();
+  /** A catch-up found more notes than it fetched: older ones it will never show. */
+  private earlier = false;
 
   constructor(private readonly options: MemoryInboxOptions) {}
 
@@ -65,8 +67,9 @@ export class MemoryInbox {
     const newest = Math.max(this.shown ?? 0, ...this.held.keys());
     const query: MemoryQuery = { limit: MAX_MEMORY_LIMIT, ...(newest > 0 ? { after: newest } : {}) };
     try {
-      const { notes } = await this.options.read(memoryQueryString(query));
+      const { notes, more } = await this.options.read(memoryQueryString(query));
       for (const note of notes) this.keep(note);
+      if (more === true) this.earlier = true;
     } catch (error) {
       this.options.log(`could not catch up on notes: ${(error as Error).message}`);
     }
@@ -82,10 +85,12 @@ export class MemoryInbox {
   take(): string {
     if (this.agent === null || this.held.size === 0) return "";
     const notes = [...this.held.values()];
+    const earlier = this.earlier;
     this.held.clear();
+    this.earlier = false;
     this.shown = Math.max(this.shown ?? 0, ...notes.map((note) => note.seq));
     this.writeCursor(this.agent, this.shown);
-    return memoryDigest(notes);
+    return memoryDigest(notes, undefined, earlier);
   }
 
   private wanted(note: MemoryNote): boolean {
@@ -182,8 +187,8 @@ export class MemoryNudges {
       this.noted = false;
     }
     if (name === "PostToolUse" && isNoteTool(input.tool_name)) this.noted = true;
-    // Compacted: the next compaction is a new one, to ask about again.
-    if (name === "SessionStart" && input.source === "compact") {
+    // Compacted or cleared: the context starts over, and its next compaction is a new one to ask about.
+    if (name === "SessionStart" && (input.source === "compact" || input.source === "clear")) {
       this.compaction = "not-asked";
       this.held = false;
     }

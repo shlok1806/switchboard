@@ -36,7 +36,9 @@ export const MEMORY_SCHEMA = `
 const MAX_SEARCH_TERMS = 12;
 
 export type NoteResult = { ok: true; note: MemoryNote } | { ok: false; status: 429; reason: string };
-export type MemoryReadResult = { ok: true; notes: MemoryNote[] } | { ok: false; status: 400; reason: string };
+export type MemoryReadResult =
+  | { ok: true; notes: MemoryNote[]; more: boolean }
+  | { ok: false; status: 400; reason: string };
 
 /**
  * A search as FTS5 reads it: each word of `q` quoted, so nothing in it is syntax,
@@ -138,10 +140,11 @@ export class Memory {
     }
     const clause = where.length === 0 ? "" : `WHERE ${where.join(" AND ")}`;
     const order = query.q === undefined ? `${key} DESC` : "f.rank";
-    const notes = this.sql
-      .exec<{ note: string }>(`SELECT n.note FROM ${from} ${clause} ORDER BY ${order} LIMIT ?`, ...args, limit)
-      .toArray()
-      .map((row) => JSON.parse(row.note) as MemoryNote);
-    return { ok: true, notes };
+    // One row past the limit says whether more matched, without counting them all.
+    const rows = this.sql
+      .exec<{ note: string }>(`SELECT n.note FROM ${from} ${clause} ORDER BY ${order} LIMIT ?`, ...args, limit + 1)
+      .toArray();
+    const notes = rows.slice(0, limit).map((row) => JSON.parse(row.note) as MemoryNote);
+    return { ok: true, notes, more: rows.length > limit };
   }
 }
