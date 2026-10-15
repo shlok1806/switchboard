@@ -58,13 +58,16 @@ function useMyHosts(load: boolean) {
 
 function Field({ label, optional, hint, children }: { label: string; optional?: boolean; hint?: ReactNode; children: ReactNode }) {
   return (
-    <label className="flex flex-col gap-1.5">
-      <span className="text-small font-medium">
-        {label} {optional && <span className="font-normal text-ink-3">optional</span>}
-      </span>
-      {children}
-      {hint && <span className="text-small text-ink-3">{hint}</span>}
-    </label>
+    // The hint sits outside the label: it may hold buttons of its own.
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <label className="flex min-w-0 flex-col gap-1.5">
+        <span className="text-small font-medium">
+          {label} {optional && <span className="font-normal text-ink-3">optional</span>}
+        </span>
+        {children}
+      </label>
+      {hint && <div className="min-w-0 text-small text-ink-3">{hint}</div>}
+    </div>
   );
 }
 
@@ -178,7 +181,7 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4">
+    <form onSubmit={submit} className="flex min-w-0 flex-col gap-4">
       <DialogHeader>
         <DialogTitle>Start an Agent</DialogTitle>
         <DialogDescription>Claude Code, on one of your Hosts. It joins the Channel like any other Agent.</DialogDescription>
@@ -195,14 +198,7 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
           </select>
         </Field>
       )}
-      <Field
-        label="Folder"
-        hint={
-          <>
-            On {host?.id}, under {host?.roots.join(", ")}.
-          </>
-        }
-      >
+      <Field label="Folder" hint={host && <FolderChoices host={host} value={folder} onPick={setCwd} />}>
         <input name="cwd" value={folder} onChange={(e) => setCwd(e.target.value)} spellCheck={false} className={`${FIELD} font-mono`} />
       </Field>
       <Field label="Brief" optional hint="Its first prompt, sent as your Directive.">
@@ -217,7 +213,7 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
           className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]"
         />
       </Field>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid min-w-0 gap-4 sm:grid-cols-2">
         <Field label="Nickname" optional>
           <input name="nickname" maxLength={MAX_NICKNAME_LENGTH} value={nickname} onChange={(e) => setNickname(e.target.value)} className={FIELD} />
         </Field>
@@ -251,6 +247,34 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
         </Button>
       </DialogFooter>
     </form>
+  );
+}
+
+/**
+ * The Host's folders, any of which (or a folder under one) an Agent may start in: one
+ * click puts it in the field. Long paths keep their end, the part that names the repo.
+ */
+function FolderChoices({ host, value, onPick }: { host: Host; value: string; onPick: (root: string) => void }) {
+  return (
+    <span className="flex min-w-0 flex-col gap-1.5">
+      <span>
+        On {host.id}, in one of its folders or under it:
+      </span>
+      <span className="flex min-w-0 flex-wrap gap-1.5">
+        {host.roots.map((root) => (
+          <button
+            key={root}
+            type="button"
+            title={root}
+            onClick={() => onPick(root)}
+            aria-pressed={value === root}
+            className="block h-7 max-w-full truncate rounded-sm bg-inset px-2 font-mono text-small text-ink-2 transition-colors [direction:rtl] hover:bg-hover hover:text-ink aria-pressed:bg-hover-2 aria-pressed:text-ink"
+          >
+            <bdi>{root}</bdi>
+          </button>
+        ))}
+      </span>
+    </span>
   );
 }
 
