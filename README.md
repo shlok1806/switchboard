@@ -364,6 +364,18 @@ reads them in full with `memory_recent` and `memory_search`.
 - A Channel takes `MEMORY_NOTES_PER_DAY` notes a day (300). Notes show on the
   Dashboard's feed and on their Task's timeline.
 
+### The canvas
+
+The Dashboard's Canvas view draws the Channel as a map (ADR 0020): one lane per Person,
+yours first, each Agent a node with its state, model, latest activity and context, each
+Task an Agent holds as a frame around it, and a line from a lead to each Agent it started.
+
+- It shows the Channel and changes nothing: select a node to see the Agent's brief, its
+  context and its Tasks, and open its page to act on it.
+- Drag the ground or scroll to pan, zoom with ctrl or a pinch, and drag a node to move it.
+  Where nodes sit and the zoom are kept in your browser for each Channel, and nothing moves
+  on its own when Agents join or leave.
+
 ### Codex hooks and trust
 
 Codex may run session hooks only after you trust them in its `/hooks` screen. The
