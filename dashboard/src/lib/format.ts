@@ -346,6 +346,11 @@ function wokenFor(queued: number, directives: number): string {
 }
 
 /** The time of day in a Person's time zone, as 15:02; an unknown zone gives "". */
+/** A time zone's city, for people: "America/New_York" as "New York". */
+export function zoneCity(zone: string): string {
+  return zone.split("/").pop()?.replaceAll("_", " ") ?? zone;
+}
+
 export function localTime(at: number | Date, timeZone: string): string {
   try {
     return new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone });

@@ -1,13 +1,15 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { Agent, AgentId, Task } from "@shared/index";
+import { Chip } from "@/components/atoms/Chip";
 import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { ClaimForAgentItems, ClaimForLabel, ClaimForMeItem, claimable, useClaims } from "@/components/domain/claim";
 import { NewTaskButton } from "@/components/domain/new-task";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { COLUMN_GLYPH, COLUMN_LABEL, columnOf, type Column } from "@/components/domain/task";
 import { Glyph } from "@/components/domain/state";
-import { decideMove, heldByMe } from "@/components/domain/moves";
+import { decideMove } from "@/components/domain/moves";
+import { heldByMe } from "@/lib/state";
 import { FilterSelect } from "@/components/domain/filters";
 import { TakeoverAction } from "@/components/domain/takeover";
 import {
@@ -179,8 +181,12 @@ export function TasksView() {
       </div>
       {/* Quick filters, as on a Jira board */}
       <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-[var(--gutter)] pb-3 max-sm:gap-1 md:flex-nowrap md:overflow-x-auto">
-        <Toggle on={filters.mine} onClick={() => set("mine")(!filters.mine)} label="Mine" />
-        <Toggle on={filters.blocked} onClick={() => set("blocked")(!filters.blocked)} label="Blocked" />
+        <Chip on={filters.mine} onClick={() => set("mine")(!filters.mine)} title="Mine">
+          Mine
+        </Chip>
+        <Chip on={filters.blocked} onClick={() => set("blocked")(!filters.blocked)} title="Blocked">
+          Blocked
+        </Chip>
         <FilterSelect label="Person" value={filters.person} onChange={set("person")} allLabel="Any Person" options={persons.map((p) => ({ value: p, label: p }))} />
         {can.agents && (
           <FilterSelect
@@ -263,24 +269,6 @@ export function TasksView() {
 
 function ColumnDot({ column }: { column: Column }) {
   return <Glyph state={COLUMN_GLYPH[column]} />;
-}
-
-/** A quick filter, as a chip (design.md): the current one has an ink border. */
-function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      onClick={onClick}
-      title={label}
-      className={cn(
-        "inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-[var(--r)] border px-2 text-label font-medium transition-colors duration-[var(--dur)]",
-        on ? "border-ink text-ink" : "border-rule text-ink-2 hover:border-ink-3 hover:text-ink",
-      )}
-    >
-      {label}
-    </button>
-  );
 }
 
 function StaleLane({ count, children }: { count: number; children: ReactNode }) {

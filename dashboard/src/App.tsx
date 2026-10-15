@@ -14,6 +14,7 @@ import { go, href, useRoute, type Route } from "@/lib/router";
 import { signOut } from "@/lib/session";
 
 // One chunk per route, loaded on first visit.
+const NowView = lazy(() => import("@/views/NowView").then((m) => ({ default: m.NowView })));
 const FeedView = lazy(() => import("@/views/FeedView").then((m) => ({ default: m.FeedView })));
 const TasksView = lazy(() => import("@/views/TasksView").then((m) => ({ default: m.TasksView })));
 const TaskDetail = lazy(() => import("@/views/TaskDetail").then((m) => ({ default: m.TaskDetail })));
@@ -138,6 +139,7 @@ export default function App() {
         <Crumb route={route} taskTitle={route.view === "task" ? taskByNumber.get(route.number)?.title : undefined} />
         <main className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] sm:pb-0">
           <Suspense fallback={<ViewFallback />}>
+            {route.view === "now" && <NowView />}
             {route.view === "feed" && <FeedView selected={route.event} />}
             {route.view === "tasks" && <TasksView />}
             {route.view === "task" && <TaskDetail number={route.number} />}

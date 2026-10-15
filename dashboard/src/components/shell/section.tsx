@@ -11,7 +11,7 @@ export function SectionHead({ title, meta, action, as: H = "h2" }: { title: Reac
     <header className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule-2 pb-2">
       <H className="min-w-0 flex-[1_1_160px] text-title font-semibold text-ink [overflow-wrap:anywhere]">
         {title}
-        {meta && <span className="ml-3 text-small font-normal text-ink-3">{meta}</span>}
+        {meta && <span className="ml-3 inline-block text-small font-normal text-ink-3">{meta}</span>}
       </H>
       {action && <span className="shrink-0 text-small">{action}</span>}
     </header>

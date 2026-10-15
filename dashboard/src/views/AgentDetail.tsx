@@ -14,11 +14,11 @@ import { OlderRow } from "@/components/domain/older";
 import { useScopedHistory } from "@/data/history";
 import { RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { Composer } from "@/components/domain/composer";
-import { HostLabel, useClaimsOf } from "./AgentsView";
+import { HostLabel, useClaimsOf } from "@/components/domain/fleet";
 import { Glyph, State, useAgentState } from "@/components/domain/state";
 import { StopAgentButton } from "@/components/domain/start-agent";
 import { LeadButton, LeadLabel } from "@/components/domain/agent-role";
-import { CAPTURE_LABEL, CLI_LABEL, ago } from "@/lib/format";
+import { CAPTURE_LABEL, CLI_LABEL, ago, zoneCity } from "@/lib/format";
 import { go, href } from "@/lib/router";
 
 const MODES = ["Digest", "Raw"] as const;
@@ -263,7 +263,7 @@ export function AgentDetail({ id }: { id: string }) {
                     <RelativeTimeZoneDate />
                   </span>
                   <RelativeTimeZoneLabel className="ml-auto h-6 rounded-sm bg-hover px-2 text-small text-ink-3">
-                    {person.timeZone.split("/").pop()?.replace("_", " ")}
+                    {zoneCity(person.timeZone)}
                   </RelativeTimeZoneLabel>
                 </RelativeTimeZone>
               </RelativeTime>

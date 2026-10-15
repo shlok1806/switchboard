@@ -5,7 +5,7 @@
  * reaches them. The only coloured count is the number of lines that need you.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Check, Columns3, LogOut, MessagesSquare, Monitor, Moon, Search, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
+import { Bot, Check, Columns3, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,8 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useAgentStates } from "@/components/domain/state";
-import { needsYou } from "@/lib/state";
+import { useNeedsYou } from "@/components/domain/state";
 import { useChannel, useMe, useStore } from "@/data/store";
 import { localTime } from "@/lib/format";
 import { href, type Route } from "@/lib/router";
@@ -23,10 +22,11 @@ import { signOut } from "@/lib/session";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-export type ViewId = "feed" | "tasks" | "agents" | "canvas" | "compare";
+export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "compare";
 
 /** The views, in the order the keys show them. The icon is for the command palette only. */
 export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
+  { id: "now", title: "Now", icon: Inbox },
   { id: "agents", title: "Agents", icon: Bot },
   { id: "tasks", title: "Tasks", icon: SquareKanban },
   { id: "canvas", title: "Canvas", icon: Workflow },
@@ -43,12 +43,11 @@ export function viewOf(route: Route): ViewId {
 /** What each key counts: every Agent and every open Task, and the lines that need you. */
 export function useCounts() {
   const { agents, tasks } = useChannel();
-  const states = useAgentStates();
+  const needYou = useNeedsYou();
   return useMemo(() => {
-    const needYou = needsYou(states.values());
     const open = tasks.filter((t) => t.status !== "done").length;
     return { agents: agents.length, needYou, tasks: open };
-  }, [agents, tasks, states]);
+  }, [agents, tasks, needYou]);
 }
 
 /** The mark: a jack, a square socket with its plug seated. */
@@ -99,7 +98,7 @@ export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; 
   const counts: Partial<Record<ViewId, number>> = { agents: c.agents, tasks: c.tasks };
   return (
     <header className="flex h-[var(--topbar-h)] shrink-0 items-center gap-4 border-b border-rule bg-paper px-[var(--gutter)]">
-      <a href={href({ view: "agents" })} className="flex shrink-0 items-center gap-2 hover:no-underline" aria-label="Switchboard">
+      <a href={href({ view: "now" })} className="flex shrink-0 items-center gap-2 hover:no-underline" aria-label="Switchboard">
         <Mark />
         <span className="text-title font-semibold text-ink">Switchboard</span>
       </a>
@@ -108,7 +107,7 @@ export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; 
       </code>
       <nav aria-label="Views" className="flex items-center gap-1">
         {VIEWS.map((v) => (
-          <Key key={v.id} view={v} current={v.id === current} count={counts[v.id]} needYou={v.id === "agents" ? c.needYou : undefined} />
+          <Key key={v.id} view={v} current={v.id === current} count={counts[v.id]} needYou={v.id === "now" ? c.needYou : undefined} />
         ))}
       </nav>
       <div className="ml-auto flex shrink-0 items-center gap-4">
@@ -131,7 +130,7 @@ export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; 
 export function PhoneBar({ repo, onSearch }: { repo: string; onSearch: () => void }) {
   return (
     <header className="flex h-[var(--topbar-h)] shrink-0 items-center gap-3 border-b border-rule bg-paper px-[var(--gutter)]">
-      <a href={href({ view: "agents" })} className="flex shrink-0 items-center gap-2 hover:no-underline" aria-label="Switchboard">
+      <a href={href({ view: "now" })} className="flex shrink-0 items-center gap-2 hover:no-underline" aria-label="Switchboard">
         <Mark />
         <span className="text-title font-semibold text-ink">Switchboard</span>
       </a>
@@ -151,11 +150,14 @@ export function PhoneBar({ repo, onSearch }: { repo: string; onSearch: () => voi
   );
 }
 
+/** The views the phone's tab bar shows; the rest are under More. */
+const TABS: ViewId[] = ["now", "agents", "tasks", "feed"];
+
 /** The phone's tab bar: four views and More. */
 export function TabBar({ route }: { route: Route }) {
   const current = viewOf(route);
   const c = useCounts();
-  const tabs = VIEWS.filter((v) => v.id !== "compare");
+  const tabs = VIEWS.filter((v) => TABS.includes(v.id));
   const tab = (on: boolean) =>
     cn(
       "relative flex min-h-11 flex-col items-center justify-center text-small font-medium hover:no-underline",
@@ -170,11 +172,11 @@ export function TabBar({ route }: { route: Route }) {
         <a key={v.id} href={href({ view: v.id })} aria-current={v.id === current ? "page" : undefined} className={tab(v.id === current)}>
           <span className="inline-flex items-center gap-1.5">
             {v.title}
-            {v.id === "agents" && c.needYou > 0 && <SignalCount n={c.needYou} />}
+            {v.id === "now" && c.needYou > 0 && <SignalCount n={c.needYou} />}
           </span>
         </a>
       ))}
-      <MoreMenu className={tab(current === "compare")} current={current === "compare"} />
+      <MoreMenu className={tab(!TABS.includes(current))} current={!TABS.includes(current)} />
     </nav>
   );
 }
@@ -257,9 +259,11 @@ function MenuItems({ withViews }: { withViews?: boolean }) {
       {withViews && (
         <>
           <DropdownMenuSeparator />
-          <DropdownMenuItem asChild>
-            <a href={href({ view: "compare" })}>Compare</a>
-          </DropdownMenuItem>
+          {VIEWS.filter((v) => !TABS.includes(v.id)).map((v) => (
+            <DropdownMenuItem key={v.id} asChild>
+              <a href={href({ view: v.id })}>{v.title}</a>
+            </DropdownMenuItem>
+          ))}
         </>
       )}
       <DropdownMenuSeparator />
@@ -295,7 +299,7 @@ export function AccountMenu({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** The phone's More tab: Compare, the theme, and signing out. */
+/** The phone's More tab: the views the tab bar leaves out, the theme, and signing out. */
 function MoreMenu({ className, current }: { className: string; current: boolean }) {
   return (
     <DropdownMenu>
