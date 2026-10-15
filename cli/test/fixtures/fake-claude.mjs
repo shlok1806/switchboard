@@ -42,6 +42,9 @@
 // while it was doing nothing starts a turn of its own: it runs the lines in the file
 // FAKE_CLAUDE_REPLY_FILE names, if any (such as `call post_update {...}`), then ends
 // the turn (the Stop hook).
+//
+// In a folder holding `.fake-claude-untrusted` it shows Claude Code's folder trust
+// dialog instead, and waits there for an answer that never comes.
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -68,6 +71,14 @@ const sessionId = flagValue("--session-id") ?? flagValue("--resume");
 if (!sessionId) {
   console.log("FAKE-CLAUDE no session id");
   process.exit(3);
+}
+
+if (existsSync(".fake-claude-untrusted")) {
+  console.log("Quick safety check: Is this a project you created or one you trust?");
+  console.log("\u276f 1. Yes, I trust this folder");
+  console.log("  2. No, exit");
+  setInterval(() => {}, 60_000);
+  await new Promise(() => {});
 }
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
@@ -237,6 +248,7 @@ console.log(`FAKE-CLAUDE agent=${process.env.SWITCHBOARD_AGENT_ID ?? ""}`);
 const PARENT_ENV = ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID"];
 console.log(`FAKE-CLAUDE parent=${JSON.stringify(PARENT_ENV.filter((name) => process.env[name] !== undefined))}`);
 console.log(`FAKE-CLAUDE session=${sessionId}`);
+console.log(`FAKE-CLAUDE pid=${process.pid}`);
 runHooks("SessionStart", { source: flagValue("--resume") ? "resume" : "startup" });
 // Bracketed paste on, as Claude Code does once its prompt is up.
 process.stdout.write("\x1b[?2004h");

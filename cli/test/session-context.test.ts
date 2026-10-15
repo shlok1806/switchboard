@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentIdFor } from "../../shared/src/index";
 import { AgentLink } from "../src/agent-link";
 import { ChannelClient } from "../src/channel-client";
+import { briefPrompt } from "../src/host/supervisor";
 import { ContextParser, SessionContextReader } from "../src/session-context";
 
 const dirs: string[] = [];
@@ -56,6 +57,13 @@ describe("main-session context", () => {
     expect(p.context.autoCompactions).toBeUndefined();
     p.entry({ type: "event_msg", payload: { type: "context_compacted", trigger: "auto" } });
     expect(p.context.autoCompactions).toBeUndefined();
+  });
+  it("takes a Host's brief from the Directive that starts the session, not its heading", () => {
+    const p = new ContextParser("claude-code");
+    const prompt = briefPrompt("ana", "ana/studio", "Fix the login redirect.\n\nThen open a PR.");
+    p.entry({ type: "user", message: { content: prompt } });
+    expect(p.context.brief).toBe("Fix the login redirect.\n\nThen open a PR.");
+    expect(p.context.task).toBe("Fix the login redirect.");
   });
   it("finds the Person's first brief in a Codex rollout without user_message events, excluding injected context", async () => {
     const p = new ContextParser("codex");

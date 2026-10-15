@@ -228,6 +228,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     // Whether the wrapper types Interrupts into this CLI's pty. When not, the
     // Relay delivers them as Queue, labelled downgraded.
     interrupts: adapter.interrupts,
+    // A Host started this wrapper (ADR 0015): the Agent runs on it, and answers its spawn.
+    ...(env.SWITCHBOARD_HOST ? { host: env.SWITCHBOARD_HOST } : {}),
+    ...(env.SWITCHBOARD_HOST && env.SWITCHBOARD_SPAWN ? { spawn: env.SWITCHBOARD_SPAWN } : {}),
   });
 
   // The Channel stream stays open for the whole session. It carries the Hook
@@ -445,6 +448,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     if (hookDir) await rm(hookDir, { recursive: true, force: true });
   };
   const childEnv: Record<string, string> = { ...(env as Record<string, string>) };
+  // What the Host told this wrapper is about this session only, not one an Agent starts.
+  delete childEnv.SWITCHBOARD_HOST;
+  delete childEnv.SWITCHBOARD_SPAWN;
   for (const name of adapter.parentEnv ?? []) delete childEnv[name];
   if (plan.kind !== "none" && proxySetting !== "off") {
     // The Proxy Capture: model traffic goes through a local proxy. If it cannot
@@ -551,7 +557,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         log,
         context: (hook) => nextTurn.take(hook),
         onHook: (input) => {
-          if (input.hook_event_name === "SessionStart") sawSessionStart = true;
+          if (input.hook_event_name === "SessionStart") {
+            sawSessionStart = true;
+            link?.sessionStarted();
+          }
           // The CLI's own reason the session ended, for the session's one `session.end` (#54).
           if (input.hook_event_name === "SessionEnd") {
             endDetail = (typeof input.reason === "string" ? input.reason : "other").slice(0, 40);

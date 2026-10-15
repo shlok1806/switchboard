@@ -127,6 +127,9 @@ switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-la
 switchboard run codex  [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...codex arguments]
 switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...gemini arguments]
 switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
+switchboard spawn [--host <name>] [--cwd <folder>] [--nickname <name>] [--model <id>] [--permission-mode <mode>] [--repo <owner>/<repo>] [brief...]
+switchboard stop <agent> [--repo <owner>/<repo>]
+switchboard host install|uninstall|run|status
 ```
 
 The wrapper sets up hooks, Switchboard's MCP tools and the proxy for each session
@@ -280,6 +283,42 @@ Pick the narrowest policy the work allows. Without a sandbox and without prompts
 nothing stands between a bad command and your machine: not one the model gets wrong,
 and not one a file, issue or web page talked it into. Switchboard's own MCP tools are
 approved for the session either way.
+
+### Hosts: Agents with no terminal
+
+A Host is one of your machines that starts and stops Claude Code Agents for you, with
+no window (ADR 0015). Install it once on the machine:
+
+```sh
+switchboard host install --root ~/code/my-repo --max-permission-mode acceptEdits
+```
+
+That registers the Host on the Channel (named after the machine, or `--name`) and
+installs a LaunchAgent, `~/Library/LaunchAgents/dev.switchboard.host.plist`, that runs
+`switchboard host run` at login as a background process and restarts it if it dies.
+Agents start only in a `--root` folder or under one, and in at most the
+`--max-permission-mode` (`plan`, `dontAsk`, `default`, `acceptEdits`, `auto`,
+`bypassPermissions`, strictest first; `default` if you leave it out).
+
+Then start an Agent from any terminal:
+
+```sh
+switchboard spawn --cwd ~/code/my-repo --nickname builder "Fix the login redirect."
+switchboard stop builder
+```
+
+The brief is the session's first prompt, labelled as your Directive. The Host runs
+`switchboard run claude` in a pty of its own, so the Agent is on the Channel like any
+other, and `GET /api/agents` names its `host`. Only you can start or stop Agents on your Hosts,
+and Hosts on a Channel run at most `HOST_AGENTS_LIVE_CAP` Agents at once (20).
+
+- A folder Claude Code has not trusted fails the spawn: the Host never answers the
+  trust dialog for you. Run `claude` there once and accept it.
+- An Agent whose CLI crashes is resumed in the same session, at most 3 times in 10
+  minutes. Agents the Host runs are resumed after a reboot too.
+- `switchboard host status` shows the Host, its Agents and its files under
+  `~/.config/switchboard/host/`: each Agent's terminal output is in `logs/<agent>.log`.
+- `switchboard host uninstall` unloads the LaunchAgent and removes the Host.
 
 ### Codex hooks and trust
 
