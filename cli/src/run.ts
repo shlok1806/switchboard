@@ -617,10 +617,12 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   };
   if (!adapter.sessionFromHooks) discover();
 
-  // A CLI that runs session hooks only once the Person trusts them: say so when
+  // A CLI that runs session hooks only once the Person trusts them: notice when
   // none has arrived in time. Codex starts its session (and runs SessionStart) at
   // the first prompt, so the wait starts when the Person first presses Enter.
-  // Until a hook arrives, next-turn notices go to the read_channel tool.
+  // Until a hook arrives, next-turn notices go to the read_channel tool. The Person
+  // is told how to trust them once the CLI exits: written while it runs, the hint
+  // would paint over the CLI's screen (its approval dialog, its own /hooks review).
   let trustTimer: ReturnType<typeof setTimeout> | undefined;
   const hint = plan.kind === "none" ? undefined : adapter.untrustedHooksHint;
   const watchTrust = () => {
@@ -629,7 +631,6 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       () => {
         if (sawSessionStart) return;
         log("no SessionStart hook: the CLI's hooks are not trusted");
-        stdout.write(`\r\n${dim(`switchboard: ${hint}`)}\r\n`);
         hooksRunning = false;
         sessionTools?.leaveForNextTurn(STANDING_RULE);
         heldForTools();
@@ -662,6 +663,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   stdout.off("resize", onResize);
   if (stdin.isTTY) stdin.setRawMode(false);
   stdin.pause();
+  // The terminal is the wrapper's again: the hooks never ran, so say how to trust them.
+  if (hint !== undefined && !hooksRunning) stdout.write(`${dim(`switchboard: ${hint}`)}\n`);
   // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
   await Promise.all([hooks?.drain(END_TIMEOUT_MS), proxy?.drain(END_TIMEOUT_MS)]);
   // Then the last usage reading, once the last turn end has been seen.

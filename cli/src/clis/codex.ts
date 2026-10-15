@@ -355,6 +355,6 @@ export const codex: CliAdapter = {
   },
 
   untrustedHooksHint:
-    "Codex has not run Switchboard's hooks yet. Open /hooks in Codex and trust the switchboard hooks " +
-    "(once; they stay trusted). Until then, Queued Events reach this Agent through the read_channel tool.",
+    "Codex did not run Switchboard's hooks in this session, so Queued Events reached this Agent through the " +
+    "read_channel tool. Open /hooks in Codex and trust the switchboard hooks (once; they stay trusted).",
 };

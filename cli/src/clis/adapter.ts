@@ -113,9 +113,10 @@ export interface CliAdapter {
   /** Installs the session's hooks and MCP tools, for this session only. */
   install(options: InstallOptions): Promise<Installed>;
   /**
-   * Set when the CLI runs session hooks only once the Person trusts them. The
-   * wrapper prints it when no SessionStart hook arrives in time, and until one
-   * does, it leaves next-turn notices for the `read_channel` tool instead.
+   * Set when the CLI runs session hooks only once the Person trusts them. When no
+   * SessionStart hook arrives in time, the wrapper leaves next-turn notices for the
+   * `read_channel` tool instead, and prints this once the CLI exits, unless a hook
+   * arrived meanwhile. Never while the CLI runs: it would paint over its screen.
    */
   untrustedHooksHint?: string;
 }

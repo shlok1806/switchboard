@@ -2382,14 +2382,13 @@ describe("switchboard run codex and gemini", () => {
     expect(await term.exited).toBe(0);
   }, 90_000);
 
-  it("tells the Person to trust Codex's hooks, and hands queued items over through read_channel until then", async () => {
+  it("hands queued items over through read_channel while Codex's hooks are untrusted, and says how to trust them once Codex exits", async () => {
     const term = new Terminal(["run", "codex"], fakeEnv);
     const { sessionId } = await startedAs(term, "FAKE-CODEX");
     const id = `e2e/codex/${sessionId.slice(-4)}`;
     // No hook runs, so the session is found from the session file Codex writes at the first prompt.
     term.type("prompt hello\r");
     await waitFor("the untrusted Codex Agent", async () => (await agents()).find((a) => a.id === id));
-    await term.waitForOutput(/Open \/hooks in Codex and trust the switchboard hooks/);
     expect(await hookEvents(id)).toEqual([]);
     // Registered is not yet reachable: the wrapper's socket reconnects with the Agent's token first.
     await term.attached(id);
@@ -2405,8 +2404,12 @@ describe("switchboard run codex and gemini", () => {
     expect(answer).toContain("Directive from shlok");
     // Handed over once.
     expect(await callFakeTool(term, "FAKE-CODEX", "read_channel", { limit: 3 })).not.toContain("Pick up #7 next.");
+    // Nothing written over Codex's screen while it ran; the hint once it exited.
+    const ran = term.output.length;
+    expect(term.output).not.toContain("/hooks");
     term.type("quit\r");
     expect(await term.exited).toBe(0);
+    expect(term.output.slice(ran)).toMatch(/Open \/hooks in Codex and trust the switchboard hooks/);
   }, 90_000);
 
   it("registers a Gemini CLI session from its hooks, and labels its Interrupts downgraded", async () => {
