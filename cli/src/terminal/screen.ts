@@ -34,6 +34,12 @@ const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const STYLE_BREAK = "\x1b[m";
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the style break is an escape sequence.
 const STYLE_BREAKS = /\x1b\[m/g;
+/** The style breaks that cannot start a key, as they do not follow a letter or digit. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the style break is an escape sequence.
+const STYLE_BREAKS_INSIDE = /(?<![A-Za-z0-9])\x1b\[m/g;
+/** A broken row's indent, style breaks among it included. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the style break is an escape sequence.
+const LEADING_BLANKS = /^(?:[ \t]|\x1b\[m)*/;
 /**
  * A mask, then a style or row break, then more of a token: the rest of a key that was
  * both glued to a word and split. It goes with the mask; the row breaks stay.
@@ -63,7 +69,17 @@ function redactRows(rows: string[], broken: boolean[]): string[] {
   const indents = kept.map((row, i) => (broken[i] ? (/^[ \t]*/.exec(row)?.[0] ?? "") : ""));
   const bodies = kept.map((row, i) => row.slice(indents[i]?.length ?? 0));
   const joined = bodies.join("");
-  const masked = redactLine(joined);
+  // A key both glued to a word and split, with too little of it on its first row for the
+  // first pass to know it: joined, it is whole, but stripped of its style breaks it is
+  // glued again. So the style breaks after a letter or digit, where a key may start, stay
+  // for one more pass before the rest go. A key a colour change split after a letter is
+  // then masked only to that break, so the rest goes with its mask, as in the first pass.
+  const glued = first
+    .split("\n")
+    .map((row, i) => (broken[i] ? row.replace(LEADING_BLANKS, "") : row))
+    .join("")
+    .replace(STYLE_BREAKS_INSIDE, "");
+  const masked = redactLine(redactLine(glued).replace(SPLIT_TAIL, MASK).replace(STYLE_BREAKS, ""));
   if (masked === joined) return kept;
   // Where the second pass masked, map each row's start through it: the text before the
   // first change and after the last is the same, and a row that starts inside the
@@ -90,28 +106,72 @@ function redactRows(rows: string[], broken: boolean[]): string[] {
 
 const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----/;
 const PEM_END = /-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----/;
+/** A line of base64 only, as a key's body is, after any indent or tool-output mark. */
+const BASE64_LINE = /^[ \t]*(?:⎿[ \t]*)?([A-Za-z0-9+/]{16,}={0,2})$/;
+/** How long a base64 line must be to count toward a block: a PEM line holds 64. */
+const BASE64_LONG = 40;
+/** How many long base64 lines make a block that is masked with no BEGIN line seen. */
+const BASE64_BLOCK = 3;
 
 /**
  * The rows, up to `end`, inside a private key printed over several lines: between its
  * BEGIN and END lines, or to the bottom while no END has come. Each row alone looks like
- * nothing to mask; the BEGIN line may have scrolled off the top. Lines are read whole,
- * with the rows the terminal wrapped them over.
+ * nothing to mask. Lines are read whole, over the rows the terminal wrapped them across
+ * or the CLI broke them over (a row whose text reaches the last column goes on), and a
+ * BEGIN or END line the CLI wrapped at a space is read over the two lines it took.
+ * A key whose BEGIN line has gone past the scrollback is still found, as a block of
+ * base64 lines with at least BASE64_BLOCK long ones, wherever it is.
  */
 function privateKeyRows(buffer: { length: number; getLine(y: number): Line | undefined }, end: number): Set<number> {
-  const rows = new Set<number>();
-  let inside = false;
+  const lines: { from: number; to: number; text: string }[] = [];
   let y = 0;
   while (y < Math.min(end, buffer.length)) {
     let text = buffer.getLine(y)?.translateToString(true) ?? "";
+    let full = markedRow(buffer.getLine(y)).full;
     let next = y + 1;
-    while (next < buffer.length && buffer.getLine(next)?.isWrapped) {
-      text += buffer.getLine(next)?.translateToString(true) ?? "";
+    while (next < buffer.length && (full || buffer.getLine(next)?.isWrapped)) {
+      const line = buffer.getLine(next);
+      // A row the CLI broke itself may be indented under the one before.
+      const row = line?.translateToString(true) ?? "";
+      text += line?.isWrapped ? row : row.replace(/^[ \t]+/, "");
+      full = markedRow(line).full;
       next++;
     }
-    if (inside && PEM_END.test(text)) inside = false;
-    else if (inside) for (let row = y; row < next; row++) rows.add(row);
-    else if (PEM_BEGIN.test(text) && !PEM_END.test(text)) inside = true;
+    lines.push({ from: y, to: next, text });
     y = next;
+  }
+  const rows = new Set<number>();
+  const add = (line: { from: number; to: number }) => {
+    for (let row = line.from; row < line.to; row++) rows.add(row);
+  };
+  // A BEGIN or END line the CLI wrapped at a space, over two lines.
+  const marker = (pattern: RegExp, i: number) => {
+    const line = lines[i]?.text ?? "";
+    const next = lines[i + 1]?.text;
+    if (next === undefined || pattern.test(line) || pattern.test(next)) return false;
+    return pattern.test(`${line.trimEnd()} ${next.trim()}`);
+  };
+  let inside = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as (typeof lines)[number];
+    if (inside && PEM_END.test(line.text)) inside = false;
+    else if (inside && marker(PEM_END, i)) {
+      inside = false;
+      i++;
+    } else if (inside) add(line);
+    else if (PEM_BEGIN.test(line.text) && !PEM_END.test(line.text)) inside = true;
+    else if (marker(PEM_BEGIN, i)) {
+      inside = true;
+      i++;
+    } else if (BASE64_LINE.test(line.text)) {
+      // A block of base64 lines: a key's body whose BEGIN line is not in the buffer.
+      let last = i;
+      while (last + 1 < lines.length && BASE64_LINE.test(lines[last + 1]?.text ?? "")) last++;
+      const block = lines.slice(i, last + 1);
+      const long = block.filter((l) => (BASE64_LINE.exec(l.text)?.[1]?.length ?? 0) >= BASE64_LONG).length;
+      if (long >= BASE64_BLOCK) for (const l of block) add(l);
+      i = last;
+    }
   }
   return rows;
 }
