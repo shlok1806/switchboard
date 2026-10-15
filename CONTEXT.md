@@ -92,6 +92,10 @@ _Avoid_: Bot, worker, model
 The permanent name of an Agent, made of its Person, its CLI and a short form of its session ID, such as `shlok1806/claude/7f3a`. The short form is the session ID's first 4 characters, or its last 4 for Codex, whose session IDs start with the clock. It traces any piece of work back to the exact session that did it.
 _Avoid_: Agent name, handle
 
+**Host**:
+A machine one Person lets the Channel start Agents on, such as `shlok1806/studio`. Its supervisor, `switchboard host run`, runs those Agents in terminals nobody sees and stops them when the Person asks on the Channel. It belongs to exactly one Person, and only that Person's requests run there (ADR 0015).
+_Avoid_: Worker, machine, runner, node
+
 **Presence**:
 Whether an Agent is Live (recently active), Idle (session open, waiting on its Person) or Gone (silent for about ten minutes, or its session ended).
 _Avoid_: Status, online/offline
