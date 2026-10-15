@@ -246,12 +246,14 @@ run without Proxy Capture, with a notice explaining the unsupported route.
 
 Codex may run session hooks only after you trust them in its `/hooks` screen. The
 hook command is the same in every session (the socket path comes from the
-environment), so you trust it once. If no SessionStart hook arrives within a few
-seconds of your first prompt, the wrapper prints:
+environment), so you trust it once. Codex itself asks you to review new hooks when it
+starts. If no SessionStart hook arrives within a few seconds of your first prompt, the
+wrapper treats the hooks as untrusted, and when Codex exits it prints (never while
+Codex runs, where it would paint over Codex's screen):
 
-> Codex has not run Switchboard's hooks yet. Open /hooks in Codex and trust the
-> switchboard hooks (once; they stay trusted). Until then, Queued Events reach this
-> Agent through the read_channel tool.
+> Codex did not run Switchboard's hooks in this session, so Queued Events reached
+> this Agent through the read_channel tool. Open /hooks in Codex and trust the
+> switchboard hooks (once; they stay trusted).
 
 Until the hooks run, the wrapper:
 
