@@ -3,6 +3,7 @@ import type {
   ActionResult,
   Agent,
   AgentId,
+  AgentRole,
   ChannelEvent,
   ChannelSnapshot,
   Holder,
@@ -426,6 +427,24 @@ export class MockChannelSource implements ChannelSource {
     this.record(makeEvent("agent.stop", person(this.me), null, { agent: id, host: agent.host }, { at }), undefined, true);
     agent.presence = "gone";
     agent.lastSeenAt = at;
+    this.emit({ type: "agent", agent: clone(agent) });
+    return { ok: true };
+  }
+
+  async setRole(id: AgentId, role: AgentRole | null): Promise<ActionResult> {
+    await new Promise((r) => setTimeout(r, 300));
+    const agent = this.agents.find((a) => a.id === id);
+    if (!agent) return { ok: false, reason: `No Agent ${id} on this Channel.` };
+    if (agent.person !== this.me) {
+      return { ok: false, reason: `${id} is ${agent.person}'s Agent. Only its own Person grants or revokes its role.` };
+    }
+    const had = agent.role ?? null;
+    if (had === role) return { ok: true };
+    const at = new Date().toISOString();
+    if (had !== null) this.record(makeEvent("agent.role.revoked", person(this.me), null, { agent: id, role: had }, { at }), undefined, true);
+    if (role !== null) this.record(makeEvent("agent.role.granted", person(this.me), null, { agent: id, role }, { at }), undefined, true);
+    if (role === null) delete agent.role;
+    else agent.role = role;
     this.emit({ type: "agent", agent: clone(agent) });
     return { ok: true };
   }

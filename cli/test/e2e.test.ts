@@ -722,7 +722,7 @@ describe("Switchboard's tools (the Tool Capture)", () => {
 
     expect(await call("list_tasks", {})).toContain(`#${held} Dashboard [claimed] held by dev`);
     expect(term.output).toContain(
-      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","list_agents","rename","finish_task","agent_spawn","agent_stop"]',
+      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","list_agents","rename","finish_task","agent_spawn","agent_stop","send_directive"]',
     );
     expect(await call("claim_task", { task: held })).toBe(`claim_task ERROR: Task #${held} is held by dev.`);
     expect(await call("claim_task", { task: claims })).toContain(`claim_task: You hold Task #${claims} now`);
@@ -3119,18 +3119,71 @@ describe("switchboard host", () => {
     }
   });
 
-  it("refuses agent_spawn and agent_stop to an Agent: only a Person starts and stops Agents for now", async () => {
-    const term = new Terminal(["run", "claude"]);
-    const { agentEnv: self } = await term.started();
-    await waitForPresence(self as AgentId, "live");
-    for (const [tool, input] of [
-      ["agent_spawn", { cwd }],
-      ["agent_stop", { agent: self }],
-    ] as const) {
-      const answer = await callTool(term, tool, input);
-      expect(answer).toContain(`${tool} ERROR`);
-      expect(answer).toContain("An Agent cannot start or stop Agents, or manage Hosts: only a Person can");
-    }
+  it("lets an Agent its Person made a lead start, direct and stop an Agent through its tools, and refuses it before and after", async () => {
+    const term = new Terminal(["run", "claude", "--nickname", "planner"]);
+    const { agentEnv: lead } = await term.started();
+    await waitForPresence(lead as AgentId, "live");
+    const refused = async () => {
+      for (const [tool, input] of [
+        ["agent_spawn", { cwd }],
+        // Itself: the only Agent running, and outside its own subtree anyway.
+        ["agent_stop", { agent: lead }],
+        ["send_directive", { agent: lead, text: "Stop." }],
+      ] as const) {
+        const answer = await callTool(term, tool, input);
+        expect(answer).toContain(`${tool} ERROR`);
+        expect(answer).toContain(`${lead} is not a lead: its Person can make it one`);
+      }
+    };
+    await refused();
+
+    expect((await cli("role", "grant", "planner", "lead", "--repo", github.repo)).stdout).toContain(
+      `${lead} is a lead now`,
+    );
+    const spawned = await callTool(term, "agent_spawn", { cwd, nickname: "helper", brief: "Write the tests." });
+    const helper = /(e2e\/claude\/\S+) "helper" is running on e2e\/studio\./.exec(spawned)?.[1];
+    expect(helper, spawned).toBeDefined();
+    const id = helper as AgentId;
+    expect((await agents()).find((a) => a.id === id)).toMatchObject({
+      person: "e2e",
+      parent: lead,
+      host: `e2e/${HOST}`,
+    });
+    // Its brief is the lead's Directive.
+    const log = await waitFor("the helper's log", async () => {
+      const text = await agentLog(id);
+      return /FAKE-CLAUDE args=/.test(text) ? text : undefined;
+    });
+    const args = JSON.parse(/FAKE-CLAUDE args=(\[.*\])/.exec(log)?.[1] ?? "[]") as string[];
+    expect(args.at(-1)).toBe(
+      `[Switchboard] Directive from ${lead}, the lead e2e put over this Agent, which started this Agent on e2e/${HOST}:\n> Write the tests.`,
+    );
+
+    expect(await callTool(term, "send_directive", { agent: "helper", text: "Run the linter too." })).toMatch(
+      new RegExp(`Sent ${id} a Directive`),
+    );
+    // The helper's wrapper types it into its session, framed as from the lead.
+    await waitFor("the helper to read the Directive", async () => {
+      const text = await agentLog(id);
+      return text.includes(`Directive from ${lead}, the lead e2e put over this Agent`) &&
+        text.includes("> Run the linter too.")
+        ? true
+        : undefined;
+    });
+
+    expect(await callTool(term, "agent_stop", { agent: "helper" })).toContain(`Asked e2e/${HOST} to stop ${id}.`);
+    await waitForPresence(id, "gone", 20_000);
+    const { events } = await api<HistoryResponse>("/api/events");
+    const by = (type: string) =>
+      events.filter((e) => e.type === type && e.actor.kind === "agent" && e.actor.agentId === lead);
+    expect(by("agent.spawn")).toHaveLength(1);
+    expect(by("directive").map((e) => e.payload)).toEqual([{ to: id, text: "Run the linter too." }]);
+    expect(by("agent.stop").map((e) => e.payload)).toEqual([{ agent: id, host: `e2e/${HOST}` }]);
+
+    expect((await cli("role", "revoke", "planner", "--repo", github.repo)).stdout).toContain(
+      `${lead} has no role now.`,
+    );
+    await refused();
     term.type("quit\r");
     expect(await term.exited).toBe(0);
   });

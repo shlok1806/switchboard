@@ -190,11 +190,17 @@ export function summarize(e: ChannelEvent): string {
     case "agent.spawn":
       return `Asked ${e.payload.host} to start ${e.payload.nickname ?? "an Agent"} in ${e.payload.cwd}`;
     case "agent.spawned":
-      return `Started on ${e.payload.host}`;
+      return e.payload.parent === undefined
+        ? `Started on ${e.payload.host}`
+        : `Started on ${e.payload.host} by ${e.payload.parent}`;
     case "agent.spawn.failed":
       return `${e.payload.host} could not start an Agent: ${e.payload.reason}`;
     case "agent.stop":
       return `Asked ${e.payload.host} to stop ${e.payload.agent}`;
+    case "agent.role.granted":
+      return `Made ${e.payload.agent} a ${e.payload.role}`;
+    case "agent.role.revoked":
+      return `Took back ${e.payload.agent}'s ${e.payload.role} role`;
     case "host.online":
       return `${e.payload.host} is Live`;
     case "host.offline":
@@ -236,6 +242,8 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "agent.spawned": "Started",
   "agent.spawn.failed": "Start failed",
   "agent.stop": "Stop",
+  "agent.role.granted": "Role",
+  "agent.role.revoked": "Role",
   "host.online": "Host",
   "host.offline": "Host",
   "tool.call": "Tool call",

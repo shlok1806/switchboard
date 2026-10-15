@@ -23,7 +23,11 @@ import type { WrapperDowngradeReason } from "./relay";
 /** The longest Directive text the Channel accepts, in characters. */
 export const MAX_DIRECTIVE_LENGTH = 4000;
 
-/** `POST /api/directives`: a Person sends a Directive to one Agent. Refused when sent through an Agent. */
+/**
+ * `POST /api/directives`: a Person sends a Directive to one Agent. Through an Agent's
+ * token it is refused, unless that Agent is a lead and the target is in its subtree
+ * (ADR 0017).
+ */
 export interface SendDirectiveRequest {
   to: AgentId;
   text: string;
@@ -42,8 +46,10 @@ export interface DirectiveDelivery {
   seq: number;
   /** When the Person sent it. */
   at: string;
-  /** The Person who sent it. */
+  /** The Person who sent it, or for whom its lead sent it. */
   from: PersonName;
+  /** The lead that sent it for `from` (ADR 0017). Absent when the Person sent it. */
+  lead?: AgentId;
   to: AgentId;
   text: string;
 }
@@ -75,9 +81,11 @@ export type DirectiveTypedResult = { type: "directive.result"; agent: AgentId; i
   | { typed: false; reason: WrapperDowngradeReason }
 );
 
-/** The frame's first line, naming the Person. */
-export function directiveHeading(from: PersonName): string {
-  return `[Switchboard] Directive from ${from} (a Person on the Channel)`;
+/** The frame's first line, naming the Person, or the lead and the Person who put it over the Agent. */
+export function directiveHeading(from: PersonName, lead?: AgentId): string {
+  return lead === undefined
+    ? `[Switchboard] Directive from ${from} (a Person on the Channel)`
+    : `[Switchboard] Directive from ${lead}, the lead ${from} put over this Agent`;
 }
 
 /**
@@ -95,20 +103,26 @@ export function directiveText(prompt: string): string | null {
 /** One Directive as the Agent reads it. */
 export function describeDirective(directive: DirectiveDelivery): string {
   return [
-    `${directiveHeading(directive.from)}, sent at ${directive.at}:`,
+    `${directiveHeading(directive.from, directive.lead)}, sent at ${directive.at}:`,
     ...directive.text.split("\n").map((line) => `> ${line}`),
   ].join("\n");
 }
 
 /**
- * The framed notice for the Agent's context: instructions from named Persons. Unlike
- * the Relay's Deliveries, which are information from Agents, these carry
- * instruction weight, and the Agent's own Person still has the final say.
+ * The framed notice for the Agent's context: instructions from named Persons, or from
+ * the lead a Person put over the Agent (ADR 0017). Unlike the Relay's Deliveries,
+ * which are information from Agents, these carry instruction weight, and the Agent's
+ * own Person still has the final say.
  */
 export function directivesNotice(directives: readonly DirectiveDelivery[]): string {
+  const fromLead = directives.some((d) => d.lead !== undefined);
   return [
     ...directives.map(describeDirective),
-    "A Directive comes from a Person, not from an Agent, and carries instruction weight. Your own Person still has " +
-      "the final say: if it conflicts with what they asked of you, follow them and say so.",
+    fromLead
+      ? "A Directive comes from a Person, or from the lead your own Person put over you, and carries instruction " +
+        "weight. Your own Person still has the final say: if it conflicts with what they asked of you, follow them " +
+        "and say so."
+      : "A Directive comes from a Person, not from an Agent, and carries instruction weight. Your own Person still " +
+        "has the final say: if it conflicts with what they asked of you, follow them and say so.",
   ].join("\n\n");
 }

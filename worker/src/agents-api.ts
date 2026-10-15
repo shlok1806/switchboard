@@ -10,6 +10,8 @@
 //   POST /api/agents/:id/model       the model it runs on; itself or its Person (ADR 0010)
 //   POST /api/agents/:id/approval    the permission prompt its CLI shows; itself or its Person (ADR 0013)
 //   POST /api/agents/:id/approval/deny  deny that prompt from the Channel; its own Person only (ADR 0014)
+//   PUT  /api/agents/:id/role        grant the Agent a role; its own Person only (ADR 0017)
+//   DELETE /api/agents/:id/role      take its role back; its own Person only (ADR 0017)
 //   GET  /api/accounts               every account's usage readings (ADR 0011)
 //
 // `:id` is the URL-encoded Agent ID, since Agent IDs contain "/".
@@ -25,6 +27,7 @@ import type {
   TouchedFilesResponse,
 } from "../../shared/src/index";
 import {
+  AGENT_ROLES,
   CLIS,
   cleanAccountLabel,
   cleanApproval,
@@ -34,6 +37,7 @@ import {
   cleanNickname,
   cleanUsage,
   HOST_NAME_PATTERN,
+  isAgentRole,
   MAX_ACCOUNT_LABEL_LENGTH,
   MAX_DENY_MESSAGE_LENGTH,
   MAX_EFFORT_LENGTH,
@@ -58,20 +62,23 @@ export type AgentRoute =
   | { kind: "nickname"; id: AgentId }
   | { kind: "model"; id: AgentId }
   | { kind: "approval"; id: AgentId }
-  | { kind: "approval-deny"; id: AgentId };
+  | { kind: "approval-deny"; id: AgentId }
+  | { kind: "role-grant"; id: AgentId }
+  | { kind: "role-revoke"; id: AgentId };
 
 const AGENT_ACTION =
-  /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|proxy-mode|nickname|model|approval|approval\/deny)$/;
-const METHODS = {
-  heartbeat: "POST",
-  end: "POST",
-  "touched-files": "GET",
-  "proxy-mode": "POST",
-  nickname: "POST",
-  model: "POST",
-  approval: "POST",
-  "approval/deny": "POST",
-} as const;
+  /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|proxy-mode|nickname|model|approval|approval\/deny|role)$/;
+const METHODS: Record<string, readonly string[]> = {
+  heartbeat: ["POST"],
+  end: ["POST"],
+  "touched-files": ["GET"],
+  "proxy-mode": ["POST"],
+  nickname: ["POST"],
+  model: ["POST"],
+  approval: ["POST"],
+  "approval/deny": ["POST"],
+  role: ["PUT", "DELETE"],
+};
 
 function isProxyMode(value: unknown): value is ProxyMode {
   return PROXY_MODES.includes(value as ProxyMode);
@@ -105,8 +112,8 @@ export function matchAgentRoute(method: string, pathname: string): AgentRoute | 
     return null;
   }
   const match = AGENT_ACTION.exec(pathname);
-  const kind = match?.[2] as keyof typeof METHODS | undefined;
-  if (!match?.[1] || !kind || METHODS[kind] !== method) return null;
+  const kind = match?.[2];
+  if (!match?.[1] || !kind || !METHODS[kind]?.includes(method)) return null;
   let id: string;
   try {
     id = decodeURIComponent(match[1]);
@@ -114,7 +121,8 @@ export function matchAgentRoute(method: string, pathname: string): AgentRoute | 
     return null;
   }
   if (id.split("/").length !== 3) return null;
-  return { kind: kind === "approval/deny" ? "approval-deny" : kind, id: id as AgentId };
+  if (kind === "role") return { kind: method === "PUT" ? "role-grant" : "role-revoke", id: id as AgentId };
+  return { kind: kind === "approval/deny" ? "approval-deny" : kind, id } as AgentRoute;
 }
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -288,5 +296,12 @@ export async function handleAgentRoute(
       }
       return answer(await channel.denyAgentApproval(caller, route.id, deny));
     }
+    case "role-grant": {
+      const { role } = await readJson(request);
+      if (!isAgentRole(role)) return fail(400, `"role" must be one of ${AGENT_ROLES.join(", ")}.`);
+      return answer(await channel.setAgentRole(caller, route.id, role));
+    }
+    case "role-revoke":
+      return answer(await channel.setAgentRole(caller, route.id, null));
   }
 }

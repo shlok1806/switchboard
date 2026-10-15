@@ -6,7 +6,7 @@
 import type { AgentContext } from "./agent-context";
 import type { LostClaim } from "./claims";
 import type { DirectiveDelivery } from "./directives";
-import type { Agent, AgentId, Cli, PersonName, ProxyMode } from "./domain";
+import type { Agent, AgentId, AgentRole, Cli, PersonName, ProxyMode } from "./domain";
 import type { Delivery } from "./relay";
 import type { ReportedUsage } from "./usage";
 
@@ -293,6 +293,22 @@ export interface EndSessionRequest {
   /** The agent CLI's own reason (its SessionEnd hook's), recorded on `session.end`. */
   detail?: string;
 }
+
+/** The path that grants (PUT) or revokes (DELETE) one Agent's role (ADR 0017). */
+export function rolePath(id: AgentId): string {
+  return `${agentPath(id)}/role`;
+}
+
+/** `PUT /api/agents/:id/role`: the Agent's own Person grants it a role. */
+export interface GrantRoleRequest {
+  role: AgentRole;
+}
+
+/** The longest chain of leads the Channel follows to find a lead's subtree (ADR 0017). */
+export const MAX_LEAD_DEPTH = 8;
+
+/** The most Agents in one lead's subtree that are not Gone, unless LEAD_AGENTS_LIVE_CAP says otherwise. */
+export const DEFAULT_LEAD_AGENTS_LIVE_CAP = 5;
 
 /** `GET /api/agents`: every Agent the Channel has seen, newest first. */
 export interface AgentsResponse {

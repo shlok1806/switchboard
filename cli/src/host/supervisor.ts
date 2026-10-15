@@ -100,10 +100,10 @@ export function showsTrustDialog(screen: string): boolean {
   return TRUST_DIALOG.some((words) => squeezed.includes(words));
 }
 
-/** The session's first prompt: the brief, labelled as the requesting Person's words. */
-export function briefPrompt(by: string, host: string, brief: string): string {
+/** The session's first prompt: the brief, labelled as the requesting Person's words, or their lead's (ADR 0017). */
+export function briefPrompt(by: string, host: string, brief: string, lead?: AgentId): string {
   return [
-    `${directiveHeading(by)}, who started this Agent on ${host}:`,
+    `${directiveHeading(by, lead)}, ${lead === undefined ? "who" : "which"} started this Agent on ${host}:`,
     ...brief.split("\n").map((line) => `> ${line}`),
   ].join("\n");
 }
@@ -257,11 +257,13 @@ export class HostSupervisor {
       ...(message.model === undefined ? {} : { model: message.model }),
       permissionMode: mode,
     };
-    this.options.log(`spawn ${message.spawn} from ${message.by}: ${entry.agent} in ${cwd}`);
+    this.options.log(`spawn ${message.spawn} from ${message.lead ?? message.by}: ${entry.agent} in ${cwd}`);
     this.launch(entry, {
       resume: false,
       spawn: message.spawn,
-      ...(message.brief === undefined ? {} : { prompt: briefPrompt(message.by, this.hostId, message.brief) }),
+      ...(message.brief === undefined
+        ? {}
+        : { prompt: briefPrompt(message.by, this.hostId, message.brief, message.lead) }),
     });
   }
 

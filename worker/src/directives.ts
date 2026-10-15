@@ -1,5 +1,6 @@
-// Directives (ADR 0005): the one message with instruction weight. A Person sends
-// one to one Agent; it is recorded as a `directive` Event naming both, and delivered
+// Directives (ADR 0005, ADR 0017): the one message with instruction weight. A Person
+// sends one to one Agent, or a lead sends one to an Agent in its subtree for its
+// Person (the Channel checks that); it is recorded as a `directive` Event naming both, and delivered
 // to that Agent without the Relay. A Directive is addressed and always delivered,
 // so it never waits on Jev or a Verdict (the Relay skips `directive` Events).
 //
@@ -26,7 +27,6 @@ import type {
 } from "../../shared/src/index";
 import { INTERRUPT_ANSWER_MS } from "../../shared/src/index";
 import type { NewEvent } from "./channel";
-import type { Caller } from "./claims";
 
 export const DIRECTIVES_SCHEMA = `
   CREATE TABLE IF NOT EXISTS directive_deliveries (
@@ -51,6 +51,9 @@ export interface DirectivesHost {
   waitUntil(work: Promise<unknown>): void;
 }
 
+/** Who sends a Directive: a Person, or a lead for its Person (ADR 0017). */
+export type DirectiveSender = { person: PersonName; lead?: AgentId };
+
 export type DirectiveResult = { ok: true; event: ChannelEvent } | { ok: false; status: 403 | 404; reason: string };
 
 type Row = { id: string; agent: string; seq: number; data: string };
@@ -71,23 +74,28 @@ export class Directives {
   constructor(private readonly host: DirectivesHost) {}
 
   /**
-   * A Person sending a Directive to Agent `to`. Refused when the call came through
-   * an Agent's credentials (Agents inform, only People instruct) and when the
-   * Channel has no such Agent. A Gone Agent gets it when it resumes.
+   * A Person, or a lead for its Person, sending a Directive to Agent `to`. Whether a
+   * lead may reach `to` is the Channel's check. Refused when the Channel has no such
+   * Agent. A Gone Agent gets it when it resumes.
    */
-  send(caller: Caller, to: AgentId, text: string): DirectiveResult {
-    if (caller.agent !== undefined) {
-      return { ok: false, status: 403, reason: "Only a Person sends Directives. Agents post Updates instead." };
-    }
+  send(from: DirectiveSender, to: AgentId, text: string): DirectiveResult {
     const agent = this.host.findAgent(to);
     if (agent === null) return { ok: false, status: 404, reason: `The Channel has no Agent ${to}.` };
     const event = this.host.append({
       type: "directive",
-      actor: { kind: "person", person: caller.person },
-      capture: null,
+      actor: from.lead === undefined ? { kind: "person", person: from.person } : { kind: "agent", agentId: from.lead },
+      capture: from.lead === undefined ? null : "tool",
       payload: { to, text },
     });
-    const directive: DirectiveDelivery = { id: event.id, seq: event.seq, at: event.at, from: caller.person, to, text };
+    const directive: DirectiveDelivery = {
+      id: event.id,
+      seq: event.seq,
+      at: event.at,
+      from: from.person,
+      ...(from.lead === undefined ? {} : { lead: from.lead }),
+      to,
+      text,
+    };
     if (!agent.canReceiveInterrupts) {
       this.queue(agent, directive, "cli-cannot-interrupt");
     } else {

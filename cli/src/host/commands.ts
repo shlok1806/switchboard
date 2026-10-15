@@ -6,8 +6,11 @@
 //   switchboard host status
 //   switchboard spawn [--host N] [--cwd DIR] [--nickname N] [--model M] [--permission-mode M] [--repo R] [brief...]
 //   switchboard stop <agent> [--repo R]
+//   switchboard role grant <agent> lead | revoke <agent> [--repo R]   (ADR 0017)
 //
 // `spawn` and `stop` work from anywhere: they ask the Channel, which asks the Host.
+// `role` makes one of the Person's Agents a lead, which may spawn and stop on their
+// Hosts, and send Directives, for the Agents it starts.
 
 import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
@@ -15,6 +18,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type {
   Agent,
+  AgentResponse,
   AgentsResponse,
   HostResponse,
   HostsResponse,
@@ -23,11 +27,14 @@ import type {
   StopAgentResponse,
 } from "../../../shared/src/index";
 import {
+  AGENT_ROLES,
   agentPath,
   DEFAULT_PERMISSION_MODE,
   HOST_NAME_PATTERN,
+  isAgentRole,
   isPermissionMode,
   PERMISSION_MODES,
+  rolePath,
 } from "../../../shared/src/index";
 import { ChannelChoiceError, chooseChannel } from "../channel-choice";
 import { ChannelClient, ChannelError, targetOf } from "../channel-client";
@@ -290,6 +297,52 @@ export function spawnCommand(args: string[]): Promise<number> {
       answer.agent === undefined
         ? `${answer.host} is still starting it (spawn ${answer.spawn}). The Channel says when it is on.`
         : `${answer.agent.id}${answer.agent.nickname ? ` "${answer.agent.nickname}"` : ""} is running on ${answer.host}.`,
+    );
+    return 0;
+  });
+}
+
+export const ROLE_USAGE = `Usage:
+  switchboard role grant <agent> lead [--repo <owner>/<repo>]
+  switchboard role revoke <agent> [--repo <owner>/<repo>]`;
+
+/** The one Agent `name` names, by Agent ID or Nickname, among `agents`. */
+function oneAgent(agents: Agent[], name: string): Agent {
+  const found = matchAgents(agents, name);
+  if (found.length !== 1) {
+    throw new CommandError(
+      found.length === 0
+        ? `no Agent is called ${name}. Name it by its Agent ID or Nickname.`
+        : `${name} could be ${found.map((a) => a.id).join(", ")}. Use the full Agent ID.`,
+    );
+  }
+  return found[0] as Agent;
+}
+
+/** Grants one of the Person's Agents a role, or takes it back (ADR 0017). */
+export function roleCommand(args: string[]): Promise<number> {
+  return command(async () => {
+    const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { repo: { type: "string" } } });
+    const [verb, name, role, ...extra] = positionals;
+    const granting = verb === "grant" && role !== undefined && extra.length === 0;
+    const revoking = verb === "revoke" && role === undefined;
+    if (name === undefined || (!granting && !revoking)) {
+      console.error(ROLE_USAGE);
+      return 2;
+    }
+    if (granting && !isAgentRole(role)) throw new CommandError(`the role must be one of ${AGENT_ROLES.join(", ")}.`);
+    const config = await signedIn();
+    const { client } = await channelFor(config, values.repo);
+    const { agents } = await client.request<AgentsResponse>("/api/agents");
+    const agent = oneAgent(agents, name);
+    const { agent: after } = await client.request<AgentResponse>(
+      rolePath(agent.id),
+      granting ? { method: "PUT", body: JSON.stringify({ role }) } : { method: "DELETE" },
+    );
+    console.log(
+      after.role === undefined
+        ? `${after.id} has no role now.`
+        : `${after.id} is a ${after.role} now: it may start Agents on your Hosts, and stop and direct the ones it starts.`,
     );
     return 0;
   });

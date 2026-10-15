@@ -64,6 +64,13 @@ describe("main-session context", () => {
     p.entry({ type: "user", message: { content: prompt } });
     expect(p.context.brief).toBe("Fix the login redirect.\n\nThen open a PR.");
     expect(p.context.task).toBe("Fix the login redirect.");
+    // A lead's brief is its Directive, read the same way (ADR 0017).
+    const fromLead = new ContextParser("claude-code");
+    fromLead.entry({
+      type: "user",
+      message: { content: briefPrompt("ana", "ana/studio", "Write tests.", "ana/claude/7f3a") },
+    });
+    expect(fromLead.context.brief).toBe("Write tests.");
   });
   it("finds the Person's first brief in a Codex rollout without user_message events, excluding injected context", async () => {
     const p = new ContextParser("codex");

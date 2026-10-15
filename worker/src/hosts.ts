@@ -15,6 +15,9 @@
 // - The Agents Hosts run, and the spawns still starting, are capped per Channel.
 // - A stop is recorded (`agent.stop`) and sent to the Host that runs the Agent. The
 //   Agent goes Gone the usual way, when its wrapper ends the session.
+// - A lead (ADR 0017) spawns and stops for its Person: on that Person's Hosts, and
+//   only Agents in its own subtree, within `leadCap`. The Agent a lead's spawn starts
+//   gets the lead as its parent. Whether the caller holds the role is the Channel's check.
 
 import type {
   Actor,
@@ -66,7 +69,8 @@ export const HOSTS_SCHEMA = `
     person TEXT NOT NULL,
     host TEXT NOT NULL,
     state TEXT NOT NULL,
-    requested_at INTEGER NOT NULL
+    requested_at INTEGER NOT NULL,
+    lead TEXT
   );
   CREATE INDEX IF NOT EXISTS host_spawns_pending ON host_spawns (requested_at) WHERE state = 'pending';
 `;
@@ -84,7 +88,16 @@ type HostRow = {
   offline_since: number | null;
 };
 
-type SpawnRow = { id: string; person: string; host: string; state: string; requested_at: number };
+type SpawnRow = { id: string; person: string; host: string; state: string; requested_at: number; lead: string | null };
+
+/** Who asks a Host for something: a Person, or a lead for its Person (ADR 0017). */
+export type HostActing = { person: PersonName; lead?: AgentId };
+
+function actorOf(acting: HostActing): Extract<Actor, { kind: "agent" | "person" }> {
+  return acting.lead === undefined
+    ? { kind: "person", person: acting.person }
+    : { kind: "agent", agentId: acting.lead };
+}
 
 /** What the Hosts need from the Channel that keeps them. */
 export interface HostsDeps {
@@ -102,10 +115,18 @@ export interface HostsDeps {
   /** Closes Host `id`'s sockets, for a Host that was removed. */
   close(id: HostId): void;
   findAgent(id: AgentId): Agent | null;
+  /** Whether Agent `id` is in lead `lead`'s subtree (ADR 0017). */
+  inSubtree(lead: AgentId, id: AgentId): boolean;
+  /** How many Agents in lead `lead`'s subtree are not Gone. */
+  liveInSubtree(lead: AgentId): number;
+  /** Agent `id` was started by lead `parent`. */
+  setParent(id: AgentId, parent: AgentId): void;
   /** Sets when the Hosts next need the alarm (null: never). */
   schedule(at: number | null): Promise<void>;
   /** How many Agents Hosts may run at once. */
   cap: number;
+  /** How many Agents one lead's subtree may have that are not Gone, with its spawns still starting. */
+  leadCap: number;
   spawnWaitMs: number;
 }
 
@@ -135,6 +156,12 @@ export class Hosts {
 
   constructor(private readonly deps: HostsDeps) {
     deps.sql.exec(HOSTS_SCHEMA);
+    // ADR 0017: the lead that asked, on a table made before it.
+    try {
+      deps.sql.exec("ALTER TABLE host_spawns ADD COLUMN lead TEXT");
+    } catch {
+      // The column is there already.
+    }
   }
 
   list(): Host[] {
@@ -222,10 +249,11 @@ export class Hosts {
   }
 
   /**
-   * Asks one of `person`'s Hosts to start an Agent, and waits up to `spawnWaitMs` for
-   * it to register. `request` is already clean, apart from what only a Host can judge.
+   * Asks one of `acting.person`'s Hosts to start an Agent, and waits up to `spawnWaitMs`
+   * for it to register. `request` is already clean, apart from what only a Host can judge.
    */
-  async spawn(person: PersonName, request: SpawnAgentRequest): Promise<SpawnResult> {
+  async spawn(acting: HostActing, request: SpawnAgentRequest): Promise<SpawnResult> {
+    const { person, lead } = acting;
     const host = this.pick(person, request.host);
     if (!host.ok) return host;
     const { row } = host;
@@ -250,11 +278,18 @@ export class Hosts {
         reason: `Hosts on this Channel already run or are starting ${this.deps.cap} Agents, the most allowed.`,
       };
     }
+    if (lead !== undefined && this.leadRunning(lead) >= this.deps.leadCap) {
+      return {
+        ok: false,
+        status: 409,
+        reason: `${lead} already has ${this.deps.leadCap} Agents running or starting, the most a lead may (LEAD_AGENTS_LIVE_CAP).`,
+      };
+    }
 
     const event = this.deps.append({
       type: "agent.spawn",
-      actor: { kind: "person", person },
-      capture: null,
+      actor: actorOf(acting),
+      capture: lead === undefined ? null : "tool",
       payload: {
         host: id,
         cli: request.cli,
@@ -263,15 +298,17 @@ export class Hosts {
         ...(request.model === undefined ? {} : { model: request.model }),
         permissionMode: mode,
         ...(request.brief === undefined ? {} : { brief: request.brief }),
+        ...(lead === undefined ? {} : { parent: lead }),
       },
     });
     const spawn = event.id;
     this.deps.sql.exec(
-      "INSERT INTO host_spawns (id, person, host, state, requested_at) VALUES (?, ?, ?, 'pending', ?)",
+      "INSERT INTO host_spawns (id, person, host, state, requested_at, lead) VALUES (?, ?, ?, 'pending', ?, ?)",
       spawn,
       person,
       row.name,
       Date.now(),
+      lead ?? null,
     );
     const ended = new Promise<SpawnEnd>((resolve) => this.waiting.set(spawn, resolve));
     const sent = this.deps.sendTo(id, {
@@ -284,6 +321,7 @@ export class Hosts {
       ...(request.brief === undefined ? {} : { brief: request.brief }),
       permissionMode: mode,
       by: person,
+      ...(lead === undefined ? {} : { lead }),
     });
     if (!sent) this.failed(spawn, `${id} went Offline before the request reached it.`);
     await this.reschedule();
@@ -308,16 +346,19 @@ export class Hosts {
    */
   spawned(person: PersonName, name: string, spawn: string, agent: Agent): void {
     if (!this.takePending(spawn, person, name, "spawned")) return;
+    const lead = (this.spawnRow(spawn)?.lead ?? null) as AgentId | null;
+    if (lead !== null) this.deps.setParent(agent.id, lead);
     this.deps.append({
       type: "agent.spawned",
       actor: { kind: "agent", agentId: agent.id },
       capture: null,
-      payload: { spawn, host: hostIdFor(person, name), agent: agent.id },
+      payload: { spawn, host: hostIdFor(person, name), agent: agent.id, ...(lead === null ? {} : { parent: lead }) },
     });
     // The Host stops watching the new session for Claude Code's folder trust dialog.
     const answered: HostSpawnedMessage = { type: "host.spawned", spawn, agent: agent.id };
     this.deps.sendTo(hostIdFor(person, name), answered);
-    this.waiting.get(spawn)?.({ agent });
+    const found = this.deps.findAgent(agent.id);
+    this.waiting.get(spawn)?.({ agent: found ?? agent });
   }
 
   /** `person`'s Host `name` says it could not start spawn `spawn`. Ignored unless that spawn is its, and pending. */
@@ -327,10 +368,21 @@ export class Hosts {
     this.failed(spawn, reason);
   }
 
-  /** Asks the Host that runs Agent `agent` to stop it. Only the Agent's own Person may. */
-  stop(person: PersonName, agentId: AgentId): { ok: true; host: HostId } | HostRefusal {
+  /**
+   * Asks the Host that runs Agent `agent` to stop it. Only the Agent's own Person may,
+   * or a lead for an Agent in its subtree.
+   */
+  stop(acting: HostActing, agentId: AgentId): { ok: true; host: HostId } | HostRefusal {
+    const { person, lead } = acting;
     const agent = this.deps.findAgent(agentId);
     if (agent === null) return { ok: false, status: 404, reason: `No Agent ${agentId} on this Channel.` };
+    if (lead !== undefined && !this.deps.inSubtree(lead, agentId)) {
+      return {
+        ok: false,
+        status: 403,
+        reason: `${agentId} is not one of the Agents ${lead} started. A lead stops only Agents in its own subtree.`,
+      };
+    }
     if (agent.person !== person) {
       return {
         ok: false,
@@ -352,8 +404,8 @@ export class Hosts {
     }
     this.deps.append({
       type: "agent.stop",
-      actor: { kind: "person", person },
-      capture: null,
+      actor: actorOf(acting),
+      capture: lead === undefined ? null : "tool",
       payload: { agent: agentId, host },
     });
     if (!this.deps.sendTo(host, { type: "host.stop", agent: agentId })) {
@@ -401,6 +453,17 @@ export class Hosts {
       );
     }
     await this.reschedule();
+  }
+
+  /** The Agents in lead `lead`'s subtree that are not Gone, and its spawns still starting. */
+  private leadRunning(lead: AgentId): number {
+    const starting = this.deps.sql
+      .exec<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM host_spawns INDEXED BY host_spawns_pending WHERE state = 'pending' AND lead = ?",
+        lead,
+      )
+      .one().n;
+    return this.deps.liveInSubtree(lead) + starting;
   }
 
   /** The Host a spawn goes to: the one named, or the Person's most recently seen Live Host. */

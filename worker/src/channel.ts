@@ -11,6 +11,7 @@ import type {
   Agent,
   AgentContext,
   AgentId,
+  AgentRole,
   ApprovalDenyMessage,
   Capture,
   ChannelEvent,
@@ -48,6 +49,7 @@ import type {
 import {
   DEFAULT_GONE_AFTER_SECONDS,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
+  DEFAULT_LEAD_AGENTS_LIVE_CAP,
   hostIdFor,
   LIVE_PING,
   LIVE_PONG,
@@ -333,8 +335,12 @@ export class Channel extends DurableObject<Env> {
       },
       close: (id) => this.closeSockets(hostTag(id), 4004, "This Host was removed."),
       findAgent: (id) => this.agents.find(id),
+      inSubtree: (lead, id) => this.agents.inSubtree(lead, id),
+      liveInSubtree: (lead) => this.agents.liveInSubtree(lead),
+      setParent: (id, parent) => this.agents.setParent(id, parent),
       schedule: (at) => this.alarms.set("hosts", at),
       cap: this.hostCap(),
+      leadCap: this.leadCap(),
       spawnWaitMs: wait > 0 ? wait * 1000 : DEFAULT_SPAWN_WAIT_MS,
     });
   }
@@ -547,10 +553,53 @@ export class Channel extends DurableObject<Env> {
     return this.agents.endSession(person, id, detail);
   }
 
-  /** A Person sending a Directive to one Agent. Refused through an Agent's credentials. */
+  /**
+   * A Person sending a Directive to one Agent, or a lead sending one to an Agent in its
+   * subtree (ADR 0017). Refused through any other Agent's credentials.
+   */
   sendDirective(caller: Caller, to: AgentId, text: string): DirectiveResult {
+    if (caller.agent === undefined) {
+      this.join(caller.person);
+      return this.directives.send({ person: caller.person }, to, text);
+    }
+    const lead = this.lead(caller.agent, "send Directives");
+    if (!lead.ok) return lead;
+    if (!this.agents.inSubtree(caller.agent, to)) {
+      return {
+        ok: false,
+        status: 403,
+        reason: `${to} is not one of the Agents ${caller.agent} started. A lead sends Directives only to its own subtree.`,
+      };
+    }
+    return this.directives.send({ person: caller.person, lead: caller.agent }, to, text);
+  }
+
+  /**
+   * Agent `agent`, calling with its token, holds the lead role (ADR 0017). Otherwise a
+   * refusal saying that only a Person may `act`, unless they make the Agent a lead.
+   */
+  private lead(agent: AgentId, act: string): { ok: true } | { ok: false; status: 403; reason: string } {
+    if (this.agents.find(agent)?.role === "lead") return { ok: true };
+    return {
+      ok: false,
+      status: 403,
+      reason:
+        `Only a Person may ${act}, or a lead for them. ${agent} is not a lead: its Person can make it one ` +
+        `(\`switchboard role grant ${agent} lead\`, ADR 0017). Agents post Updates instead.`,
+    };
+  }
+
+  /** The Agent's own Person grants it a role, or takes it back with null (ADR 0017). Never an Agent. */
+  setAgentRole(caller: Caller, id: AgentId, role: AgentRole | null): RosterResult {
+    if (caller.agent !== undefined) {
+      return {
+        ok: false,
+        status: 403,
+        reason: "Only the Agent's own Person grants or revokes a role, never an Agent.",
+      };
+    }
     this.join(caller.person);
-    return this.directives.send(caller, to, text);
+    return this.agents.setRole(caller.person, id, role);
   }
 
   /**
@@ -882,6 +931,11 @@ export class Channel extends DurableObject<Env> {
     return { hosts: this.hosts.list(), cap: this.hostCap(), running: this.hosts.running() };
   }
 
+  private leadCap(): number {
+    const cap = Number(this.env.LEAD_AGENTS_LIVE_CAP);
+    return Number.isInteger(cap) && cap >= 0 ? cap : DEFAULT_LEAD_AGENTS_LIVE_CAP;
+  }
+
   private hostCap(): number {
     const cap = Number(this.env.HOST_AGENTS_LIVE_CAP);
     return Number.isInteger(cap) && cap >= 0 ? cap : DEFAULT_HOST_AGENTS_LIVE_CAP;
@@ -897,15 +951,23 @@ export class Channel extends DurableObject<Env> {
     return this.hosts.remove(person, name);
   }
 
-  /** Starts an Agent on one of `person`'s Hosts (ADR 0015). */
-  spawnAgent(person: PersonName, request: SpawnAgentRequest): Promise<SpawnResult> {
-    this.join(person);
-    return this.hosts.spawn(person, request);
+  /** Starts an Agent on one of the caller's Person's Hosts (ADR 0015), for the Person or their lead (ADR 0017). */
+  async spawnAgent(caller: Caller, request: SpawnAgentRequest): Promise<SpawnResult> {
+    if (caller.agent === undefined) {
+      this.join(caller.person);
+      return this.hosts.spawn({ person: caller.person }, request);
+    }
+    const lead = this.lead(caller.agent, "start Agents");
+    if (!lead.ok) return lead;
+    return this.hosts.spawn({ person: caller.person, lead: caller.agent }, request);
   }
 
-  /** Stops an Agent one of `person`'s Hosts runs. */
-  stopAgent(person: PersonName, id: AgentId): { ok: true; host: HostId } | HostRefusal {
-    return this.hosts.stop(person, id);
+  /** Stops an Agent one of the caller's Person's Hosts runs: for the Person, or their lead over it. */
+  stopAgent(caller: Caller, id: AgentId): { ok: true; host: HostId } | HostRefusal {
+    if (caller.agent === undefined) return this.hosts.stop({ person: caller.person }, id);
+    const lead = this.lead(caller.agent, "stop Agents");
+    if (!lead.ok) return lead;
+    return this.hosts.stop({ person: caller.person, lead: caller.agent }, id);
   }
 
   /** Host `id`'s newest open socket, or null when it is Offline. */
