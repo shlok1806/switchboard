@@ -22,10 +22,10 @@ The owner wants one Agent to run a team: start Agents on their Hosts with a brie
 
 - An Agent a lead starts has that lead as its **parent**. A lead's **subtree** is every Agent whose chain of parents reaches it. Since roles are not inherited, the subtree is one level deep unless the Person makes one of its Agents a lead as well. Then that Agent's own Agents are in both subtrees.
 - With its Agent Token, a lead may:
-  - **start** an Agent: `POST /api/agents/spawn`, through the `agent_spawn` tool. It runs on one of the lead's own Person's Hosts, belongs to that Person, and gets the lead as its parent. Every check of ADR 0015 still applies: the Host's folders, the Host's `--max-permission-mode`, and the per-Channel `HOST_AGENTS_LIVE_CAP`.
+  - **start** an Agent: `POST /api/agents/spawn`, through the `agent_spawn` tool. It runs on one of the lead's own Person's Hosts, belongs to that Person, and gets the lead as its parent. Every check of ADR 0015 still applies: the Host's folders, the Host's `--max-permission-mode`, and the per-Channel `HOST_AGENTS_LIVE_CAP`. The mode is also no looser than the lead's own (see Consequences).
   - **stop** an Agent in its subtree: `POST /api/agents/:id/stop`, through `agent_stop`.
   - **send a Directive** to an Agent in its subtree: `POST /api/directives`, through a new tool, `send_directive`.
-- A lead's subtree is capped per Channel: `LEAD_AGENTS_LIVE_CAP` (default 5) limits the Agents in one lead's subtree that are not Gone, plus its spawns still starting. A spawn over it answers 409 with the cap. Both caps apply to every spawn.
+- A lead's subtree is capped per Channel: `LEAD_AGENTS_LIVE_CAP` (default 5) limits the Agents in one lead's subtree that are not Gone, plus the spawns still starting in it, its own and those of the leads below it. A spawn over it answers 409 with the cap. Both caps apply to every spawn.
 - A lead cannot reach anything outside its subtree. It cannot stop, or send a Directive to, its own Person's other Agents, another Person's Agents, its own parent, or itself. It cannot grant or revoke roles, register or remove Hosts, take over Claims, or answer or deny permission prompts (ADR 0013, ADR 0014). Each refusal says why.
 - Without the role, an Agent Token is refused exactly as before, with a message saying its Person can grant the lead role.
 - Revoking the role ends the lead's authority at once. Its subtree keeps running, and the parent links stay, so the history still shows who started what. The Person can stop those Agents, or grant the lead role again.
@@ -51,7 +51,7 @@ ADR 0005's rule becomes: only a Directive carries instruction weight, and a Dire
 ## Consequences
 
 - A Person who makes an Agent a lead lets a model start processes on their Hosts and steer other sessions with instruction weight. The boundary is the Person's own: their Hosts, the folders and permission mode they allowed each Host, the two caps, and the lead's own subtree. A prompt-injected lead can do no more than that Person allowed their Hosts, and every step it takes is an Event.
-- The permission mode a lead may give is the Host's maximum, not the lead's own mode, which the Channel does not know for an Agent started in a terminal. A Person who wants leads to start only careful Agents installs the Host with a careful `--max-permission-mode`.
+- A lead gives no Agent a looser permission mode than its own, within the Host's maximum. The Channel knows that mode for a lead a Host started, from its `agent.spawn`. It does not know the mode of a lead started in a terminal, so such a lead starts Agents in at most `default`. A lead cannot raise its own mode by starting a looser Agent and making it a lead: only the Person grants the role.
 - Agents still cannot instruct each other across Persons, and an Agent cannot make itself a lead. ADR 0005's protection against a stray or injected Agent steering another Person's setup is unchanged.
 - The greenroom lead can move onto Hosts: its Person makes it a lead, and it starts, steers and stops its team through the Channel instead of through Terminal.app.
 

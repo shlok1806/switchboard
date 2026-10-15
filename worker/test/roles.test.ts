@@ -164,6 +164,52 @@ describe("a lead", () => {
     expect(theirs.spawns()).toEqual([]);
   });
 
+  it("gives no Agent a looser permission mode than its own, nor than default when it was started in a terminal", async () => {
+    const studio = await FakeHost.registered("shlok", "studio", ["/work"], "bypassPermissions");
+    await studio.connect();
+    const terminalLead = await aLead("shlok");
+    const looser = await post(
+      "/api/agents/spawn",
+      "shlok",
+      { cli: "claude-code", cwd: "/work/app", permissionMode: "acceptEdits" },
+      terminalLead,
+    );
+    expect(looser.status).toBe(403);
+    expect(await reason(looser)).toContain(`${terminalLead} was not started by a Host`);
+
+    // The Person starts an Agent in acceptEdits, and makes it a lead: it may give that, and no more.
+    const { registered } = await spawnAndStart(studio, { permissionMode: "acceptEdits" });
+    const hostedLead = registered.agent.id;
+    expect((await grant("shlok", hostedLead)).status).toBe(200);
+    const bypass = await post(
+      "/api/agents/spawn",
+      "shlok",
+      { cli: "claude-code", cwd: "/work/app", permissionMode: "bypassPermissions" },
+      hostedLead,
+    );
+    expect(bypass.status).toBe(403);
+    expect(await reason(bypass)).toContain(`${hostedLead} runs in the "acceptEdits" permission mode`);
+    const { spawn } = await leadSpawns(studio, hostedLead, { permissionMode: "acceptEdits" });
+    expect(spawn.permissionMode).toBe("acceptEdits");
+    expect(studio.spawns().filter((s) => s.permissionMode === "bypassPermissions")).toEqual([]);
+  });
+
+  it("cannot reach another Person's Agents, even as a lead", async () => {
+    const studio = await FakeHost.registered("shlok", "studio");
+    await studio.connect();
+    const { registered } = await spawnAndStart(studio);
+    const theirs = registered.agent.id;
+    const natesLead = await aLead("nate");
+
+    const stop = await post(`${agentPath(theirs)}/stop`, "nate", {}, natesLead);
+    expect(stop.status).toBe(403);
+    expect(await reason(stop)).toContain("only Agents in its own subtree");
+    const directive = await direct("nate", theirs, "Delete your branch.", natesLead);
+    expect(directive.status).toBe(403);
+    expect(await reason(directive)).toContain("only to its own subtree");
+    expect(studio.frames.some((f) => f.type === "host.stop")).toBe(false);
+  });
+
   it("stops and directs only its own subtree, which reaches through a lead it started", async () => {
     const studio = await FakeHost.registered("shlok", "studio");
     await studio.connect();
@@ -219,6 +265,21 @@ describe("a lead", () => {
     expect((await second).status).toBe(202);
     // The Person is not held to the lead's cap, only to the Channel's.
     expect((await spawnAndStart(studio)).response.status).toBe(201);
+  });
+
+  it("counts the spawns still starting under a lead it started toward its own cap", async () => {
+    const studio = await FakeHost.registered("shlok", "studio");
+    await studio.connect();
+    const lead = await aLead("shlok");
+    const { agent: child } = await leadSpawns(studio, lead);
+    expect((await grant("shlok", child.id)).status).toBe(200);
+    // The child lead's spawn is still starting: with the child, the lead's subtree is at its cap of 2.
+    const grandchild = post("/api/agents/spawn", "shlok", { cli: "claude-code", cwd: "/work/app" }, child.id);
+    await studio.nextSpawn();
+    const third = await post("/api/agents/spawn", "shlok", { cli: "claude-code", cwd: "/work/app" }, lead);
+    expect(third.status).toBe(409);
+    expect(await reason(third)).toContain("LEAD_AGENTS_LIVE_CAP");
+    expect((await grandchild).status).toBe(202);
   });
 
   it("is refused again once its Person revokes the role, while its Agents keep running and their parent", async () => {

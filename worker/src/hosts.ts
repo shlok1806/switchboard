@@ -77,7 +77,9 @@ export const HOSTS_SCHEMA = `
     host TEXT NOT NULL,
     state TEXT NOT NULL,
     requested_at INTEGER NOT NULL,
-    lead TEXT
+    lead TEXT,
+    mode TEXT,
+    agent TEXT
   );
   CREATE INDEX IF NOT EXISTS host_spawns_pending ON host_spawns (requested_at) WHERE state = 'pending';
 `;
@@ -95,7 +97,17 @@ type HostRow = {
   offline_since: number | null;
 };
 
-type SpawnRow = { id: string; person: string; host: string; state: string; requested_at: number; lead: string | null };
+type SpawnRow = {
+  id: string;
+  person: string;
+  host: string;
+  state: string;
+  requested_at: number;
+  lead: string | null;
+  /** The permission mode it asked for, and the Agent it started (ADR 0018: a lead gives no looser mode). */
+  mode: string | null;
+  agent: string | null;
+};
 
 /** Who asks a Host for something: a Person, or a lead for its Person (ADR 0018). */
 export type HostActing = { person: PersonName; lead?: AgentId };
@@ -163,12 +175,15 @@ export class Hosts {
 
   constructor(private readonly deps: HostsDeps) {
     deps.sql.exec(HOSTS_SCHEMA);
-    // ADR 0018: the lead that asked, on a table made before it.
-    try {
-      deps.sql.exec("ALTER TABLE host_spawns ADD COLUMN lead TEXT");
-    } catch {
-      // The column is there already.
+    // ADR 0018: the lead that asked, the mode and the Agent started, on a table made before them.
+    for (const column of ["lead", "mode", "agent"]) {
+      try {
+        deps.sql.exec(`ALTER TABLE host_spawns ADD COLUMN ${column} TEXT`);
+      } catch {
+        // The column is there already.
+      }
     }
+    deps.sql.exec("CREATE INDEX IF NOT EXISTS host_spawns_agent ON host_spawns (agent) WHERE agent IS NOT NULL");
   }
 
   list(): Host[] {
@@ -280,6 +295,20 @@ export class Hosts {
     if (!permissionModeWithin(mode, max)) {
       return { ok: false, status: 403, reason: `${name} starts Agents in at most the "${max}" permission mode.` };
     }
+    // A lead gives no Agent more than it has itself (ADR 0018).
+    if (lead !== undefined) {
+      const own = this.modeOf(lead);
+      if (!permissionModeWithin(mode, own ?? DEFAULT_PERMISSION_MODE)) {
+        return {
+          ok: false,
+          status: 403,
+          reason:
+            own === null
+              ? `${lead} was not started by a Host, so the Channel does not know its permission mode: it starts Agents in at most the "${DEFAULT_PERMISSION_MODE}" mode.`
+              : `${lead} runs in the "${own}" permission mode, so it starts Agents in at most that mode.`,
+        };
+      }
+    }
     if (this.running() >= this.deps.cap) {
       return {
         ok: false,
@@ -312,12 +341,13 @@ export class Hosts {
     });
     const spawn = event.id;
     this.deps.sql.exec(
-      "INSERT INTO host_spawns (id, person, host, state, requested_at, lead) VALUES (?, ?, ?, 'pending', ?, ?)",
+      "INSERT INTO host_spawns (id, person, host, state, requested_at, lead, mode) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
       spawn,
       person,
       row.name,
       Date.now(),
       lead ?? null,
+      mode,
     );
     const ended = new Promise<SpawnEnd>((resolve) => this.waiting.set(spawn, resolve));
     const sent = this.deps.sendTo(id, {
@@ -357,6 +387,7 @@ export class Hosts {
     if (!this.takePending(spawn, person, name, "spawned")) return;
     const lead = (this.spawnRow(spawn)?.lead ?? null) as AgentId | null;
     if (lead !== null) this.deps.setParent(agent.id, lead);
+    this.deps.sql.exec("UPDATE host_spawns SET agent = ? WHERE id = ?", agent.id, spawn);
     this.deps.append({
       type: "agent.spawned",
       actor: { kind: "agent", agentId: agent.id },
@@ -465,14 +496,30 @@ export class Hosts {
     await this.reschedule();
   }
 
-  /** The Agents in lead `lead`'s subtree that are not Gone, and its spawns still starting. */
-  private leadRunning(lead: AgentId): number {
-    const starting = this.deps.sql
-      .exec<{ n: number }>(
-        "SELECT COUNT(*) AS n FROM host_spawns INDEXED BY host_spawns_pending WHERE state = 'pending' AND lead = ?",
-        lead,
+  /** The permission mode a Host started Agent `agent` in, or null for one started in a terminal. */
+  private modeOf(agent: AgentId): PermissionMode | null {
+    const mode = this.deps.sql
+      .exec<{ mode: string | null }>(
+        "SELECT mode FROM host_spawns INDEXED BY host_spawns_agent WHERE agent = ? ORDER BY requested_at DESC LIMIT 1",
+        agent,
       )
-      .one().n;
+      .toArray()[0]?.mode;
+    return isPermissionMode(mode) ? mode : null;
+  }
+
+  /**
+   * The Agents in lead `lead`'s subtree that are not Gone, and the spawns still starting
+   * in it: its own, and those of the leads below it.
+   */
+  private leadRunning(lead: AgentId): number {
+    const pending = this.deps.sql
+      .exec<{ lead: string }>(
+        "SELECT lead FROM host_spawns INDEXED BY host_spawns_pending WHERE state = 'pending' AND lead IS NOT NULL",
+      )
+      .toArray();
+    const starting = pending.filter(
+      (row) => row.lead === lead || this.deps.inSubtree(lead, row.lead as AgentId),
+    ).length;
     return this.deps.liveInSubtree(lead) + starting;
   }
 
