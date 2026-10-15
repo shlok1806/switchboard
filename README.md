@@ -302,22 +302,30 @@ does, from a list on your machine. To type from a browser:
    ```sh
    # Your own browser: the key is labelled with you.
    switchboard attach allow K7QX-2MRD-PA4L-7TZE-WCBN
-   # Someone else's browser, for one Agent only. Take the fingerprint from them, not from the Channel.
-   switchboard attach allow K7QX-2MRD-PA4L-7TZE-WCBN --person maya --agent shlok/claude/7f3a
+   # Someone else's browser, for one Agent in one Channel. Take the fingerprint from them, not from the Channel.
+   switchboard attach allow K7QX-2MRD-PA4L-7TZE-WCBN --person maya --repo shlok/app --agent shlok/claude/7f3a
    ```
 
 3. Click the screen and type. Every keystroke is signed by the browser's key, and your
    wrapper types it only if the signature checks out. What is typed counts as your own
-   typing: an Interrupt waits for it, and Enter submits a prompt.
+   typing: an Interrupt waits for it, and Enter submits a prompt. A paste goes in as one
+   paste, as it would at your keyboard.
+
+When someone starts watching or typing, your terminal shows a notification (in iTerm2,
+WezTerm, kitty and Ghostty; the wrapper's log has it everywhere), and when the CLI exits
+the wrapper says who watched and typed. Typing is not exclusive: you and everyone you
+allowed type into the same session at once. Watching sends up to eight screen frames a
+second through your Channel, each a billed message on Cloudflare.
 
 `switchboard attach list` shows the allowed keys and `switchboard attach revoke <fingerprint>`
 removes one; a running wrapper refuses it from its next keystroke. The list is
 `attach.json` in your config folder, readable only by you.
 
-Someone you allow can also answer your Agent's permission prompts from its terminal.
-That is the working answer for now, kept behind one setting while it is confirmed:
-`switchboard attach prompts off` holds back everyone's keys but your own while a prompt
-is open, and `switchboard attach prompts on` turns it back.
+Someone you allow can also answer your Agent's dialogs from its terminal: its permission
+prompts, its questions and its plans to approve. That is the working answer for now, kept
+behind one setting while it is confirmed: `switchboard attach prompts off` holds back
+everyone's keys but your own while a dialog may be open (and before the session's hooks
+first report), and `switchboard attach prompts on` turns it back.
 
 ### Hosts: Agents with no terminal
 

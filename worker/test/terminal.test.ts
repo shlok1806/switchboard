@@ -106,6 +106,7 @@ const screen = (agent: AgentId, text: string): Frame => ({
   cursor: { x: 0, y: 1 },
   attached: [],
   prompt: false,
+  paste: false,
 });
 
 async function events(): Promise<ChannelEvent[]> {
@@ -122,7 +123,7 @@ afterEach(async () => {
 });
 
 describe("Watching an Agent's terminal", () => {
-  it("tells the wrapper how many sockets watch, as they come, go and close", async () => {
+  it("tells the wrapper how many sockets watch and whose, as they come, go and close", async () => {
     const { id, socket: agent } = await wrapper("alice");
     expect(counts(agent)).toEqual([0]);
     const bob = await Socket.open("bob");
@@ -130,6 +131,12 @@ describe("Watching an Agent's terminal", () => {
     bob.send({ type: "terminal.watch", agent: id, on: true });
     await told(agent, 1);
     carol.send({ type: "terminal.watch", agent: id, on: true });
+    // A second socket of bob's counts, and names him once.
+    const bobAgain = await Socket.open("bob");
+    bobAgain.send({ type: "terminal.watch", agent: id, on: true });
+    await told(agent, 3);
+    expect(agent.of("terminal.watchers").at(-1)?.persons).toEqual(["bob", "carol"]);
+    bobAgain.close();
     await told(agent, 2);
     carol.send({ type: "terminal.watch", agent: id, on: false });
     await told(agent, 1);
@@ -147,6 +154,7 @@ describe("Watching an Agent's terminal", () => {
     again.send({ type: "interrupt.attach", agent: id });
     await waitFor(() => (again.of("terminal.watchers").length > 0 ? true : undefined));
     expect(counts(again)).toEqual([1]);
+    expect(again.of("terminal.watchers")[0]?.persons).toEqual(["bob"]);
   });
 
   it("lets one socket watch at most 16 Agents at once", async () => {
@@ -208,6 +216,7 @@ describe("Watching an Agent's terminal", () => {
     agent.send({ ...screen(id, "x"), lines: ["a", "b", "too many rows"] });
     agent.send({ ...screen(id, "x"), cols: 0 });
     agent.send({ ...screen(id, "x"), prompt: "yes" });
+    agent.send({ ...screen(id, "x"), paste: "yes" });
     agent.send({ ...screen(id, "x"), attached: [{ person: 3, key: "ABCD" }] });
     agent.send(screen(id, "fine"));
     await waitFor(() => (bob.of("terminal.screen").length > 0 ? true : undefined));

@@ -8,7 +8,7 @@ export interface AttachKey {
   /** The public key, SPKI, base64: sent with every input frame. */
   spki: string;
   fingerprint: string;
-  sign(agent: string, nonce: string, seq: number, text: string): Promise<string>;
+  sign(repo: string, agent: string, nonce: string, seq: number, text: string): Promise<string>;
 }
 
 const DB = "switchboard";
@@ -53,8 +53,8 @@ async function load(): Promise<AttachKey> {
   return {
     spki: toBase64(spki),
     fingerprint: await attachKeyFingerprint(spki),
-    async sign(agent, nonce, seq, text) {
-      const message = new TextEncoder().encode(signedInput(agent, nonce, seq, text));
+    async sign(repo, agent, nonce, seq, text) {
+      const message = new TextEncoder().encode(signedInput(repo, agent, nonce, seq, text));
       // WebCrypto's ECDSA signature is already r || s, as the wrapper verifies it.
       return toBase64(new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, message)));
     },
@@ -101,4 +101,15 @@ export function keyInput(e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | 
   if (e.key in ARROWS) return ARROWS[e.key] ?? null;
   if (e.key.length === 1) return e.altKey ? `\x1b${e.key}` : e.key;
   return null;
+}
+
+/**
+ * What a terminal receives for pasted `text`. Line breaks become Enter. When the CLI asked
+ * for bracketed paste, the text goes in between the start and end markers, so a
+ * multi-line paste is one prompt; its own ESC bytes are shown as \u241b, as xterm.js
+ * does, so the text cannot end the paste early and run the rest as keystrokes.
+ */
+export function pasteInput(text: string, bracketed: boolean): string {
+  const lines = text.replace(/\r?\n/g, "\r");
+  return bracketed ? `\x1b[200~${lines.replaceAll("\x1b", "\u241b")}\x1b[201~` : lines;
 }

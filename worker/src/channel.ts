@@ -1180,11 +1180,7 @@ export class Channel extends DurableObject<Env> {
         // Tells the wrapper its Agent's Interrupts and Directives come here from now on.
         send(ws, { type: "interrupt.attached", agent: agent as AgentId });
         // And whether anyone watches its terminal, so a new run of the wrapper starts streaming.
-        send(ws, {
-          type: "terminal.watchers",
-          agent: agent as AgentId,
-          count: this.watchersOf(agent as AgentId).length,
-        });
+        send(ws, this.watchersMessage(agent as AgentId));
         return;
       }
       const result = parseInterruptResult(body);
@@ -1313,9 +1309,15 @@ export class Channel extends DurableObject<Env> {
     });
   }
 
-  /** Tells Agent `id`'s wrapper how many watch it, so it streams only while someone does. */
+  /** Tells Agent `id`'s wrapper who watches it, so it streams only while someone does. */
   private tellWatchers(id: AgentId): void {
-    this.interruptTo(id, { type: "terminal.watchers", agent: id, count: this.watchersOf(id).length });
+    this.interruptTo(id, this.watchersMessage(id));
+  }
+
+  private watchersMessage(id: AgentId): TerminalWatchersMessage {
+    const watchers = this.watchersOf(id);
+    const persons = [...new Set(watchers.map((ws) => this.ctx.getTags(ws)[0] ?? ""))].filter((p) => p !== "").sort();
+    return { type: "terminal.watchers", agent: id, count: watchers.length, persons };
   }
 
   /** Every Host on the Channel, with whether it is Live. */

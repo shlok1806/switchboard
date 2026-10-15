@@ -548,6 +548,22 @@ describe("InterruptTyper after the Person clears their line", () => {
   });
 });
 
+describe("InterruptTyper, the Person's Enter", () => {
+  it("is told of every Enter, before the session starts and in a dialog, and of no other key", () => {
+    let entered = 0;
+    const t = new InterruptTyper({ write: () => {}, log: () => {}, onEnter: () => entered++ });
+    // Codex starts its session at the first prompt: the Enter that sends it comes before any hook.
+    t.personTyped("hello");
+    expect(entered).toBe(0);
+    t.personTyped("\r");
+    expect(entered).toBe(1);
+    t.hook({ hook_event_name: "SessionStart", source: "startup" });
+    t.hook({ hook_event_name: "PermissionRequest", tool_name: "Bash" });
+    t.personTyped("\x1b[B\r");
+    expect(entered).toBe(2);
+  });
+});
+
 describe("InterruptTyper, waking an idle session", () => {
   /** A typer for Claude Code whose session started, with bracketed paste on. */
   function typer(onPersonPrompt: () => void = () => {}) {
@@ -693,5 +709,25 @@ describe("InputLine, the rewind picker", () => {
     clock.now += 5_000;
     line.keys("\x1b");
     expect(line.empty).toBe(true);
+  });
+});
+
+describe("InterruptTyper's open dialog, which holds an attacher back (ADR 0021)", () => {
+  it("is every dialog the hooks report, and the session's start before any hook", () => {
+    const t = new InterruptTyper({ write: () => {}, log: () => {} });
+    // The CLI's own trust dialog comes before any hook: nothing says it is closed.
+    expect(t.dialogOpen).toMatch(/has not started/);
+    t.hook({ hook_event_name: "SessionStart", source: "startup" });
+    expect(t.dialogOpen).toBeNull();
+    for (const tool of ["AskUserQuestion", "ExitPlanMode"]) {
+      t.hook({ hook_event_name: "PreToolUse", tool_name: tool });
+      expect(t.dialogOpen).toBe(tool);
+      t.personTyped("\r");
+      expect(t.dialogOpen).toBeNull();
+    }
+    t.hook({ hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "ls" } });
+    expect(t.dialogOpen).toBe("permission for Bash");
+    t.hook({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "ls" } });
+    expect(t.dialogOpen).toBeNull();
   });
 });

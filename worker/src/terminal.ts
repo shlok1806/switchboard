@@ -47,7 +47,7 @@ export function parseInput(body: Record<string, unknown>, from: string): Termina
 
 /** A wrapper's `terminal.screen` for `agent`, rebuilt from its known fields; or null. */
 export function parseScreen(body: Record<string, unknown>, agent: AgentId): TerminalScreenFrame | null {
-  const { nonce, cols, rows, lines, cursor, attached, prompt } = body;
+  const { nonce, cols, rows, lines, cursor, attached, prompt, paste } = body;
   if (!str(nonce, MAX_NONCE) || !int(cols, 1, MAX_COLS) || !int(rows, 1, MAX_ROWS)) return null;
   if (!Array.isArray(lines) || lines.length > rows || !lines.every((l) => str(l, MAX_LINE))) return null;
   const c = cursor as { x?: unknown; y?: unknown } | null;
@@ -59,6 +59,8 @@ export function parseScreen(body: Record<string, unknown>, agent: AgentId): Term
     who.push({ person: a.person, key: a.key });
   }
   if (typeof prompt !== "boolean") return null;
+  // Absent from a wrapper older than bracketed paste: a plain paste, as before.
+  if (paste !== undefined && typeof paste !== "boolean") return null;
   return {
     type: "terminal.screen",
     agent,
@@ -69,6 +71,7 @@ export function parseScreen(body: Record<string, unknown>, agent: AgentId): Term
     cursor: { x: c.x, y: c.y },
     attached: who,
     prompt,
+    paste: paste === true,
   };
 }
 

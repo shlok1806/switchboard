@@ -12,13 +12,14 @@ import { Button } from "@/components/atoms/Button";
 import { Snippet, SnippetCopyButton, SnippetHeader, SnippetTabsContent } from "@/components/kibo-ui/snippet";
 import { Section } from "@/components/shell/section";
 import type { TerminalLink } from "@/data/source";
-import { useMe, useStore } from "@/data/store";
-import { type AttachKey, attachKey, keyInput, nextSeq } from "@/lib/attach-key";
+import { useChannel, useMe, useStore } from "@/data/store";
+import { type AttachKey, attachKey, keyInput, nextSeq, pasteInput } from "@/lib/attach-key";
 import { cn } from "@/lib/utils";
 
 export function TerminalPanel({ agent }: { agent: Agent }) {
   const store = useStore();
   const me = useMe();
+  const repo = useChannel().snapshot?.channel.repo;
   const [watching, setWatching] = useState(false);
   const [screen, setScreen] = useState<TerminalScreenFrame | null>(null);
   const [typing, setTyping] = useState(false);
@@ -57,7 +58,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
 
   const type = useCallback(
     (text: string) => {
-      if (key === null || text === "") return;
+      if (key === null || repo === undefined || text === "") return;
       for (let at = 0; at < text.length; at += TERMINAL_INPUT_MAX) {
         const chunk = text.slice(at, at + TERMINAL_INPUT_MAX);
         // Signed one after another, so frames leave in the order they were typed.
@@ -65,14 +66,14 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
           const n = nonce.current;
           if (n === null || link.current === null) return;
           const seq = nextSeq();
-          const sig = await key.sign(agent.id, n, seq, chunk);
+          const sig = await key.sign(repo, agent.id, n, seq, chunk);
           sent.current.add(seq);
           if (link.current?.send({ agent: agent.id, key: key.spki, seq, text: chunk, sig })) setRefused(null);
           else setRefused("Not connected to the Channel.");
         });
       }
     },
-    [key, agent.id],
+    [key, repo, agent.id],
   );
 
   const onKeyDown = (e: KeyboardEvent<HTMLPreElement>) => {
@@ -83,12 +84,13 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
   };
   const onPaste = (e: ClipboardEvent<HTMLPreElement>) => {
     e.preventDefault();
-    type(e.clipboardData.getData("text").replace(/\r?\n/g, "\r"));
+    const text = e.clipboardData.getData("text");
+    if (text !== "") type(pasteInput(text, screen?.paste === true));
   };
 
   const owner = agent.person === me;
-  const canType = typing && key !== null && screen !== null;
-  const command = key && `switchboard attach allow ${key.fingerprint}${owner ? "" : ` --person ${me} --agent ${agent.id}`}`;
+  const canType = typing && key !== null && repo !== undefined && screen !== null;
+  const command = key && `switchboard attach allow ${key.fingerprint}${owner ? "" : ` --person ${me} --repo ${repo} --agent ${agent.id}`}`;
 
   return (
     <Section
@@ -118,7 +120,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
                   {screen.cols} × {screen.rows}
                 </span>
                 {screen.prompt && (
-                  <span className="rounded-sm bg-orange-tint px-1.5 text-orange">Permission prompt open</span>
+                  <span className="rounded-sm bg-orange-tint px-1.5 text-orange">Waiting on a dialog</span>
                 )}
                 {screen.attached.length > 0 && (
                   <span>

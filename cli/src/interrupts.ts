@@ -509,6 +509,8 @@ export interface InterruptTyperOptions {
   idleClears?: boolean;
   /** The Person submitted a prompt they typed themselves. */
   onPersonPrompt?: () => void;
+  /** The Person pressed Enter, at their own keyboard or from the Dashboard, a dialog open or not. */
+  onEnter?: () => void;
   /**
    * A permission prompt opened (with the PermissionRequest hook's input) or closed
    * (null): what the Channel shows as the Agent's pending approval (ADR 0013).
@@ -520,7 +522,7 @@ export class InterruptTyper {
   private readonly line: InputLine;
   private lastKey = 0;
   private started = false;
-  private pasteMode = false;
+  private bracketed = false;
   private dialog: string | null = null;
   /** The PermissionRequest that opened the dialog, when a permission prompt is what is open. */
   private permission: ClaudeHookInput | null = null;
@@ -551,6 +553,22 @@ export class InterruptTyper {
     if (this.held) this.held.push(data);
     else this.options.write(data);
     if (submitted && !dialog) this.options.onPersonPrompt?.();
+    if (enter) this.options.onEnter?.();
+  }
+
+  /**
+   * The dialog the CLI shows now, as the hooks report it: a permission prompt, a
+   * question, a plan to approve. Until the session's first hook, one may be open unseen
+   * (the CLI's own trust dialog comes before any hook), and that is said instead.
+   */
+  get dialogOpen(): string | null {
+    if (!this.started) return "the session has not started: its hooks have not reported yet";
+    return this.dialog;
+  }
+
+  /** The CLI asked for bracketed paste, so a paste from the Dashboard is sent as one. */
+  get pasteMode(): boolean {
+    return this.bracketed;
   }
 
   /** Whether the CLI waits at its prompt: a turn ended (or a session started) and no prompt since. */
@@ -562,8 +580,8 @@ export class InterruptTyper {
   output(data: string): void {
     const on = data.lastIndexOf("\x1b[?2004h");
     const off = data.lastIndexOf("\x1b[?2004l");
-    if (on > off) this.pasteMode = true;
-    else if (off > on) this.pasteMode = false;
+    if (on > off) this.bracketed = true;
+    else if (off > on) this.bracketed = false;
   }
 
   /**
@@ -658,7 +676,7 @@ export class InterruptTyper {
 
   /** What stops an Interrupt being typed right now, or null when nothing does. */
   private blocked(): NotTyped | null {
-    if (!this.started || !this.pasteMode) return "session-not-ready";
+    if (!this.started || !this.bracketed) return "session-not-ready";
     if (this.dialog !== null) return "dialog-open";
     if (!this.line.empty || this.now() - this.lastKey < this.quietMs) return "person-typing";
     return null;

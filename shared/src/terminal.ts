@@ -26,8 +26,13 @@ export interface TerminalScreenFrame {
   cursor: { x: number; y: number };
   /** Keys that typed recently: the label the owner gave each and its fingerprint's first group. */
   attached: { person: string; key: string }[];
-  /** A permission dialog is open in the CLI. */
+  /**
+   * A dialog may be open in the CLI: a permission prompt, a question or a plan to
+   * approve, or the session has not started, so one may be open that no hook reported.
+   */
   prompt: boolean;
+  /** The CLI asked for bracketed paste: a paste goes in between ESC [200~ and ESC [201~. */
+  paste: boolean;
 }
 
 /** A Person's socket to the Channel: start or stop watching Agent `agent`. */
@@ -37,11 +42,13 @@ export interface TerminalWatchFrame {
   on: boolean;
 }
 
-/** Channel to wrapper: how many sockets watch its Agent now. It sends frames only while some do. */
+/** Channel to wrapper: how many sockets watch its Agent now, and whose. It sends frames only while some do. */
 export interface TerminalWatchersMessage {
   type: "terminal.watchers";
   agent: AgentId;
   count: number;
+  /** The Persons those sockets are signed in as, each once, sorted. */
+  persons: string[];
 }
 
 /**
@@ -79,9 +86,12 @@ export interface TerminalAttachedFrame {
   key: string;
 }
 
-/** The exact text an input frame's signature covers, one field per line. */
-export function signedInput(agent: string, nonce: string, seq: number, text: string): string {
-  return `switchboard-terminal-input\n${agent}\n${nonce}\n${seq}\n${text}`;
+/**
+ * The exact text an input frame's signature covers, one field per line. The Channel's
+ * repo is in it, so a frame signed for an Agent in one Channel is no good in another.
+ */
+export function signedInput(repo: string, agent: string, nonce: string, seq: number, text: string): string {
+  return `switchboard-terminal-input\n${repo}\n${agent}\n${nonce}\n${seq}\n${text}`;
 }
 
 const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

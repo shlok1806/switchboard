@@ -37,6 +37,7 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
       cursor: { x: prompt.length, y: Math.min(ROWS, lines.length) - 1 },
       attached: typed ? [{ person: me, key: "MOCK" }] : [],
       prompt: false,
+      paste: true,
     });
   };
   const first = setTimeout(send, 300);

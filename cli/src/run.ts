@@ -34,6 +34,7 @@ import type {
 import {
   agentIdFor,
   approvalPath,
+  channelKey,
   DEFAULT_IDLE_AFTER_MS,
   denyReason,
   directivesNotice,
@@ -41,7 +42,6 @@ import {
   interruptNotice,
   modelPath,
   STANDING_RULE,
-  TERMINAL_ATTACHED_MS,
 } from "../../shared/src/index";
 import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
@@ -62,8 +62,9 @@ import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
 import { SessionContextReader } from "./session-context";
 import { channelCheckout, GitError } from "./task-worktree";
-import { readAttachList } from "./terminal/attach-keys";
+import { cachedAttachList } from "./terminal/attach-keys";
 import { AttachGate } from "./terminal/gate";
+import { TerminalPresence, terminalNotification } from "./terminal/presence";
 import { ScreenStream, TerminalScreen } from "./terminal/screen";
 import { readAccount } from "./usage/limits";
 import { UsageSchedule } from "./usage/schedule";
@@ -254,9 +255,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   let tools: SessionTools | null = null;
   let agentId: AgentId | null = null;
   let child: pty.IPty | null = null;
-  // Whether the CLI shows a permission dialog now: an attacher may be held back from it (ADR 0021).
-  let promptOpen = false;
   // Types Interrupts into the session, never over the Person's own typing.
+  // The Person pressed Enter, here or from the Dashboard.
+  let entered = () => {};
   const typer = new InterruptTyper({
     write: (data) => child?.write(data),
     quietMs: seconds(env.SWITCHBOARD_INTERRUPT_QUIET_SECONDS, DEFAULT_QUIET_MS),
@@ -264,8 +265,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     idleClears: adapter.idleClears,
     log,
     onPersonPrompt: () => waker?.reset("the Person sent a prompt"),
+    // Set below to the hook trust watch, once the CLI runs.
+    onEnter: () => entered(),
     onApproval: (request) => {
-      promptOpen = request !== null;
       screenStream.changed();
       approvals.changed(request);
       if (request === null) denyGate?.release();
@@ -300,34 +302,48 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // input comes back signed by a key this machine's Person allowed, and only then is typed.
   const nonce = randomBytes(16).toString("base64url");
   let screen: TerminalScreen | null = null;
-  const attachedKeys = new Map<string, { person: string; at: number }>();
+  const presence = new TerminalPresence(config.person);
+  // Tells the owner in their own terminal, without drawing over the CLI.
+  const notify = (text: string) => {
+    log(text);
+    if (process.stdout.isTTY) process.stdout.write(terminalNotification(`switchboard: ${text}`));
+  };
   const sendScreen = () => {
     if (agentId === null || screen === null) return;
-    const now = Date.now();
     const shot = screen.snapshot();
     const frame: TerminalScreenFrame = {
       type: "terminal.screen",
       agent: agentId,
       nonce,
       ...shot,
-      attached: [...attachedKeys]
-        .filter(([, k]) => now - k.at < TERMINAL_ATTACHED_MS)
-        .map(([fingerprint, k]) => ({ person: k.person, key: fingerprint.slice(0, 4) })),
-      prompt: promptOpen,
+      attached: presence.attached(),
+      prompt: typer.dialogOpen !== null,
+      paste: typer.pasteMode,
     };
     stream.send(JSON.stringify(frame));
   };
   const screenStream = new ScreenStream(sendScreen);
   const gate = new AttachGate({
     owner: config.person,
+    // As the Dashboard names it, from its address: the default repo in config.json may not be lowercase.
+    repo: channelKey(repo) ?? repo,
     agent: () => agentId,
     nonce,
-    list: () => readAttachList(env),
-    promptOpen: () => promptOpen,
+    list: cachedAttachList(env),
+    dialog: () => typer.dialogOpen,
   });
+  let floodLoggedAt = 0;
   const typedFromChannel = async (frame: TerminalInputFrame) => {
     const result = await gate.check(frame);
     if (agentId === null) return;
+    if (!result.ok && result.limited) {
+      // A flood: said once a second, and not answered frame by frame.
+      if (Date.now() - floodLoggedAt >= 1000) {
+        floodLoggedAt = Date.now();
+        log(`dropping terminal input from the Channel: ${result.reason}`);
+      }
+      return;
+    }
     if (!result.ok) {
       log(
         `refused terminal input from ${result.fingerprint || "a bad key"} (Channel says ${frame.from ?? "nobody"}): ${result.reason}`,
@@ -344,10 +360,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
     // Typed as the Person's own keys are: Interrupts wait for it, and Enter is the Person's prompt.
     typer.personTyped(result.text);
-    attachedKeys.set(result.fingerprint, { person: result.person, at: Date.now() });
+    const attaching = presence.keyTyped(result.fingerprint, result.person);
     screenStream.changed();
-    if (result.first) {
-      log(`${result.person} (key ${result.fingerprint}) attached to the terminal`);
+    if (attaching) {
+      notify(`${result.person} is typing into this terminal from the Dashboard (key ${result.fingerprint})`);
       const attachedFrame: TerminalAttachedFrame = {
         type: "terminal.attached",
         agent: agentId,
@@ -473,7 +489,12 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         log(`attached: ${agentId}'s Interrupts and Directives come to this wrapper`);
       }
       if (message.type === "interrupt" && message.agent === agentId) void interrupted(message);
-      if (message.type === "terminal.watchers" && message.agent === agentId) screenStream.setWatchers(message.count);
+      if (message.type === "terminal.watchers" && message.agent === agentId) {
+        screenStream.setWatchers(message.count);
+        // An older Channel sends only the count.
+        for (const person of presence.watchers(Array.isArray(message.persons) ? message.persons : []))
+          notify(`${person} is watching this terminal from the Dashboard`);
+      }
       if (message.type === "terminal.input" && message.agent === agentId) void typedFromChannel(message);
       if (message.type === "directives" && message.agent === agentId) {
         const kept = addForNextTurn({ directives: message.directives });
@@ -781,7 +802,6 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const onInput = (data: Buffer) => {
     const text = data.toString("utf8");
     typer.personTyped(text);
-    if (/[\r\n]/.test(text)) watchTrust();
   };
   if (stdin.isTTY) stdin.setRawMode(true);
   stdin.on("data", onInput);
@@ -829,6 +849,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       seconds(env.SWITCHBOARD_HOOK_TRUST_SECONDS, HOOK_TRUST_WAIT_MS),
     );
   };
+  entered = watchTrust;
 
   link?.start();
   watch.start();
@@ -857,6 +878,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   stdin.pause();
   // The terminal is the wrapper's again: the hooks never ran, so say how to trust them.
   if (hint !== undefined && !hooksRunning) stdout.write(`${dim(`switchboard: ${hint}`)}\n`);
+  const visitors = presence.summary();
+  if (visitors !== null) stdout.write(`${dim(`switchboard: ${visitors}`)}\n`);
   // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
   await Promise.all([hooks?.drain(END_TIMEOUT_MS), proxy?.drain(END_TIMEOUT_MS)]);
   // Then the last usage reading, once the last turn end has been seen.

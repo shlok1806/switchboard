@@ -2,21 +2,23 @@
 // kept in attach.json in Switchboard's config folder. Only this file decides who may
 // type: nothing in it comes from the Channel.
 //
-//   switchboard attach allow <fingerprint> [--person <name>] [--agent <id>]
+//   switchboard attach allow <fingerprint> [--person <name>] [--repo <owner/name>] [--agent <id>]
 //   switchboard attach revoke <fingerprint>
 //   switchboard attach list
 //   switchboard attach prompts on|off
 
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { normalizeFingerprint } from "../../../shared/src/index";
+import { channelKey, normalizeFingerprint } from "../../../shared/src/index";
 import { configDir, readConfig } from "../config";
 
 export interface AllowedKey {
   fingerprint: string;
   /** The name the wrapper shows for this key: the owner's label, never the Channel's. */
   person: string;
+  /** Only this Channel's repo, `owner/name`; absent for every Channel. */
+  repo?: string;
   /** Only this Agent; absent for every Agent this Person runs. */
   agent?: string;
   addedAt: string;
@@ -29,7 +31,7 @@ export interface AttachList {
 }
 
 export const ATTACH_USAGE = `Usage:
-  switchboard attach allow <fingerprint> [--person <name>] [--agent <agent id>]
+  switchboard attach allow <fingerprint> [--person <name>] [--repo <owner/name>] [--agent <agent id>]
   switchboard attach revoke <fingerprint>
   switchboard attach list
   switchboard attach prompts on|off`;
@@ -58,6 +60,7 @@ export async function readAttachList(env: NodeJS.ProcessEnv = process.env): Prom
           {
             fingerprint,
             person: k.person,
+            ...(typeof k.repo === "string" ? { repo: channelKey(k.repo) ?? k.repo } : {}),
             ...(typeof k.agent === "string" ? { agent: k.agent } : {}),
             addedAt: typeof k.addedAt === "string" ? k.addedAt : "",
           },
@@ -65,6 +68,25 @@ export async function readAttachList(env: NodeJS.ProcessEnv = process.env): Prom
       })
     : [];
   return { attachersAnswerPrompts: parsed.attachersAnswerPrompts !== false, keys };
+}
+
+/**
+ * The list, read again only when attach.json changed: a stat per frame instead of a
+ * read and parse. A revoke writes a new file through a rename, so it is seen at once.
+ */
+export function cachedAttachList(env: NodeJS.ProcessEnv = process.env): () => Promise<AttachList> {
+  let cached: { stamp: string; list: AttachList } | null = null;
+  return async () => {
+    let stamp = "missing";
+    try {
+      const s = await stat(attachPath(env), { bigint: true });
+      stamp = `${s.ino}:${s.size}:${s.mtimeNs}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (cached?.stamp !== stamp) cached = { stamp, list: await readAttachList(env) };
+    return cached.list;
+  };
 }
 
 /** Writes the list readable by its owner only, through a rename so a reader never sees half of it. */
@@ -85,7 +107,7 @@ export async function attachCommand(args: string[], env: NodeJS.ProcessEnv = pro
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,
-    options: { person: { type: "string" }, agent: { type: "string" } },
+    options: { person: { type: "string" }, repo: { type: "string" }, agent: { type: "string" } },
   });
   const list = await readAttachList(env);
   switch (verb) {
@@ -97,6 +119,11 @@ export async function attachCommand(args: string[], env: NodeJS.ProcessEnv = pro
         );
         return 2;
       }
+      const repo = values.repo === undefined ? undefined : channelKey(values.repo);
+      if (repo === null) {
+        console.error(`switchboard: --repo is a GitHub repo, owner/name.\n\n${ATTACH_USAGE}`);
+        return 2;
+      }
       const person = values.person ?? (await readConfig(env))?.person;
       if (person === undefined) {
         console.error("switchboard: say whose key this is with --person, or log in first.");
@@ -106,12 +133,13 @@ export async function attachCommand(args: string[], env: NodeJS.ProcessEnv = pro
       keys.push({
         fingerprint,
         person,
+        ...(repo === undefined ? {} : { repo }),
         ...(values.agent === undefined ? {} : { agent: values.agent }),
         addedAt: new Date().toISOString(),
       });
       const path = await writeAttachList({ ...list, keys }, env);
       console.log(
-        `Allowed ${fingerprint} as ${person} to type into ${values.agent ?? "every Agent you run"}. Saved to ${path}.`,
+        `Allowed ${fingerprint} as ${person} to type into ${values.agent ?? "every Agent you run"}${repo === undefined ? "" : ` in ${repo}`}. Saved to ${path}.`,
       );
       return 0;
     }
@@ -133,9 +161,11 @@ export async function attachCommand(args: string[], env: NodeJS.ProcessEnv = pro
     case "list": {
       if (list.keys.length === 0) console.log("No attach keys are allowed.");
       for (const k of list.keys)
-        console.log(`${k.fingerprint}  ${k.person}  ${k.agent ?? "every Agent"}  ${k.addedAt}`);
+        console.log(
+          `${k.fingerprint}  ${k.person}  ${k.repo ?? "every Channel"}  ${k.agent ?? "every Agent"}  ${k.addedAt}`,
+        );
       console.log(
-        `Attachers ${list.attachersAnswerPrompts ? "may" : "may not"} answer permission prompts (switchboard attach prompts on|off).`,
+        `Attachers ${list.attachersAnswerPrompts ? "may" : "may not"} answer dialogs: permission prompts, questions and plans (switchboard attach prompts on|off).`,
       );
       return 0;
     }
@@ -148,8 +178,8 @@ export async function attachCommand(args: string[], env: NodeJS.ProcessEnv = pro
       await writeAttachList({ ...list, attachersAnswerPrompts: setting === "on" }, env);
       console.log(
         setting === "on"
-          ? "Attachers may answer permission prompts."
-          : "Attachers may not answer permission prompts: while one is open, only your own keys type.",
+          ? "Attachers may answer dialogs: permission prompts, questions and plans."
+          : "Attachers may not answer dialogs: while one may be open, only your own keys type.",
       );
       return 0;
     }

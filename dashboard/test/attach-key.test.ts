@@ -3,7 +3,7 @@
 // the last one it took from the key.
 
 import { describe, expect, it } from "vitest";
-import { keyInput, nextSeq } from "@/lib/attach-key";
+import { keyInput, nextSeq, pasteInput } from "@/lib/attach-key";
 
 const press = (key: string, mods: Partial<Record<"ctrlKey" | "metaKey" | "altKey" | "shiftKey", boolean>> = {}) =>
   keyInput({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
@@ -38,6 +38,22 @@ describe("keyInput", () => {
 
   it("prefixes Alt with Escape, as terminals read Meta", () => {
     expect(press("b", { altKey: true })).toBe("\x1bb");
+  });
+});
+
+describe("pasteInput", () => {
+  it("types each line break as Enter when the CLI did not ask for bracketed paste", () => {
+    expect(pasteInput("one\r\ntwo\nthree", false)).toBe("one\rtwo\rthree");
+  });
+
+  it("wraps the paste in the bracketed paste markers, so many lines are one prompt", () => {
+    expect(pasteInput("one\ntwo", true)).toBe("\x1b[200~one\rtwo\x1b[201~");
+  });
+
+  it("keeps a pasted end marker from closing the paste early", () => {
+    const sent = pasteInput("a\x1b[201~\x1b[A rm -rf", true);
+    expect(sent).toBe("\x1b[200~a\u241b[201~\u241b[A rm -rf\x1b[201~");
+    expect(sent.indexOf("\x1b[201~")).toBe(sent.length - "\x1b[201~".length);
   });
 });
 

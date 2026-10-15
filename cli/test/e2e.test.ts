@@ -2163,7 +2163,7 @@ describe("A live terminal (ADR 0021)", () => {
     async signed(text: string, change: { seq?: number; nonce?: string; signText?: string } = {}) {
       const nonce = change.nonce ?? (await waitFor("the session nonce", () => this.screens().at(-1)?.nonce));
       const seq = change.seq ?? ++this.seq;
-      const message = new TextEncoder().encode(signedInput(id, nonce, seq, change.signText ?? text));
+      const message = new TextEncoder().encode(signedInput(github.repo, id, nonce, seq, change.signText ?? text));
       const sig = new Uint8Array(
         await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, this.keys.privateKey, message),
       );
@@ -2226,8 +2226,10 @@ describe("A live terminal (ADR 0021)", () => {
     expect(term.output).toContain(SECRET);
     expect(shown).not.toMatch(/sk-ant-api03-Q|QQQQQQQQ/);
     expect(bob.frames.some((f) => JSON.stringify(f).includes("QQQQQQQQ"))).toBe(false);
-    // No escape sequence reaches a watcher: the CLI turned bracketed paste on, which the screen does not carry.
+    // No escape sequence reaches a watcher: the CLI turned bracketed paste on, which the
+    // screen carries as a flag, so the Dashboard can send a paste as one.
     expect(bob.screens().every((s) => s.lines.every((l) => !l.includes("\x1b")))).toBe(true);
+    expect(bob.screens().at(-1)?.paste).toBe(true);
   }, 30_000);
 
   it("types nothing from a key the Agent's Person has not allowed, then everything once they allow it", async () => {
@@ -2315,7 +2317,7 @@ describe("A live terminal (ADR 0021)", () => {
     await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash[\s\S]*FAKE-CLAUDE asking permission for Bash/);
     await waitFor("the open prompt on the screen", () => (bob.screens().at(-1)?.prompt ? true : undefined));
     const held = await bob.type("2\r");
-    expect(await bob.refused(held.seq)).toMatch(/only its owner answers prompts/);
+    expect(await bob.refused(held.seq)).toMatch(/permission for .*only the owner answers dialogs/);
     await owner.type("3\r");
     await term.waitForOutput(/FAKE-CLAUDE permission answered "3"/);
     expect(term.output).not.toContain('FAKE-CLAUDE permission answered "2"');
