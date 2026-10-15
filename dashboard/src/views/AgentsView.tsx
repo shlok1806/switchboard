@@ -9,7 +9,7 @@ import { IssueLink, Pending } from "@/components/domain/pending";
 import { AccountLabel, ModelLabel, PresenceDot, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { AgentUsage, AccountsPanel } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
-import { StartAgentButton } from "@/components/domain/start-agent";
+import { StartAgentButton, useHostsSupported } from "@/components/domain/start-agent";
 import { CLI_LABEL, PRESENCE_LABEL, ago } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -65,17 +65,24 @@ export function AgentsView() {
     (a, b) => ORDER[a.presence] - ORDER[b.presence] || a.person.localeCompare(b.person) || a.id.localeCompare(b.id),
   );
   const can = useCapabilities();
+  const hosts = useHostsSupported();
 
   if (agents.length === 0) {
     return (
       <Pending title={can.agents ? "No Agents yet" : "Agents are not on this Channel yet"} className="h-full">
         {can.agents ? (
-          <>
-            Run <code className="font-mono text-ink-2">switchboard run claude</code> to add one, or start one on a Host. {/* taste-skill-ignore: a command */}
-            <span className="mt-4 flex justify-center">
-              <StartAgentButton />
-            </span>
-          </>
+          // Shown once the Channel says whether it has Hosts, so the text never changes under the reader.
+          hosts !== null && (
+            <>
+              Run <code className="font-mono text-ink-2">switchboard run claude</code> to add one
+              {hosts ? <>, or start one on a&nbsp;Host.</> : "."}
+              {hosts && (
+                <span className="mt-4 flex justify-center">
+                  <StartAgentButton />
+                </span>
+              )}
+            </>
+          )
         ) : (
           <>
             Agents appear once <IssueLink capability="agents" /> lands.
