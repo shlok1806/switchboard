@@ -30,7 +30,8 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
   const link = useRef<TerminalLink | null>(null);
   const nonce = useRef<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
-  const sent = useRef(new Set<number>());
+  /** This page's own frames, by sequence number, with what each did: a refusal names it. */
+  const sent = useRef(new Map<number, TerminalInputOp | undefined>());
 
   useEffect(() => {
     if (!watching) return;
@@ -40,7 +41,8 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
         setScreen(frame);
       } else if (sent.current.has(frame.seq)) {
         // Only this page's own keystrokes: another watcher's refusal is theirs.
-        setRefused(frame.reason);
+        const op = sent.current.get(frame.seq);
+        setRefused(`${op === "take" ? "Could not take the keyboard" : op === "release" ? "Not released" : "Not typed"}: ${frame.reason}`);
       }
     });
     link.current = l;
@@ -60,16 +62,19 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
   const send = useCallback(
     (op: TerminalInputOp | undefined, text: string) => {
       if (key === null || repo === undefined) return;
-      queue.current = queue.current.then(async () => {
-        const n = nonce.current;
-        if (n === null || link.current === null) return;
-        const seq = nextSeq();
-        const sig = await key.sign(repo, agent.id, n, seq, op, text);
-        sent.current.add(seq);
-        const frame = { agent: agent.id, key: key.spki, seq, ...(op === undefined ? {} : { op }), text, sig };
-        if (link.current?.send(frame)) setRefused(null);
-        else setRefused("Not connected to the Channel.");
-      });
+      queue.current = queue.current
+        .then(async () => {
+          const n = nonce.current;
+          if (n === null || link.current === null) return;
+          const seq = nextSeq();
+          const sig = await key.sign(repo, agent.id, n, seq, op, text);
+          sent.current.set(seq, op);
+          const frame = { agent: agent.id, key: key.spki, seq, ...(op === undefined ? {} : { op }), text, sig };
+          if (link.current?.send(frame)) setRefused(null);
+          else setRefused("Not sent: not connected to the Channel.");
+        })
+        // One frame that could not be signed must not stop the ones after it.
+        .catch((e: unknown) => setRefused(`Not sent: ${e instanceof Error ? e.message : "this browser could not sign it."}`));
     },
     [key, repo, agent.id],
   );
@@ -173,19 +178,28 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
             <p className="text-small text-ink-3">Making this browser's key</p>
           ) : (
             <div className="flex flex-col gap-2">
-              <p className="text-small text-ink-2">
-                {owner
-                  ? "Take the keyboard, then click the screen and type. The wrapper takes your keys once you allow this browser on the machine that runs it:"
-                  : `Take the keyboard, then click the screen and type. ${agent.person}'s wrapper takes your keys once they allow this browser on their machine:`}
-              </p>
-              <Snippet defaultValue="allow" className="bg-page">
-                <SnippetHeader>
-                  <span className="text-small font-medium">Key {key.fingerprint}</span>
-                  <SnippetCopyButton value={command ?? ""} aria-label="Copy command" />
-                </SnippetHeader>
-                <SnippetTabsContent value="allow">{command}</SnippetTabsContent>
-              </Snippet>
-              {refused && <p className="text-small text-orange">Not typed: {refused}</p>}
+              {mine ? (
+                <p className="text-small text-ink-2">
+                  You hold the keyboard: click the screen and type. Others wait until you release it, or a minute
+                  passes without your keys.
+                </p>
+              ) : (
+                <>
+                  <p className="text-small text-ink-2">
+                    {owner
+                      ? "Take the keyboard, then click the screen and type. The wrapper takes your keys once you allow this browser on the machine that runs it:"
+                      : `Take the keyboard, then click the screen and type. ${agent.person}'s wrapper takes your keys once they allow this browser on their machine:`}
+                  </p>
+                  <Snippet defaultValue="allow" className="bg-page">
+                    <SnippetHeader>
+                      <span className="text-small font-medium">Key {key.fingerprint}</span>
+                      <SnippetCopyButton value={command ?? ""} aria-label="Copy command" />
+                    </SnippetHeader>
+                    <SnippetTabsContent value="allow">{command}</SnippetTabsContent>
+                  </Snippet>
+                </>
+              )}
+              {refused && <p className="text-small text-orange">{refused}</p>}
               <div className="flex flex-wrap items-center gap-2">
                 {mine ? (
                   <Button size="sm" variant="secondary" className="bg-page" onClick={() => send("release", "")}>

@@ -650,6 +650,8 @@ describe("who holds the keyboard", () => {
       idleMs: 60_000,
       onChange: (h) => changes.push(h === null ? null : h.kind === "local" ? "local" : h.person),
     });
+    // The Channel names watchers by their sign-in, not by the labels the owner gave their keys.
+    k.watching(["maya-gh", "bob-gh"]);
     return { k, changes };
   }
   const MAYA = "MAYA-MAYA-MAYA-MAYA-MAYA";
@@ -659,18 +661,28 @@ describe("who holds the keyboard", () => {
     const { k, changes } = keyboard();
     // The owner types at the terminal: they hold the keyboard, and Maya cannot take it.
     expect(k.local("ls")).toEqual({ pass: "ls", heldBack: false });
-    expect(k.take(MAYA, "maya")).toBe("the owner is typing at the terminal, and holds the keyboard");
+    expect(k.take(MAYA, "maya", "maya-gh")).toBe("the owner is typing at the terminal, and holds the keyboard");
     expect(k.typed(MAYA)).toBe("the owner is typing at the terminal, and holds the keyboard");
     // Once the owner's hold lapses, Maya takes it; now the owner's keys and Bob's are held back.
     vi.advanceTimersByTime(60_000);
-    expect(k.take(MAYA, "maya")).toBeNull();
+    expect(k.take(MAYA, "maya", "maya-gh")).toBeNull();
     // A second take, a click twice or a retried frame, keeps it.
-    expect(k.take(MAYA, "maya")).toBeNull();
+    expect(k.take(MAYA, "maya", "maya-gh")).toBeNull();
     expect(k.typed(MAYA)).toBeNull();
     expect(k.local(" -la\r")).toEqual({ pass: "", heldBack: true });
-    expect(k.take(BOB, "bob")).toBe("maya holds the keyboard");
+    expect(k.take(BOB, "bob", "bob-gh")).toBe("maya holds the keyboard");
     expect(k.typed(BOB)).toBe("maya holds the keyboard");
     expect(changes).toEqual(["local", null, "maya"]);
+  });
+
+  it("lets only someone watching the terminal take the keyboard", () => {
+    const { k } = keyboard();
+    expect(k.take(MAYA, "maya", "carol-gh")).toBe("maya is not watching this terminal");
+    expect(k.take(MAYA, "maya", undefined)).toBe("maya is not watching this terminal");
+    expect(k.held).toBeNull();
+    expect(k.take(MAYA, "maya", "maya-gh")).toBeNull();
+    expect(k.holds(MAYA)).toBe(true);
+    expect(k.holds(BOB)).toBe(false);
   });
 
   it("asks a Dashboard key to take the keyboard before it types, even when it is free", () => {
@@ -681,7 +693,7 @@ describe("who holds the keyboard", () => {
 
   it("gives the keyboard back to the owner at Ctrl+], which never reaches the CLI while it does", () => {
     const { k, changes } = keyboard();
-    k.take(MAYA, "maya");
+    k.take(MAYA, "maya", "maya-gh");
     expect(k.local(TAKE_BACK)).toEqual({ pass: "", heldBack: false });
     expect(k.held).toEqual({ kind: "local" });
     expect(k.typed(MAYA)).toBe("the owner is typing at the terminal, and holds the keyboard");
@@ -693,7 +705,7 @@ describe("who holds the keyboard", () => {
 
   it("lets go after a minute without a keystroke from the holder, and each keystroke starts the minute again", () => {
     const { k, changes } = keyboard();
-    k.take(MAYA, "maya");
+    k.take(MAYA, "maya", "maya-gh");
     vi.advanceTimersByTime(59_000);
     expect(k.typed(MAYA)).toBeNull();
     vi.advanceTimersByTime(59_000);
@@ -705,19 +717,20 @@ describe("who holds the keyboard", () => {
 
   it("lets go when its holder releases it, stops watching, or the wrapper loses the Channel", () => {
     const { k } = keyboard();
-    k.take(MAYA, "maya");
+    k.take(MAYA, "maya", "maya-gh");
     k.release(BOB);
     expect(k.held).toMatchObject({ person: "maya" });
     k.release(MAYA);
     expect(k.held).toBeNull();
 
-    k.take(MAYA, "maya");
-    k.watching(["maya", "bob"]);
+    k.take(MAYA, "maya", "maya-gh");
+    k.watching(["maya-gh", "bob-gh"]);
     expect(k.held).toMatchObject({ person: "maya" });
-    k.watching(["bob"]);
+    // The key's label is not who watches: only the Channel's name for the sender counts.
+    k.watching(["maya", "bob-gh"]);
     expect(k.held).toBeNull();
 
-    k.take(MAYA, "maya");
+    k.take(MAYA, "maya", "maya-gh");
     k.disconnected();
     expect(k.held).toBeNull();
     // The owner's own hold does not depend on the Channel.
@@ -732,7 +745,7 @@ describe("who holds the keyboard", () => {
     // A focus report as the owner changes windows is not typing.
     expect(k.local("\x1b[I")).toEqual({ pass: "\x1b[I", heldBack: false });
     expect(k.held).toBeNull();
-    k.take(MAYA, "maya");
+    k.take(MAYA, "maya", "maya-gh");
     const replies = "\x1b[12;40R\x1b[?65;4c\x1b]11;rgb:0000/0000/0000\x07";
     expect(k.local(`${replies}abc`)).toEqual({ pass: replies, heldBack: true });
     expect(k.local("\x1b[O")).toEqual({ pass: "\x1b[O", heldBack: false });
@@ -741,7 +754,7 @@ describe("who holds the keyboard", () => {
   it("names the holder as the screen shows it: the owner at the terminal has no key", () => {
     expect(holderOf(null, "shlok")).toBeNull();
     expect(holderOf({ kind: "local" }, "shlok")).toEqual({ person: "shlok", key: null });
-    expect(holderOf({ kind: "key", fingerprint: MAYA, person: "maya" }, "shlok")).toEqual({
+    expect(holderOf({ kind: "key", fingerprint: MAYA, person: "maya", watcher: "maya-gh" }, "shlok")).toEqual({
       person: "maya",
       key: MAYA,
     });

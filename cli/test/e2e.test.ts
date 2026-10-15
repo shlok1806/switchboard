@@ -2293,6 +2293,8 @@ describe("A live terminal (ADR 0021)", () => {
     const early = await bob.type("work\r");
     expect(await bob.refused(early.seq)).toMatch(/take the keyboard first|holds the keyboard/);
     await bob.take();
+    // Taking the keyboard is not typing: no one is attached yet.
+    expect(bob.screens().at(-1)?.attached.some((a) => a.person === "bob")).toBe(false);
     await bob.type("work\r");
     await waitFor("bob's line in the session", () =>
       count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined,

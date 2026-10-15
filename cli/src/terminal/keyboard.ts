@@ -19,7 +19,12 @@ const REPLIES =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replies are escape sequences.
   /\x1b[\]PX^_][\s\S]*?(?:\x07|\x1b\\)|\x1b\[(?:[?>][0-9;:?<>=]*[ -/]*[@-~]|[0-9;:]*\$y|[0-9;:]*[tnR]|[IO])/g;
 
-export type Holder = { kind: "local" } | { kind: "key"; fingerprint: string; person: string };
+/**
+ * Who holds the keyboard. A key's `person` is its label on the owner's machine; `watcher`
+ * is who the Channel says sent its take, in the names the Channel's watcher list uses.
+ * The wrapper never lets `watcher` grant anything: it only ends a hold, or refuses one.
+ */
+export type Holder = { kind: "local" } | { kind: "key"; fingerprint: string; person: string; watcher: string };
 
 export interface KeyboardOptions {
   /** The holder changed: to show at the terminal and on the screen. */
@@ -29,6 +34,8 @@ export interface KeyboardOptions {
 
 export class TerminalKeyboard {
   private holder: Holder | null = null;
+  /** Who watches the terminal now, as the Channel last said. */
+  private watchers: readonly string[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly idleMs: number;
 
@@ -58,17 +65,27 @@ export class TerminalKeyboard {
     return { pass: data, heldBack: false };
   }
 
-  /** Key `fingerprint`, labelled `person`, asks for the keyboard. Null when it holds it now, else why not. */
-  take(fingerprint: string, person: string): string | null {
+  /**
+   * Key `fingerprint`, labelled `person`, asks for the keyboard, sent by `watcher` as the
+   * Channel says. Null when it holds it now, else why not. Only someone watching the
+   * terminal may hold it: the hold ends when they stop.
+   */
+  take(fingerprint: string, person: string, watcher: string | undefined): string | null {
+    if (watcher === undefined || !this.watchers.includes(watcher)) return `${person} is not watching this terminal`;
     const refusal = this.busy(fingerprint);
     if (refusal !== null) return refusal;
-    this.hold({ kind: "key", fingerprint, person });
+    this.hold({ kind: "key", fingerprint, person, watcher });
     return null;
+  }
+
+  /** Whether key `fingerprint` holds the keyboard now. */
+  holds(fingerprint: string): boolean {
+    return this.holder?.kind === "key" && this.holder.fingerprint === fingerprint;
   }
 
   /** Key `fingerprint` typed. Null when it holds the keyboard (and keeps it), else why not. */
   typed(fingerprint: string): string | null {
-    if (this.holder?.kind === "key" && this.holder.fingerprint === fingerprint) {
+    if (this.holder?.kind === "key" && this.holds(fingerprint)) {
       this.hold(this.holder);
       return null;
     }
@@ -77,12 +94,13 @@ export class TerminalKeyboard {
 
   /** Key `fingerprint` lets go of the keyboard, if it holds it. */
   release(fingerprint: string): void {
-    if (this.holder?.kind === "key" && this.holder.fingerprint === fingerprint) this.free();
+    if (this.holds(fingerprint)) this.free();
   }
 
-  /** The Persons who watch now: a Dashboard holder who stopped watching has gone. */
+  /** Who watches now, as the Channel names them: a Dashboard holder who stopped watching has gone. */
   watching(persons: readonly string[]): void {
-    if (this.holder?.kind === "key" && !persons.includes(this.holder.person)) this.free();
+    this.watchers = persons;
+    if (this.holder?.kind === "key" && !persons.includes(this.holder.watcher)) this.free();
   }
 
   /** The wrapper lost the Channel: no Dashboard key can type or release now. */

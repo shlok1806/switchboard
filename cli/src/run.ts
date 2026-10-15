@@ -386,13 +386,19 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       return;
     }
     const busy =
-      result.op === "take" ? keyboard.take(result.fingerprint, result.person) : keyboard.typed(result.fingerprint);
+      result.op === "take"
+        ? keyboard.take(result.fingerprint, result.person, frame.from)
+        : keyboard.typed(result.fingerprint);
     if (busy !== null) {
       refuse(result.fingerprint, busy);
       return;
     }
+    // A take is not typing: the hold's change is shown already.
+    if (result.op === "take") return;
     // Typed as the Person's own keys are: Interrupts wait for it, and Enter is the Person's prompt.
-    if (result.op === undefined) typer.personTyped(result.text);
+    // Held back behind an Interrupt, they go only if this key still holds the keyboard then.
+    const { fingerprint } = result;
+    typer.personTyped(result.text, () => keyboard.holds(fingerprint));
     const attaching = presence.keyTyped(result.fingerprint, result.person);
     screenStream.changed();
     if (attaching) {

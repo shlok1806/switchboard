@@ -23,14 +23,15 @@ One typist at a time **holds the keyboard**: either the owner at the terminal it
 
 - **At the terminal.** When the keyboard is free, or the owner already holds it, the owner's keystrokes go to the CLI and they hold it. While a Dashboard key holds it, the owner's keystrokes are held back: the wrapper drops them and reminds the owner, at most every five seconds, who holds it and how to take it back. The terminal's own replies to the CLI's queries (device attributes, cursor, size and focus reports, control strings) are not typing: they still reach the CLI, and they never take the keyboard.
 - **Taking it back.** Ctrl+] at the terminal takes the keyboard back at once, whoever holds it. The wrapper keeps that Ctrl+] from the CLI. When no Dashboard key holds the keyboard, Ctrl+] goes to the CLI as before, so no CLI loses the key.
-- **From the Dashboard.** Taking the keyboard is explicit: the Dashboard's Take the keyboard button sends a signed `take` frame. The wrapper grants it when the keyboard is free, or already this key's. While the owner or another key holds it, the take is refused, naming who holds it. A key types only while it holds the keyboard; otherwise its frames are refused with that reason. The Release the keyboard button, and Stop typing, send a signed `release`.
+- **From the Dashboard.** Taking the keyboard is explicit: the Dashboard's Take the keyboard button sends a signed `take` frame. The wrapper grants it when the keyboard is free, or already this key's, and only to someone watching the terminal: the Channel names who sent the take, and that name must be on its list of watchers. While the owner or another key holds it, the take is refused, naming who holds it. A take is not typing: it attaches no one. A key types only while it holds the keyboard; otherwise its frames are refused with that reason. The Release the keyboard button, and Stop typing, send a signed `release`.
 - **Letting go.** A hold ends:
   - after a minute without a keystroke from its holder, the owner's own included, so a typist who walked away does not lock the others out;
   - when its holder releases it;
-  - when a Dashboard holder's Person stops watching the Agent, which is how the wrapper sees them close the page or lose their connection (the Channel names the watching Persons);
+  - when the Person who took it stops watching the Agent, which is how the wrapper sees them close the page or lose their connection. Both names are the Channel's (who sent the take, who watches), never the label the owner gave the key on their machine. The Channel cannot grant a hold this way, only refuse or end one, which it could always do by dropping frames;
   - when the wrapper loses its own connection to the Channel.
 - **Who holds it is shown.** Every screen frame names the holder: the Person and key, or the owner at the terminal (no key), or no one. The Dashboard shows it over the screen. At the terminal, each change of holder is a terminal notification (OSC 9) and a log line.
 - Anything else that types into the session is not a typist and does not hold the keyboard: an Interrupt waits for the holder to go quiet as it waits for the owner, and a Directive, a Wake and an approval from the Channel go their own ways.
+- While an Interrupt is being typed, every typist's keys are held back and sent right after it, so they never interleave with it. A Dashboard key's held keys go then only if it still holds the keyboard: an owner who took it back meanwhile never sees them arrive after their own.
 
 ### The frames
 

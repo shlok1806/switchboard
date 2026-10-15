@@ -319,8 +319,9 @@ One typist holds the keyboard at a time, so two people never type into one promp
 once. While someone holds it from the Dashboard, your own keys are held back and your
 terminal says who has it: press **Ctrl+]** to take it back. A hold ends after a minute
 without a keystroke, when its holder releases it or stops watching, or when your wrapper
-loses the Channel. Anyone else asking for it is told who holds it. Watching sends up to eight screen frames a
-second through your Channel, each a billed message on Cloudflare.
+loses the Channel. Anyone else asking for it is told who holds it, and only someone
+watching can take it. Watching sends up to eight screen frames a second through your
+Channel, each a billed message on Cloudflare.
 
 `switchboard attach list` shows the allowed keys and `switchboard attach revoke <fingerprint>`
 removes one; a running wrapper refuses it from its next keystroke. The list is
