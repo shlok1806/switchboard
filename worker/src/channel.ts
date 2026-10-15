@@ -165,7 +165,8 @@ export function buildHistoryIndexes(
   const missing = HISTORY_INDEXES.filter((index) => !existing.has(index.name));
   if (missing.length > 0) {
     sql.exec("CREATE TABLE IF NOT EXISTS index_builds (day TEXT PRIMARY KEY, rows INTEGER NOT NULL)");
-    let spent = sql.exec<{ rows: number }>("SELECT rows FROM index_builds WHERE day = ?", today).toArray()[0]?.rows ?? 0;
+    let spent =
+      sql.exec<{ rows: number }>("SELECT rows FROM index_builds WHERE day = ?", today).toArray()[0]?.rows ?? 0;
     const sizes = sql
       .exec<Record<string, number>>(
         `SELECT ${missing.map((index, i) => `coalesce(sum(CASE WHEN ${index.where} THEN 1 ELSE 0 END), 0) AS n${i}`).join(", ")} FROM events`,
