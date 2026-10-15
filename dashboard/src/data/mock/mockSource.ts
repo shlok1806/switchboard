@@ -234,6 +234,18 @@ export class MockChannelSource implements ChannelSource {
         this.emit({ type: "agent", agent: a });
         return { ok: true };
       }
+      case "deny-approval": {
+        // Like the Worker (ADR 0014): the Agent's own Person, a deniable prompt, once.
+        const a = this.agents.find((x) => x.id === action.agent);
+        if (!a) return { ok: false, reason: "Unknown Agent." };
+        if (a.person !== this.me) return { ok: false, reason: `Agent ${a.id} belongs to ${a.person}.` };
+        if (a.approval?.id !== action.id) return { ok: false, reason: `Agent ${a.id} is not waiting on that prompt any more.` };
+        if (!a.approval.deniable) return { ok: false, reason: "That prompt can be answered only at the Agent's terminal." };
+        if (a.approval.deniedBy) return { ok: false, reason: `${a.approval.deniedBy} already denied that prompt.` };
+        a.approval = { ...a.approval, deniedBy: this.me };
+        this.emit({ type: "agent", agent: a });
+        return { ok: true };
+      }
       case "rename": {
         // Like the Worker (ADR 0009): anyone may rename any Agent; a running Agent's name is taken, a Gone one's is free.
         const a = this.agents.find((x) => x.id === action.agent);

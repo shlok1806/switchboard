@@ -65,7 +65,9 @@ export type PersonAction =
   /** `POST /api/agents/:id/proxy-mode`. Only the Agent's own Person may change it. */
   | { type: "proxy-mode"; agent: AgentId; mode: ProxyMode }
   /** `POST /api/agents/:id/nickname`. Any Person on the Channel may rename any Agent (ADR 0009); null clears it. */
-  | { type: "rename"; agent: AgentId; nickname: string | null };
+  | { type: "rename"; agent: AgentId; nickname: string | null }
+  /** `POST /api/agents/:id/approval/deny`. Only the Agent's own Person, once per prompt (ADR 0014). */
+  | { type: "deny-approval"; agent: AgentId; id: string; message?: string };
 
 export type ActionResult = { ok: true } | { ok: false; reason: string };
 

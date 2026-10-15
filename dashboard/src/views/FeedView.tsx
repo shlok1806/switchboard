@@ -10,6 +10,8 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useIsMobile } from "@/hooks/use-mobile";
 import { CAPTURE_LABEL, VERDICT_LABEL, VERDICT_OPTIONS } from "@/lib/format";
 import { go } from "@/lib/router";
+import { PageHead } from "@/components/shell/page-head";
+import { AccountsPanel } from "@/components/domain/usage";
 
 // How many more Events each scroll to the top shows.
 const SHOW = 250;
@@ -82,10 +84,30 @@ export function FeedView({ selected }: { selected?: string }) {
   const set = (k: keyof FeedFilters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
   const n = activeCount(filters);
 
+  const live = agents.filter((a) => a.presence === "live").length;
+  const open = tasks.filter((t) => t.status !== "done").length;
+  const head = (
+    <div className="shrink-0 px-[var(--gutter)] pt-6 pb-3 sm:pt-8">
+      <div className="mx-auto flex w-full max-w-[var(--column)] min-w-0 flex-col gap-5">
+        <PageHead
+          title="Activity"
+          summary={
+            <span className="tabular-nums">
+              {live} {live === 1 ? "Agent" : "Agents"} live · {open} open {open === 1 ? "Task" : "Tasks"} · {events.length} Events
+            </span>
+          }
+        />
+        <div className="rise [--i:1]">
+          <AccountsPanel />
+        </div>
+      </div>
+    </div>
+  );
+
   const filterBar = (
-    <div className="shrink-0 border-b border-line px-3 py-2.5 sm:px-6">
+    <div className="shrink-0 px-[var(--gutter)] pb-4">
       {/* Lines up with the feed and the composer below it. */}
-      <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-wrap items-center gap-1.5 md:flex-nowrap md:gap-2 md:overflow-x-auto">
+      <div className="rise mx-auto flex w-full max-w-[var(--column)] min-w-0 flex-wrap items-center gap-1.5 [--i:2] md:flex-nowrap md:overflow-x-auto">
         <FilterSelect
           label="Person"
           value={filters.person}
@@ -130,7 +152,7 @@ export function FeedView({ selected }: { selected?: string }) {
           <button
             type="button"
             onClick={() => setFilters(EMPTY_FILTERS)}
-            className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] text-ink-3 hover:bg-hover hover:text-ink"
+            className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-2.5 text-small text-ink-3 transition-colors hover:bg-hover hover:text-ink"
           >
             <X className="size-3.5" aria-hidden /> Clear
           </button>
@@ -153,25 +175,32 @@ export function FeedView({ selected }: { selected?: string }) {
       aria-relevant="additions"
     >
       {shown.length === 0 ? (
-        <div className="flex h-40 flex-col items-center justify-center gap-1 text-center">
-          <p className="text-[14px] text-ink-2">{loadingOlder ? "Looking through older Events" : "Nothing matches"}</p>
+        <div className="mx-auto flex max-w-[var(--column)] flex-col items-start gap-1 px-[var(--gutter)] py-10">
+          <p className="text-body text-ink">{loadingOlder ? "Looking through older Events" : "Nothing matches these filters"}</p>
           {olderBefore !== undefined && !loadingOlder && (
-            <button type="button" onClick={showOlder} className="text-[13px] text-accent-ink hover:underline">
+            <button type="button" onClick={showOlder} className="text-small text-accent-ink underline-offset-4 hover:underline">
               Look through older Events
             </button>
           )}
-          <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="text-[13px] text-accent-ink hover:underline">
+          <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="text-small text-accent-ink underline-offset-4 hover:underline">
             Clear filters
           </button>
         </div>
       ) : (
-        <ul className="mx-auto flex max-w-4xl flex-col px-2 py-2 sm:px-3">
+        <ul className="mx-auto flex max-w-[calc(var(--column)+1.5rem)] flex-col px-[calc(var(--gutter)-0.75rem)] pt-1 pb-4">
             {older && (
-              <li className="flex h-9 items-center justify-center text-[12px] text-ink-3" aria-live="off">
+              <li className="flex h-10 items-center px-3 text-small text-ink-3" aria-live="off">
                 {loadingOlder ? (
-                  "Loading older Events"
+                  <span className="inline-flex items-center gap-2">
+                    <span aria-hidden className="breathe size-1.5 rounded-full bg-ink-3" />
+                    Loading older Events
+                  </span>
                 ) : (
-                  <button type="button" onClick={showOlder} className="hover:text-ink-2 hover:underline">
+                  <button
+                    type="button"
+                    onClick={showOlder}
+                    className="inline-flex h-8 items-center rounded-md bg-inset px-3 text-ink-2 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+                  >
                     Show older Events
                   </button>
                 )}
@@ -210,8 +239,8 @@ export function FeedView({ selected }: { selected?: string }) {
   ) : null;
 
   const composer = (
-    <div className="shrink-0 border-t border-line bg-page px-3 py-3 sm:px-6">
-      <div className="mx-auto max-w-4xl">
+    <div className="shrink-0 bg-page px-[var(--gutter)] pt-2 pb-4">
+      <div className="mx-auto max-w-[var(--column)]">
         <Composer />
       </div>
     </div>
@@ -222,23 +251,24 @@ export function FeedView({ selected }: { selected?: string }) {
     if (selectedEvent)
       return (
         <div className="flex h-full min-h-0 flex-col">
-          <div className="flex h-11 shrink-0 items-center border-b border-line px-2">
+          <div className="flex h-12 shrink-0 items-center px-2">
             <button
               type="button"
               onClick={() => go({ view: "feed" })}
-              className="inline-flex h-9 items-center gap-1.5 rounded-md px-2 text-[14px] text-ink-2 hover:bg-hover"
+              className="inline-flex h-10 items-center gap-1.5 rounded-md px-2 text-body text-ink-2 transition-colors hover:bg-hover"
             >
               <ArrowLeft className="size-4" aria-hidden /> Activity
             </button>
           </div>
           {/* Keyed, so React never reuses the feed's scroller (scrolled to the bottom) for the Event. */}
-          <div key={`event-${selectedEvent.id}`} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <div key={`event-${selectedEvent.id}`} className="min-h-0 flex-1 overflow-y-auto px-[var(--gutter)] pt-2 pb-6">
             {detail}
           </div>
         </div>
       );
     return (
       <div className="flex h-full min-h-0 flex-col">
+        {head}
         {filterBar}
         {list}
         {composer}
@@ -251,6 +281,7 @@ export function FeedView({ selected }: { selected?: string }) {
   return (
     <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
       <ResizablePanel id="feed" defaultSize={detail ? "58" : "100"} minSize="36" className="flex min-h-0 flex-col">
+        {head}
         {filterBar}
         {list}
         {composer}
@@ -260,7 +291,7 @@ export function FeedView({ selected }: { selected?: string }) {
           <ResizableHandle />
           <ResizablePanel id="event" defaultSize="42" minSize="28" className="min-h-0">
             {/* Keyed per Event, so a newly picked Event opens at its top. */}
-            <div key={selectedEvent?.id} className="h-full overflow-y-auto bg-surface px-6 py-5">
+            <div key={selectedEvent?.id} className="h-full overflow-y-auto bg-inset px-6 py-6">
               {detail}
             </div>
           </ResizablePanel>

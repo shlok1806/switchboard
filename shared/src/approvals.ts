@@ -13,6 +13,8 @@ export const MAX_APPROVAL_DETAIL_LENGTH = 2000;
 export const MAX_APPROVAL_REASON_LENGTH = 500;
 /** The longest approval ID. */
 export const MAX_APPROVAL_ID_LENGTH = 64;
+/** The longest message a Person sends with a deny (ADR 0014). */
+export const MAX_DENY_MESSAGE_LENGTH = 1000;
 
 /** A permission prompt the Agent's CLI is showing, as its wrapper reports it. Masked on the laptop. */
 export interface PendingApproval {
@@ -32,6 +34,13 @@ export interface PendingApproval {
   reason?: string;
   /** When the prompt opened. */
   openedAt: string;
+  /**
+   * True when the wrapper holds the prompt's hook, so the Agent's own Person may deny
+   * it from the Channel (ADR 0014). Claude Code only.
+   */
+  deniable?: boolean;
+  /** The Person who denied it from the Channel. Set by the Channel, never by the wrapper. */
+  deniedBy?: string;
 }
 
 /**
@@ -47,6 +56,37 @@ export interface SetApprovalRequest {
 /** The path that reports an Agent's pending approval. */
 export function approvalPath(id: AgentId): string {
   return `${agentPath(id)}/approval`;
+}
+
+/**
+ * `POST /api/agents/:id/approval/deny`: the Agent's own Person denies its open,
+ * deniable prompt `id` from the Channel, with an optional message the Agent reads
+ * (ADR 0014). Never an Agent Token. Once per prompt.
+ */
+export interface DenyApprovalRequest {
+  id: string;
+  message?: string;
+}
+
+/** The path that denies an Agent's pending approval. */
+export function approvalDenyPath(id: AgentId): string {
+  return `${approvalPath(id)}/deny`;
+}
+
+/** Channel to wrapper: answer the held hook of prompt `id` with a deny. */
+export interface ApprovalDenyMessage {
+  type: "approval.deny";
+  agent: AgentId;
+  id: string;
+  /** The Person who denied it. */
+  person: string;
+  message?: string;
+}
+
+/** What the Agent reads when its Person denies its prompt from the Channel. */
+export function denyReason(person: string, message?: string): string {
+  const said = message?.trim();
+  return `Denied by ${person} from the Switchboard Channel.${said ? ` ${said}` : ""}`;
 }
 
 /** One line of text: control characters out, trimmed, cut to `max`. Empty means none. */
@@ -82,5 +122,17 @@ export function cleanApproval(value: unknown): PendingApproval | null | undefine
     ...(detail === undefined ? {} : { detail }),
     ...(reason === undefined ? {} : { reason }),
     openedAt: new Date(raw.openedAt).toISOString(),
+    ...(raw.deniable === true ? { deniable: true } : {}),
   };
+}
+
+/** A deny from a request body, or undefined when it holds no valid one. */
+export function cleanDeny(value: unknown): DenyApprovalRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const id = line(raw.id, MAX_APPROVAL_ID_LENGTH);
+  if (id === undefined) return undefined;
+  if (raw.message !== undefined && typeof raw.message !== "string") return undefined;
+  const message = line(raw.message, MAX_DENY_MESSAGE_LENGTH);
+  return { id, ...(message === undefined ? {} : { message }) };
 }

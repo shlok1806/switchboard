@@ -11,15 +11,21 @@ import type {
   Agent,
   AgentContext,
   AgentId,
+  ApprovalDenyMessage,
   Capture,
   ChannelEvent,
   DeliveryMessage,
+  DenyApprovalRequest,
   DirectiveInterruptMessage,
   DirectiveMessage,
   EventPayloads,
   EventType,
   Holder,
   HookCaptureReply,
+  Host,
+  HostId,
+  HostSpawnMessage,
+  HostStopMessage,
   InterruptAttached,
   InterruptMessage,
   InterruptResult,
@@ -29,14 +35,23 @@ import type {
   ProxyCaptureReply,
   ProxyMode,
   RegisterAgentRequest,
+  RegisterHostRequest,
   ReportedPresence,
   ReportedUsage,
+  SpawnAgentRequest,
   StreamMessage,
   Task,
   TaskNumber,
   TouchedFile,
 } from "../../shared/src/index";
-import { DEFAULT_GONE_AFTER_SECONDS, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
+import {
+  DEFAULT_GONE_AFTER_SECONDS,
+  DEFAULT_HOST_AGENTS_LIVE_CAP,
+  hostIdFor,
+  LIVE_PING,
+  LIVE_PONG,
+  MAX_SPAWN_FAILURE_LENGTH,
+} from "../../shared/src/index";
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
 import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
@@ -46,6 +61,7 @@ import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./clai
 import { DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
+import { DEFAULT_SPAWN_WAIT_MS, type HostRefusal, Hosts, type SpawnResult } from "./hosts";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
@@ -252,6 +268,7 @@ export class Channel extends DurableObject<Env> {
   private readonly usage: AccountUsageStore;
   /** Directives from Persons to Agents, delivered without the Relay (ADR 0005). */
   private readonly directives: Directives;
+  private readonly hosts: Hosts;
   /** Records the wrappers' idle wakes. */
   private readonly wakes: Wakes;
   /** Who may use the Channel: membership of the repo, and Agent tokens (ADR 0007). */
@@ -358,7 +375,7 @@ export class Channel extends DurableObject<Env> {
         return stored;
       },
       sendTo: (person, message) => {
-        for (const ws of this.ctx.getWebSockets(person)) send(ws, message);
+        for (const ws of this.personSockets(person)) send(ws, message);
       },
       interruptTo: (agent, message) => this.interruptTo(agent, message),
       waitUntil: (work) => this.ctx.waitUntil(work),
@@ -368,12 +385,27 @@ export class Channel extends DurableObject<Env> {
       findAgent: (id) => this.agents.find(id),
       append: (event) => this.append(event),
       sendTo: (person, message) => {
-        for (const ws of this.ctx.getWebSockets(person)) send(ws, message);
+        for (const ws of this.personSockets(person)) send(ws, message);
       },
       interruptTo: (agent, message) => this.interruptTo(agent, message),
       waitUntil: (work) => this.ctx.waitUntil(work),
     });
     this.wakes = new Wakes({ sql: ctx.storage.sql, append: (event) => this.append(event) });
+    const wait = Number((env as { HOST_SPAWN_WAIT_SECONDS?: string }).HOST_SPAWN_WAIT_SECONDS);
+    this.hosts = new Hosts({
+      sql: ctx.storage.sql,
+      append: (event) => this.append(event),
+      attached: (id) => this.hostSocket(id) !== null,
+      sendTo: (id, message) => {
+        const ws = this.hostSocket(id);
+        return ws !== null && send(ws, message);
+      },
+      close: (id) => this.closeSockets(hostTag(id), 4004, "This Host was removed."),
+      findAgent: (id) => this.agents.find(id),
+      schedule: (at) => this.alarms.set("hosts", at),
+      cap: this.hostCap(),
+      spawnWaitMs: wait > 0 ? wait * 1000 : DEFAULT_SPAWN_WAIT_MS,
+    });
   }
 
   /**
@@ -386,6 +418,7 @@ export class Channel extends DurableObject<Env> {
       if (due.has("tasks")) await this.tasks.alarm();
       if (due.has("presence")) await this.agents.expireSilent();
       if (due.has("members")) await this.recheckMembers();
+      if (due.has("hosts")) await this.hosts.alarm();
     } finally {
       await this.alarms.arm();
     }
@@ -522,10 +555,16 @@ export class Channel extends DurableObject<Env> {
    * new Agent token, bound to this one Agent (ADR 0007).
    */
   async registerAgent(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
+    if (request.host !== undefined && this.hosts.find(person, request.host) === null) {
+      return { ok: false, status: 409, reason: `You have no Host named ${request.host} on this Channel.` };
+    }
     this.join(person);
     const result = this.withNextTurn(await this.agents.register(person, request));
     if (!result.ok) return result;
     if (request.usage !== undefined) this.recordUsage(request.usage);
+    if (request.host !== undefined && request.spawn !== undefined) {
+      this.hosts.spawned(person, request.host, request.spawn, result.agent);
+    }
     return { ...result, token: await this.access.issueAgentToken(result.agent.id, person) };
   }
 
@@ -633,6 +672,22 @@ export class Channel extends DurableObject<Env> {
       };
     }
     return this.agents.setApproval(caller.person, id, approval);
+  }
+
+  /** The Agent's own Person denies its open prompt from the Channel; its wrapper answers the hook (ADR 0014). */
+  denyAgentApproval(caller: Caller, id: AgentId, deny: DenyApprovalRequest): RosterResult {
+    if (caller.agent !== undefined) {
+      return { ok: false, status: 403, reason: "Only the Agent's own Person can deny its prompt, never an Agent." };
+    }
+    return this.agents.denyApproval(caller.person, id, deny, () =>
+      this.interruptTo(id, {
+        type: "approval.deny",
+        agent: id,
+        id: deny.id,
+        person: caller.person,
+        ...(deny.message === undefined ? {} : { message: deny.message }),
+      }),
+    );
   }
 
   /** Sets an Agent's Proxy mode; only its own Person may. Its wrapper hears on the stream. */
@@ -819,8 +874,22 @@ export class Channel extends DurableObject<Env> {
     const url = new URL(request.url);
     const name = url.searchParams.get("person");
     const agent = url.searchParams.get("agent");
+    const host = url.searchParams.get("host");
     const after = url.searchParams.get("after");
     if (name === null) return new Response("Missing person", { status: 400 });
+
+    if (host !== null) {
+      // A Host's socket only carries what the Channel asks of that Host: no stream.
+      if (this.hosts.find(name, host) === null) {
+        return Response.json({ error: `You have no Host named ${host} on this Channel.` }, { status: 404 });
+      }
+      const { 0: client, 1: server } = new WebSocketPair();
+      this.ctx.acceptWebSocket(server, [name, hostTag(hostIdFor(name, host))]);
+      server.serializeAttachment({ at: Date.now() } satisfies HostAttachment);
+      this.hosts.attach(name, host);
+      await this.watchMembers();
+      return new Response(null, { status: 101, webSocket: client });
+    }
 
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server, agent === null ? [name] : [name, agentTag(agent as AgentId)]);
@@ -862,12 +931,21 @@ export class Channel extends DurableObject<Env> {
       type !== "interrupt.result" &&
       type !== "directive.result" &&
       type !== "wake" &&
-      type !== "wake.capped"
+      type !== "wake.capped" &&
+      type !== "host.spawn.failed"
     ) {
       return;
     }
     const [person, tag] = this.ctx.getTags(ws);
     if (person === undefined) return;
+    if (type === "host.spawn.failed") {
+      // Only a Host's own socket answers for its spawns.
+      const host = tag?.startsWith(HOST_TAG) ? tag.slice(HOST_TAG.length + person.length + 1) : null;
+      const { spawn, reason } = frame as { spawn?: unknown; reason?: unknown };
+      if (host === null || typeof spawn !== "string" || typeof reason !== "string") return;
+      this.hosts.hostFailed(person, host, spawn, reason.slice(0, MAX_SPAWN_FAILURE_LENGTH) || "no reason given");
+      return;
+    }
     // The Agent whose token opened this socket; a Person's socket speaks for no Agent.
     const socketAgent = tag?.startsWith(AGENT_TAG) ? (tag.slice(AGENT_TAG.length) as AgentId) : null;
     const body = frame as Record<string, unknown>;
@@ -922,7 +1000,10 @@ export class Channel extends DurableObject<Env> {
    * Sends an Interrupt to the wrapper of Agent `id`: the socket that most recently
    * said it belongs to that wrapper. False when there is none.
    */
-  private interruptTo(id: AgentId, message: InterruptMessage | DirectiveInterruptMessage): boolean {
+  private interruptTo(
+    id: AgentId,
+    message: InterruptMessage | DirectiveInterruptMessage | ApprovalDenyMessage,
+  ): boolean {
     const person = this.agents.find(id)?.person;
     if (person === undefined) return false;
     let target: { ws: WebSocket; at: number } | null = null;
@@ -948,12 +1029,63 @@ export class Channel extends DurableObject<Env> {
     return this.agents.has(id) ? this.hooks.touchedFiles(id) : null;
   }
 
-  override webSocketClose(ws: WebSocket, code: number, reason: string): void {
+  override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     try {
       ws.close(code, reason);
     } catch {
       // Already closed.
     }
+    const [person, tag] = this.ctx.getTags(ws);
+    if (person !== undefined && tag?.startsWith(HOST_TAG)) {
+      await this.hosts.detached(person, tag.slice(HOST_TAG.length + person.length + 1));
+    }
+  }
+
+  /** Every Host on the Channel, with whether it is Live. */
+  listHosts(): { hosts: Host[]; cap: number; running: number } {
+    return { hosts: this.hosts.list(), cap: this.hostCap(), running: this.hosts.running() };
+  }
+
+  private hostCap(): number {
+    const cap = Number(this.env.HOST_AGENTS_LIVE_CAP);
+    return Number.isInteger(cap) && cap >= 0 ? cap : DEFAULT_HOST_AGENTS_LIVE_CAP;
+  }
+
+  /** Registers one of `person`'s Hosts, or updates its folders and mode, and joins them. */
+  registerHost(person: PersonName, request: RegisterHostRequest): Host {
+    this.join(person);
+    return this.hosts.register(person, request);
+  }
+
+  removeHost(person: PersonName, name: string): boolean {
+    return this.hosts.remove(person, name);
+  }
+
+  /** Starts an Agent on one of `person`'s Hosts (ADR 0015). */
+  spawnAgent(person: PersonName, request: SpawnAgentRequest): Promise<SpawnResult> {
+    this.join(person);
+    return this.hosts.spawn(person, request);
+  }
+
+  /** Stops an Agent one of `person`'s Hosts runs. */
+  stopAgent(person: PersonName, id: AgentId): { ok: true; host: HostId } | HostRefusal {
+    return this.hosts.stop(person, id);
+  }
+
+  /** Host `id`'s newest open socket, or null when it is Offline. */
+  private hostSocket(id: HostId): WebSocket | null {
+    let newest: { ws: WebSocket; at: number } | null = null;
+    for (const ws of this.ctx.getWebSockets(hostTag(id))) {
+      if (ws.readyState !== WebSocket.READY_STATE_OPEN) continue;
+      const at = (ws.deserializeAttachment() as HostAttachment | null)?.at ?? 0;
+      if (newest === null || at > newest.at) newest = { ws, at };
+    }
+    return newest?.ws ?? null;
+  }
+
+  /** `person`'s sockets that carry the stream: theirs and their wrappers', not their Hosts'. */
+  private personSockets(person: PersonName): WebSocket[] {
+    return this.ctx.getWebSockets(person).filter((ws) => !this.ctx.getTags(ws)[1]?.startsWith(HOST_TAG));
   }
 
   private append<K extends EventType>(event: NewEvent<K>): ChannelEvent {
@@ -988,7 +1120,9 @@ export class Channel extends DurableObject<Env> {
   }
 
   private broadcast(message: StreamMessage): void {
-    for (const ws of this.ctx.getWebSockets()) send(ws, message);
+    for (const ws of this.ctx.getWebSockets()) {
+      if (!this.ctx.getTags(ws)[1]?.startsWith(HOST_TAG)) send(ws, message);
+    }
   }
 }
 
@@ -997,6 +1131,18 @@ const AGENT_TAG = "agent:";
 
 function agentTag(id: AgentId): string {
   return `${AGENT_TAG}${id}`;
+}
+
+/** The tag on a Host's WebSocket: `host:<person>/<name>`. */
+const HOST_TAG = "host:";
+
+function hostTag(id: HostId): string {
+  return `${HOST_TAG}${id}`;
+}
+
+/** What a Host's socket carries: when it attached, so the newest one gets the Host's requests. */
+interface HostAttachment {
+  at: number;
 }
 
 /** What a wrapper's socket carries: the Agent whose Interrupts it types, and since when. */
@@ -1035,7 +1181,10 @@ function send(
     | InterruptAttached
     | InterruptMessage
     | DirectiveMessage
-    | DirectiveInterruptMessage,
+    | DirectiveInterruptMessage
+    | ApprovalDenyMessage
+    | HostSpawnMessage
+    | HostStopMessage,
 ): boolean {
   try {
     ws.send(JSON.stringify(message));

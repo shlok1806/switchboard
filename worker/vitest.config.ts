@@ -30,6 +30,10 @@ const vars = {
   PRESENCE_GONE_AFTER_SECONDS: "600",
   RELAY_INTERRUPT_THRESHOLD: "0.6",
   RELAY_INTERRUPT_INTERVAL_SECONDS: "20",
+  // Small, so the tests reach the cap with a few spawns.
+  HOST_AGENTS_LIVE_CAP: "3",
+  // Short, so a spawn the Host never answers comes back without the Agent quickly.
+  HOST_SPAWN_WAIT_SECONDS: "2",
   GITHUB_API_URL: "",
   GITHUB_WEB_URL: "",
   JEV_API_URL: "",

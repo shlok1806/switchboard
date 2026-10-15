@@ -74,7 +74,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             .sort((a, b) => a.number - b.number)
             .map((t) => (
               <CommandItem key={t.number} value={`#${t.number} ${t.title}`} onSelect={() => run({ view: "task", number: t.number })}>
-                <span className="font-mono text-[12px] text-ink-3">#{t.number}</span>
+                <span className="text-small text-ink-3 tabular-nums">#{t.number}</span>
                 <span className="truncate">{t.title}</span>
                 {t.claim?.stale && <CommandShortcut className="text-red">Stale</CommandShortcut>}
               </CommandItem>
@@ -83,7 +83,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         <CommandGroup heading="Agents">
           {agents.map((a) => (
             <CommandItem key={a.id} value={`${a.id} ${a.nickname ?? ""}`} onSelect={() => run({ view: "agent", id: a.id })}>
-              <span className="truncate font-mono text-[12px]">{a.id}</span>
+              <span className="truncate font-medium">{a.id}</span>
               {a.nickname && <span className="truncate text-ink-3">{a.nickname}</span>}
               <CommandShortcut>{PRESENCE_LABEL[a.presence]}</CommandShortcut>
             </CommandItem>

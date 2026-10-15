@@ -30,8 +30,9 @@
 //   busy <seconds>
 //         -> works for a while, printing as it goes, like a long model turn
 //   permission <tool>
-//         -> opens a permission dialog for <tool>: runs the PermissionRequest hook;
-//            the next line answers it
+//         -> opens a permission dialog for <tool> and, like Claude Code, runs the
+//            PermissionRequest hook while it shows: the next line answers it, unless
+//            the hook decides first (`FAKE-CLAUDE permission <behavior> by hook ...`)
 //   quit  -> exits 0, after the SessionEnd hook
 //
 // Like Claude Code, it turns bracketed paste on. A pasted text (between the paste
@@ -42,7 +43,7 @@
 // FAKE_CLAUDE_REPLY_FILE names, if any (such as `call post_update {...}`), then ends
 // the turn (the Stop hook).
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -103,6 +104,60 @@ function runHooks(name, input, tool) {
       );
     }
   }
+}
+
+/**
+ * Runs the PermissionRequest hook without waiting, as Claude Code does while its dialog
+ * shows. Resolves to the hook's decision, or never when it makes none.
+ */
+function permissionDecision(tool_name) {
+  const hook = settings.hooks?.PermissionRequest?.[0]?.hooks?.[0];
+  if (!hook) return new Promise(() => {});
+  return new Promise((resolve) => {
+    const started = Date.now();
+    // Claude Code kills a hook at its timeout; FAKE_CLAUDE_HOOK_TIMEOUT_MS makes that come sooner.
+    const timeout = Number(process.env.FAKE_CLAUDE_HOOK_TIMEOUT_MS) || (hook.timeout ?? 60) * 1000;
+    // The kill goes to the hook's process group: a /bin/sh that forks its command
+    // (dash, on Linux) would otherwise leave the hook running with its output open.
+    const child = spawn("/bin/sh", ["-c", hook.command], { detached: true });
+    const kill = () => {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    };
+    const timer = setTimeout(kill, timeout);
+    process.on("exit", kill);
+    let out = "";
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+    });
+    child.on("close", (status, signal) => {
+      clearTimeout(timer);
+      process.off("exit", kill);
+      out = out.trim();
+      console.log(
+        `FAKE-CLAUDE hook PermissionRequest exit=${status}${signal ? ` signal=${signal}` : ""} ms=${Date.now() - started}${out ? ` out=${out}` : ""}`,
+      );
+      try {
+        const decision = JSON.parse(out).hookSpecificOutput?.decision;
+        if (decision?.behavior) resolve(decision);
+      } catch {
+        // No decision: the dialog decides.
+      }
+    });
+    child.stdin.end(
+      JSON.stringify({
+        session_id: sessionId,
+        transcript_path: transcript,
+        cwd: process.cwd(),
+        hook_event_name: "PermissionRequest",
+        tool_name,
+        tool_input: {},
+      }),
+    );
+  });
 }
 
 function toolUse(tool_name, tool_input, tool_response = {}) {
@@ -178,6 +233,9 @@ async function modelTurn(prompt, subagentModel) {
 console.log(`FAKE-CLAUDE args=${JSON.stringify(args)}`);
 console.log(`FAKE-CLAUDE mcp=${mcpConfig ?? ""}`);
 console.log(`FAKE-CLAUDE agent=${process.env.SWITCHBOARD_AGENT_ID ?? ""}`);
+// What a parent Claude Code session would have left in the environment.
+const PARENT_ENV = ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID"];
+console.log(`FAKE-CLAUDE parent=${JSON.stringify(PARENT_ENV.filter((name) => process.env[name] !== undefined))}`);
 console.log(`FAKE-CLAUDE session=${sessionId}`);
 runHooks("SessionStart", { source: flagValue("--resume") ? "resume" : "startup" });
 // Bracketed paste on, as Claude Code does once its prompt is up.
@@ -269,16 +327,23 @@ async function answer(command) {
   }
   const permission = /^permission (\w+)$/.exec(command);
   if (permission) {
-    runHooks("PermissionRequest", { tool_name: permission[1], tool_input: {} });
+    const decided = permissionDecision(permission[1]).then((decision) => ({ decision }));
     console.log(`FAKE-CLAUDE asking permission for ${permission[1]}`);
     doing = "dialog";
-    // The next line answers it, whatever it is.
-    const reply = await new Promise((resolve) => {
+    // The next line answers it, whatever it is, unless the hook decides first.
+    const typed = new Promise((resolve) => {
       dialogAnswer = resolve;
-    });
+    }).then((reply) => ({ reply }));
+    const answer = await Promise.race([decided, typed]);
+    dialogAnswer = null;
     doing = "nothing";
-    toolUse(permission[1], {}, {});
-    console.log(`FAKE-CLAUDE permission answered ${JSON.stringify(reply.trim())}`);
+    if (answer.decision) {
+      const { behavior, message } = answer.decision;
+      console.log(`FAKE-CLAUDE permission ${behavior} by hook message=${JSON.stringify(message ?? "")}`);
+    } else {
+      toolUse(permission[1], {}, {});
+      console.log(`FAKE-CLAUDE permission answered ${JSON.stringify(answer.reply.trim())}`);
+    }
   }
   const model = /^model (.*)$/.exec(command);
   if (model) await modelTurn(model[1]);

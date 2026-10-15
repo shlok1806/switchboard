@@ -54,14 +54,26 @@ export const DEFAULT_PROXY_SETTING: ProxySetting = DEFAULT_PROXY_MODE;
  * ANTHROPIC_BASE_URL from the environment, else from the Person's Claude Code
  * settings, else undefined (the Anthropic API).
  */
-export async function originalBaseUrl(env: NodeJS.ProcessEnv, claudeConfigDir: string): Promise<string | undefined> {
-  if (env.ANTHROPIC_BASE_URL) return env.ANTHROPIC_BASE_URL;
+export function originalBaseUrl(env: NodeJS.ProcessEnv, claudeConfigDir: string): Promise<string | undefined> {
+  return claudeEnvSetting(env, claudeConfigDir, "ANTHROPIC_BASE_URL");
+}
+
+/**
+ * A Claude Code environment setting as the Person set it: from the environment,
+ * else from the `env` of their Claude Code settings, else undefined.
+ */
+export async function claudeEnvSetting(
+  env: NodeJS.ProcessEnv,
+  claudeConfigDir: string,
+  name: string,
+): Promise<string | undefined> {
+  if (env[name]) return env[name];
   try {
     const settings = JSON.parse(await readFile(join(claudeConfigDir, "settings.json"), "utf8")) as {
       env?: Record<string, unknown>;
     };
-    const url = settings.env?.ANTHROPIC_BASE_URL;
-    return typeof url === "string" && url !== "" ? url : undefined;
+    const value = settings.env?.[name];
+    return typeof value === "string" && value !== "" ? value : undefined;
   } catch {
     return undefined;
   }

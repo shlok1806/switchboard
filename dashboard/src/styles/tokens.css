@@ -1,69 +1,145 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Workbench (app shell) · theme: custom (Still)
- * vibe: "calm, low-glare workspace, one soft indigo signal"
- * paper oklch(98.4% 0.003 255) · accent oklch(52% 0.12 266) indigo · Geist + Geist Mono
- * axes: light / grotesk-sans / cool · nav: top tabs + ⌘K (app), bottom tab bar on phones · footer: none (app)
- * tone: calm, utilitarian · anchor hue: indigo 266
- * pre-emit critique: P4 H5 E4 S4 R5 V4
+/*
+ * Switchboard's design system (ADR 0016). Every colour, size, radius and
+ * elevation the Dashboard uses is a token here, and the canvas (docs/canvas-design-spec.md)
+ * inherits the same tokens: an Agent node is a surface, a Task frame is an inset field,
+ * an edge is an ink line, and a node's state is one of the status tokens below.
  *
- * Switchboard's tokens. They override Beautiful UI's foundation tokens and feed
- * shadcn/ui's variable names, so every vendored component picks them up.
- * Light is a soft near-white, never #fff on #000 text; dark is a quiet slate,
- * never #000. Chroma stays low everywhere except the one accent and the status
- * hues, which are muted so nothing glows.
+ * Direction: "the quiet instrument" (tasteskill v2). Navy ink on white, one tangerine
+ * action per screen, one typeface, surfaces separated by a tone step instead of a rule,
+ * and no shadow on anything at rest. (taste-skill-ignore: prose)
+ *
+ * Layers, in order:
+ *   1. primitives    raw colours; nothing outside this file names them
+ *   2. roles         page, surface, ink, line, accent, action
+ *   3. status        agent states, Task columns, meters (shared by board and canvas)
+ *   4. identity      one hue per agent CLI
+ *   5. canvas        node, frame and edge roles for the coming canvas
+ *   6. scales        type, radius, elevation, motion, layout, z-index
  */
 
 :root {
-  /* surfaces */
-  --page: oklch(98.4% 0.003 255);
-  --canvas: oklch(96.6% 0.004 255);
-  --surface: oklch(99.7% 0.001 255);
-  --inset: oklch(97.4% 0.004 255);
-  --hover: oklch(95.9% 0.005 255);
-  --hover-2: oklch(93.8% 0.007 255);
-  --field: oklch(99.7% 0.001 255);
+  /* ── 1. primitives ───────────────────────────────────────── */
+  --navy-950: #141c33;
+  --navy-900: #1f2b4d;
+  --navy-800: #2e3a5c;
+  --navy-700: #3d4868;
+  --navy-600: #545d79;
+  --navy-500: #6a7186;
+  --navy-400: #8b91a3;
+  --navy-signal: #2f4c8c;
+  --stone-0: #ffffff;
+  --stone-50: #f7f7f5;
+  --stone-100: #f1f1ee;
+  --stone-200: #e8e7e3;
+  --stone-300: #dddcd6;
+  --tangerine: #f7941d;
+  --tangerine-hover: #ec8710;
+  --tangerine-deep: #a85406;
 
-  /* ink: soft charcoal, not black */
-  --ink: oklch(28% 0.014 260);
-  --ink-2: oklch(45% 0.013 260);
-  --ink-3: oklch(52.5% 0.012 260);
-  --ink-4: oklch(64% 0.009 260);
+  /* ── 2. roles ───────────────────────────────────────────── */
+  /* surfaces: white ground, one warm tone step for panels, white again on a panel */
+  --page: var(--stone-0);
+  --canvas: var(--stone-50);
+  --surface: var(--stone-0);
+  --inset: var(--stone-50);
+  --hover: var(--stone-100);
+  --hover-2: var(--stone-200);
+  --field: var(--stone-0);
 
-  /* rules */
-  --line: oklch(92.4% 0.005 255);
-  --line-strong: oklch(87.5% 0.008 255);
-  --line-soft: oklch(95% 0.004 255);
+  /* ink: navy, never black; grey is for secondary notes only */
+  --ink: var(--navy-900);
+  --ink-2: var(--navy-700);
+  --ink-3: var(--navy-600);
+  --ink-4: var(--navy-400);
+
+  /* the empty part of a meter or progress bar: a full step darker than a panel */
+  --track: var(--stone-300);
+
+  /* lines: only real tables and form fields draw one */
+  --line: var(--stone-200);
+  --line-strong: var(--stone-300);
+  --line-soft: var(--stone-100);
   --stripe: transparent;
   --stripe-bg: var(--page);
 
-  /* the one signal */
-  --accent: oklch(52% 0.12 266);
-  --accent-ink: oklch(47% 0.12 266);
-  --accent-tint: oklch(95.4% 0.02 266);
-  --on-accent: oklch(98.6% 0.004 266);
+  /* signal: selection, focus, links and "queued" - a stronger shade of the ink, not a second accent */
+  --accent: var(--navy-signal);
+  --accent-ink: var(--navy-signal);
+  --accent-tint: #eceff5;
+  --on-accent: #ffffff;
 
-  /* status: muted, and at least 4.5:1 as text on every light surface, hover and tint */
-  --green: oklch(47% 0.1 155);
-  --green-tint: oklch(95.6% 0.022 155);
-  --orange: oklch(50% 0.11 62);
-  --orange-tint: oklch(95.8% 0.03 75);
-  --red: oklch(50% 0.14 25);
-  --red-tint: oklch(96% 0.018 22);
+  /* action: tangerine, on the one primary control of a screen and nowhere else */
+  --action: var(--tangerine);
+  --action-hover: var(--tangerine-hover);
+  --on-action: var(--navy-950);
 
-  /* Verdict options */
-  --verdict-drop: oklch(85% 0.008 257);
-  --verdict-queue: oklch(62% 0.1 266);
-  --verdict-interrupt: oklch(70% 0.12 62);
+  /* ── 3. status ──────────────────────────────────────────── */
+  /* text-safe (4.5:1 on page, inset and their tint) */
+  --green: #1c6e45;
+  --green-tint: #e8f3ec;
+  --orange: #8f5a06;
+  --orange-tint: #fbf2e0;
+  --red: #b0281f;
+  --red-tint: #fcebe9;
+  --on-red: #ffffff;
 
-  --tooltip-bg: oklch(28% 0.014 260);
-  --tooltip-fg: oklch(97% 0.003 255);
-  --tooltip-muted: oklch(80% 0.01 256);
-  --tooltip-border: oklch(34% 0.014 260);
+  /* Agent states (CONTEXT.md Presence, and the canvas spec's lifecycle). The dot carries the state. */
+  --state-live: var(--green);
+  --state-needs: var(--tangerine-deep);
+  --state-needs-dot: var(--tangerine);
+  --state-idle: var(--ink-4);
+  --state-gone: var(--ink-4);
+  --state-queued: var(--accent);
+  --state-errored: var(--red);
+  --state-stale: var(--red);
+  --state-done: var(--green);
+  --state-review: var(--orange);
 
-  --shadow-hairline: 0 0 0 1px var(--line);
-  --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 1px oklch(28% 0.014 260 / 0.04);
-  --shadow-card: 0 0 0 1px var(--line), 0 1px 2px oklch(28% 0.014 260 / 0.035);
-  --shadow-raised: 0 0 0 1px var(--line), 0 6px 18px oklch(28% 0.014 260 / 0.08);
-  --shadow-overlay: 0 0 0 1px var(--line-strong), 0 14px 36px oklch(28% 0.014 260 / 0.12);
+  /* Verdicts */
+  --verdict-drop: var(--navy-400);
+  --verdict-queue: var(--accent);
+  --verdict-interrupt: var(--tangerine);
+
+  /* ── 4. identity: one hue per agent CLI ─────────────────── */
+  --cli-claude: #b9572f;
+  --cli-codex: #11765a;
+  --cli-gemini: #3767c9;
+  --cli-other: var(--ink-3);
+
+  /* ── 5. canvas roles ────────────────────────────────────── */
+  --canvas-bg: var(--canvas);
+  --canvas-grid: var(--stone-300);
+  --node-bg: var(--surface);
+  --node-selected: var(--accent);
+  --frame-bg: color-mix(in srgb, var(--hover) 70%, transparent);
+  --frame-label: var(--ink-3);
+  --edge: var(--ink-4);
+  --edge-active: var(--accent);
+  --edge-conflict: var(--red);
+
+  /* State shapes: a node's state never rides on colour alone (stale red and review
+     amber collide for deuteranopia). Each shape is a clip-path for a square dot;
+     a ring (Open, Gone) is a border, not a shape. */
+  --shape-circle: circle(50% at 50% 50%);
+  --shape-stale: polygon(50% 0%, 100% 100%, 0% 100%);
+  --shape-review: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  --shape-needs: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+  --shape-errored: polygon(20% 0%, 80% 0%, 100% 20%, 100% 80%, 80% 100%, 20% 100%, 0% 80%, 0% 20%);
+
+  /* tooltips sit on navy in both themes */
+  --tooltip-bg: var(--navy-900);
+  --tooltip-fg: #f4f5f8;
+  --tooltip-muted: #b9bfcd;
+  --tooltip-border: var(--navy-900);
+
+  /* ── 6. scales ──────────────────────────────────────────── */
+  /* elevation: flat at rest; only what floats (menus, dialogs, toasts, a dragged card) casts a shadow (taste-skill-ignore: prose) */
+  --shadow-float: 0 1px 2px rgb(20 28 51 / 0.06), 0 12px 32px rgb(20 28 51 / 0.14);
+  --shadow-hairline: none;
+  --shadow-btn: none;
+  --shadow-card: none;
+  --shadow-raised: none;
+  --shadow-overlay: var(--shadow-float);
   --shadow-inset-field: none;
 
   /* shadcn/ui variable names, pointed at ours */
@@ -73,8 +149,8 @@
   --card-foreground: var(--ink);
   --popover: var(--surface);
   --popover-foreground: var(--ink);
-  --primary: var(--accent);
-  --primary-foreground: var(--on-accent);
+  --primary: var(--action);
+  --primary-foreground: var(--on-action);
   --secondary: var(--inset);
   --secondary-foreground: var(--ink);
   --muted: var(--inset);
@@ -83,13 +159,11 @@
   --border: var(--line);
   --input: var(--line-strong);
   --ring: var(--accent);
-  --radius: 8px;
+  --radius: 4px;
 
-  /* type: one sans for everything, a mono for IDs */
-  --font-sans-face: "Geist Variable";
-  --font-mono-face: "Geist Mono Variable";
-  /* Beautiful UI's foundation reads --font-inter for its sans stack */
-  --font-inter: var(--font-sans-face);
+  /* type: one family; a monospace face only inside real code */
+  --font-sans-face: "Albert Sans Variable";
+  --font-mono-face: "Geist Mono Variable"; /* taste-skill-ignore: the face for literal code only */
 
   /* motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -97,63 +171,135 @@
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --dur-fast: 120ms;
   --dur-base: 200ms;
+  --dur-slow: 320ms;
 
   /* layout */
-  --header-h: 52px;
-  --tabbar-h: calc(56px + env(safe-area-inset-bottom));
+  --header-h: 56px;
+  --tabbar-h: calc(60px + env(safe-area-inset-bottom));
+  --gutter: 16px;
+  --column: 46rem;
 
   color-scheme: light;
 }
 
+@media (min-width: 640px) {
+  :root {
+    --gutter: 24px;
+  }
+}
+
 .dark {
-  --page: oklch(20.5% 0.009 260);
-  --canvas: oklch(19% 0.009 260);
-  --surface: oklch(23.2% 0.01 260);
-  --inset: oklch(21.8% 0.009 260);
-  --hover: oklch(26% 0.011 260);
-  --hover-2: oklch(29.5% 0.012 260);
-  --field: oklch(23.2% 0.01 260);
+  --page: #0c0f16;
+  --canvas: #10141c;
+  --surface: #161b26;
+  --inset: #131823;
+  --hover: #1b2130;
+  --hover-2: #242b3b;
+  --field: #10141c;
 
-  --ink: oklch(91% 0.006 255);
-  --ink-2: oklch(76% 0.01 256);
-  --ink-3: oklch(64% 0.011 257);
-  --ink-4: oklch(54% 0.011 257);
+  --ink: #e8ebf2;
+  --ink-2: #c3c8d5;
+  --ink-3: #98a0b3;
+  --ink-4: #697189;
 
-  --line: oklch(29.5% 0.011 260);
-  --line-strong: oklch(35.5% 0.013 260);
-  --line-soft: oklch(26.5% 0.01 260);
+  --line: #262d3c;
+  --line-strong: #323a4c;
+  --line-soft: #1c2230;
 
-  --accent: oklch(70% 0.1 266);
-  --accent-ink: oklch(78% 0.08 266);
-  --accent-tint: oklch(70% 0.1 266 / 0.15);
-  --on-accent: oklch(20% 0.02 266);
+  --accent: #93abe6;
+  --accent-ink: #a9bdf0;
+  --accent-tint: rgb(147 171 230 / 0.14);
+  --on-accent: #0c0f16;
 
-  --green: oklch(74% 0.1 155);
-  --green-tint: oklch(74% 0.1 155 / 0.13);
-  --orange: oklch(78% 0.1 70);
-  --orange-tint: oklch(78% 0.1 70 / 0.13);
-  --red: oklch(71% 0.12 25);
-  --red-tint: oklch(71% 0.12 25 / 0.14);
+  --action: var(--tangerine);
+  --action-hover: #ffa53a;
+  --on-action: #1a1206;
 
-  --verdict-drop: oklch(40% 0.01 257);
-  --verdict-queue: oklch(66% 0.09 266);
-  --verdict-interrupt: oklch(74% 0.1 66);
+  --green: #67c792;
+  --green-tint: rgb(103 199 146 / 0.13);
+  --orange: #e5b45f;
+  --orange-tint: rgb(229 180 95 / 0.13);
+  --red: #f4808c;
+  --red-tint: rgb(244 128 140 / 0.13);
+  --on-red: #1a0b0d;
 
-  --tooltip-bg: oklch(30% 0.012 260);
-  --tooltip-fg: oklch(93% 0.005 255);
-  --tooltip-muted: oklch(76% 0.01 256);
-  --tooltip-border: oklch(38% 0.013 260);
+  --state-needs: #ffad4d;
+  --verdict-drop: #5d6680;
+  --track: #343c4f;
 
-  --shadow-hairline: 0 0 0 1px var(--line);
-  --shadow-btn: 0 0 0 1px oklch(100% 0 0 / 0.08), 0 1px 2px oklch(0% 0 0 / 0.25);
-  --shadow-card: 0 0 0 1px oklch(100% 0 0 / 0.06), 0 1px 2px oklch(0% 0 0 / 0.2);
-  --shadow-raised: 0 0 0 1px oklch(100% 0 0 / 0.08), 0 6px 18px oklch(0% 0 0 / 0.28);
-  --shadow-overlay: 0 0 0 1px oklch(100% 0 0 / 0.1), 0 14px 36px oklch(0% 0 0 / 0.4);
+  --cli-claude: #e08a64;
+  --cli-codex: #4cc39d;
+  --cli-gemini: #7da2f0;
+
+  --canvas-grid: #262d3c;
+
+  --tooltip-bg: #e8ebf2;
+  --tooltip-fg: #141c33;
+  --tooltip-muted: #4b5470;
+  --tooltip-border: #e8ebf2;
+
+  --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.06), 0 16px 40px rgb(0 0 0 / 0.5);
 
   color-scheme: dark;
 }
 
 @theme inline {
+  --color-page: var(--page);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-inset: var(--inset);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-hover: var(--hover);
+  --color-hover-2: var(--hover-2);
+  --color-field: var(--field);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-soft: var(--line-soft);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-tint: var(--accent-tint);
+  --color-on-accent: var(--on-accent);
+  --color-action: var(--action);
+  --color-action-hover: var(--action-hover);
+  --color-on-action: var(--on-action);
+  --color-green: var(--green);
+  --color-green-tint: var(--green-tint);
+  --color-orange: var(--orange);
+  --color-orange-tint: var(--orange-tint);
+  --color-red: var(--red);
+  --color-red-tint: var(--red-tint);
+  --color-on-red: var(--on-red);
+  --color-state-live: var(--state-live);
+  --color-state-needs: var(--state-needs);
+  --color-state-needs-dot: var(--state-needs-dot);
+  --color-state-idle: var(--state-idle);
+  --color-state-gone: var(--state-gone);
+  --color-state-queued: var(--state-queued);
+  --color-state-errored: var(--state-errored);
+  --color-state-stale: var(--state-stale);
+  --color-state-done: var(--state-done);
+  --color-state-review: var(--state-review);
+  --color-canvas-bg: var(--canvas-bg);
+  --color-canvas-grid: var(--canvas-grid);
+  --color-node-bg: var(--node-bg);
+  --color-node-selected: var(--node-selected);
+  --color-frame-bg: var(--frame-bg);
+  --color-frame-label: var(--frame-label);
+  --color-edge: var(--edge);
+  --color-edge-active: var(--edge-active);
+  --color-edge-conflict: var(--edge-conflict);
+  --color-verdict-drop: var(--verdict-drop);
+  --color-track: var(--track);
+  --color-verdict-queue: var(--verdict-queue);
+  --color-verdict-interrupt: var(--verdict-interrupt);
+  --color-cli-claude: var(--cli-claude);
+  --color-cli-codex: var(--cli-codex);
+  --color-cli-gemini: var(--cli-gemini);
+  --color-cli-other: var(--cli-other);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -170,18 +316,43 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-on-accent: var(--on-accent);
-  --color-ink-4: var(--ink-4);
-  --color-line-soft: var(--line-soft);
-  --color-verdict-drop: var(--verdict-drop);
-  --color-verdict-queue: var(--verdict-queue);
-  --color-verdict-interrupt: var(--verdict-interrupt);
 
   --font-sans: var(--font-sans-face), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-mono-face), ui-monospace, "SF Mono", monospace;
+  --font-mono: var(--font-mono-face), ui-monospace, "SF Mono", monospace; /* taste-skill-ignore: the face for literal code only */
 
+  /* five type steps: small, body, lead, title, display */
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.45;
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.5;
+  --text-lead: 1.0625rem;
+  --text-lead--line-height: 1.4;
+  --text-title: 1.5rem;
+  --text-title--line-height: 1.2;
+  --text-title--letter-spacing: -0.02em;
+  --text-display: 2rem;
+  --text-display--line-height: 1.1;
+  --text-display--letter-spacing: -0.035em;
+  /* the vendored shadcn parts speak in xs/sm/base; map them onto the same steps */
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-base: 0.9375rem;
+
+  /* one corner radius for every box and control; dots and avatars are round */
+  --radius-xs: 4px;
   --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  --radius-md: 4px;
+  --radius-lg: 4px;
+  --radius-xl: 4px;
+  --radius-2xl: 4px;
+
+  --shadow-hairline: var(--shadow-hairline);
+  --shadow-btn: var(--shadow-btn);
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-overlay: var(--shadow-overlay);
+  --shadow-inset-field: var(--shadow-inset-field);
+  --shadow-float: var(--shadow-float);
+  --shadow-md: var(--shadow-float);
+  --shadow-lg: var(--shadow-float);
 }

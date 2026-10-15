@@ -2,7 +2,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const statusPillVariants = cva(
-  "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium leading-none",
+  "inline-flex h-6 items-center gap-1.5 rounded-sm px-2 text-small font-medium leading-none whitespace-nowrap",
   {
     variants: {
       tone: {
@@ -10,7 +10,7 @@ const statusPillVariants = cva(
         orange: "bg-orange-tint text-orange",
         red: "bg-red-tint text-red",
         accent: "bg-accent-tint text-accent-ink",
-        neutral: "bg-inset text-ink-2",
+        neutral: "bg-hover text-ink-2",
       },
     },
     defaultVariants: { tone: "neutral" },
@@ -25,7 +25,7 @@ const dotColor: Record<Tone, string> = {
   orange: "bg-orange",
   red: "bg-red",
   accent: "bg-accent",
-  neutral: "bg-ink-3",
+  neutral: "bg-state-idle",
 };
 
 export function StatusPill({

@@ -15,13 +15,13 @@ export function SegmentedControl<T extends string>({
   const index = options.indexOf(value);
   return (
     <div
-      className={`relative inline-grid h-8 select-none rounded-[7px] bg-line/60 p-0.5 ${className}`}
+      className={`relative inline-grid h-9 select-none rounded-md bg-hover p-0.5 ${className}`}
       style={{ gridTemplateColumns: `repeat(${options.length}, 1fr)` }}
       role="tablist"
     >
       <span
         aria-hidden
-        className="absolute inset-y-0.5 rounded-[5px] bg-surface shadow-hairline
+        className="absolute inset-y-0.5 rounded-sm bg-surface
           transition-transform duration-200"
         style={{
           width: `calc((100% - 4px) / ${options.length})`,
@@ -36,7 +36,7 @@ export function SegmentedControl<T extends string>({
           role="tab"
           aria-selected={opt === value}
           onClick={() => onChange(opt)}
-          className={`relative z-10 rounded-[5px] px-3 text-[13px] font-medium
+          className={`relative z-10 rounded-sm px-3 text-small font-medium focus-visible:outline-2 focus-visible:outline-accent
             transition-colors duration-150
             ${opt === value ? "text-ink" : "text-ink-3 hover:text-ink-2"}`}
         >

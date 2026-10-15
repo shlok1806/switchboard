@@ -57,13 +57,13 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
       }}
       aside={
         mode === "Directive" ? (
-          <label className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-3" onClick={(e) => e.stopPropagation()}>
+          <label className="flex min-w-0 items-center gap-1.5 text-small text-ink-3" onClick={(e) => e.stopPropagation()}>
             To
             <select
               value={to}
               onChange={(e) => setTo(e.target.value as AgentId)}
               aria-label="Directive target Agent"
-              className="h-7 max-w-full min-w-0 truncate rounded-md border border-line bg-surface px-1.5 font-mono text-[12.5px] text-ink"
+              className="h-8 max-w-full min-w-0 truncate rounded-md border border-line-strong bg-field px-2 text-small text-ink tabular-nums"
             >
               {reachable.map((a) => (
                 <option key={a.id} value={a.id}>
@@ -77,7 +77,7 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
       footer={
         <Tooltip>
           <TooltipTrigger asChild>
-            <span tabIndex={0} className="inline-grid size-7 place-items-center rounded-md text-ink-4 hover:text-ink-2" aria-label="Who hears this">
+            <span tabIndex={0} className="inline-grid size-8 place-items-center rounded-md text-ink-3 transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Who hears this">
               <Info className="size-4" aria-hidden />
             </span>
           </TooltipTrigger>

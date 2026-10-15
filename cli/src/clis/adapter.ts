@@ -87,8 +87,22 @@ export interface CliAdapter {
    * prompt at its idle prompt was seen to start a turn with the real CLI.
    */
   wakes: boolean;
+  /**
+   * Whether the wrapper holds this CLI's PermissionRequest hook, so the Agent's own
+   * Person may deny its permission prompt from the Channel (ADR 0014): true only
+   * where the CLI's own dialog stays answerable while the hook waits, as Claude
+   * Code's was seen to.
+   */
+  remoteDeny: boolean;
   /** Whether the Proxy Capture can read this CLI's model traffic. */
   proxy: boolean;
+  /**
+   * What this CLI sets in its own child processes' environment to describe the
+   * session they run in. `switchboard run` always starts a new top-level session, so
+   * when it runs inside another session (an Agent starting an Agent) the wrapper
+   * removes these from the CLI's environment instead of passing the parent's on.
+   */
+  parentEnv?: readonly string[];
   /**
    * Where this session's model traffic goes without Switchboard, and in which API
    * format; or why the Proxy Capture cannot read it (another model provider, say),

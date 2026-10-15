@@ -1,12 +1,16 @@
 // The per-session Claude Code settings the wrapper passes with --settings, and
 // how a hook's input becomes small Hook Events.
 
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { claude } from "../src/clis/claude";
+import type { HookCapture } from "../src/hooks/capture";
 import { HookSummarizer, SWITCHBOARD_TOOL, shortCommand } from "../src/hooks/summarize";
+import type { SessionTools } from "../src/mcp-config";
 import { MCP_SERVER_NAME } from "../src/mcp-server";
+import { anthropicMessages } from "../src/proxy/anthropic";
 import { applySessionSettings, mergeSettings } from "../src/session-settings";
 
 const hook = (command: string) => ({ type: "command" as const, command });
@@ -102,5 +106,42 @@ describe("summarizing hooks", () => {
     expect(post("Bash", {})).toEqual([{ type: "tool.call", payload: { tool: "Bash", arg: "", ok: true } }]);
     // The pattern follows the server's name.
     expect(SWITCHBOARD_TOOL.test(`mcp__${MCP_SERVER_NAME}__x`)).toBe(true);
+  });
+});
+
+describe("Claude Code's proxy settings", () => {
+  // What `install` gives Claude Code for its environment, in both places it reads it.
+  async function proxyEnv(upstream: string, env: NodeJS.ProcessEnv = {}, personSettings?: object) {
+    const dir = await mkdtemp(join(tmpdir(), "switchboard-claude-"));
+    const configDir = join(dir, "claude-config");
+    await mkdir(configDir);
+    if (personSettings) await writeFile(join(configDir, "settings.json"), JSON.stringify(personSettings));
+    const installed = await claude.install({
+      args: [],
+      dir,
+      cwd: dir,
+      env: { ...env, CLAUDE_CONFIG_DIR: configDir },
+      hooks: { settings: () => ({}) } as unknown as HookCapture,
+      tools: { dir, server: { name: "switchboard", command: "node", args: [], env: {} } } as unknown as SessionTools,
+      proxyUrl: "http://127.0.0.1:1234",
+      proxyRoute: { api: anthropicMessages, upstream },
+    });
+    const settings = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as { env: Record<string, string> };
+    expect(settings.env).toEqual(installed.env);
+    return installed.env;
+  }
+
+  it("keeps tool search on for a session bound for the Anthropic API", async () => {
+    expect(await proxyEnv(anthropicMessages.defaultUpstream)).toEqual({
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:1234",
+      ENABLE_TOOL_SEARCH: "true",
+    });
+  });
+
+  it("leaves tool search alone behind the Person's own gateway, or when they set it", async () => {
+    expect(await proxyEnv("https://gateway.example")).toEqual({ ANTHROPIC_BASE_URL: "http://127.0.0.1:1234" });
+    const own = { ANTHROPIC_BASE_URL: "http://127.0.0.1:1234" };
+    expect(await proxyEnv(anthropicMessages.defaultUpstream, { ENABLE_TOOL_SEARCH: "false" })).toEqual(own);
+    expect(await proxyEnv(anthropicMessages.defaultUpstream, {}, { env: { ENABLE_TOOL_SEARCH: "auto" } })).toEqual(own);
   });
 });

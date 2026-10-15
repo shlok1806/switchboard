@@ -53,7 +53,7 @@ export const Banner = ({
       <div
         className={cn(
           "flex w-full items-center justify-between gap-2 bg-primary px-4 py-2 text-primary-foreground",
-          inset && "rounded-lg",
+          inset && "rounded-md",
           className
         )}
         {...props}
@@ -75,7 +75,7 @@ export const BannerIcon = ({
 }: BannerIconProps) => (
   <div
     className={cn(
-      "rounded-full border border-background/20 bg-background/10 p-1 shadow-sm",
+      "rounded-full bg-background/10 p-1",
       className
     )}
     {...props}

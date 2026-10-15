@@ -32,12 +32,12 @@ export function subtaskProgress(t: Task) {
 /** "3/5 steps" with a rolling numerator. */
 export function Progress({ done, total, noun }: { done: number; total: number; noun: string }) {
   return (
-    <span className="inline-flex items-baseline gap-1 font-mono text-[11.5px] font-normal whitespace-nowrap tabular-nums text-ink-2">
+    <span className="inline-flex items-baseline gap-1 text-small font-medium whitespace-nowrap tabular-nums text-ink-2">
       <span className="inline-flex items-baseline">
         <span className="tabular-nums">{done}</span>
         <span>/{total}</span>
       </span>
-      <span className="font-sans text-ink-3">{noun}</span>
+      <span className="font-normal text-ink-3">{noun}</span>
     </span>
   );
 }

@@ -37,6 +37,15 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   // A permission prompt waits for the Agent's own Person, not for other Agents (ADR 0013).
   "approval.pending",
   "approval.closed",
+  "approval.denied",
+  // Starting and stopping Agents, and Hosts coming and going (ADR 0015): about machines, not work.
+  // A brief is its Person's words to the one Agent it starts, never relayed to others.
+  "agent.spawn",
+  "agent.spawned",
+  "agent.spawn.failed",
+  "agent.stop",
+  "host.online",
+  "host.offline",
   "session.start",
   "session.end",
   "claim.refused",

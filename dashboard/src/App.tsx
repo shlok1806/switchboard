@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronRight, Radio } from "lucide-react";
-import { AccountMenu, ConnectionDot, SearchButton, TabBar, ViewTabs } from "@/components/shell/nav";
+import { AlertTriangle, ChevronLeft } from "lucide-react";
+import { AccountMenu, ConnectionDot, Mark, SearchButton, TabBar, ViewTabs } from "@/components/shell/nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -9,7 +9,6 @@ import { Banner, BannerAction, BannerClose, BannerIcon, BannerTitle } from "@/co
 import LoadingState from "@/components/primitives/LoadingState";
 import { Button } from "@/components/atoms/Button";
 import { CommandPalette } from "@/components/domain/palette";
-import { AccountsPanel } from "@/components/domain/usage";
 import { useChannel, useIndex, useStore } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { DOWNGRADE_LABEL, prob } from "@/lib/format";
@@ -28,7 +27,7 @@ function ViewFallback() {
   return (
     <div className="flex flex-col gap-2 p-4" aria-busy="true">
       {[0, 1, 2, 3, 4].map((i) => (
-        <Skeleton key={i} className="h-11 rounded-lg bg-hover" />
+        <Skeleton key={i} className="h-11 bg-inset" />
       ))}
     </div>
   );
@@ -67,19 +66,19 @@ function StaleBanner() {
   if (!stale.length) return null;
   const first = stale[0];
   return (
-    <Banner className="gap-3 border-b border-line bg-red-tint px-4 py-1.5 text-red" key={stale.map((t) => t.number).join()}>
+    <Banner className="gap-3 bg-red-tint px-[var(--gutter)] py-1.5 text-red" key={stale.map((t) => t.number).join()}>
       <BannerIcon icon={AlertTriangle} className="border-0 bg-transparent p-0 text-red" />
-      <BannerTitle className="min-w-0 truncate text-[13px] font-medium">
+      <BannerTitle className="min-w-0 truncate text-small font-medium">
         {stale.length === 1 ? `#${first.number} has a Stale Claim` : `${stale.length} Stale Claims`}
       </BannerTitle>
       <BannerAction
         variant="ghost"
-        className="h-7 px-2.5 text-[13px] text-red hover:bg-red/10 hover:text-red"
+        className="h-8 px-3 text-small font-medium text-red hover:bg-red/10 hover:text-red"
         onClick={() => go(stale.length === 1 ? { view: "task", number: first.number } : { view: "tasks" })}
       >
         Review
       </BannerAction>
-      <BannerClose variant="ghost" className="size-7 text-red hover:bg-red/10 hover:text-red" />
+      <BannerClose variant="ghost" className="size-8 text-red hover:bg-red/10 hover:text-red" />
     </Banner>
   );
 }
@@ -96,22 +95,24 @@ function Loading() {
   );
 }
 
-/** Where you are, when you are inside a Task or an Agent. */
+/** Where you are, when you are inside a Task or an Agent: the way back, on the content's left edge. */
 function Crumb({ route, taskTitle }: { route: Route; taskTitle?: string }) {
   if (route.view !== "task" && route.view !== "agent") return null;
   const parent = route.view === "task" ? { label: "Board", to: href({ view: "tasks" }) } : { label: "Agents", to: href({ view: "agents" }) };
   return (
-    <nav aria-label="Breadcrumb" className="flex h-10 shrink-0 items-center gap-1.5 border-b border-line px-4 text-[13px] sm:px-6">
-      <a href={parent.to} className="text-ink-3 hover:text-ink">
+    // The same box as the detail views (max-w-6xl, gutter inside), so the crumb starts on their column.
+    <nav aria-label="Breadcrumb" className="mx-auto flex h-10 w-full max-w-6xl shrink-0 items-center gap-1.5 px-[var(--gutter)] text-small">
+      <a href={parent.to} className="-ml-1 inline-flex items-center gap-1 text-ink-3 transition-colors hover:text-ink">
+        <ChevronLeft className="size-4" aria-hidden />
         {parent.label}
       </a>
-      <ChevronRight className="size-3.5 text-ink-4" aria-hidden />
+      <span aria-hidden className="text-ink-3">/</span>
       {route.view === "task" ? (
-        <span className="min-w-0 truncate text-ink">
-          <span className="font-mono text-ink-3">#{route.number}</span> {taskTitle}
+        <span className="min-w-0 truncate text-ink-2">
+          <span className="tabular-nums">#{route.number}</span> {taskTitle}
         </span>
       ) : (
-        <span className="min-w-0 truncate font-mono text-ink">{route.id}</span>
+        <span className="min-w-0 truncate text-ink-2">{route.id}</span>
       )}
     </nav>
   );
@@ -129,19 +130,19 @@ export default function App() {
   if (state.status === "error")
     return (
       <Center>
-        <div className="flex w-full max-w-sm flex-col gap-4 rounded-xl bg-surface p-6 shadow-raised">
+        <div className="flex w-full max-w-sm flex-col gap-5 rounded-md bg-inset p-6">
           <div className="flex gap-3">
             <AlertTriangle className="mt-0.5 size-5 shrink-0 text-red" aria-hidden />
             <div className="flex min-w-0 flex-col gap-1">
-              <p className="text-[15px] font-medium">Could not reach the Channel</p>
-              <p className="font-mono text-[12px] break-words text-ink-3">{state.error}</p>
+              <p className="text-lead font-medium">Could not reach the Channel</p>
+              <p className="text-small break-words text-ink-3">{state.error}</p>
             </div>
           </div>
           <div className="flex justify-end gap-2">
             <Button size="sm" onClick={() => void signOut()}>
               Sign out
             </Button>
-            <Button size="sm" variant="accent" onClick={() => window.location.reload()}>
+            <Button size="sm" variant="action" onClick={() => window.location.reload()}>
               Try again
             </Button>
           </div>
@@ -154,28 +155,22 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={500}>
       <div className="flex h-dvh flex-col bg-page">
-        <header className="flex h-[var(--header-h)] shrink-0 items-stretch gap-4 border-b border-line bg-surface px-4 sm:px-6">
+        <header className="flex h-[var(--header-h)] shrink-0 items-center gap-6 bg-page px-[var(--gutter)]">
           <a
             href={href({ view: "feed" })}
             aria-label={`Switchboard ${repo}`}
             className="flex min-w-0 items-center gap-2.5"
             title={repo}
           >
-            <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-accent text-on-accent">
-              <Radio className="size-4" aria-hidden />
-            </span>
+            <Mark />
             {/* Between a phone and a wide desk the tabs need the room: the mark alone stays. */}
-            <span className="flex min-w-0 flex-col leading-tight md:hidden lg:flex">
-              <span className="text-[14px] font-semibold tracking-tight">Switchboard</span>
-              <span className="truncate font-mono text-[11px] text-ink-3">{repo}</span>
+            <span className="flex min-w-0 items-baseline gap-2 md:hidden lg:flex">
+              <span className="text-lead font-semibold tracking-[-0.02em] text-ink">Switchboard</span>
+              <span className="truncate text-small text-ink-3 max-[400px]:hidden">{repo}</span>
             </span>
           </a>
-          {!mobile && (
-            <div className="ml-4 shrink-0">
-              <ViewTabs route={route} />
-            </div>
-          )}
-          <div className="ml-auto flex items-center gap-1.5">
+          {!mobile && <ViewTabs route={route} />}
+          <div className="ml-auto flex items-center gap-1">
             <SearchButton onClick={() => setPalette(true)} compact={mobile} />
             <ConnectionDot />
             <AccountMenu />
@@ -183,7 +178,6 @@ export default function App() {
         </header>
         {route.view !== "tasks" && <StaleBanner />}
         <Crumb route={route} taskTitle={route.view === "task" ? taskByNumber.get(route.number)?.title : undefined} />
-        {(route.view === "feed" || route.view === "agents" || route.view === "tasks") && <AccountsPanel />}
         <main className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] md:pb-0">
           <Suspense fallback={<ViewFallback />}>
             {route.view === "feed" && <FeedView selected={route.event} />}

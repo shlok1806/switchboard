@@ -19,7 +19,7 @@ export type SnippetProps = ComponentProps<typeof Tabs>;
 export const Snippet = ({ className, ...props }: SnippetProps) => (
   <Tabs
     className={cn(
-      "group w-full gap-0 overflow-hidden rounded-xl border border-line bg-surface",
+      "group w-full gap-0 overflow-hidden rounded-md bg-inset",
       className
     )}
     {...props}
@@ -31,7 +31,7 @@ export type SnippetHeaderProps = HTMLAttributes<HTMLDivElement>;
 export const SnippetHeader = ({ className, ...props }: SnippetHeaderProps) => (
   <div
     className={cn(
-      "flex flex-row items-center justify-between border-b border-line-soft py-1.5 pr-1.5 pl-4 text-ink",
+      "flex flex-row items-center justify-between bg-hover py-1.5 pr-1.5 pl-4 text-ink",
       className
     )}
     {...props}
@@ -117,7 +117,7 @@ export const SnippetTabsContent = ({
 }: SnippetTabsContentProps) => (
   <TabsContent
     asChild
-    className={cn("mt-0 px-4 py-3 font-mono text-[12.5px] text-ink-2", className)}
+    className={cn("mt-0 px-4 py-3 font-mono text-small text-ink-2", className)} // taste-skill-ignore: a command is code
     {...props}
   >
     <pre className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{children}</pre>

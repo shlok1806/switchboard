@@ -92,6 +92,10 @@ _Avoid_: Bot, worker, model
 The permanent name of an Agent, made of its Person, its CLI and a short form of its session ID, such as `shlok1806/claude/7f3a`. The short form is the session ID's first 4 characters, or its last 4 for Codex, whose session IDs start with the clock. It traces any piece of work back to the exact session that did it.
 _Avoid_: Agent name, handle
 
+**Host**:
+A machine one Person lets the Channel start Agents on, such as `shlok1806/studio`. Its supervisor, `switchboard host run`, runs those Agents in terminals nobody sees and stops them when the Person asks on the Channel. It belongs to exactly one Person, and only that Person's requests run there (ADR 0015).
+_Avoid_: Worker, machine, runner, node
+
 **Presence**:
 Whether an Agent is Live (recently active), Idle (session open, waiting on its Person) or Gone (silent for about ten minutes, or its session ended).
 _Avoid_: Status, online/offline
@@ -125,5 +129,5 @@ _Avoid_: Quota, billing, limits report
 The latest main-session context fullness, automatic compactions when known, first prompt brief, current activity, model and working location, read by the wrapper and sent with each heartbeat (ADR 0012). Separate from cumulative session usage and account limits.
 
 **Pending Approval**:
-A permission prompt an Agent's CLI is waiting on (Codex's approval dialog, Claude Code's permission prompt), as its wrapper reports it: the tool, what it asks for with secrets masked, the CLI's reason and when it opened. The Agent carries it until the prompt closes, which is an `approval.closed` Event. Read-only: it is answered at the Agent's terminal (ADR 0013). A question the CLI asks (AskUserQuestion, a plan to accept) is not one.
+A permission prompt an Agent's CLI is waiting on (Codex's approval dialog, Claude Code's permission prompt), as its wrapper reports it: the tool, what it asks for with secrets masked, the CLI's reason and when it opened. The Agent carries it until the prompt closes, which is an `approval.closed` Event. It is answered at the Agent's terminal (ADR 0013); a Claude Code Agent's own Person may also deny it from the Channel, never approve it (ADR 0014). A question the CLI asks (AskUserQuestion, a plan to accept) is not one.
 _Avoid_: Permission request, approval request

@@ -21,9 +21,11 @@ import type {
   ChannelEvent,
   Cli,
   Delivery,
+  DenyApprovalRequest,
   DirectiveDelivery,
   EventPayloads,
   EventType,
+  HostId,
   LostClaim,
   PendingApproval,
   PersonName,
@@ -34,7 +36,7 @@ import type {
   ReportedUsage,
   StreamMessage,
 } from "../../shared/src/index";
-import { agentIdFor, DEFAULT_PROXY_MODE, sameNickname } from "../../shared/src/index";
+import { agentIdFor, DEFAULT_PROXY_MODE, hostIdFor, sameNickname } from "../../shared/src/index";
 
 type AgentRow = {
   id: string;
@@ -48,6 +50,7 @@ type AgentRow = {
   usage: string | null;
   context: string | null;
   approval: string | null;
+  host: string | null;
   presence: string;
   proxy_mode: string;
   secret_masking: number;
@@ -69,6 +72,7 @@ export const AGENTS_SCHEMA = `
     usage TEXT,
     context TEXT,
     approval TEXT,
+    host TEXT,
     presence TEXT NOT NULL,
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
@@ -82,8 +86,8 @@ export const AGENTS_SCHEMA = `
 export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(AGENTS_SCHEMA);
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
-  // ADR 0012: context. ADR 0013: the pending approval.
-  for (const column of ["account", "model", "effort", "usage", "context", "approval"]) {
+  // ADR 0012: context. ADR 0013: the pending approval. ADR 0015: the Host that runs it.
+  for (const column of ["account", "model", "effort", "usage", "context", "approval", "host"]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
     } catch {
@@ -152,6 +156,7 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.context == null ? {} : { context: JSON.parse(row.context) as AgentContext }),
     ...(row.approval == null ? {} : { approval: JSON.parse(row.approval) as PendingApproval }),
     presence: row.presence as Presence,
+    ...(row.host == null ? {} : { host: row.host as HostId }),
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
     canReceiveInterrupts: row.can_receive_interrupts === 1,
@@ -228,11 +233,13 @@ export class AgentRoster {
     const secretMasking = request.secretMasking === false ? 0 : 1;
     // The wrapper says, every time it registers, whether it can type Interrupts into its CLI.
     const interrupts = request.interrupts === true ? 1 : 0;
+    // Which Host runs the session now: a session resumed in a terminal has none.
+    const host = request.host === undefined ? null : hostIdFor(person, request.host);
     if (existing) {
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
         `UPDATE agents SET nickname = ?, account = ?, model = ?, effort = ?, usage = ?, proxy_mode = ?,
-             secret_masking = ?, can_receive_interrupts = ?, presence = 'live', last_seen_at = ?
+             secret_masking = ?, can_receive_interrupts = ?, host = ?, presence = 'live', last_seen_at = ?
          WHERE id = ?`,
         nickname,
         account,
@@ -242,14 +249,15 @@ export class AgentRoster {
         proxyMode,
         secretMasking,
         interrupts,
+        host,
         now,
         id,
       );
     } else {
       this.host.sql.exec(
-        `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, usage, presence,
+        `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, usage, host, presence,
                              proxy_mode, secret_masking, can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
@@ -259,6 +267,7 @@ export class AgentRoster {
         model,
         effort,
         usage,
+        host,
         request.proxyMode ?? DEFAULT_PROXY_MODE,
         secretMasking,
         interrupts,
@@ -351,6 +360,46 @@ export class AgentRoster {
       const { openedAt: _, ...payload } = approval;
       this.host.append({ type: "approval.pending", actor: { kind: "agent", agentId: id }, capture: "hook", payload });
     }
+    const agent = this.agent(id);
+    this.host.broadcast({ type: "agent", agent });
+    return { ok: true, agent };
+  }
+
+  /**
+   * The Agent's own Person denies its open prompt `request.id` from the Channel (ADR 0014):
+   * only a deniable one, only once, and only while `deliver` reaches the Agent's wrapper.
+   */
+  denyApproval(person: PersonName, id: AgentId, request: DenyApprovalRequest, deliver: () => boolean): RosterResult {
+    const found = this.owned(person, id);
+    if (!found.ok) return found;
+    const held = found.row.approval == null ? null : (JSON.parse(found.row.approval) as PendingApproval);
+    if (held === null || held.id !== request.id) {
+      return { ok: false, status: 409, reason: `Agent ${id} is not waiting on that prompt any more.` };
+    }
+    if (held.deniable !== true) {
+      return { ok: false, status: 409, reason: "That prompt can be answered only at the Agent's terminal." };
+    }
+    if (held.deniedBy !== undefined) {
+      return { ok: false, status: 409, reason: `${held.deniedBy} already denied that prompt.` };
+    }
+    if (!deliver()) {
+      return {
+        ok: false,
+        status: 409,
+        reason: `Agent ${id}'s wrapper is not connected to the Channel. Answer the prompt at its terminal.`,
+      };
+    }
+    this.host.sql.exec(
+      "UPDATE agents SET approval = ? WHERE id = ?",
+      JSON.stringify({ ...held, deniedBy: person }),
+      id,
+    );
+    this.host.append({
+      type: "approval.denied",
+      actor: { kind: "person", person },
+      capture: null,
+      payload: { agent: id, id: held.id, ...(request.message === undefined ? {} : { message: request.message }) },
+    });
     const agent = this.agent(id);
     this.host.broadcast({ type: "agent", agent });
     return { ok: true, agent };
