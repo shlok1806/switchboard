@@ -1,4 +1,4 @@
-// Who holds an Agent's keyboard (ADR 0021): the owner at the terminal itself, one
+// Who holds an Agent's keyboard (ADR 0022): the owner at the terminal itself, one
 // attach key from the Dashboard, or no one. One typist at a time, so two people never
 // mix their keystrokes into one prompt. The wrapper keeps the hold; the Channel only
 // carries the requests.

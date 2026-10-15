@@ -1,6 +1,6 @@
 # A live terminal that the owning wrapper guards
 
-Status: proposed on 2026-10-15. Builds step 6 of the canvas plan (`docs/canvas-design-spec.md`, Decided 4). Shlok decided its two open questions on 2026-10-15: attachers may answer dialogs (Assumption A), and typing is exclusive (One typist holds the keyboard).
+Status: proposed on 2026-10-15. Builds step 6 of the canvas plan (`docs/canvas-design-spec.md`, Decided 4). Assumption A below is the owner's to confirm.
 
 ## Context
 
@@ -30,16 +30,15 @@ So the Channel must not be what decides who may type. The Channel is a Worker on
 
 ### Every keystroke is signed, and the wrapper checks it
 
-- An input frame carries the Agent, the public key (SPKI, base64), a sequence number, what it does (`type`, `take` or `release`, below), the text, and a signature over `switchboard-terminal-input`, the Channel's repo, the Agent ID, the wrapper's **session nonce**, the sequence number, what it does and the text, one per line. The repo is the one in the Dashboard's address, lowercase.
+- An input frame carries the Agent, the public key (SPKI, base64), a sequence number, the text, and a signature over `switchboard-terminal-input`, the Channel's repo, the Agent ID, the wrapper's **session nonce**, the sequence number and the text, one per line. The repo is the one in the Dashboard's address, lowercase.
 - The session nonce is 16 random bytes the wrapper makes when it starts and puts in every screen frame. A frame signed for another run of the wrapper fails.
 - Before writing a frame to the session, the wrapper checks, in order:
   1. the rate: at most 50 frames a second from all sockets together, with bursts of 100. Frames past it are dropped before anything else is done with them, and the wrapper logs that once a second instead of answering each;
-  2. the frame is for the Agent this wrapper runs, and its text is 1 to 1,024 characters (empty for `take` and `release`);
+  2. the frame is for the Agent this wrapper runs, and its text is 1 to 1,024 characters;
   3. the key's fingerprint is on its list, and allowed for this Channel and this Agent;
   4. the signature is valid for this Channel, this Agent and this nonce;
   5. the sequence number is higher than the last one it took from that key in this run, so the Channel cannot replay a frame;
-  6. for typed text, that this key holds the keyboard (below);
-  7. Assumption A, when a dialog may be open.
+  6. Assumption A, when a dialog may be open.
 
   Any other failure drops the frame. The wrapper tells watchers why, and logs it. It never writes part of a frame.
 - The Channel can still drop, delay or reorder frames. That is a denial of service, which it can always cause. It cannot make a frame that passes.
@@ -66,27 +65,13 @@ So the Channel must not be what decides who may type. The Channel is a Worker on
 - A key **attaches** when it gets its first frame into a session in this run, and again when it types after two minutes without a keystroke. Each attach makes the wrapper record a `terminal.attached` Event naming the Agent, the key's label and its fingerprint's first group. The Event records the Agent's own claim, from the Agent's own socket.
 - Every screen frame lists the keys that typed in the last two minutes, so everyone watching sees who is attached.
 - The owner is told at their own terminal. When a key attaches, or another Person starts watching (the Channel names the watching Persons to the wrapper), the wrapper logs it and sends a terminal notification (OSC 9), which iTerm2, WezTerm, kitty and Ghostty show and other terminals ignore. A line printed into the terminal would draw over the CLI's screen. When the CLI exits, the wrapper prints who watched and typed during the run.
+- Typing is not exclusive. The owner and every attached key type into the same session at once, and their keystrokes mix in the order they arrive. Whether one Person at a time should hold the keyboard is Shlok's to decide later.
 
-### One typist holds the keyboard
+### Assumption A: someone allowed to attach may answer permission prompts
 
-Two people typing into one prompt at once mix their keystrokes into a line neither meant, and one of them can send it. So one typist at a time **holds the keyboard**: either the owner at the terminal itself, or one attach key from the Dashboard. The wrapper keeps the hold; nothing about it is decided on the Channel.
-
-- **At the terminal.** When the keyboard is free, or the owner already holds it, the owner's keystrokes go to the CLI and they hold it. While a Dashboard key holds it, the owner's keystrokes are held back: the wrapper drops them and reminds the owner, at most every five seconds, who holds it and how to take it back.
-- **Taking it back.** Ctrl+] at the terminal takes the keyboard back at once, whoever holds it. The wrapper keeps that Ctrl+] from the CLI. When no Dashboard key holds the keyboard, Ctrl+] goes to the CLI as before, so no CLI loses the key.
-- **From the Dashboard.** Taking the keyboard is explicit: the Dashboard's Take the keyboard button sends a signed `take` frame. The wrapper grants it when the keyboard is free, or already this key's. While the owner or another key holds it, the take is refused, naming who holds it. A key types only while it holds the keyboard; its frames otherwise are refused with that reason. The Dashboard's Release button, and Stop typing, send a signed `release`.
-- **Letting go.** A hold ends:
-  - after a minute without a keystroke from its holder, the owner's own included, so a typist who walked away does not lock the others out;
-  - when its holder releases it;
-  - when a Dashboard holder's Person stops watching the Agent, which is how the wrapper sees them close the page or lose their connection (the Channel names the watching Persons);
-  - when the wrapper loses its own connection to the Channel.
-- **Who holds it is shown.** Every screen frame names the holder: the Person and key, or the owner at the terminal, or no one. The Dashboard shows it over the screen. At the terminal, each change of holder is a terminal notification (OSC 9) and a log line.
-- Anything else that types into the session is not a typist and does not hold the keyboard: an Interrupt waits for the holder to go quiet as it waits for the owner, and a Directive, a Wake and an approval from the Channel go their own ways.
-
-### Assumption A: someone allowed to attach may answer dialogs
-
-- Answering a prompt and typing it are the same act (spec, approve and deny on the node). Shlok's answer is **yes**: an attacher who holds the keyboard reaches an open dialog like the owner.
+- Answering a prompt and typing it are the same act (spec, approve and deny on the node). The working answer is **yes**: an attacher's keys reach an open dialog like the owner's.
 - A **dialog** here is any choice the CLI waits on that its hooks report: a permission prompt, a question (AskUserQuestion), or a plan to approve (ExitPlanMode). A plan's options include accepting edits from then on, which is as strong as a permission. Before the session's first hook a dialog may be open that no hook reported (the CLI's own trust dialog comes first), so a dialog counts as possibly open until then.
-- Each owner can still turn it off, with one flag on their machine, `attachersAnswerPrompts` in `attach.json`, which defaults to true:
+- This is the owner's decision to confirm. It sits behind one flag on the owner's machine, `attachersAnswerPrompts` in `attach.json`, which defaults to true:
   - `switchboard attach prompts off` sets it false;
   - `switchboard attach prompts on` sets it back.
 - When it is off, the wrapper drops an attacher's frames while a dialog may be open and tells watchers why. The owner's key is never held back.
@@ -104,5 +89,4 @@ Two people typing into one prompt at once mix their keystrokes into a line neith
 - A stolen browser profile can type into the owner's Agents until the owner revokes its key. The key cannot be copied out of the browser, but it can be used from inside it.
 - The screen is text without colours or attributes. That was chosen for the redaction and for safety, not for looks. Colours can come later as attributes on the same frames, still never as raw escapes.
 - A Host's Agents (ADR 0015), which have no window, can now be watched and typed into from the Dashboard. This is the first way to answer one of their prompts when no Person is at the machine.
-- An owner who turns Assumption A off keeps attachers to typing between dialogs; Shlok's default is on.
-- Holding the keyboard costs one step for a Dashboard typist, Take the keyboard, and the owner at the terminal must learn one key, Ctrl+], to take it back. A typist who walks away holds the keyboard for at most a minute.
+- If the owner answers no to Assumption A, the change is the flag's default and the ADR that records the answer. The code stays as it is.
