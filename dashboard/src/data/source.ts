@@ -1,6 +1,7 @@
 import type {
   ActionResult,
   AgentId,
+  AgentRole,
   ChannelSnapshot,
   ClaimRefusal,
   CreateTaskRequest,
@@ -104,4 +105,6 @@ export interface ChannelSource {
   spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult>;
   /** `POST /api/agents/:id/stop`: ask the Host that runs one of this Person's Agents to stop it. */
   stopAgent(agent: AgentId): Promise<ActionResult>;
+  /** `PUT` or `DELETE /api/agents/:id/role`: grant one of this Person's Agents a role, or take it back (ADR 0018). */
+  setRole(agent: AgentId, role: AgentRole | null): Promise<ActionResult>;
 }

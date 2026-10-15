@@ -16,6 +16,7 @@ import type {
   Agent,
   AgentContext,
   AgentId,
+  AgentRole,
   AgentUsage,
   Capture,
   ChannelEvent,
@@ -36,7 +37,14 @@ import type {
   ReportedUsage,
   StreamMessage,
 } from "../../shared/src/index";
-import { agentIdFor, DEFAULT_PROXY_MODE, hostIdFor, sameNickname } from "../../shared/src/index";
+import {
+  agentIdFor,
+  DEFAULT_PROXY_MODE,
+  hostIdFor,
+  isAgentRole,
+  MAX_LEAD_DEPTH,
+  sameNickname,
+} from "../../shared/src/index";
 
 type AgentRow = {
   id: string;
@@ -51,6 +59,8 @@ type AgentRow = {
   context: string | null;
   approval: string | null;
   host: string | null;
+  role: string | null;
+  parent: string | null;
   presence: string;
   proxy_mode: string;
   secret_masking: number;
@@ -73,6 +83,8 @@ export const AGENTS_SCHEMA = `
     context TEXT,
     approval TEXT,
     host TEXT,
+    role TEXT,
+    parent TEXT,
     presence TEXT NOT NULL,
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
@@ -87,7 +99,8 @@ export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(AGENTS_SCHEMA);
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
   // ADR 0012: context. ADR 0013: the pending approval. ADR 0015: the Host that runs it.
-  for (const column of ["account", "model", "effort", "usage", "context", "approval", "host"]) {
+  // ADR 0018: its role, and the lead that started it.
+  for (const column of ["account", "model", "effort", "usage", "context", "approval", "host", "role", "parent"]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
     } catch {
@@ -99,6 +112,7 @@ export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(`
     CREATE INDEX IF NOT EXISTS agents_by_last_seen ON agents (last_seen_at DESC, id);
     CREATE INDEX IF NOT EXISTS agents_live ON agents (last_seen_at) WHERE presence != 'gone';
+    CREATE INDEX IF NOT EXISTS agents_by_parent ON agents (parent) WHERE parent IS NOT NULL;
   `);
 }
 
@@ -157,6 +171,8 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.approval == null ? {} : { approval: JSON.parse(row.approval) as PendingApproval }),
     presence: row.presence as Presence,
     ...(row.host == null ? {} : { host: row.host as HostId }),
+    ...(row.role != null && isAgentRole(row.role) ? { role: row.role } : {}),
+    ...(row.parent == null ? {} : { parent: row.parent as AgentId }),
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
     canReceiveInterrupts: row.can_receive_interrupts === 1,
@@ -298,6 +314,76 @@ export class AgentRoster {
     this.host.broadcast({ type: "agent", agent });
     await this.watch();
     return { ok: true, agent, ...(nicknameRefused === undefined ? {} : { nicknameRefused }) };
+  }
+
+  /**
+   * Grants Agent `id` a role, or takes its role back (`role` null), for its own Person
+   * only (ADR 0018). Records `agent.role.granted` or `agent.role.revoked` when it changed.
+   */
+  setRole(person: PersonName, id: AgentId, role: AgentRole | null): RosterResult {
+    const row = this.row(id);
+    if (!row) return { ok: false, status: 404, reason: `No Agent ${id} on this Channel.` };
+    if (row.person !== person) {
+      return {
+        ok: false,
+        status: 403,
+        reason: `${id} is ${row.person}'s Agent. Only its own Person grants or revokes its role.`,
+      };
+    }
+    const had = row.role !== null && isAgentRole(row.role) ? row.role : null;
+    if (had === role) return { ok: true, agent: rowToAgent(row) };
+    this.host.sql.exec("UPDATE agents SET role = ? WHERE id = ?", role, id);
+    if (had !== null) {
+      this.host.append({
+        type: "agent.role.revoked",
+        actor: { kind: "person", person },
+        capture: null,
+        payload: { agent: id, role: had },
+      });
+    }
+    if (role !== null) {
+      this.host.append({
+        type: "agent.role.granted",
+        actor: { kind: "person", person },
+        capture: null,
+        payload: { agent: id, role },
+      });
+    }
+    const agent = this.agent(id);
+    this.host.broadcast({ type: "agent", agent });
+    return { ok: true, agent };
+  }
+
+  /** Agent `id` was started by lead `parent` (ADR 0018). Set once, when its spawn is answered. */
+  setParent(id: AgentId, parent: AgentId): void {
+    this.host.sql.exec("UPDATE agents SET parent = ? WHERE id = ? AND parent IS NULL", parent, id);
+    const agent = this.find(id);
+    if (agent !== null) this.host.broadcast({ type: "agent", agent });
+  }
+
+  /** Whether Agent `id` is in lead `lead`'s subtree: its chain of parents reaches `lead` (ADR 0018). */
+  inSubtree(lead: AgentId, id: AgentId): boolean {
+    let at = this.row(id)?.parent ?? null;
+    for (let depth = 0; at !== null && depth < MAX_LEAD_DEPTH; depth++) {
+      if (at === lead) return true;
+      at = this.row(at as AgentId)?.parent ?? null;
+    }
+    return false;
+  }
+
+  /** How many Agents in lead `lead`'s subtree are not Gone (ADR 0018). */
+  liveInSubtree(lead: AgentId): number {
+    return this.host.sql
+      .exec<{ n: number }>(
+        `WITH RECURSIVE tree (id, depth) AS (
+           SELECT id, 1 FROM agents WHERE parent = ?
+           UNION SELECT agents.id, tree.depth + 1 FROM agents JOIN tree ON agents.parent = tree.id WHERE tree.depth < ?
+         )
+         SELECT COUNT(*) AS n FROM agents WHERE id IN (SELECT id FROM tree) AND presence != 'gone'`,
+        lead,
+        MAX_LEAD_DEPTH,
+      )
+      .one().n;
   }
 
   /**

@@ -3,6 +3,8 @@ import type {
   AccountsResponse,
   ActionResult,
   AgentId,
+  AgentResponse,
+  AgentRole,
   AgentsResponse,
   ClaimRequest,
   CreateTaskRequest,
@@ -28,7 +30,7 @@ import type {
   ClaimRefusal,
   Verdict,
 } from "@shared/index";
-import { LIVE_PING, MAX_HISTORY_LIMIT, agentPath, approvalDenyPath, claimPath, nicknamePath, releasePath } from "@shared/index";
+import { LIVE_PING, MAX_HISTORY_LIMIT, agentPath, approvalDenyPath, claimPath, nicknamePath, releasePath, rolePath } from "@shared/index";
 import type { Capabilities, ChannelSource, ClaimResult, ConnectionState, SpawnResult } from "./source";
 
 /**
@@ -322,6 +324,18 @@ export class HttpChannelSource implements ChannelSource {
   async stopAgent(agent: AgentId): Promise<ActionResult> {
     try {
       const { status, body } = await this.call<StopAgentResponse>(`${agentPath(agent)}/stop`, { method: "POST" });
+      return status < 400 ? { ok: true } : { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
+  async setRole(agent: AgentId, role: AgentRole | null): Promise<ActionResult> {
+    try {
+      const { status, body } = await this.call<AgentResponse>(
+        rolePath(agent),
+        role === null ? { method: "DELETE" } : { method: "PUT", body: JSON.stringify({ role }) },
+      );
       return status < 400 ? { ok: true } : { ok: false, reason: reasonOf(body, status) };
     } catch (e) {
       return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };

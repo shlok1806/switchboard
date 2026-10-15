@@ -6,8 +6,9 @@
 //   POST   /api/agents/spawn        start an Agent on one of the caller's Hosts
 //   POST   /api/agents/:id/stop     stop an Agent one of the caller's Hosts runs
 //
-// Every route needs a Person's session. An Agent token is refused (ADR 0005): starting
-// and stopping Agents waits for the roles ADR, which lets a Person grant that.
+// Every route needs a Person's session, except that a lead's Agent token may spawn and
+// stop (ADR 0018): the Channel checks the role and the lead's subtree. Any other Agent
+// token is refused (ADR 0005).
 
 import type {
   AgentId,
@@ -65,8 +66,12 @@ export function matchHostRoute(method: string, pathname: string): HostRoute | nu
 }
 
 export const HOST_AGENT_REFUSED =
-  "An Agent cannot start or stop Agents, or manage Hosts: only a Person can, until a Person grants an Agent " +
-  "that role (ADR 0005, ADR 0015).";
+  "An Agent cannot list, register or remove Hosts, or attach as one: only a Person can (ADR 0015, ADR 0018).";
+
+/** Whether an Agent token may call `route`: a lead may spawn and stop, the Channel decides the rest (ADR 0018). */
+export function agentMayCall(route: HostRoute): boolean {
+  return route.kind === "spawn" || route.kind === "stop";
+}
 
 const MODE_REASON = `"permissionMode" must be one of ${PERMISSION_MODES.join(", ")}.`;
 
@@ -152,7 +157,7 @@ export async function handleHostRoute(
     case "spawn": {
       const parsed = parseSpawn(await readJson(request));
       if (!parsed.ok) return fail(400, parsed.reason);
-      const result = await channel.spawnAgent(person, parsed.value);
+      const result = await channel.spawnAgent(caller, parsed.value);
       if (!result.ok) return fail(result.status, result.reason);
       return json<SpawnAgentResponse>(
         {
@@ -165,7 +170,7 @@ export async function handleHostRoute(
       );
     }
     case "stop": {
-      const result = await channel.stopAgent(person, route.id);
+      const result = await channel.stopAgent(caller, route.id);
       if (!result.ok) return fail(result.status, result.reason);
       return json<StopAgentResponse>({ ok: true, agent: route.id, host: result.host });
     }

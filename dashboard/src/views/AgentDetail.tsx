@@ -14,6 +14,7 @@ import { RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { Composer } from "@/components/domain/composer";
 import { CliSwatch, HostLabel, PresenceStatus, useClaimsOf } from "./AgentsView";
 import { StopAgentButton } from "@/components/domain/start-agent";
+import { LeadButton, LeadLabel } from "@/components/domain/agent-role";
 import { CAPTURE_LABEL, CLI_LABEL, ago } from "@/lib/format";
 import { go, href } from "@/lib/router";
 
@@ -24,7 +25,7 @@ import { Section } from "@/components/shell/section";
 import NumberFlow from "@number-flow/react";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AccountLabel, ActorAvatar, ModelLabel } from "@/components/domain/pills";
+import { AccountLabel, ActorAvatar, AgentLink, ModelLabel } from "@/components/domain/pills";
 import { AgentUsage } from "@/components/domain/usage";
 
 /** Newest first here, so a group is the same sender within two minutes going back. */
@@ -109,12 +110,21 @@ export function AgentDetail({ id }: { id: string }) {
                 <span>{CLI_LABEL[agent.cli]}</span>
                 <span>{agent.person}</span>
                 {agent.host && <HostLabel host={agent.host} />}
+                {agent.role === "lead" && <LeadLabel />}
+                {agent.parent && (
+                  <span className="inline-flex min-w-0 items-baseline gap-1">
+                    started by <AgentLink id={agent.parent} showNickname={false} className="[&>span]:text-small [&>span]:font-normal [&>span]:text-ink-2" />
+                  </span>
+                )}
                 {agent.account && !agent.usage?.email && <AccountLabel account={agent.account} />}
                 {agent.model && <ModelLabel model={agent.model} effort={agent.effort} />}
                 {agent.proxyMode === "raw" && <RawBadge />}
               </div>
             </div>
-            <StopAgentButton agent={agent} />
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+              <LeadButton agent={agent} />
+              <StopAgentButton agent={agent} />
+            </div>
           </header>
           <PendingApproval agent={agent} className="rise [--i:1]" />
 

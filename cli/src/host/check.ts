@@ -5,7 +5,7 @@
 // trusted to have the type it should.
 
 import { realpathSync } from "node:fs";
-import type { PermissionMode } from "../../../shared/src/index";
+import type { AgentId, PermissionMode } from "../../../shared/src/index";
 import {
   cleanAbsolutePath,
   isPermissionMode,
@@ -36,6 +36,8 @@ export interface CheckedSpawn {
   brief?: string;
   permissionMode: PermissionMode;
   by: string;
+  /** The lead that asked, for a lead's spawn (ADR 0018). */
+  lead?: AgentId;
 }
 
 type Refused = { ok: false; reason: string };
@@ -100,6 +102,10 @@ export function checkSpawn(
   if (frame.cli !== "claude-code") return refuse("this Host starts only claude-code Agents");
   // The Person's name goes into the brief's heading, so it must be a name and nothing else.
   if (typeof frame.by !== "string" || !LOGIN_PATTERN.test(frame.by)) return refuse("the request names no Person");
+  // An Agent ID is `<person>/<cli>/<suffix>`; the Host only names it in the brief.
+  const lead = frame.lead;
+  if (lead !== undefined && (typeof lead !== "string" || !/^[^/\s]+\/[^/\s]+\/[^/\s]+$/.test(lead)))
+    return refuse("the lead is not an Agent ID");
   const nickname = optionalText(frame.nickname, MAX_NICKNAME_LENGTH);
   const model = optionalText(frame.model, MAX_MODEL_LENGTH);
   const brief =
@@ -123,6 +129,7 @@ export function checkSpawn(
       ...(brief === undefined ? {} : { brief }),
       permissionMode: place.permissionMode,
       by: frame.by,
+      ...(lead === undefined ? {} : { lead: lead as AgentId }),
     },
   };
 }

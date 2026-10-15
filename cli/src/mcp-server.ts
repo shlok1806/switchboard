@@ -23,6 +23,7 @@ import type {
   ChannelEvent,
   HistoryResponse,
   PostUpdateResponse,
+  SendDirectiveResponse,
   SpawnAgentResponse,
   StopAgentResponse,
   SwitchboardTool,
@@ -39,6 +40,7 @@ import {
   finishPath,
   holderName,
   MAX_BRIEF_LENGTH,
+  MAX_DIRECTIVE_LENGTH,
   MAX_FINISH_SUMMARY_LENGTH,
   MAX_HISTORY_LIMIT,
   MAX_MODEL_LENGTH,
@@ -104,6 +106,9 @@ export function describeAgent(agent: Agent, me?: AgentId): string {
     const name = label === agent.model ? agent.model : `${label} (${agent.model})`;
     parts.push(`model ${name}${agent.effort === undefined ? "" : `, effort ${agent.effort}`}`);
   }
+  if (agent.role !== undefined) parts.push(agent.role);
+  if (agent.parent !== undefined) parts.push(`started by ${agent.parent === me ? "you" : agent.parent}`);
+  if (agent.host !== undefined) parts.push(`on ${agent.host}`);
   parts.push(`[${agent.presence}]`);
   return parts.join(" ");
 }
@@ -395,22 +400,33 @@ export class SwitchboardTools {
   /** Asks the Host that runs Agent `target` to stop it. The Channel decides whether this Agent may. */
   stopAgent(target: string) {
     return this.run("agent_stop", target.slice(0, 80), undefined, async (agent) => {
-      const { agents } = await this.as<AgentsResponse>(agent, "/api/agents");
-      const found = matchAgents(
-        agents.filter((a) => a.presence !== "gone"),
-        target,
-      );
-      if (found.length !== 1) {
-        throw new Error(
-          found.length === 0
-            ? `No running Agent is called ${target}.`
-            : `${target} could be ${found.map((a) => a.id).join(", ")}; use the full Agent ID.`,
-        );
-      }
-      const [stopping] = found as [Agent];
+      const stopping = await this.findAgent(agent, target, true);
       const answer = await this.post<StopAgentResponse>(agent, `${agentPath(stopping.id)}/stop`);
       return `Asked ${answer.host} to stop ${answer.agent}.`;
     });
+  }
+
+  /** Sends Agent `target` a Directive. The Channel decides whether this Agent may: a lead, to its subtree (ADR 0018). */
+  sendDirective(target: string, text: string) {
+    return this.run("send_directive", target.slice(0, 80), undefined, async (agent) => {
+      const to = await this.findAgent(agent, target, false);
+      const { event } = await this.post<SendDirectiveResponse>(agent, "/api/directives", { to: to.id, text });
+      return `Sent ${to.id} a Directive [${event.seq}].`;
+    });
+  }
+
+  /** The one Agent `target` names, by Agent ID or Nickname: only those not Gone when `running`. */
+  private async findAgent(agent: AgentId, target: string, running: boolean): Promise<Agent> {
+    const { agents } = await this.as<AgentsResponse>(agent, "/api/agents");
+    const found = matchAgents(running ? agents.filter((a) => a.presence !== "gone") : agents, target);
+    if (found.length !== 1) {
+      throw new Error(
+        found.length === 0
+          ? `No ${running ? "running " : ""}Agent is called ${target}.`
+          : `${target} could be ${found.map((a) => a.id).join(", ")}; use the full Agent ID.`,
+      );
+    }
+    return found[0] as Agent;
   }
 
   readChannel(limit = DEFAULT_READ_LIMIT) {
@@ -573,7 +589,8 @@ export function createMcpServer(tools: SwitchboardTools): McpServer {
     {
       description:
         "Lists the Channel's Agents: each one's permanent Agent ID, Nickname, Person, CLI, Account Label (which " +
-        "login of its CLI it runs under), the model it runs on and Presence. Marks you with (you).",
+        "login of its CLI it runs under), the model it runs on, its role, the lead that started it, the Host that " +
+        "runs it and Presence. Marks you with (you).",
       inputSchema: {},
     },
     () => answer(tools.listAgents()),
@@ -613,8 +630,8 @@ export function createMcpServer(tools: SwitchboardTools): McpServer {
     {
       description:
         "Starts a Claude Code Agent on one of your Person's Hosts, in a folder under that Host's roots, with an " +
-        "optional brief as its first prompt. Only an Agent its Person granted that role may; until then the " +
-        "Channel refuses, saying so (ADR 0015).",
+        "optional brief as its first prompt, which it reads as your Directive. It becomes one of your Agents. Only " +
+        "a lead may: an Agent its Person made one (ADR 0018); otherwise the Channel refuses, saying so.",
       inputSchema: {
         cwd: z.string().max(MAX_PATH_LENGTH).describe("The folder to run in: an absolute path on the Host."),
         host: z.string().optional().describe("The Host's name; else the Person's most recently seen Live Host."),
@@ -630,11 +647,24 @@ export function createMcpServer(tools: SwitchboardTools): McpServer {
     "agent_stop",
     {
       description:
-        "Stops an Agent one of your Person's Hosts runs. Only an Agent its Person granted that role may; until " +
-        "then the Channel refuses, saying so (ADR 0015).",
+        "Stops one of the Agents you started on a Host. Only a lead may, and only for its own Agents (ADR 0018).",
       inputSchema: { agent: z.string().describe("The Agent's ID or Nickname.") },
     },
     ({ agent }) => answer(tools.stopAgent(agent)),
+  );
+  server.registerTool(
+    "send_directive",
+    {
+      description:
+        "Sends one of the Agents you started a Directive: an instruction it reads as from you, the lead its Person " +
+        "put over it. Only a lead may, and only to its own Agents (ADR 0018). To tell anyone else something, " +
+        "post an Update.",
+      inputSchema: {
+        agent: z.string().describe("The Agent's ID or Nickname."),
+        text: z.string().min(1).max(MAX_DIRECTIVE_LENGTH),
+      },
+    },
+    ({ agent, text }) => answer(tools.sendDirective(agent, text)),
   );
   return server;
 }

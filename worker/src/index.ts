@@ -29,7 +29,7 @@ import { handleBranchRoute, matchBranchRoute } from "./branches-api";
 import type { Caller } from "./claims";
 import { handleClaimRoute, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
-import { HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } from "./hosts-api";
+import { agentMayCall, HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } from "./hosts-api";
 import { fail, json, readJson } from "./http";
 import { relaySettings } from "./relay/relay";
 import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
@@ -125,8 +125,18 @@ const ROUTES = new Set([
   DIRECTIVE_ROUTE,
 ]);
 
-/** What an Agent token may call (ADR 0007): read the Channel, and act for its own Agent only. */
-const AGENT_ROUTES = new Set(["GET /api/events", "GET /api/relay", "POST /api/updates", "GET /api/stream"]);
+/**
+ * What an Agent token may call (ADR 0007): read the Channel, and act for its own Agent
+ * only. A Directive, a spawn and a stop also reach the Channel, which refuses them
+ * unless the Agent is a lead acting on its own subtree (ADR 0018).
+ */
+const AGENT_ROUTES = new Set([
+  "GET /api/events",
+  "GET /api/relay",
+  "POST /api/updates",
+  "GET /api/stream",
+  DIRECTIVE_ROUTE,
+]);
 const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
   "list",
   "accounts",
@@ -140,7 +150,8 @@ const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
 
 const AGENT_REFUSED =
   "An Agent token cannot do this. Agents read the Channel, post their own Events, and claim, release and finish " +
-  "Tasks for themselves; Directives, Takeovers and everything else a Person does need a Person's session.";
+  "Tasks for themselves (and a lead acts on its own subtree); Takeovers, roles and everything else a Person " +
+  "does need a Person's session.";
 
 async function handleChannel(request: Request, url: URL, env: Env, repo: string, path: string): Promise<Response> {
   const route = `${request.method} ${path}`;
@@ -175,9 +186,10 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   };
 
   if (caller.agent !== undefined) {
-    if (hostRoute !== null) return fail(403, HOST_AGENT_REFUSED);
+    if (hostRoute !== null && !agentMayCall(hostRoute)) return fail(403, HOST_AGENT_REFUSED);
     const allowed =
       AGENT_ROUTES.has(route) ||
+      hostRoute !== null ||
       (taskRoute && request.method === "GET") ||
       claimRoute !== null ||
       branchRoute !== null ||
