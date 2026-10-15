@@ -64,9 +64,18 @@ async function handleJoin(request: Request, channel: ChannelStub, caller: Caller
   return json<JoinResponse>({ ok: true, person: joined });
 }
 
-/** A scoped history read the Channel cannot answer yet: its index is built on a later day. */
-function indexPending(index: string): Response {
-  return fail(503, `This history is not indexed yet (${index}). The Channel builds its indexes within a day or two.`);
+/** A scoped history read the Channel cannot answer: its index is built on a later day, or never. */
+function indexMissing(missing: { pending: string } | { tooLarge: string }): Response {
+  if ("tooLarge" in missing) {
+    return fail(
+      501,
+      `This history cannot be indexed (${missing.tooLarge}): it covers more Events than the Channel builds an index for in a day. The Channel's feed still has every Event.`,
+    );
+  }
+  return fail(
+    503,
+    `This history is not indexed yet (${missing.pending}). The Channel builds its indexes over the next few days, one large one a day.`,
+  );
 }
 
 async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> {
@@ -96,7 +105,7 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
         : task > 0
           ? await channel.latestEventsOfTask(task as TaskNumber, tail, before)
           : await channel.latestEvents(tail, before);
-    if ("pending" in events) return indexPending(events.pending);
+    if (!Array.isArray(events)) return indexMissing(events);
     return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? 0 });
   }
   const after = intParam(url, "after", 0);
@@ -107,7 +116,7 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
   const type = url.searchParams.get("type");
   if (type !== null && type !== "wake") return fail(400, '"type" can only be "wake".');
   const events = type === "wake" ? await channel.wakesAfter(after, limit) : await channel.history(after, limit);
-  if ("pending" in events) return indexPending(events.pending);
+  if (!Array.isArray(events)) return indexMissing(events);
   return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? after });
 }
 

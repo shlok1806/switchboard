@@ -5,11 +5,12 @@
 // decision must read a bounded number of rows however big the Channel gets. A
 // query that scans one of those tables shows up here as thousands of rows.
 
-import { reset, runInDurableObject } from "cloudflare:test";
+import { env, reset, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { AgentId, AgentResponse, ChannelEvent, HookEvent, Task } from "../../shared/src/index";
 import { agentPath } from "../../shared/src/index";
+import { Channel } from "../src/channel";
 import { installJev } from "../src/relay/jev";
 import { lastUpdate } from "../src/status-comment";
 import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
@@ -374,4 +375,29 @@ it("Events by ID and the Wakes after an Event read only what they return", async
     expect(events.every((e) => e.type === "wake")).toBe(true);
   });
   expect(wakes).toBeLessThan(25);
+});
+
+/** What starting the Channel's Durable Object again reads, as after an eviction or a deploy. */
+function restart(): Promise<number> {
+  return rowsRead(() =>
+    runInDurableObject(channelStub(), (_channel, state) => {
+      new Channel(state, env);
+    }),
+  );
+}
+
+it("a Durable Object that starts again reads a bounded number of rows, its history indexes built or not", async () => {
+  expect(await restart()).toBeLessThan(BUDGET);
+  // An index still missing is counted once a day, by the first start: not by every start.
+  await runInDurableObject(channelStub(), (_channel, state) => {
+    state.storage.sql.exec("DROP INDEX events_by_agent");
+    state.storage.sql.exec("DELETE FROM index_builds");
+    state.storage.sql.exec(
+      "INSERT INTO index_builds (day, rows) VALUES (?, ?)",
+      new Date().toISOString().slice(0, 10),
+      25_000,
+    );
+  });
+  expect(await restart()).toBeGreaterThan(EVENTS);
+  expect(await restart()).toBeLessThan(BUDGET);
 });
