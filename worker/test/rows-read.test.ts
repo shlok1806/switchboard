@@ -19,6 +19,8 @@ import { FakeJev } from "./fake-jev";
 const EVENTS = 20_000;
 const GONE_AGENTS = 300;
 const TASKS = 200;
+/** Files each live Agent has edited. */
+const TOUCHED_FILES = 100;
 
 /** Generous for what each call needs, far below one scan of any seeded table. */
 const BUDGET = 150;
@@ -155,6 +157,19 @@ async function seed(live: AgentId[]): Promise<void> {
         ...columns.map((c) => row[c]),
       );
     }
+    for (const agent of live) {
+      for (let f = 0; f < TOUCHED_FILES; f++) {
+        sql.exec(
+          `INSERT INTO touched_files (agent, path, edits, first_edited_at, last_edited_at, last_seq)
+           VALUES (?, ?, 1, ?, ?, ?)`,
+          agent,
+          `src/file-${f}.ts`,
+          new Date().toISOString(),
+          new Date().toISOString(),
+          f,
+        );
+      }
+    }
     const tasks = (channel as unknown as { tasks: { write(task: Task): void } }).tasks;
     for (let n = 1; n <= TASKS; n++) tasks.write(task(n, n % 40 === 0 ? live[n % live.length] : undefined));
   });
@@ -222,6 +237,17 @@ it("a heartbeat that changes Presence reads a bounded number of rows", async () 
 });
 
 it("an edit the Relay considers for every live Agent reads a bounded number of rows", async () => {
+  // The first Event the Relay considers after the Channel wakes reads each Agent's touched files once.
+  const first = hook("file.edit", { path: "src/app.ts", additions: 1, deletions: 0 });
+  await rowsRead(
+    async () => {
+      meter.paused = true;
+      await sendHooks(measured, [first]);
+    },
+    () => verdictsAbout(first.id),
+  );
+  // Another Agent edits meanwhile, as they do.
+  await sendHooks(live[1] as AgentId, [hook("file.edit", { path: "src/other.ts", additions: 1, deletions: 0 })]);
   const edit = hook("file.edit", { path: "src/app.ts", additions: 3, deletions: 1 });
   const read = await rowsRead(
     async () => {
@@ -233,19 +259,23 @@ it("an edit the Relay considers for every live Agent reads a bounded number of r
   expect(read).toBeLessThan(BUDGET);
 });
 
-it("a holder's last Update is found without scanning the history", async () => {
+it("a holder's last Update is found without scanning its other Updates", async () => {
+  // The slowest case: a holder with many Updates on other Tasks, none on this one, and
+  // none since it claimed this one.
+  const holder = live[1] as AgentId;
   const read = await rowsRead(() =>
     runInDurableObject(channelStub(), (_channel, state) => {
-      // A Task no Update names, by a holder with no Update since it claimed: the slowest case.
-      lastUpdate(
-        state.storage.sql,
-        { kind: "agent", agentId: "shlok/claude/none" },
-        TASKS + 1,
-        new Date(0).toISOString(),
-      );
+      const since = new Date(Date.now() + 60_000).toISOString();
+      expect(lastUpdate(state.storage.sql, { kind: "agent", agentId: holder }, TASKS + 1, since)).toBeUndefined();
     }),
   );
-  expect(read).toBeLessThan(BUDGET);
+  const updates = await runInDurableObject(channelStub(), (_channel, state) =>
+    state.storage.sql
+      .exec<{ n: number }>("SELECT count(*) AS n FROM events WHERE type = 'update' AND actor_id = ?", holder)
+      .one(),
+  );
+  expect(updates.n).toBeGreaterThan(BUDGET);
+  expect(read).toBeLessThan(10);
 });
 
 it("reading the Channel's latest Events reads only those Events", async () => {
@@ -254,6 +284,16 @@ it("reading the Channel's latest Events reads only those Events", async () => {
       headers: { Authorization: await bearer("shlok") },
     });
     expect(((await response.json()) as { events: ChannelEvent[] }).events.length).toBeGreaterThan(0);
+  });
+  expect(read).toBeLessThan(BUDGET);
+});
+
+it("paging back through older Events reads only that page", async () => {
+  const auth = { Authorization: await bearer("shlok") };
+  const read = await rowsRead(async () => {
+    const response = await call("/api/events?tail=100&before=5001", { headers: auth });
+    const { events } = (await response.json()) as { events: ChannelEvent[] };
+    expect(events.map((e) => e.seq)).toEqual(Array.from({ length: 100 }, (_, i) => 4901 + i));
   });
   expect(read).toBeLessThan(BUDGET);
 });

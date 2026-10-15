@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, X } from "lucide-react";
 import type { AgentId, ChannelEvent } from "@shared/index";
-import { useCapabilities, useChannel, useIndex } from "@/data/store";
+import { useCapabilities, useChannel, useIndex, useStore } from "@/data/store";
 import { EventDetail, EventRow } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
 import { Composer } from "@/components/domain/composer";
@@ -10,9 +10,12 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { CAPTURE_LABEL, VERDICT_LABEL, VERDICT_OPTIONS } from "@/lib/format";
 import { go } from "@/lib/router";
 
+// How many more Events each scroll to the top shows.
 const SHOW = 250;
 // How close to the bottom (px) still counts as "following" the live feed.
 const FOLLOW_SLACK = 80;
+// How close to the top (px) shows older Events.
+const OLDER_SLACK = 200;
 
 /** Two Events from the same sender within two minutes read as one chat group. */
 function continues(prev: ChannelEvent | undefined, e: ChannelEvent): boolean {
@@ -22,33 +25,53 @@ function continues(prev: ChannelEvent | undefined, e: ChannelEvent): boolean {
 }
 
 export function FeedView({ selected }: { selected?: string }) {
-  const { events, verdictsByEvent, agents, tasks, snapshot, fresh } = useChannel();
+  const { events, verdictsByEvent, agents, tasks, snapshot, fresh, olderBefore, loadingOlder } = useChannel();
+  const store = useStore();
   const { agentById, taskByNumber } = useIndex();
   const mobile = useIsMobile();
   const can = useCapabilities();
   const [filters, setFilters] = useState<FeedFilters>(EMPTY_FILTERS);
+  const [limit, setLimit] = useState(SHOW);
   const threshold = snapshot?.relay.interruptThreshold ?? 0.6;
 
-  const shown = useMemo(() => {
+  // `all`: every loaded Event that matches is shown.
+  const { shown, all } = useMemo(() => {
     const out = [];
-    for (let i = events.length - 1; i >= 0 && out.length < SHOW; i--) {
+    let i = events.length - 1;
+    for (; i >= 0 && out.length < limit; i--) {
       const e = events[i];
       if (matches(e, verdictsByEvent.get(e.id) ?? [], filters)) out.push(e);
     }
     // Chat order: oldest at the top, newest at the bottom.
-    return out.reverse();
-  }, [events, verdictsByEvent, filters]);
+    return { shown: out.reverse(), all: i < 0 };
+  }, [events, verdictsByEvent, filters, limit]);
+  const older = !all || olderBefore !== undefined;
+
+  /** Near the top: show more, loading the page before the oldest Event once every loaded one is shown. */
+  const showOlder = () => {
+    if (loadingOlder || !older) return;
+    setLimit((l) => l + SHOW);
+    if (all) void store.loadOlder();
+  };
 
   // Follow new Events like a chat, unless the Person has scrolled up to read.
   const scroller = useRef<HTMLDivElement>(null);
   const following = useRef(true);
+  // Where the Person is, from the bottom, so older Events added above do not move the list.
+  const fromBottom = useRef(0);
   const newestId = shown.at(-1)?.id;
+  const oldestId = shown[0]?.id;
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && following.current) el.scrollTop = el.scrollHeight;
   }, [newestId]);
   useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && !following.current) el.scrollTop = el.scrollHeight - fromBottom.current;
+  }, [oldestId]);
+  useLayoutEffect(() => {
     following.current = true;
+    setLimit(SHOW);
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
     // On a phone the list remounts when the Person comes back from an Event.
@@ -121,6 +144,8 @@ export function FeedView({ selected }: { selected?: string }) {
       onScroll={(e) => {
         const el = e.currentTarget;
         following.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK;
+        fromBottom.current = el.scrollHeight - el.scrollTop;
+        if (el.scrollTop < OLDER_SLACK) showOlder();
       }}
       className="min-h-0 flex-1 overflow-y-auto"
       aria-live="polite"
@@ -128,13 +153,29 @@ export function FeedView({ selected }: { selected?: string }) {
     >
       {shown.length === 0 ? (
         <div className="flex h-40 flex-col items-center justify-center gap-1 text-center">
-          <p className="text-[14px] text-ink-2">Nothing matches</p>
+          <p className="text-[14px] text-ink-2">{loadingOlder ? "Looking through older Events" : "Nothing matches"}</p>
+          {olderBefore !== undefined && !loadingOlder && (
+            <button type="button" onClick={showOlder} className="text-[13px] text-accent-ink hover:underline">
+              Look through older Events
+            </button>
+          )}
           <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="text-[13px] text-accent-ink hover:underline">
             Clear filters
           </button>
         </div>
       ) : (
         <ul className="mx-auto flex max-w-4xl flex-col px-2 py-2 sm:px-3">
+            {older && (
+              <li className="flex h-9 items-center justify-center text-[12px] text-ink-3" aria-live="off">
+                {loadingOlder ? (
+                  "Loading older Events"
+                ) : (
+                  <button type="button" onClick={showOlder} className="hover:text-ink-2 hover:underline">
+                    Show older Events
+                  </button>
+                )}
+              </li>
+            )}
             {shown.map((e, i) => (
               <EventRow
                 continued={continues(shown[i - 1], e)}

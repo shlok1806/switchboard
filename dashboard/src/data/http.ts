@@ -12,6 +12,7 @@ import type {
   ChannelSnapshot,
   ErrorResponse,
   HistoryResponse,
+  PersonsResponse,
   JoinResponse,
   Person,
   PersonAction,
@@ -155,11 +156,15 @@ export class HttpChannelSource implements ChannelSource {
     if (!joined.ok) throw new Error(joined.reason);
     const me = joined.person;
 
-    // The Relay records each Verdict as an Event; views show Verdicts next to their Event.
-    const all = await this.allEvents();
-    const { events, verdicts } = splitVerdicts(all);
+    // Only the latest Events: a Channel's history only grows, and every row read is billed.
+    const latest = await this.get<HistoryResponse>(`/api/events?tail=${MAX_HISTORY_LIMIT}`);
+    const { events, verdicts } = splitVerdicts(latest.events);
     // Tasks need GitHub; if it is unreachable the board is empty, not broken.
-    const [tasks, agents, relay, accounts] = await Promise.all([
+    const [persons, tasks, agents, relay, accounts] = await Promise.all([
+      // A Worker older than `GET /api/persons`: the Persons the loaded Events name.
+      this.get<PersonsResponse>("/api/persons")
+        .then((r) => withMe(r.persons, me))
+        .catch(() => personsFrom(events, me)),
       this.get<TaskListResponse>("/api/tasks")
         .then((r) => r.tasks)
         .catch((): Task[] => []),
@@ -175,27 +180,21 @@ export class HttpChannelSource implements ChannelSource {
 
     return {
       channel: { id: this.repo, repo: this.repo, mainBranch: "main" },
-      persons: personsFrom(events, me),
+      persons,
       agents,
       verdicts,
       tasks,
       events,
       relay,
       accounts,
-      cursor: all.at(-1)?.seq ?? 0,
+      cursor: latest.cursor,
+      ...olderThan(latest.events),
     };
   }
 
-  /** Page through `GET /api/events` from the start. */
-  private async allEvents(): Promise<ChannelEvent[]> {
-    const out: ChannelEvent[] = [];
-    let after = 0;
-    for (;;) {
-      const page = await this.get<HistoryResponse>(`/api/events?after=${after}&limit=${MAX_HISTORY_LIMIT}`);
-      out.push(...page.events);
-      if (page.events.length < MAX_HISTORY_LIMIT) return out;
-      after = page.cursor;
-    }
+  async olderEvents(before: number): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">> {
+    const page = await this.get<HistoryResponse>(`/api/events?tail=${MAX_HISTORY_LIMIT}&before=${before}`);
+    return { ...splitVerdicts(page.events), ...olderThan(page.events) };
   }
 
   subscribe(
@@ -333,7 +332,18 @@ function splitVerdicts(all: ChannelEvent[]): { events: ChannelEvent[]; verdicts:
 }
 
 
-/** Persons come from `person.join` Events until the Worker lists them. */
+/** A full page of history means there may be older Events: page back from its oldest. */
+function olderThan(page: ChannelEvent[]): { olderBefore?: number } {
+  const oldest = page[0]?.seq;
+  return page.length === MAX_HISTORY_LIMIT && oldest !== undefined && oldest > 1 ? { olderBefore: oldest } : {};
+}
+
+/** The Channel's Persons, with `me` as it just joined. */
+function withMe(persons: Person[], me: Person): Person[] {
+  return [...persons.filter((p) => p.name !== me.name), me];
+}
+
+/** For a Worker without `GET /api/persons`: the Persons whose `person.join` Events are loaded. */
 function personsFrom(events: ChannelEvent[], me: Person): Person[] {
   const byName = new Map<string, Person>();
   for (const e of events) {
@@ -341,6 +351,5 @@ function personsFrom(events: ChannelEvent[], me: Person): Person[] {
       byName.set(e.actor.person, { name: e.actor.person, timeZone: e.payload.timeZone, joinedAt: e.at });
     }
   }
-  byName.set(me.name, me);
-  return [...byName.values()];
+  return withMe([...byName.values()], me);
 }

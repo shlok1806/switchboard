@@ -72,7 +72,10 @@ export interface ChannelSource {
   readonly capabilities: Capabilities;
   /** True for the simulated Channel, so the UI can say it is a demo. */
   readonly isMock: boolean;
+  /** The Channel now, with only its latest Events: older ones come from `olderEvents`. */
   snapshot(): Promise<ChannelSnapshot>;
+  /** The page of Events before `seq`, oldest first, with `olderBefore` set when there are older ones still. */
+  olderEvents(before: number): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">>;
   /** Follow the stream after `cursor`. Returns an unsubscribe function. */
   subscribe(
     cursor: number,

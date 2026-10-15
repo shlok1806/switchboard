@@ -37,6 +37,11 @@ export interface ChannelSnapshot {
   accounts?: AccountUsage[];
   /** The `seq` to resume the WebSocket from. */
   cursor: number;
+  /**
+   * Set when the Channel has Events older than `events`: the `seq` of the oldest one
+   * loaded, to page back from (`GET /api/events?tail=<n>&before=<seq>`).
+   */
+  olderBefore?: number;
 }
 
 /** Messages the Worker sends over the WebSocket (`/api/stream?after=<cursor>`). */
@@ -85,12 +90,18 @@ export interface RelayResponse {
 
 /**
  * `GET /api/events?after=<seq>&limit=<n>`: Events with `seq` above `after`, oldest first.
- * `GET /api/events?tail=<n>`: the latest `n` Events, oldest first.
+ * `GET /api/events?tail=<n>`: the latest `n` Events, oldest first; with `&before=<seq>`,
+ * the latest `n` below that `seq`, to page back through older Events.
  */
 export interface HistoryResponse {
   events: ChannelEvent[];
   /** The `seq` of the last Event returned, or `after` when there are none. */
   cursor: number;
+}
+
+/** `GET /api/persons`: every Person who has joined the Channel. */
+export interface PersonsResponse {
+  persons: Person[];
 }
 
 /** Largest `limit` a history read accepts, and the default. */
