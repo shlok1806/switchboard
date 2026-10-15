@@ -72,7 +72,7 @@ export class StaleClaims {
    */
   presenceChanged(id: AgentId, presence: Presence): void {
     const stale = presence === "gone";
-    for (const task of this.host.tasks.stored()) {
+    for (const task of this.host.tasks.held(id)) {
       const claim = task.claim;
       if (claim === undefined || task.status === "done") continue;
       if (claim.holder.kind !== "agent" || claim.holder.agentId !== id || claim.stale === stale) continue;

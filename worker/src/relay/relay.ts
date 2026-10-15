@@ -90,8 +90,10 @@ const MAX_TOUCHED = 50;
 /** What the Channel lends the Relay. */
 export interface RelayHost {
   sql: SqlStorage;
-  agents(): Agent[];
-  tasks(): Task[];
+  /** The Agents that are not Gone. */
+  liveAgents(): Agent[];
+  /** The Tasks whose Claim an Agent holds. */
+  heldTasks(): Task[];
   task(number: TaskNumber): Task | null;
   touchedFiles(id: AgentId): TouchedFile[];
   /** The Jev to ask, or null when it is not configured. */
@@ -450,15 +452,15 @@ export class Relay {
 
   /** Works out, for every connected Agent but the one that caused the Event, what the Relay knows. */
   private plan(event: AgentDeliverable): Plan[] {
-    const tasks = this.host.tasks();
-    const sender = this.senderOf(event, tasks);
+    const sender = this.senderOf(event);
     const cause = sender.kind === "agent" ? sender.agentId : null;
-    const agents = this.host.agents().filter((agent) => agent.presence !== "gone" && agent.id !== cause);
+    const agents = this.host.liveAgents().filter((agent) => agent.id !== cause);
     if (agents.length === 0) return [];
+    const tasks = this.host.heldTasks();
     const recent = this.recentCode(event.seq);
     const files = eventFiles(event);
     const changes = event.type === "push" || event.type === "merge" ? event.payload.files : [];
-    const eventTask = event.task === undefined ? null : (tasks.find((t) => t.number === event.task) ?? null);
+    const eventTask = event.task === undefined ? null : this.host.task(event.task);
 
     return agents.map((agent): Plan => {
       const held = tasks.filter((t) => t.claim?.holder.kind === "agent" && t.claim.holder.agentId === agent.id);
@@ -503,13 +505,13 @@ export class Relay {
    * Who an Event came from: its actor, or for a push or merge GitHub reported on a
    * Task branch, the holder of that Task, who did the work.
    */
-  private senderOf(event: ChannelEvent, tasks: readonly Task[]): Actor {
+  private senderOf(event: ChannelEvent): Actor {
     if (
       event.actor.kind === "github" &&
       (event.type === "push" || event.type === "merge") &&
       event.task !== undefined
     ) {
-      const holder = tasks.find((t) => t.number === event.task)?.claim?.holder;
+      const holder = this.host.task(event.task)?.claim?.holder;
       if (holder?.kind === "agent") return { kind: "agent", agentId: holder.agentId };
       if (holder?.kind === "person") return { kind: "person", person: holder.person };
     }

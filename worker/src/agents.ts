@@ -86,6 +86,12 @@ export function createAgentsTable(sql: SqlStorage): void {
       // The column is there already.
     }
   }
+  // The roster keeps every Agent the Channel has seen, so the queries that run on
+  // every heartbeat or Relay decision read through these instead of the whole table.
+  sql.exec(`
+    CREATE INDEX IF NOT EXISTS agents_by_last_seen ON agents (last_seen_at DESC, id);
+    CREATE INDEX IF NOT EXISTS agents_live ON agents (last_seen_at) WHERE presence != 'gone';
+  `);
 }
 
 /** Who changes a Nickname, and through which Capture: the Agent itself (Tool Capture), or a Person. */
@@ -161,6 +167,16 @@ export class AgentRoster {
   list(): Agent[] {
     return this.host.sql
       .exec<AgentRow>("SELECT * FROM agents ORDER BY last_seen_at DESC, id")
+      .toArray()
+      .map(rowToAgent);
+  }
+
+  /** The Agents that are not Gone, most recently seen first. */
+  live(): Agent[] {
+    return this.host.sql
+      .exec<AgentRow>(
+        "SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone' ORDER BY last_seen_at DESC, id",
+      )
       .toArray()
       .map(rowToAgent);
   }

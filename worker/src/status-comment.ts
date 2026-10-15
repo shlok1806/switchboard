@@ -61,8 +61,8 @@ export function lastUpdate(
   task: TaskNumber,
   since: string,
 ): { text: string; at: string } | undefined {
-  const [field, value] = holder.kind === "agent" ? ["$.agentId", holder.agentId] : ["$.person", holder.person];
-  const who = `type = 'update' AND json_extract(actor, '$.kind') = ? AND json_extract(actor, '${field}') = ?`;
+  const value = holder.kind === "agent" ? holder.agentId : holder.person;
+  const who = "type = 'update' AND actor_kind = ? AND actor_id = ?";
   const row =
     sql
       .exec<PayloadRow>(
