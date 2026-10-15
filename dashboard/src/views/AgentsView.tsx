@@ -1,3 +1,4 @@
+import { PendingApproval } from "@/components/domain/approval";
 import { AgentBrief, ContextWindow } from "@/components/domain/context";
 import { useMemo } from "react";
 import type { Agent, Presence, Task } from "@shared/index";
@@ -127,6 +128,7 @@ export function AgentsView() {
                             {a.account && !a.usage?.email && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
                             {a.model && <ModelLabel model={a.model} effort={a.effort} className="flex min-w-0 shrink items-center gap-1" />}
                           </span>
+                          <PendingApproval agent={a} className="mt-2" />
                           <div className="pt-2"><AgentBrief agent={a} /></div>
                           {a.usage && (
                             <div className="pt-1.5">
@@ -178,6 +180,7 @@ export function AgentsView() {
                       {a.account && !a.usage?.email ? ` · ${a.account}` : ""}
                       {a.model ? ` · ${modelLabel(a.model)}` : ""}
                     </span>
+                    <PendingApproval agent={a} className="my-1.5" />
                     <AgentBrief agent={a} />
                     {a.usage && <AgentUsage agent={a} compact />}
                     {held.length > 0 && <ClaimCell agent={a} tasks={held} />}

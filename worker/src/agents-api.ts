@@ -8,6 +8,7 @@
 //   POST /api/agents/:id/proxy-mode  set the Agent's Proxy mode; its own Person only
 //   POST /api/agents/:id/nickname    rename the Agent; itself, or any Person (ADR 0009)
 //   POST /api/agents/:id/model       the model it runs on; itself or its Person (ADR 0010)
+//   POST /api/agents/:id/approval    the permission prompt its CLI shows; itself or its Person (ADR 0013)
 //   GET  /api/accounts               every account's usage readings (ADR 0011)
 //
 // `:id` is the URL-encoded Agent ID, since Agent IDs contain "/".
@@ -25,6 +26,7 @@ import type {
 import {
   CLIS,
   cleanAccountLabel,
+  cleanApproval,
   cleanContext,
   cleanModelField,
   cleanNickname,
@@ -50,9 +52,10 @@ export type AgentRoute =
   | { kind: "touched-files"; id: AgentId }
   | { kind: "proxy-mode"; id: AgentId }
   | { kind: "nickname"; id: AgentId }
-  | { kind: "model"; id: AgentId };
+  | { kind: "model"; id: AgentId }
+  | { kind: "approval"; id: AgentId };
 
-const AGENT_ACTION = /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|proxy-mode|nickname|model)$/;
+const AGENT_ACTION = /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|proxy-mode|nickname|model|approval)$/;
 const METHODS = {
   heartbeat: "POST",
   end: "POST",
@@ -60,6 +63,7 @@ const METHODS = {
   "proxy-mode": "POST",
   nickname: "POST",
   model: "POST",
+  approval: "POST",
 } as const;
 
 function isProxyMode(value: unknown): value is ProxyMode {
@@ -246,6 +250,16 @@ export async function handleAgentRoute(
       if (model === false || model === undefined || effort === false) return fail(400, MODEL_REASON);
       const via = body.via === "proxy" ? "proxy" : "config";
       return answer(await channel.setAgentModel(caller, route.id, model, effort ?? null, via));
+    }
+    case "approval": {
+      const approval = cleanApproval((await readJson(request)).approval);
+      if (approval === undefined) {
+        return fail(
+          400,
+          '"approval" must be null, or an object with "id", "tool" and "openedAt" (and optional "detail", "reason").',
+        );
+      }
+      return answer(await channel.setAgentApproval(caller, route.id, approval));
     }
   }
 }

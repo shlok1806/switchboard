@@ -20,12 +20,14 @@ import type {
   InterruptAttach,
   InterruptMessage,
   InterruptResult,
+  SetApprovalRequest,
   SetModelRequest,
   WakeCappedMessage,
   WakeMessage,
 } from "../../shared/src/index";
 import {
   agentIdFor,
+  approvalPath,
   DEFAULT_IDLE_AFTER_MS,
   directivesNotice,
   HEARTBEAT_INTERVAL_MS,
@@ -35,6 +37,7 @@ import {
 } from "../../shared/src/index";
 import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
+import { ApprovalReporter } from "./approvals";
 import { type ChannelChoice, ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ChannelClient, ChannelError, targetOf } from "./channel-client";
 import { claudeConfigDir, projectDir } from "./claude-session";
@@ -244,6 +247,22 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     idleClears: adapter.idleClears,
     log,
     onPersonPrompt: () => waker?.reset("the Person sent a prompt"),
+    onApproval: (request) => approvals.changed(request),
+  });
+  // Shows the permission prompt the CLI waits on to the Channel, read-only (ADR 0013).
+  const approvals = new ApprovalReporter({
+    send: async (approval) => {
+      if (agentId === null) return false;
+      try {
+        const body: SetApprovalRequest = { approval };
+        await client.request(approvalPath(agentId), { method: "POST", body: JSON.stringify(body) });
+        return true;
+      } catch (error) {
+        log(`could not report the pending approval: ${(error as Error).message}`);
+        return false;
+      }
+    },
+    log,
   });
   // Tells the Channel this socket is the Agent's wrapper, so its Interrupts and Directives come here.
   const attach = () => {
@@ -396,6 +415,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   let hookDir: string | null = null;
   const stopHooks = async () => {
     models.close();
+    approvals.close();
     stream.close();
     await hooks?.close();
     await proxy?.close();
@@ -480,6 +500,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     proxy?.setAgent(agent);
     models.known(agent.model, agent.effort);
     void models.flush();
+    approvals.registered();
     attach();
   };
   const linkTo = (sessionId: string, resumed: boolean) => {

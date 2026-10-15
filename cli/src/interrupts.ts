@@ -509,6 +509,11 @@ export interface InterruptTyperOptions {
   idleClears?: boolean;
   /** The Person submitted a prompt they typed themselves. */
   onPersonPrompt?: () => void;
+  /**
+   * A permission prompt opened (with the PermissionRequest hook's input) or closed
+   * (null): what the Channel shows as the Agent's pending approval (ADR 0013).
+   */
+  onApproval?: (request: ClaudeHookInput | null) => void;
 }
 
 export class InterruptTyper {
@@ -517,6 +522,8 @@ export class InterruptTyper {
   private started = false;
   private pasteMode = false;
   private dialog: string | null = null;
+  /** The PermissionRequest that opened the dialog, when a permission prompt is what is open. */
+  private permission: ClaudeHookInput | null = null;
   /** The Person's keystrokes held back while an Interrupt is typed; null when none is. */
   private held: string[] | null = null;
   /** Interrupts are typed one at a time. */
@@ -540,7 +547,7 @@ export class InterruptTyper {
     // The terminal's replies to the CLI's queries come in on the same stdin: they are not the Person typing.
     if (typed) this.lastKey = this.now();
     // Enter or Escape answers or cancels an open dialog.
-    if (enter || cancel) this.dialog = null;
+    if (enter || cancel) this.closeDialog();
     if (this.held) this.held.push(data);
     else this.options.write(data);
     if (submitted && !dialog) this.options.onPersonPrompt?.();
@@ -576,27 +583,44 @@ export class InterruptTyper {
     switch (event) {
       case "SessionStart":
         this.started = true;
-        this.dialog = null;
+        this.closeDialog();
         return;
       case "PermissionRequest":
+        this.closeDialog();
         this.dialog = `permission for ${input.tool_name ?? "a tool"}`;
+        this.permission = input;
+        this.options.onApproval?.(input);
         return;
       case "PreToolUse":
         if ((DIALOG_TOOLS as readonly (string | undefined)[]).includes(input.tool_name)) {
+          this.closeDialog();
           this.dialog = input.tool_name ?? "a question";
         }
         return;
       case "UserPromptSubmit":
         this.line.clear();
-        this.dialog = null;
+        this.closeDialog();
         return;
       case "PostToolUse":
+        // A permission prompt closes when its own call has run. Another call's result
+        // (one running alongside it) leaves it open.
+        if (this.permission === null || sameCall(this.permission, input)) this.closeDialog();
+        return;
       case "Stop":
-        this.dialog = null;
+      case "SessionEnd":
+        this.closeDialog();
         return;
       default:
         return;
     }
+  }
+
+  /** The open dialog was answered, or went with its turn or session. */
+  private closeDialog(): void {
+    this.dialog = null;
+    if (this.permission === null) return;
+    this.permission = null;
+    this.options.onApproval?.(null);
   }
 
   /** Types `text` into the session as a prompt when the moment is right; says why not otherwise. */
@@ -666,6 +690,17 @@ export class InterruptTyper {
       for (const data of held) this.options.write(data);
     }
   }
+}
+
+/**
+ * Whether a PostToolUse is for the call a PermissionRequest asked about: the same tool
+ * and, when both name one, the same command. Neither hook names the call by its ID.
+ */
+function sameCall(request: ClaudeHookInput, result: ClaudeHookInput): boolean {
+  if (request.tool_name !== result.tool_name) return false;
+  const asked = request.tool_input?.command;
+  const ran = result.tool_input?.command;
+  return typeof asked !== "string" || typeof ran !== "string" || asked === ran;
 }
 
 function sleep(ms: number): Promise<void> {

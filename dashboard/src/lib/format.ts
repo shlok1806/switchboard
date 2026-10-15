@@ -179,6 +179,10 @@ export function summarize(e: ChannelEvent): string {
       if (from === undefined) return to === undefined ? "Model unknown" : `Model is ${to}${effortNote}`;
       return `Model ${from} → ${to ?? "unknown"}${effortNote}`;
     }
+    case "approval.pending":
+      return `Waiting for approval to run ${e.payload.tool}${e.payload.detail ? `: ${e.payload.detail}` : ""}`;
+    case "approval.closed":
+      return "Approval prompt closed";
     case "agent.rename": {
       const { agent, from, to } = e.payload;
       const who = e.actor.kind === "agent" && e.actor.agentId === agent ? "Renamed itself" : `Renamed ${agent}`;
@@ -209,6 +213,8 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   presence: "Presence",
   "agent.rename": "Rename",
   "agent.model": "Model",
+  "approval.pending": "Approval",
+  "approval.closed": "Approval",
   "tool.call": "Tool call",
   "file.edit": "File edit",
   command: "Command",

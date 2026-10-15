@@ -1,5 +1,6 @@
 export * from "./agent-context";
 export * from "./agents";
+export * from "./approvals";
 export * from "./auth";
 export * from "./branches";
 export * from "./channel";
