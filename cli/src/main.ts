@@ -10,6 +10,7 @@
 //   switchboard spawn [--host <name>] [--cwd <folder>] [...] [brief]
 //   switchboard stop <agent>
 //   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
+//   switchboard attach allow|revoke|list|prompts   (ADR 0021)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
@@ -21,6 +22,7 @@ import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
 import { renameAgent } from "./rename";
 import { runCli } from "./run";
+import { ATTACH_USAGE, attachCommand } from "./terminal/attach-keys";
 
 const USAGE = `Usage:
   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
@@ -33,6 +35,7 @@ const USAGE = `Usage:
   switchboard stop <agent> [--repo <owner>/<repo>]
 ${HOST_USAGE.replace("Usage:\n", "")}
 ${ROLE_USAGE.replace("Usage:\n", "")}
+${ATTACH_USAGE.replace("Usage:\n", "")}
 
 \`login\` signs you in with GitHub (a code to enter at github.com), once: the session
 works for every Channel on that host whose repo you have write access to. The
@@ -74,7 +77,14 @@ prompt; \`stop\` stops one. Both work from any machine.
 
 \`role grant <agent> lead\` makes one of your Agents a lead: it may start Agents on your
 Hosts, and stop and send Directives to the Agents it starts, within the Channel's
-LEAD_AGENTS_LIVE_CAP. \`role revoke\` takes that back (ADR 0018).`;
+LEAD_AGENTS_LIVE_CAP. \`role revoke\` takes that back (ADR 0018).
+
+\`attach allow <fingerprint>\` lets the browser whose attach key has that fingerprint type
+into your Agents' terminals from the Dashboard (ADR 0021): the Dashboard shows the
+fingerprint when you choose Take over. --person names whose key it is (you, by default);
+--agent limits it to one Agent. Your wrappers check every keystroke against this list,
+so the Channel cannot type for anyone. \`attach prompts off\` stops keys allowed for
+someone else from answering a permission prompt.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -167,6 +177,8 @@ async function main(argv: string[]): Promise<number> {
       return stopCommand(rest);
     case "role":
       return roleCommand(rest);
+    case "attach":
+      return attachCommand(rest);
     case "mcp":
       return runMcpServer();
     case "run": {

@@ -254,7 +254,8 @@ the prompt is open, the Agent card on the Dashboard shows **Waiting for approval
 tool, what it asks to run (the command or path, with detected secrets masked), the
 CLI's reason, and since when (ADR 0013). The Channel API carries the same thing as the
 Agent's `approval` in `GET /api/agents`, and the feed records an `approval.pending`
-Event and an `approval.closed` Event. Answer the prompt at the Agent's terminal.
+Event and an `approval.closed` Event. Answer the prompt at the Agent's terminal, or in
+it from the Dashboard (see [Watching and typing into an Agent's terminal](#watching-and-typing-into-an-agents-terminal)).
 
 For a Claude Code Agent, its own Person can also **Deny** the prompt from the card,
 with a message the Agent reads instead of running the command (ADR 0014). The Agent
@@ -283,6 +284,40 @@ Pick the narrowest policy the work allows. Without a sandbox and without prompts
 nothing stands between a bad command and your machine: not one the model gets wrong,
 and not one a file, issue or web page talked it into. Switchboard's own MCP tools are
 approved for the session either way.
+
+### Watching and typing into an Agent's terminal
+
+Any Person on the Channel can watch an Agent's terminal: on its page in the Dashboard,
+**Terminal**, then **Watch**. The screen is plain text, without colours, and the wrapper
+masks secrets in it before it leaves your machine (ADR 0021). The wrapper sends it only
+while someone watches.
+
+Typing into it is **Attach**. The Channel does not decide who may type: your wrapper
+does, from a list on your machine. To type from a browser:
+
+1. On the Agent's page, choose **Type into it**. The browser makes its own key and shows
+   its fingerprint and a command.
+2. The Agent's Person runs that command on the machine that runs the Agent:
+
+   ```sh
+   # Your own browser: the key is labelled with you.
+   switchboard attach allow K7QX-2MRD-PA4L-7TZE-WCBN
+   # Someone else's browser, for one Agent only. Take the fingerprint from them, not from the Channel.
+   switchboard attach allow K7QX-2MRD-PA4L-7TZE-WCBN --person maya --agent shlok/claude/7f3a
+   ```
+
+3. Click the screen and type. Every keystroke is signed by the browser's key, and your
+   wrapper types it only if the signature checks out. What is typed counts as your own
+   typing: an Interrupt waits for it, and Enter submits a prompt.
+
+`switchboard attach list` shows the allowed keys and `switchboard attach revoke <fingerprint>`
+removes one; a running wrapper refuses it from its next keystroke. The list is
+`attach.json` in your config folder, readable only by you.
+
+Someone you allow can also answer your Agent's permission prompts from its terminal.
+That is the working answer for now, kept behind one setting while it is confirmed:
+`switchboard attach prompts off` holds back everyone's keys but your own while a prompt
+is open, and `switchboard attach prompts on` turns it back.
 
 ### Hosts: Agents with no terminal
 

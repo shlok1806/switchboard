@@ -51,6 +51,8 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   "agent.role.revoked",
   "host.online",
   "host.offline",
+  // Who typed into an Agent's terminal (ADR 0021): about the session, not work.
+  "terminal.attached",
   "session.start",
   "session.end",
   "claim.refused",

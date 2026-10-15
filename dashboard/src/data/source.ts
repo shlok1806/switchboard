@@ -14,6 +14,9 @@ import type {
   StreamMessage,
   Task,
   TaskNumber,
+  TerminalInputFrame,
+  TerminalRefusedFrame,
+  TerminalScreenFrame,
 } from "@shared/index";
 
 /** A spawn answers with the Agent once it is on the Channel, or with the Host still starting it (ADR 0015). */
@@ -23,6 +26,16 @@ export type SpawnResult = { ok: true; answer: SpawnAgentResponse } | { ok: false
 export type ClaimResult = { ok: true; task: Task } | ClaimRefusal;
 
 export type ConnectionState = "connecting" | "live" | "reconnecting";
+
+/** What the Channel carries from an Agent's wrapper to a socket watching its terminal (ADR 0021). */
+export type TerminalFrame = TerminalScreenFrame | TerminalRefusedFrame;
+
+/** Watching one Agent's terminal: open until `close`, kept across reconnects. */
+export interface TerminalLink {
+  /** Sends a signed input frame to the Agent's wrapper. False when the socket is not open. */
+  send(input: Omit<TerminalInputFrame, "type" | "from">): boolean;
+  close(): void;
+}
 
 /** The Events about one Agent, or on one Task. */
 export type HistoryScope = { agent: AgentId } | { task: TaskNumber };
@@ -123,4 +136,6 @@ export interface ChannelSource {
   stopAgent(agent: AgentId): Promise<ActionResult>;
   /** `PUT` or `DELETE /api/agents/:id/role`: grant one of this Person's Agents a role, or take it back (ADR 0018). */
   setRole(agent: AgentId, role: AgentRole | null): Promise<ActionResult>;
+  /** Watch Agent `agent`'s terminal over the stream's socket (ADR 0021). Needs `subscribe` to be open. */
+  terminal(agent: AgentId, onFrame: (frame: TerminalFrame) => void): TerminalLink;
 }

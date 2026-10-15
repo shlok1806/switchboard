@@ -28,6 +28,8 @@ import type {
   TaskListResponse,
   TaskNumber,
   ClaimRefusal,
+  TerminalInputFrame,
+  TerminalWatchFrame,
   Verdict,
 } from "@shared/index";
 import {
@@ -49,6 +51,8 @@ import type {
   EventPage,
   HistoryScope,
   SpawnResult,
+  TerminalFrame,
+  TerminalLink,
 } from "./source";
 
 /**
@@ -97,6 +101,10 @@ export class HttpChannelSource implements ChannelSource {
   readonly capabilities = LIVE_CAPABILITIES;
   readonly isMock = false;
   private readonly base: string;
+  /** The stream's socket while it is open: terminal frames go out on it. */
+  private socket: WebSocket | null = null;
+  /** Who watches each Agent's terminal from this page. */
+  private readonly watching = new Map<AgentId, Set<(frame: TerminalFrame) => void>>();
 
   constructor(
     base: string,
@@ -263,9 +271,12 @@ export class HttpChannelSource implements ChannelSource {
       // The Worker replays every Event after `after`, so a reconnect misses nothing.
       url.searchParams.set("after", String(last));
       socket = new WebSocket(url);
+      this.socket = socket;
       socket.onopen = () => {
         retry = 0;
         onState("live");
+        // A new socket watches nothing yet: ask again for every terminal this page shows.
+        for (const agent of this.watching.keys()) this.sendFrame({ type: "terminal.watch", agent, on: true });
         ping = setInterval(() => socket?.readyState === WebSocket.OPEN && socket.send(LIVE_PING), 25_000);
       };
       socket.onmessage = (e) => {
@@ -274,6 +285,11 @@ export class HttpChannelSource implements ChannelSource {
           message = JSON.parse(String(e.data)) as StreamMessage;
         } catch {
           return; // the "pong" keepalive answer
+        }
+        const terminal = message as unknown as TerminalFrame;
+        if (terminal.type === "terminal.screen" || terminal.type === "terminal.refused") {
+          for (const listener of this.watching.get(terminal.agent) ?? []) listener(terminal);
+          return;
         }
         if (message.type === "event") last = Math.max(last, message.event.seq);
         // A Verdict Event reaches the views as a Verdict, next to the Event it is about.
@@ -297,7 +313,33 @@ export class HttpChannelSource implements ChannelSource {
       closed = true;
       clearInterval(ping);
       socket?.close();
+      if (this.socket === socket) this.socket = null;
     };
+  }
+
+  terminal(agent: AgentId, onFrame: (frame: TerminalFrame) => void): TerminalLink {
+    let listeners = this.watching.get(agent);
+    if (listeners === undefined) {
+      listeners = new Set();
+      this.watching.set(agent, listeners);
+      this.sendFrame({ type: "terminal.watch", agent, on: true });
+    }
+    listeners.add(onFrame);
+    return {
+      send: (input) => this.sendFrame({ type: "terminal.input", ...input }),
+      close: () => {
+        listeners.delete(onFrame);
+        if (listeners.size > 0 || this.watching.get(agent) !== listeners) return;
+        this.watching.delete(agent);
+        this.sendFrame({ type: "terminal.watch", agent, on: false });
+      },
+    };
+  }
+
+  private sendFrame(frame: TerminalWatchFrame | TerminalInputFrame): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+    this.socket.send(JSON.stringify(frame));
+    return true;
   }
 
   async createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }> {

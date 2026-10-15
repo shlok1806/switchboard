@@ -26,7 +26,18 @@ import type {
   TouchedFilesResponse,
   Verdict,
 } from "../../shared/src/index";
-import { agentPath, approvalDenyPath, nicknamePath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
+import {
+  agentPath,
+  approvalDenyPath,
+  attachKeyFingerprint,
+  nicknamePath,
+  REVIEW_LABEL,
+  STANDING_RULE,
+  signedInput,
+  type TerminalRefusedFrame,
+  type TerminalScreenFrame,
+  toBase64,
+} from "../../shared/src/index";
 import { EDIT_NUDGE } from "../src/memory";
 import { CODE_ASSIST_SSE, GEMINI_SSE, RESPONSES_SSE, RESPONSES_TURN } from "./fixtures/api-shapes";
 import { GitHubApi } from "./fixtures/github-api";
@@ -2089,6 +2100,249 @@ describe("Permission prompts on the Channel (ADR 0013, ADR 0014)", () => {
       /FAKE-CLAUDE hook PermissionRequest exit=0 ms=\d+\r*\n/.test(term.output.slice(seen)) ? true : undefined,
     );
   }, 60_000);
+});
+
+describe("A live terminal (ADR 0021)", () => {
+  let term: Terminal;
+  let id = "";
+  const run = (...args: string[]) => promisify(execFile)(process.execPath, [CLI, ...args], { env, cwd });
+  const SECRET = `sk-ant-api03-${"Q".repeat(110)}`;
+
+  /** A browser on the Dashboard: an attach key made with WebCrypto, and the stream's socket. */
+  class Browser {
+    readonly frames: { type: string }[] = [];
+    private seq = 0;
+    private constructor(
+      private readonly ws: WebSocket,
+      private readonly keys: CryptoKeyPair,
+      readonly spki: string,
+      readonly fingerprint: string,
+    ) {
+      ws.addEventListener("message", (m) => {
+        try {
+          this.frames.push(JSON.parse(String(m.data)));
+        } catch {
+          // The keepalive answer.
+        }
+      });
+    }
+
+    static async open(person: string): Promise<Browser> {
+      const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+      const spki = new Uint8Array(await crypto.subtle.exportKey("spki", keys.publicKey));
+      const url = channelUrl(`/api/stream?token=${encodeURIComponent(await sessionOf(person))}`).replace(/^http/, "ws");
+      const ws = new WebSocket(url);
+      await new Promise((resolve, reject) => {
+        ws.addEventListener("open", resolve);
+        ws.addEventListener("error", reject);
+      });
+      return new Browser(ws, keys, toBase64(spki), await attachKeyFingerprint(spki));
+    }
+
+    watch(on = true): void {
+      this.ws.send(JSON.stringify({ type: "terminal.watch", agent: id, on }));
+    }
+
+    screens(): TerminalScreenFrame[] {
+      return this.frames.filter((f) => f.type === "terminal.screen") as TerminalScreenFrame[];
+    }
+
+    refusals(): TerminalRefusedFrame[] {
+      return this.frames.filter((f) => f.type === "terminal.refused") as TerminalRefusedFrame[];
+    }
+
+    /** The screen's text once a frame shows `pattern`. */
+    async sees(pattern: RegExp): Promise<string> {
+      return waitFor(`a screen showing ${pattern}`, () => {
+        const shown = this.screens().at(-1)?.lines.join("\n");
+        return shown !== undefined && pattern.test(shown) ? shown : undefined;
+      });
+    }
+
+    /** A signed input frame for the wrapper's current run, as the Dashboard sends it. */
+    async signed(text: string, change: { seq?: number; nonce?: string; signText?: string } = {}) {
+      const nonce = change.nonce ?? (await waitFor("the session nonce", () => this.screens().at(-1)?.nonce));
+      const seq = change.seq ?? ++this.seq;
+      const message = new TextEncoder().encode(signedInput(id, nonce, seq, change.signText ?? text));
+      const sig = new Uint8Array(
+        await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, this.keys.privateKey, message),
+      );
+      return { type: "terminal.input", agent: id, key: this.spki, seq, text, sig: toBase64(sig) };
+    }
+
+    send(frame: unknown): void {
+      this.ws.send(JSON.stringify(frame));
+    }
+
+    async type(text: string, change: { seq?: number; nonce?: string; signText?: string } = {}) {
+      const frame = await this.signed(text, change);
+      this.send(frame);
+      return frame;
+    }
+
+    /** The reason the wrapper gave for refusing frame `seq`. */
+    refused(seq: number): Promise<string> {
+      return waitFor(`the refusal of ${seq}`, () => this.refusals().find((r) => r.seq === seq)?.reason);
+    }
+
+    close(): void {
+      this.ws.close();
+    }
+  }
+
+  const browsers: Browser[] = [];
+  const browser = async (person: string) => {
+    const b = await Browser.open(person);
+    browsers.push(b);
+    return b;
+  };
+  /** How often fake-claude has printed `text` so far. */
+  const count = (text: string) => term.output.split(text).length - 1;
+
+  beforeAll(async () => {
+    term = new Terminal(["run", "claude"], INTERRUPT_ENV);
+    id = (await term.started()).agentEnv;
+    await waitForPresence(id, "live");
+    await term.attached(id);
+  }, 30_000);
+
+  afterAll(async () => {
+    for (const b of browsers) b.close();
+    await rm(join(scratch, "config", "attach.json"), { force: true });
+    term?.type("quit\r");
+    await term?.exited;
+  });
+
+  it("shows the screen to anyone who watches, with secrets masked, even split by a wrap", async () => {
+    const bob = await browser("bob");
+    bob.watch();
+    await bob.sees(/FAKE-CLAUDE session=/);
+    const screen = bob.screens().at(-1);
+    expect(screen).toMatchObject({ cols: 100, rows: 30, prompt: false, attached: [] });
+    // The Person types a line longer than the terminal: the CLI echoes it across two rows.
+    term.type(`prompt Authorization: Bearer ${SECRET}\r`);
+    await term.waitForOutput(/FAKE-CLAUDE prompted/);
+    const shown = await bob.sees(/Authorization: Bearer \*\*\*\*/);
+    expect(term.output).toContain(SECRET);
+    expect(shown).not.toMatch(/sk-ant-api03-Q|QQQQQQQQ/);
+    expect(bob.frames.some((f) => JSON.stringify(f).includes("QQQQQQQQ"))).toBe(false);
+    // No escape sequence reaches a watcher: the CLI turned bracketed paste on, which the screen does not carry.
+    expect(bob.screens().every((s) => s.lines.every((l) => !l.includes("\x1b")))).toBe(true);
+  }, 30_000);
+
+  it("types nothing from a key the Agent's Person has not allowed, then everything once they allow it", async () => {
+    const bob = await browser("bob");
+    bob.watch();
+    const before = count("FAKE-CLAUDE working on it");
+    const refused = await bob.type("work\r");
+    expect(await bob.refused(refused.seq)).toMatch(/is not allowed to type into/);
+
+    const { stdout } = await run(
+      "attach",
+      "allow",
+      bob.fingerprint.toLowerCase().replaceAll("-", ""),
+      "--person",
+      "bob",
+    );
+    expect(stdout).toContain(`Allowed ${bob.fingerprint} as bob`);
+    expect((await stat(join(scratch, "config", "attach.json"))).mode & 0o777).toBe(0o600);
+    await bob.type("work\r");
+    await waitFor("bob's line in the session", () =>
+      count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined,
+    );
+    // Everyone watching sees who typed, and the Channel records it once, as the Agent's own Event.
+    await bob.sees(/FAKE-CLAUDE working on it/);
+    await waitFor("bob attached on the screen", () =>
+      bob
+        .screens()
+        .at(-1)
+        ?.attached.some((a) => a.person === "bob" && a.key === bob.fingerprint.slice(0, 4))
+        ? true
+        : undefined,
+    );
+    await bob.type("work\r");
+    await waitFor("bob's second line", () => (count("FAKE-CLAUDE working on it") === before + 2 ? true : undefined));
+    const attached = (await agentEvents(id)).filter((e) => e.type === "terminal.attached");
+    expect(attached.map((e) => e.payload)).toEqual([{ agent: id, person: "bob", key: bob.fingerprint.slice(0, 4) }]);
+  }, 30_000);
+
+  it("refuses frames the Channel could forge: replayed, altered, for another run, or under someone else's key", async () => {
+    const carol = await browser("carol");
+    carol.watch();
+    await run("attach", "allow", carol.fingerprint, "--person", "carol", "--agent", id);
+    const before = count("FAKE-CLAUDE working on it");
+    const typed = await carol.type("work\r");
+    await waitFor("carol's line", () => (count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined));
+
+    // The same frame again.
+    carol.send(typed);
+    await waitFor("the replay's refusal", () =>
+      carol.refusals().some((r) => r.seq === typed.seq && /already used/.test(r.reason)) ? true : undefined,
+    );
+    // Its text changed on the way.
+    const altered = await carol.type("quit\r", { signText: "work\r" });
+    expect(await carol.refused(altered.seq)).toMatch(/signature/);
+    // Signed for another run of the wrapper.
+    const stale = await carol.type("work\r", { nonce: "an-earlier-run" });
+    expect(await carol.refused(stale.seq)).toMatch(/signature/);
+    // Carol's allowed public key, signed by someone else's private key.
+    const mallory = await browser("mallory");
+    const nonce = carol.screens().at(-1)?.nonce;
+    const forged = { ...(await mallory.signed("work\r", { nonce, seq: typed.seq + 100 })), key: carol.spki };
+    carol.send(forged);
+    await waitFor("the forgery's refusal", () =>
+      carol.refusals().some((r) => r.seq === forged.seq && /signature/.test(r.reason)) ? true : undefined,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(count("FAKE-CLAUDE working on it")).toBe(before + 1);
+    expect(term.output).not.toContain("FAKE-CLAUDE bye");
+  }, 30_000);
+
+  it("lets an attacher answer a permission prompt until the owner turns that off; the owner's own key still answers", async () => {
+    const bob = browsers[1] as Browser;
+    term.type("permission Bash\r");
+    await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash/);
+    await waitFor("the open prompt on the screen", () => (bob.screens().at(-1)?.prompt ? true : undefined));
+    await bob.type("1\r");
+    await term.waitForOutput(/FAKE-CLAUDE permission answered "1"/);
+
+    await run("attach", "prompts", "off");
+    const owner = await browser("e2e");
+    owner.watch();
+    // Without --person the key is the signed-in Person's: the owner's.
+    expect((await run("attach", "allow", owner.fingerprint)).stdout).toContain(`as e2e`);
+    term.type("permission Bash\r");
+    await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash[\s\S]*FAKE-CLAUDE asking permission for Bash/);
+    await waitFor("the open prompt on the screen", () => (bob.screens().at(-1)?.prompt ? true : undefined));
+    const held = await bob.type("2\r");
+    expect(await bob.refused(held.seq)).toMatch(/only its owner answers prompts/);
+    await owner.type("3\r");
+    await term.waitForOutput(/FAKE-CLAUDE permission answered "3"/);
+    expect(term.output).not.toContain('FAKE-CLAUDE permission answered "2"');
+
+    // With the prompt closed, the attacher types again.
+    const before = count("FAKE-CLAUDE working on it");
+    await bob.type("work\r");
+    await waitFor("bob's line", () => (count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined));
+    await run("attach", "prompts", "on");
+  }, 30_000);
+
+  it("refuses a revoked key from its next keystroke", async () => {
+    const bob = browsers[1] as Browser;
+    await run("attach", "revoke", bob.fingerprint);
+    const refused = await bob.type("work\r");
+    expect(await bob.refused(refused.seq)).toMatch(/is not allowed/);
+  }, 30_000);
+
+  it("stops sending the screen when no one watches", async () => {
+    for (const b of browsers) b.watch(false);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const seen = browsers.map((b) => b.screens().length);
+    term.type("work\r");
+    await term.waitForOutput(/FAKE-CLAUDE working on it/);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(browsers.map((b) => b.screens().length)).toEqual(seen);
+  }, 30_000);
 });
 
 describe("Idle wake", () => {

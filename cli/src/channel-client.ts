@@ -26,6 +26,8 @@ import type {
   ReportedPresence,
   ReportedUsage,
   StreamMessage,
+  TerminalInputFrame,
+  TerminalWatchersMessage,
 } from "../../shared/src/index";
 import { agentPath, channelApiBase, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
 import type { Config } from "./config";
@@ -55,7 +57,9 @@ export type ChannelMessage =
   | InterruptMessage
   | DirectiveMessage
   | DirectiveInterruptMessage
-  | ApprovalDenyMessage;
+  | ApprovalDenyMessage
+  | TerminalWatchersMessage
+  | TerminalInputFrame;
 
 export class ChannelError extends Error {
   constructor(

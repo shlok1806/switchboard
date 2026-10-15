@@ -178,6 +178,8 @@ export function summarize(e: ChannelEvent): string {
       return "Issue deleted or moved on GitHub, Task removed";
     case "mirror.failed":
       return `Could not mirror the ${e.payload.change} to GitHub (${e.payload.call}): ${e.payload.reason}`;
+    case "terminal.attached":
+      return `${e.payload.person} typed into the terminal (key ${e.payload.key})`;
     case "verdict":
       return `${VERDICT_LABEL[e.payload.option]} for ${e.payload.agent}`;
     case "agent.model": {
@@ -285,6 +287,7 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "task.remove": "Task removed",
   "mirror.failed": "GitHub mirror failed",
   verdict: "Verdict",
+  "terminal.attached": "Terminal",
 };
 
 /**
@@ -304,6 +307,8 @@ export function unrelayedReason(type: EventType): string | null {
     case "proxy.raw":
     case "proxy.digest":
       return "Not relayed: model context and replies stay on the Dashboard.";
+    case "terminal.attached":
+      return "Not relayed: what was typed is Person input, already in the session.";
     case "memory.note":
       return "Not relayed: a note reaches every Agent in its next turn's digest.";
     default:

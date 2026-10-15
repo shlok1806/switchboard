@@ -34,10 +34,13 @@ import {
   type ConnectionState,
   type EventPage,
   type SpawnResult,
+  type TerminalFrame,
+  type TerminalLink,
 } from "../source";
 import { accounts, ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
 import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
+import { mockTerminal } from "./terminal";
 
 const clone = <T,>(v: T): T => structuredClone(v);
 
@@ -122,6 +125,10 @@ export class MockChannelSource implements ChannelSource {
         this.started = false;
       }
     };
+  }
+
+  terminal(agent: AgentId, onFrame: (frame: TerminalFrame) => void): TerminalLink {
+    return mockTerminal(agent, this.me, onFrame);
   }
 
   private emit(m: StreamMessage) {

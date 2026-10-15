@@ -5,6 +5,7 @@
 // (clis/): how the session ID is known, how hooks and MCP tools are installed for
 // the session only, and whether Interrupts can be typed into it.
 
+import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +24,10 @@ import type {
   MemoryResponse,
   SetApprovalRequest,
   SetModelRequest,
+  TerminalAttachedFrame,
+  TerminalInputFrame,
+  TerminalRefusedFrame,
+  TerminalScreenFrame,
   WakeCappedMessage,
   WakeMessage,
 } from "../../shared/src/index";
@@ -36,6 +41,7 @@ import {
   interruptNotice,
   modelPath,
   STANDING_RULE,
+  TERMINAL_ATTACHED_MS,
 } from "../../shared/src/index";
 import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
@@ -56,6 +62,9 @@ import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
 import { SessionContextReader } from "./session-context";
 import { channelCheckout, GitError } from "./task-worktree";
+import { readAttachList } from "./terminal/attach-keys";
+import { AttachGate } from "./terminal/gate";
+import { ScreenStream, TerminalScreen } from "./terminal/screen";
 import { readAccount } from "./usage/limits";
 import { UsageSchedule } from "./usage/schedule";
 import { SessionTally } from "./usage/session";
@@ -245,6 +254,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   let tools: SessionTools | null = null;
   let agentId: AgentId | null = null;
   let child: pty.IPty | null = null;
+  // Whether the CLI shows a permission dialog now: an attacher may be held back from it (ADR 0021).
+  let promptOpen = false;
   // Types Interrupts into the session, never over the Person's own typing.
   const typer = new InterruptTyper({
     write: (data) => child?.write(data),
@@ -254,6 +265,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     log,
     onPersonPrompt: () => waker?.reset("the Person sent a prompt"),
     onApproval: (request) => {
+      promptOpen = request !== null;
+      screenStream.changed();
       approvals.changed(request);
       if (request === null) denyGate?.release();
     },
@@ -282,6 +295,67 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     if (agentId === null) return;
     const frame: InterruptAttach = { type: "interrupt.attach", agent: agentId };
     stream.send(JSON.stringify(frame));
+  };
+  // The live terminal (ADR 0021): the screen goes to watchers, redacted, while anyone watches;
+  // input comes back signed by a key this machine's Person allowed, and only then is typed.
+  const nonce = randomBytes(16).toString("base64url");
+  let screen: TerminalScreen | null = null;
+  const attachedKeys = new Map<string, { person: string; at: number }>();
+  const sendScreen = () => {
+    if (agentId === null || screen === null) return;
+    const now = Date.now();
+    const shot = screen.snapshot();
+    const frame: TerminalScreenFrame = {
+      type: "terminal.screen",
+      agent: agentId,
+      nonce,
+      ...shot,
+      attached: [...attachedKeys]
+        .filter(([, k]) => now - k.at < TERMINAL_ATTACHED_MS)
+        .map(([fingerprint, k]) => ({ person: k.person, key: fingerprint.slice(0, 4) })),
+      prompt: promptOpen,
+    };
+    stream.send(JSON.stringify(frame));
+  };
+  const screenStream = new ScreenStream(sendScreen);
+  const gate = new AttachGate({
+    owner: config.person,
+    agent: () => agentId,
+    nonce,
+    list: () => readAttachList(env),
+    promptOpen: () => promptOpen,
+  });
+  const typedFromChannel = async (frame: TerminalInputFrame) => {
+    const result = await gate.check(frame);
+    if (agentId === null) return;
+    if (!result.ok) {
+      log(
+        `refused terminal input from ${result.fingerprint || "a bad key"} (Channel says ${frame.from ?? "nobody"}): ${result.reason}`,
+      );
+      const refused: TerminalRefusedFrame = {
+        type: "terminal.refused",
+        agent: agentId,
+        fingerprint: result.fingerprint,
+        seq: typeof frame.seq === "number" ? frame.seq : -1,
+        reason: result.reason,
+      };
+      stream.send(JSON.stringify(refused));
+      return;
+    }
+    // Typed as the Person's own keys are: Interrupts wait for it, and Enter is the Person's prompt.
+    typer.personTyped(result.text);
+    attachedKeys.set(result.fingerprint, { person: result.person, at: Date.now() });
+    screenStream.changed();
+    if (result.first) {
+      log(`${result.person} (key ${result.fingerprint}) attached to the terminal`);
+      const attachedFrame: TerminalAttachedFrame = {
+        type: "terminal.attached",
+        agent: agentId,
+        person: result.person,
+        key: result.fingerprint.slice(0, 4),
+      };
+      stream.send(JSON.stringify(attachedFrame));
+    }
   };
   const interrupted = async (message: InterruptMessage) => {
     log(`Interrupt ${message.delivery.id} from the Relay`);
@@ -399,6 +473,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         log(`attached: ${agentId}'s Interrupts and Directives come to this wrapper`);
       }
       if (message.type === "interrupt" && message.agent === agentId) void interrupted(message);
+      if (message.type === "terminal.watchers" && message.agent === agentId) screenStream.setWatchers(message.count);
+      if (message.type === "terminal.input" && message.agent === agentId) void typedFromChannel(message);
       if (message.type === "directives" && message.agent === agentId) {
         const kept = addForNextTurn({ directives: message.directives });
         if (kept.length > 0) log(`queued for the next turn: ${kept.length} Directive(s)`);
@@ -690,12 +766,14 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     env: childEnv,
   });
   child = cliPty;
+  screen = new TerminalScreen(stdout.columns || 80, stdout.rows || 24);
   log(`started ${bin} ${args.join(" ")}`);
 
   const watch = new IdleWatch(idleAfterMs, (presence) => link?.report(presence));
   idle = watch;
   cliPty.onData((data) => {
     stdout.write(data);
+    screen?.write(data, () => screenStream.changed());
     watch.activity();
     typer.output(data);
   });
@@ -708,7 +786,11 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   if (stdin.isTTY) stdin.setRawMode(true);
   stdin.on("data", onInput);
   stdin.resume();
-  const onResize = () => cliPty.resize(stdout.columns || 80, stdout.rows || 24);
+  const onResize = () => {
+    cliPty.resize(stdout.columns || 80, stdout.rows || 24);
+    screen?.resize(stdout.columns || 80, stdout.rows || 24);
+    screenStream.changed();
+  };
   stdout.on("resize", onResize);
 
   // Finds a `discover` session without hooks. Where hooks report the session (they
@@ -764,6 +846,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   });
 
   clearTimeout(trustTimer);
+  screenStream.stop();
+  screen?.dispose();
   waker?.stop();
   discovering.abort();
   watch.stop();

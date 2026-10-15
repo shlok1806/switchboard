@@ -143,3 +143,11 @@ The latest main-session context fullness, automatic compactions when known, firs
 **Pending Approval**:
 A permission prompt an Agent's CLI is waiting on (Codex's approval dialog, Claude Code's permission prompt), as its wrapper reports it: the tool, what it asks for with secrets masked, the CLI's reason and when it opened. The Agent carries it until the prompt closes, which is an `approval.closed` Event. It is answered at the Agent's terminal (ADR 0013); a Claude Code Agent's own Person may also deny it from the Channel, never approve it (ADR 0014). A question the CLI asks (AskUserQuestion, a plan to accept) is not one.
 _Avoid_: Permission request, approval request
+
+**Attach**:
+Typing into an Agent's live terminal from the Dashboard, as its owner or as someone the owner allowed. What is typed is Person input, exactly as if typed at the Agent's own terminal. Anyone on the Channel may watch the terminal, redacted on the Person's machine; only an allowed Attach Key types (ADR 0021). Not Takeover, which moves a Stale Claim.
+_Avoid_: Take over (the terminal), remote control, join
+
+**Attach Key**:
+A key pair a browser makes for Attach, whose private half never leaves that browser. Its Person allows its fingerprint on the machine that runs their Agents (`switchboard attach allow`), and the wrapper there checks every keystroke's signature against that list. The Channel carries keystrokes but cannot make one that passes (ADR 0021).
+_Avoid_: Token, credential

@@ -298,6 +298,12 @@ export interface EventPayloads {
   /** Agent `agent`'s own Person took `role` back (ADR 0018). The actor is that Person. */
   "agent.role.revoked": { agent: AgentId; role: AgentRole };
   /** Host `host` attached to the Channel after being Offline. The actor is its Person. */
+  /**
+   * An attach key typed into Agent `agent`'s live terminal for the first time in this run
+   * of its wrapper (ADR 0021). The actor is the Agent: its wrapper checked the key, and
+   * `person` is the label its own Person gave the key. `key` is the fingerprint's first group.
+   */
+  "terminal.attached": { agent: AgentId; person: string; key: string };
   "host.online": { host: HostId };
   /** Host `host` has been gone from the Channel for a while. The actor is its Person. */
   "host.offline": { host: HostId };
