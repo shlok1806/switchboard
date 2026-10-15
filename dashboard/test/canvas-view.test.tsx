@@ -33,6 +33,7 @@ const maya = agent("maya/claude/cccc", { presence: "gone" });
 const login: Task = {
   number: 12,
   title: "Fix the login redirect",
+  branch: "task/12-fix-the-login-redirect",
   claim: { task: 12, holder: { kind: "agent", agentId: lead.id }, claimedAt: "2026-10-15T09:01:00.000Z", stale: false },
 } as Task;
 
@@ -88,9 +89,17 @@ describe("the canvas", () => {
     expect(await node(/^shlok\/codex\/bbbb, shlok's Codex Agent, Running$/)).toBeTruthy();
     expect(await node(/^maya\/claude\/cccc, maya's Claude Code Agent, Gone$/)).toBeTruthy();
     expect(screen.getByText("Fix the login redirect")).toBeTruthy();
+    expect(screen.getByText("task/12-fix-the-login-redirect")).toBeTruthy();
     expect([...container.querySelectorAll("path[data-edge]")].map((p) => p.getAttribute("data-edge"))).toEqual([`${lead.id} ${child.id}`]);
     // shlok, the signed-in Person, comes first.
     expect([...container.querySelectorAll("[data-lane] > span:first-child")].map((e) => e.textContent)).toEqual(["shlok (you)", "maya"]);
+  });
+
+  it("puts the nodes in lane order, so Tab moves through the canvas the way it reads", async () => {
+    // maya's Agent joined first, but the signed-in Person's lane comes first.
+    const { container } = render(<CanvasView />, { wrapper: channel([maya, child, lead]) });
+    await node(/^planner/);
+    expect([...container.querySelectorAll("[data-node]")].map((e) => e.getAttribute("data-node"))).toEqual([lead.id, child.id, maya.id]);
   });
 
   it("opens an Agent on a click, and shows where it came from", async () => {
@@ -102,6 +111,30 @@ describe("the canvas", () => {
     const panel = await screen.findByRole("complementary", { name: /shlok\/codex\/bbbb/ });
     expect(panel.textContent).toContain("Started by planner");
     expect(screen.getByRole("link", { name: "Open Agent page" }).getAttribute("href")).toBe(`#/agents/${encodeURIComponent(child.id)}`);
+  });
+
+  it("closes the open Agent on Escape, from a node as well as from the canvas", async () => {
+    window.location.hash = `#/canvas/${encodeURIComponent(child.id)}`;
+    render(<CanvasView selected={child.id} />, { wrapper: channel([lead, child]) });
+    fireEvent.keyDown(await node(/^planner/), { key: "Escape" });
+    expect(window.location.hash).toBe("#/canvas");
+  });
+
+  it("zooms in as two fingers spread and out as they pinch, about the point between them", async () => {
+    render(<CanvasView />, { wrapper: channel([lead, child]) });
+    await node(/^planner/);
+    const ground = screen.getByRole("application");
+    const start = currentZoom();
+    act(() => {
+      fireEvent.pointerDown(ground, { pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100 });
+      fireEvent.pointerDown(ground, { pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100 });
+      fireEvent.pointerMove(ground, { pointerId: 2, pointerType: "touch", clientX: 220, clientY: 100 });
+    });
+    expect(currentZoom()).toBeCloseTo(start * 1.2);
+    act(() => {
+      fireEvent.pointerMove(ground, { pointerId: 2, pointerType: "touch", clientX: 160, clientY: 100 });
+    });
+    expect(currentZoom()).toBeCloseTo(start * 0.6);
   });
 
   it("keeps a dragged node where it was put, after a reload and when another Agent joins", async () => {

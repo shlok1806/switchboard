@@ -4,7 +4,7 @@
  * It draws the Channel and creates nothing; a node opens its Agent's page. Where nodes
  * sit and the camera are this browser's view state, per Channel.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Maximize, Minus, Plus, RotateCcw, X } from "lucide-react";
 import type { Agent, AgentId, Task } from "@shared/index";
 import { buttonVariants } from "@/components/atoms/Button";
@@ -91,10 +91,12 @@ function saveView(repo: string, view: View) {
   }
 }
 
-/** The first view never zooms out so far that a node cannot be read; past it, it starts at the top left. */
-const FIRST_ZOOM = 0.85;
+/** The first view is at 100%, where a node's text is its full size; what does not fit starts at the top left. */
+const FIRST_ZOOM = 1;
 
 const name = (a: Agent) => a.nickname ?? a.id;
+
+const ORIGIN: Point = { x: 0, y: 0 };
 
 function percentOf(a: Agent): number | undefined {
   const c = a.context;
@@ -115,7 +117,11 @@ function Meter({ agent }: { agent: Agent }) {
   );
 }
 
-function Node({
+/**
+ * One Agent's node. Memoised, with handlers that never change, so panning, which moves
+ * only the camera, renders no node again.
+ */
+const Node = memo(function Node({
   agent,
   state,
   at,
@@ -123,14 +129,16 @@ function Node({
   faded,
   onPointerDown,
   onSelect,
+  onFocus,
 }: {
   agent: Agent;
   state: NodeState;
   at: Point;
   selected: boolean;
   faded: boolean;
-  onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => void;
-  onSelect: () => void;
+  onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>, id: AgentId) => void;
+  onSelect: (id: AgentId) => void;
+  onFocus: (e: ReactFocusEvent<HTMLButtonElement>, id: AgentId) => void;
 }) {
   const activity = agent.context?.activity ?? agent.context?.task;
   return (
@@ -139,8 +147,9 @@ function Node({
       data-node={agent.id}
       aria-pressed={selected}
       aria-label={`${name(agent)}, ${agent.person}'s ${CLI_LABEL[agent.cli]} Agent, ${STATE_LABEL[state]}`}
-      onPointerDown={onPointerDown}
-      onClick={onSelect}
+      onPointerDown={(e) => onPointerDown(e, agent.id)}
+      onClick={() => onSelect(agent.id)}
+      onFocus={(e) => onFocus(e, agent.id)}
       style={{ left: at.x, top: at.y, width: NODE_W, height: NODE_H }}
       className={cn(
         "absolute flex cursor-grab flex-col gap-1.5 rounded-md bg-node-bg p-3 text-left transition-[opacity,background-color] duration-150 select-none active:cursor-grabbing",
@@ -167,7 +176,7 @@ function Node({
       </span>
     </button>
   );
-}
+});
 
 function Frame({ tasks, at }: { tasks: Task[]; at: Point }) {
   const [first, ...more] = tasks;
@@ -179,10 +188,13 @@ function Frame({ tasks, at }: { tasks: Task[]; at: Point }) {
       style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
       className="absolute rounded-md bg-frame-bg"
     >
-      <span className="flex h-[var(--frame-top)] items-center gap-1.5 px-3 text-small text-frame-label" style={{ ["--frame-top" as string]: `${FRAME_TOP - 4}px` }}>
-        <span className="font-medium text-ink-2 tabular-nums">#{first.number}</span>
-        <span className="min-w-0 truncate">{first.title}</span>
-        {more.length > 0 && <span className="shrink-0 tabular-nums">+{more.length}</span>}
+      <span className="flex h-[var(--frame-top)] flex-col justify-center px-3 text-small text-frame-label" style={{ ["--frame-top" as string]: `${FRAME_TOP - 4}px` }}>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="font-medium text-ink-2 tabular-nums">#{first.number}</span>
+          <span className="min-w-0 truncate">{first.title}</span>
+          {more.length > 0 && <span className="shrink-0 tabular-nums">+{more.length}</span>}
+        </span>
+        <span className="min-w-0 truncate font-mono">{first.branch ?? "No branch yet"}</span>
       </span>
     </div>
   );
@@ -385,8 +397,10 @@ export function CanvasView({ selected }: { selected?: string }) {
       const box = viewport.current?.getBoundingClientRect();
       if (!d || !a || !b || !box) return;
       const mid = { x: (a.x + b.x) / 2 - box.left, y: (a.y + b.y) / 2 - box.top };
-      setCamera((c) => zoomAt(c, d / g.distance, mid));
+      // Read before the update runs: by then the gesture holds the new distance.
+      const factor = d / g.distance;
       g.distance = d;
+      setCamera((c) => zoomAt(c, factor, mid));
     } else {
       const dx = (e.clientX - g.start.x) / camera.k;
       const dy = (e.clientY - g.start.y) / camera.k;
@@ -412,6 +426,12 @@ export function CanvasView({ selected }: { selected?: string }) {
   const select = (id?: AgentId) => go({ view: "canvas", agent: id });
 
   const onKey = (e: React.KeyboardEvent) => {
+    // Escape closes the Agent from anywhere on the canvas; the rest is for the canvas itself.
+    if (e.key === "Escape" && selected) {
+      select();
+      e.preventDefault();
+      return;
+    }
     if (e.target !== viewport.current) return;
     const step = 64;
     const moves: Record<string, Point> = { ArrowLeft: { x: step, y: 0 }, ArrowRight: { x: -step, y: 0 }, ArrowUp: { x: 0, y: step }, ArrowDown: { x: 0, y: -step } };
@@ -421,10 +441,37 @@ export function CanvasView({ selected }: { selected?: string }) {
     } else if (e.key === "+" || e.key === "=") zoomBy(1.2);
     else if (e.key === "-") zoomBy(1 / 1.2);
     else if (e.key === "0") fitAll();
-    else if (e.key === "Escape") select();
     else return;
     e.preventDefault();
   };
+
+  // Tabbing to a node the camera does not show brings it into view: the viewport clips
+  // and never scrolls, so the camera is the only thing that can move.
+  const reveal = (e: ReactFocusEvent<HTMLButtonElement>, id: AgentId) => {
+    const p = at.get(id);
+    if (!p || !size.w || !e.currentTarget.matches(":focus-visible")) return;
+    const margin = 24;
+    const k = camera.k;
+    const left = camera.x + p.x * k;
+    const top = camera.y + p.y * k;
+    const dx = left < margin ? margin - left : left + NODE_W * k > size.w - margin ? size.w - margin - (left + NODE_W * k) : 0;
+    const dy = top < margin ? margin - top : top + NODE_H * k > size.h - margin ? size.h - margin - (top + NODE_H * k) : 0;
+    if (dx || dy) setCamera((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
+  };
+
+  // Each node gets handlers that never change, calling the latest of these, so a node
+  // renders again only when what it shows changes.
+  const latest = useRef({ onDown, select, reveal, selected });
+  latest.current = { onDown, select, reveal, selected };
+  const onNodeDown = useCallback((e: ReactPointerEvent<HTMLButtonElement>, id: AgentId) => latest.current.onDown(e, id), []);
+  const onNodeFocus = useCallback((e: ReactFocusEvent<HTMLButtonElement>, id: AgentId) => latest.current.reveal(e, id), []);
+  const onNodeSelect = useCallback((id: AgentId) => {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
+    latest.current.select(latest.current.selected === id ? undefined : id);
+  }, []);
 
   const chosen = selected ? agents.find((a) => a.id === selected) : undefined;
   const live = agents.filter((a) => a.presence === "live").length;
@@ -495,7 +542,7 @@ export function CanvasView({ selected }: { selected?: string }) {
             if (suppressClick.current) suppressClick.current = false;
             else select();
           }}
-          className="relative min-w-0 flex-1 cursor-default touch-none overflow-hidden bg-canvas-bg outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+          className="relative min-w-0 flex-1 cursor-default touch-none overflow-clip bg-canvas-bg focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
         >
           <div
             data-ground
@@ -543,24 +590,20 @@ export function CanvasView({ selected }: { selected?: string }) {
                 );
               })}
             </svg>
-            {agents.map((a) => {
+            {/* In lane order, so Tab moves through the canvas the way it reads. */}
+            {laneList.flatMap((lane) => lane.agents).map((a) => {
               const state = nodeState(a, claims.get(a.id) ?? []);
               return (
                 <Node
                   key={a.id}
                   agent={a}
                   state={state}
-                  at={at.get(a.id) ?? { x: 0, y: 0 }}
+                  at={at.get(a.id) ?? ORIGIN}
                   selected={selected === a.id}
                   faded={state === "gone" && !claims.has(a.id)}
-                  onPointerDown={(e) => onDown(e, a.id)}
-                  onSelect={() => {
-                    if (suppressClick.current) {
-                      suppressClick.current = false;
-                      return;
-                    }
-                    select(selected === a.id ? undefined : a.id);
-                  }}
+                  onPointerDown={onNodeDown}
+                  onSelect={onNodeSelect}
+                  onFocus={onNodeFocus}
                 />
               );
             })}

@@ -8,9 +8,9 @@ import type { Agent, AgentId, Task } from "@shared/index";
 
 export const NODE_W = 280;
 export const NODE_H = 128;
-/** A Task frame's margin around its node, and the band above the node for its label. */
+/** A Task frame's margin around its node, and the band above the node for its label: the Task, then its branch. */
 export const FRAME_PAD = 12;
-export const FRAME_TOP = 40;
+export const FRAME_TOP = 60;
 /** The band above a lane's first row for the Person's name. */
 export const LANE_LABEL = 36;
 const SLOT_W = NODE_W + FRAME_PAD * 2;
