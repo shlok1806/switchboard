@@ -19,6 +19,7 @@ import { channelStub, streamQuery, url } from "./client";
 import {
   call,
   cleanUp,
+  closeAfterTest,
   events,
   FakeHost,
   hosts,
@@ -76,6 +77,8 @@ describe("registering a Host", () => {
       }),
     );
     expect(agentStream.status).toBe(403);
+    const agentList = await call("/api/hosts", "shlok", {}, agent.id);
+    expect(agentList.status).toBe(403);
   });
 
   it("records Offline only after the Host has stayed away, so a reconnect records nothing", async () => {
@@ -244,6 +247,30 @@ describe("starting an Agent", () => {
     // A late registration for a spawn that already ended records nothing more.
     await wrapperRegisters("shlok", "studio", spawn);
     expect((await events()).filter((e) => e.type === "agent.spawned")).toEqual([]);
+  });
+
+  it("ignores a spawn failure sent from a Person's plain socket or an Agent's socket", async () => {
+    const studio = await FakeHost.registered("shlok", "studio");
+    await studio.connect();
+    const { agent } = await wrapperRegisters("shlok");
+    const sockets: WebSocket[] = [];
+    for (const as of ["shlok", { person: "shlok", agent: agent.id }] as const) {
+      const response = await exports.default.fetch(
+        new Request(url(`/api/stream?${await streamQuery(as)}`), { headers: { Upgrade: "websocket" } }),
+      );
+      const socket = response.webSocket;
+      if (!socket) throw new Error(`No WebSocket: ${response.status}`);
+      socket.accept();
+      sockets.push(socket);
+      closeAfterTest(socket);
+    }
+    const spawning = post("/api/agents/spawn", "shlok", { cli: "claude-code", cwd: "/work/app" });
+    const { spawn } = await studio.nextSpawn();
+    for (const socket of sockets)
+      socket.send(JSON.stringify({ type: "host.spawn.failed", spawn, reason: "not a Host" }));
+    // Still waiting on the Host, so the request comes back without the Agent, not failed.
+    expect((await spawning).status).toBe(202);
+    expect((await events()).filter((e) => e.type === "agent.spawn.failed")).toEqual([]);
   });
 
   it("answers 202 when the Host is slow, and fails the spawn once it is too late", async () => {

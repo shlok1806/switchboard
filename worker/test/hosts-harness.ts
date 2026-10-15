@@ -57,6 +57,11 @@ export async function waitFor<T>(check: () => Promise<T | undefined> | T | undef
 
 const open: WebSocket[] = [];
 
+/** A socket a test opened itself, closed with the harness's own after the test. */
+export function closeAfterTest(socket: WebSocket): void {
+  open.push(socket);
+}
+
 /** One Host: registered, and with its socket attached when `connect` is called. */
 export class FakeHost {
   readonly frames: Array<{ type: string } & Record<string, unknown>> = [];

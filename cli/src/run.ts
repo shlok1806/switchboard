@@ -454,6 +454,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // What the Host told this wrapper is about this session only, not one an Agent starts.
   delete childEnv.SWITCHBOARD_HOST;
   delete childEnv.SWITCHBOARD_SPAWN;
+  for (const name of adapter.parentEnv ?? []) delete childEnv[name];
   if (plan.kind !== "none" && proxySetting !== "off") {
     // The Proxy Capture: model traffic goes through a local proxy. If it cannot
     // start, the CLI runs as it would without Switchboard.

@@ -40,8 +40,20 @@ import { ChannelChoiceError, chooseChannel } from "../channel-choice";
 import { ChannelClient, ChannelError, targetOf } from "../channel-client";
 import { type Config, configDir, readConfig } from "../config";
 import { matchAgents } from "../rename";
-import { hostDir, hostLogPath, pidPath, readAgents, readSettings, settingsPath, writeSettings } from "./files";
-import { installLaunchAgent, launchAgentLoaded, plistPath, uninstallLaunchAgent } from "./launchd";
+import {
+  CappedLog,
+  HOST_LOG_MAX_BYTES,
+  type HostedAgent,
+  hostDir,
+  hostLogPath,
+  launchdLogPath,
+  pidPath,
+  readAgents,
+  readSettings,
+  settingsPath,
+  writeSettings,
+} from "./files";
+import { installLaunchAgent, LAUNCH_AGENT_LABEL, launchAgentLoaded, plistPath, uninstallLaunchAgent } from "./launchd";
 import { HostSupervisor } from "./supervisor";
 
 export const HOST_USAGE = `Usage:
@@ -91,6 +103,16 @@ function mode(value: string | undefined, flag: string): PermissionMode | undefin
   return value;
 }
 
+/**
+ * The variables from the installing shell that change how the Agents run, carried into
+ * the LaunchAgent, which otherwise starts with launchd's bare environment.
+ */
+const PASSED_ON = ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"] as const;
+
+function passedOn(): Record<string, string> {
+  return Object.fromEntries(PASSED_ON.flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])));
+}
+
 /** This machine's short host name, as a Host name. */
 function defaultName(): string {
   return (
@@ -130,22 +152,24 @@ async function install(args: string[]): Promise<number> {
     method: "POST",
     body: JSON.stringify({ name, roots, maxPermissionMode }),
   });
-  writeSettings({ name, repo, roots: host.roots, maxPermissionMode: host.maxPermissionMode });
+  // The limits this machine keeps are the ones typed here, not the Channel's answer:
+  // the Host checks every spawn against them (ADR 0017).
+  writeSettings({ name, repo, roots, maxPermissionMode });
   const plist = await installLaunchAgent({
     node: process.execPath,
     cli: realpathSync(process.argv[1] ?? ""),
-    logPath: hostLogPath(),
+    logPath: launchdLogPath(),
     workingDirectory: homedir(),
     environment: {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       HOME: homedir(),
       SWITCHBOARD_CONFIG_DIR: configDir(),
-      ...(process.env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR } : {}),
+      ...passedOn(),
     },
   });
   console.log(`${host.id} is installed for ${repo}.`);
-  console.log(`  Starts Agents under: ${host.roots.join(", ")}`);
-  console.log(`  Permission mode: at most "${host.maxPermissionMode}"`);
+  console.log(`  Starts Agents under: ${roots.join(", ")}`);
+  console.log(`  Permission mode: at most "${maxPermissionMode}"`);
   console.log(`  LaunchAgent: ${plist}`);
   console.log(`  Log: ${hostLogPath()}`);
   return 0;
@@ -179,15 +203,29 @@ function runningPid(): number | null {
 }
 
 async function run(): Promise<number> {
-  const config = await signedIn();
+  // Under launchd the log is the Host's own capped file; stdout goes to launchd.log,
+  // which then holds only what escaped it, such as a crash.
+  const underLaunchd = process.env.XPC_SERVICE_NAME === LAUNCH_AGENT_LABEL;
+  const file = new CappedLog(hostLogPath(), HOST_LOG_MAX_BYTES);
+  const log = (line: string) => {
+    const stamped = `${new Date().toISOString()} ${line}\n`;
+    file.append(stamped);
+    if (!underLaunchd) process.stdout.write(stamped);
+  };
+  // Reasons a restart cannot help. launchd restarts only a failed exit, so under it these exit 0.
+  const cannotRun = (reason: string) => {
+    log(`not starting: ${reason}`);
+    if (!underLaunchd) console.error(`switchboard: ${reason}`);
+    return underLaunchd ? 0 : 1;
+  };
+  const config = await readConfig();
+  if (!config) return cannotRun("not logged in. Run `switchboard login` first.");
   const settings = readSettings();
   if (settings === null)
-    throw new CommandError(`no Host is installed here (no ${settingsPath()}). Run \`switchboard host install\`.`);
+    return cannotRun(`no Host is installed here (no ${settingsPath()}). Run \`switchboard host install\`.`);
   const other = runningPid();
-  if (other !== null && other !== process.pid)
-    throw new CommandError(`a Host supervisor already runs here (pid ${other}).`);
+  if (other !== null && other !== process.pid) return cannotRun(`a Host supervisor already runs here (pid ${other}).`);
   writeFileSync(pidPath(), `${process.pid}\n`, { mode: 0o600 });
-  const log = (line: string) => console.log(`${new Date().toISOString()} ${line}`);
   const supervisor = new HostSupervisor({
     config,
     settings,
@@ -232,7 +270,13 @@ async function status(): Promise<number> {
     const host = listed?.hosts.find((h) => h.person === config.person && h.name === settings.name);
     console.log(`  On the Channel: ${host === undefined ? "unknown" : host.live ? "Live" : "Offline"}`);
   }
-  const agents = readAgents();
+  let agents: HostedAgent[];
+  try {
+    agents = readAgents();
+  } catch (error) {
+    console.log(`  Agents: cannot read them (${(error as Error).message})`);
+    agents = [];
+  }
   console.log(agents.length === 0 ? "  No Agents." : `  Agents (${agents.length}):`);
   for (const a of agents)
     console.log(`    ${a.agent}${a.nickname ? ` "${a.nickname}"` : ""} in ${a.cwd} (${a.permissionMode})`);

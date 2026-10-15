@@ -18,6 +18,13 @@
 // - A lead (ADR 0018) spawns and stops for its Person: on that Person's Hosts, and
 //   only Agents in its own subtree, within `leadCap`. The Agent a lead's spawn starts
 //   gets the lead as its parent. Whether the caller holds the role is the Channel's check.
+//
+// The folders and mode kept here are advisory (ADR 0017). The same Person's session
+// that spawns can re-register the Host with wider ones, so a stolen session could
+// widen them first. `switchboard host run` MUST re-check every spawn against its own
+// install-time configuration on the machine (the folder after realpath, under its
+// local roots; the mode no looser than its local maximum) and never trust this copy.
+// `host_spawns` rows are never pruned: one short row per spawn, next to its Event.
 
 import type {
   Actor,

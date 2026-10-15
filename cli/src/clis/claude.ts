@@ -27,6 +27,21 @@ export const claude: CliAdapter = {
   wakes: true,
   remoteDeny: true,
   proxy: true,
+  // Claude Code 2.1.300 sets these in its tools' environment. Inherited, they make the
+  // new session a child of that one: CLAUDE_CODE_CHILD_SESSION turns its transcript
+  // off, so it could not be resumed and its context could not be read.
+  parentEnv: [
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+  ],
   // Claude Code's picker: its first hooks may run before the Person picks a session.
   sessionFromHooks: false,
 

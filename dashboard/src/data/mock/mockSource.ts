@@ -405,6 +405,12 @@ export class MockChannelSource implements ChannelSource {
       host: host.id,
       ...(request.nickname ? { nickname: request.nickname } : {}),
       ...(request.model ? { model: request.model } : {}),
+      // What its session reports once it starts: the brief's first line is its task.
+      context: {
+        readAt: at,
+        cwd: request.cwd,
+        ...(request.brief ? { task: request.brief.split("\n")[0], brief: request.brief } : {}),
+      },
     };
     this.agents.push(agent);
     this.emit({ type: "agent", agent: clone(agent) });
@@ -425,9 +431,12 @@ export class MockChannelSource implements ChannelSource {
     if (agent.presence === "gone") return { ok: false, reason: `${id} is Gone already.` };
     const at = new Date().toISOString();
     this.record(makeEvent("agent.stop", person(this.me), null, { agent: id, host: agent.host }, { at }), undefined, true);
-    agent.presence = "gone";
-    agent.lastSeenAt = at;
-    this.emit({ type: "agent", agent: clone(agent) });
+    // Like a real Host: the session takes a moment to end, then the Agent goes Gone.
+    setTimeout(() => {
+      agent.presence = "gone";
+      agent.lastSeenAt = new Date().toISOString();
+      this.emit({ type: "agent", agent: clone(agent) });
+    }, 1500);
     return { ok: true };
   }
 

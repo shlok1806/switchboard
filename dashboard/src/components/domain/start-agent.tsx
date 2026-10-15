@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Plus, Square } from "lucide-react";
 import { toast } from "sonner";
-import type { Agent, Host, PermissionMode } from "@shared/index";
+import type { Agent, Host, PermissionMode, Presence } from "@shared/index";
 import {
   DEFAULT_PERMISSION_MODE,
   MAX_BRIEF_LENGTH,
@@ -21,29 +21,73 @@ import {
 import { useMe, useStore } from "@/data/store";
 import { go } from "@/lib/router";
 
-/** What each permission mode lets the Agent do without asking, in a few words. */
+/** What each permission mode lets the Agent do without asking. */
 const MODE_HINT: Record<PermissionMode, string> = {
-  plan: "reads and plans, changes nothing",
-  dontAsk: "runs only tools allowed beforehand",
-  default: "asks before edits and commands",
-  acceptEdits: "edits files, asks before commands",
-  auto: "a classifier approves each action",
-  bypassPermissions: "no permission checks",
+  plan: "It reads and plans, and changes nothing.",
+  dontAsk: "It runs only the tools allowed beforehand.",
+  default: "It asks before edits and commands.",
+  acceptEdits: "It edits files, and asks before commands.",
+  auto: "A classifier approves each action.",
+  bypassPermissions: "It runs with no permission checks.",
 };
 
 const FIELD =
   "h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]";
 
-/**
- * This Person's own Hosts (ADR 0015), loaded when asked for. `null` while loading;
- * `hosts` is null when the Channel's Worker has no Hosts at all.
- */
-function useMyHosts(load: boolean) {
+/** A Host by the name its Person gave it. On this Person's own Dashboard the person part says nothing. */
+export function hostName(id: string): string {
+  return id.slice(id.indexOf("/") + 1);
+}
+
+/** Text whose `backticked` parts are commands or paths, set as code. */
+export function WithCode({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/`([^`]+)`/).map((part, i) =>
+        // Odd parts were inside backticks.
+        i % 2 === 1 ? (
+          <code key={i} className="font-mono text-ink">
+            {part}
+          </code>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
+/** Per Channel's store, whether its Worker has Hosts: asked once, so every button and empty state agrees. */
+const hostsSupported = new WeakMap<object, Promise<boolean>>();
+
+/** Whether this Channel's Worker has Hosts at all (ADR 0015): `null` while asking. */
+export function useHostsSupported(): boolean | null {
+  const store = useStore();
+  const [supported, setSupported] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    let asked = hostsSupported.get(store);
+    if (asked === undefined) {
+      asked = store.source.hosts().then(
+        (r) => r !== null,
+        () => false,
+      );
+      hostsSupported.set(store, asked);
+    }
+    asked.then((s) => live && setSupported(s));
+    return () => {
+      live = false;
+    };
+  }, [store]);
+  return supported;
+}
+
+/** This Person's own Hosts. `null` while loading; `hosts` is null when the Channel's Worker has no Hosts. */
+function useMyHosts() {
   const store = useStore();
   const me = useMe();
   const [state, setState] = useState<{ hosts: Host[] | null; problem?: string } | null>(null);
   useEffect(() => {
-    if (!load) return;
     let live = true;
     store.source
       .hosts()
@@ -52,7 +96,7 @@ function useMyHosts(load: boolean) {
     return () => {
       live = false;
     };
-  }, [store, me, load]);
+  }, [store, me]);
   return state;
 }
 
@@ -76,20 +120,10 @@ function Field({ label, optional, hint, children }: { label: string; optional?: 
  * Hidden on a Channel whose Worker has no Hosts.
  */
 export function StartAgentButton() {
-  const store = useStore();
+  const supported = useHostsSupported();
   const [open, setOpen] = useState(false);
-  // Asked once up front, so a Channel without Hosts shows no button at all.
-  const [supported, setSupported] = useState(false);
-  useEffect(() => {
-    let live = true;
-    store.source
-      .hosts()
-      .then((r) => live && setSupported(r !== null))
-      .catch(() => live && setSupported(false));
-    return () => {
-      live = false;
-    };
-  }, [store]);
+  // While a start is asked for, the dialog stays: closing it would hide the answer.
+  const [busy, setBusy] = useState(false);
 
   if (!supported) return null;
   return (
@@ -97,35 +131,54 @@ export function StartAgentButton() {
       <Button variant="action" size="sm" onClick={() => setOpen(true)} className="gap-1">
         <Plus className="size-4" aria-hidden /> <span>Start an Agent</span>
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-lg">{open && <StartAgentForm onDone={() => setOpen(false)} />}</DialogContent>
+      <Dialog open={open} onOpenChange={(next) => (busy && !next ? undefined : setOpen(next))}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+          {open && <StartAgentForm busy={busy} setBusy={setBusy} onDone={() => setOpen(false)} />}
+        </DialogContent>
       </Dialog>
     </>
   );
 }
 
-function StartAgentForm({ onDone }: { onDone: () => void }) {
+export function StartAgentForm({
+  busy,
+  setBusy,
+  onDone,
+}: {
+  busy: boolean;
+  setBusy: (busy: boolean) => void;
+  onDone: () => void;
+}) {
   const store = useStore();
-  const loaded = useMyHosts(true);
+  const loaded = useMyHosts();
   const hosts = loaded?.hosts ?? [];
-  const [hostName, setHostName] = useState<string>();
-  const host = hosts.find((h) => h.name === hostName) ?? hosts.find((h) => h.live) ?? hosts[0];
+  const [chosenHost, setChosenHost] = useState<string>();
+  const host = hosts.find((h) => h.name === chosenHost) ?? hosts.find((h) => h.live) ?? hosts[0];
   const [cwd, setCwd] = useState<string>();
   const [brief, setBrief] = useState("");
   const [nickname, setNickname] = useState("");
   const [model, setModel] = useState("");
   const [mode, setMode] = useState<PermissionMode>();
-  const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string>();
+  // Set at once, so a second click before React renders `busy` does not start a second Agent.
+  const starting = useRef(false);
+  const folderInput = useRef<HTMLInputElement>(null);
 
   const modes = host ? PERMISSION_MODES.filter((m) => permissionModeWithin(m, host.maxPermissionMode)) : [];
   const chosenMode = mode && modes.includes(mode) ? mode : modes.includes(DEFAULT_PERMISSION_MODE) ? DEFAULT_PERMISSION_MODE : modes.at(-1);
   const folder = cwd ?? host?.roots[0] ?? "";
 
+  // A long path shows its end, the part that names the repo, unless the Person is editing it.
+  useEffect(() => {
+    const input = folderInput.current;
+    if (input && document.activeElement !== input) input.scrollLeft = input.scrollWidth;
+  }, [folder]);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!host || !chosenMode) return;
+    if (!host || !chosenMode || starting.current) return;
     if (!folder.trim().startsWith("/")) return setProblem("The folder must be an absolute path on the Host.");
+    starting.current = true;
     setBusy(true);
     setProblem(undefined);
     const result = await store.source.spawnAgent({
@@ -137,15 +190,16 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
       ...(nickname.trim() ? { nickname: nickname.trim() } : {}),
       ...(model.trim() ? { model: model.trim() } : {}),
     });
+    starting.current = false;
     setBusy(false);
     if (!result.ok) return setProblem(result.reason);
     const { agent } = result.answer;
     onDone();
     if (agent) {
-      toast.success(`${agent.nickname ?? agent.id} is running on ${result.answer.host}`);
+      toast.success(`${agent.nickname ?? agent.id} is running on ${hostName(result.answer.host)}`);
       go({ view: "agent", id: agent.id });
     } else {
-      toast(`${result.answer.host} is still starting it. It appears here once it is on the Channel.`);
+      toast(`${hostName(result.answer.host)} is still starting it. It appears here once it is on the Channel.`);
     }
   };
 
@@ -188,7 +242,15 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
       </DialogHeader>
       {hosts.length > 1 && (
         <Field label="Host">
-          <select value={host?.name} onChange={(e) => setHostName(e.target.value)} className={FIELD}>
+          <select
+            value={host?.name}
+            onChange={(e) => {
+              setChosenHost(e.target.value);
+              // Another Host has other folders.
+              setCwd(undefined);
+            }}
+            className={FIELD}
+          >
             {hosts.map((h) => (
               <option key={h.id} value={h.name}>
                 {h.name}
@@ -199,7 +261,14 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
         </Field>
       )}
       <Field label="Folder" hint={host && <FolderChoices host={host} value={folder} onPick={setCwd} />}>
-        <input name="cwd" value={folder} onChange={(e) => setCwd(e.target.value)} spellCheck={false} className={`${FIELD} font-mono`} />
+        <input
+          ref={folderInput}
+          name="cwd"
+          value={folder}
+          onChange={(e) => setCwd(e.target.value)}
+          spellCheck={false}
+          className={`${FIELD} font-mono` /* taste-skill-ignore: a path is code */}
+        />
       </Field>
       <Field label="Brief" optional hint="Its first prompt, sent as your Directive.">
         <textarea
@@ -222,7 +291,7 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
         </Field>
       </div>
       <Field label="Permission mode" hint={chosenMode ? MODE_HINT[chosenMode] : undefined}>
-        <select value={chosenMode} onChange={(e) => setMode(e.target.value as PermissionMode)} className={FIELD}>
+        <select name="permissionMode" value={chosenMode} onChange={(e) => setMode(e.target.value as PermissionMode)} className={FIELD}>
           {modes.map((m) => (
             <option key={m} value={m}>
               {m}
@@ -231,15 +300,17 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
         </select>
       </Field>
       {host && !host.live && (
-        <p className="text-small text-ink-2">{host.id} is Offline: start `switchboard host run` there, or wait for it to come back.</p>
+        <p className="text-small text-ink-2">
+          {host.name} is Offline. Start <code className="font-mono text-ink">switchboard host run</code> there, or wait for it to come back.
+        </p>
       )}
       {problem && (
         <p role="alert" className="text-small text-red">
-          {problem}
+          <WithCode text={problem} />
         </p>
       )}
       <DialogFooter>
-        <Button type="button" size="sm" onClick={onDone}>
+        <Button type="button" size="sm" disabled={busy} onClick={onDone}>
           Cancel
         </Button>
         <Button type="submit" variant="action" size="sm" disabled={busy || !host?.live}>
@@ -257,9 +328,7 @@ function StartAgentForm({ onDone }: { onDone: () => void }) {
 function FolderChoices({ host, value, onPick }: { host: Host; value: string; onPick: (root: string) => void }) {
   return (
     <span className="flex min-w-0 flex-col gap-1.5">
-      <span>
-        On {host.id}, in one of its folders or under it:
-      </span>
+      <span>On {host.name}, in one of its folders or under it:</span>
       <span className="flex min-w-0 flex-wrap gap-1.5">
         {host.roots.map((root) => (
           <button
@@ -268,9 +337,11 @@ function FolderChoices({ host, value, onPick }: { host: Host; value: string; onP
             title={root}
             onClick={() => onPick(root)}
             aria-pressed={value === root}
-            className="block h-7 max-w-full truncate rounded-sm bg-inset px-2 font-mono text-small text-ink-2 transition-colors [direction:rtl] hover:bg-hover hover:text-ink aria-pressed:bg-hover-2 aria-pressed:text-ink"
+            className="block h-7 max-w-full truncate rounded-sm bg-hover px-2 text-small text-ink-2 transition-colors [direction:rtl] hover:bg-hover-2 hover:text-ink aria-pressed:bg-hover-2 aria-pressed:text-ink"
           >
-            <bdi>{root}</bdi>
+            <code className="font-mono">
+              <bdi>{root}</bdi>
+            </code>
           </button>
         ))}
       </span>
@@ -284,32 +355,41 @@ export function StopAgentButton({ agent }: { agent: Agent }) {
   const me = useMe();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const asking = useRef(false);
+  // Asked to stop: the Presence it had then. Stop stays off until the Host's answer changes it.
+  const [stoppingFrom, setStoppingFrom] = useState<Presence | null>(null);
+  const stopping = stoppingFrom !== null && stoppingFrom === agent.presence;
   if (agent.host === undefined || agent.person !== me || agent.presence === "gone") return null;
+  const name = agent.nickname ?? agent.id;
 
   const stop = async () => {
+    if (asking.current) return;
+    asking.current = true;
     setBusy(true);
     const result = await store.source.stopAgent(agent.id);
+    asking.current = false;
     setBusy(false);
     setConfirming(false);
-    if (!result.ok) toast.error(result.reason);
-    else toast.success(`Asked ${agent.host} to stop ${agent.nickname ?? agent.id}`);
+    if (!result.ok) return toast.error(result.reason);
+    setStoppingFrom(agent.presence);
+    toast.success(`Asked ${hostName(agent.host ?? "")} to stop ${name}`);
   };
 
   return (
     <>
-      <Button size="sm" onClick={() => setConfirming(true)} className="gap-1.5">
-        <Square className="size-3 fill-current" aria-hidden /> <span>Stop</span>
+      <Button size="sm" disabled={stopping} onClick={() => setConfirming(true)} className="gap-1.5">
+        <Square className="size-3 fill-current" aria-hidden /> <span>{stopping ? "Stopping" : "Stop"}</span>
       </Button>
-      <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent className="sm:max-w-md">
+      <Dialog open={confirming} onOpenChange={(next) => (busy && !next ? undefined : setConfirming(next))}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Stop {agent.nickname ?? agent.id}?</DialogTitle>
+            <DialogTitle>Stop {name}?</DialogTitle>
             <DialogDescription>
-              {agent.host} ends its Claude Code session. Any Claim it holds goes Stale, for someone to take over.
+              {hostName(agent.host)} ends its Claude Code session. Any Claim it holds goes Stale, for someone to take over.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" size="sm" onClick={() => setConfirming(false)}>
+            <Button type="button" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
               Cancel
             </Button>
             <Button type="button" variant="primary" size="sm" disabled={busy} onClick={stop}>

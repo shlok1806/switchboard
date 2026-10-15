@@ -18,9 +18,9 @@
 //   SIGKILL after `STOP_GRACE_MS`.
 
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { renameSync } from "node:fs";
 import * as pty from "@lydell/node-pty";
-import type { AgentId, HostSpawnedMessage, HostSpawnMessage, PermissionMode } from "../../../shared/src/index";
+import type { AgentId, HostSpawnedMessage } from "../../../shared/src/index";
 import {
   agentIdFor,
   channelApiBase,
@@ -28,11 +28,18 @@ import {
   LIVE_PING,
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
-  permissionModeWithin,
-  underRoots,
 } from "../../../shared/src/index";
 import type { Config } from "../config";
-import { agentLogPath, CappedLog, type HostedAgent, type HostSettings, readAgents, writeAgents } from "./files";
+import { checkFolderAndMode, checkSpawn, type LocalLimits, resolveRoots } from "./check";
+import {
+  agentLogPath,
+  agentsPath,
+  CappedLog,
+  type HostedAgent,
+  type HostSettings,
+  readAgents,
+  writeAgents,
+} from "./files";
 
 export const MAX_RESUMES = 3;
 export const RESUME_WINDOW_MS = 10 * 60_000;
@@ -97,7 +104,8 @@ export function plainText(data: string): string {
 /** Whether `screen` (plain text) shows Claude Code's folder trust dialog. */
 export function showsTrustDialog(screen: string): boolean {
   const squeezed = screen.toLowerCase().replace(/[^a-z]/g, "");
-  return TRUST_DIALOG.some((words) => squeezed.includes(words));
+  // Both of the dialog's lines, so a brief or a transcript quoting one is not taken for it.
+  return TRUST_DIALOG.every((words) => squeezed.includes(words));
 }
 
 /** The session's first prompt: the brief, labelled as the requesting Person's words, or their lead's (ADR 0018). */
@@ -125,30 +133,44 @@ export function wrapperArgs(entry: HostedAgent, resume: boolean, prompt?: string
 
 export class HostSupervisor {
   private readonly running = new Map<AgentId, Running>();
+  /** Every Agent the Host runs or will resume: what `agents.json` holds, kept here and written whole. */
+  private readonly known = new Map<AgentId, HostedAgent>();
   /** When each Agent was resumed after a crash, recent first. */
   private readonly resumes = new Map<AgentId, number[]>();
   private socket: WebSocket | null = null;
   private closed = false;
   private retry = 0;
   private pending: ReturnType<typeof setTimeout> | undefined;
-  private readonly roots: string[];
+  /** This machine's own limits, from `switchboard host install`: never the Channel's copy (ADR 0017). */
+  private readonly limits: LocalLimits;
   private readonly hostId: string;
 
   constructor(private readonly options: SupervisorOptions) {
     // Compared after resolving links, so a root reached through a symlink still counts.
-    this.roots = options.settings.roots.map((root) => {
-      try {
-        return realpathSync(root);
-      } catch {
-        return root;
-      }
-    });
+    this.limits = {
+      roots: resolveRoots(options.settings.roots),
+      maxPermissionMode: options.settings.maxPermissionMode,
+    };
     this.hostId = `${options.config.person}/${options.settings.name}`;
   }
 
   /** Resumes the Agents it ran before, and attaches to the Channel. */
   start(): void {
-    for (const entry of readAgents(this.options.env)) {
+    let saved: HostedAgent[] = [];
+    try {
+      saved = readAgents(this.options.env);
+    } catch (error) {
+      // Set aside, not overwritten: the Person can still see which Agents it held.
+      const aside = `${agentsPath(this.options.env)}.unreadable-${Date.now()}`;
+      this.options.log(`cannot read the Agents to resume (${(error as Error).message}); moved it to ${aside}`);
+      try {
+        renameSync(agentsPath(this.options.env), aside);
+      } catch {
+        // Gone already.
+      }
+    }
+    for (const entry of saved) this.known.set(entry.agent, entry);
+    for (const entry of saved) {
       this.options.log(`resuming ${entry.agent} in ${entry.cwd}`);
       this.launch(entry, { resume: true });
     }
@@ -202,9 +224,15 @@ export class HostSupervisor {
       } catch {
         return;
       }
-      if (frame.type === "host.spawn") this.spawn(frame as unknown as HostSpawnMessage);
-      else if (frame.type === "host.spawned") this.spawned(frame as unknown as HostSpawnedMessage);
-      else if (frame.type === "host.stop" && typeof frame.agent === "string") this.stop(frame.agent as AgentId);
+      // Whatever a frame holds, it must never take the supervisor, and every Agent, down.
+      try {
+        if (frame.type === "host.spawn") this.spawn(frame);
+        else if (frame.type === "host.spawned" && typeof frame.spawn === "string") {
+          this.spawned(frame as unknown as HostSpawnedMessage);
+        } else if (frame.type === "host.stop" && typeof frame.agent === "string") this.stop(frame.agent as AgentId);
+      } catch (error) {
+        this.options.log(`could not handle a ${String(frame.type)} frame: ${(error as Error).message}`);
+      }
     });
     ws.addEventListener("close", (event) => {
       clearInterval(keepalive);
@@ -225,45 +253,31 @@ export class HostSupervisor {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(frame));
   }
 
-  /** Starts what spawn `message` asks for, or answers why it cannot. */
-  private spawn(message: HostSpawnMessage): void {
-    const { settings, config } = this.options;
-    const mode: PermissionMode = message.permissionMode;
-    if (message.cli !== "claude-code") {
-      this.fail(message.spawn, `this Host starts only claude-code Agents`);
+  /** Starts what spawn `frame` asks for, once this Host's own limits allow it, or answers why not. */
+  private spawn(frame: Record<string, unknown>): void {
+    const checked = checkSpawn(frame, this.limits);
+    if (!checked.ok) {
+      if (checked.spawn === null) this.options.log(`ignored a spawn request: ${checked.reason}`);
+      else this.fail(checked.spawn, checked.reason);
       return;
     }
-    if (!permissionModeWithin(mode, settings.maxPermissionMode)) {
-      this.fail(message.spawn, `this Host starts Agents in at most the "${settings.maxPermissionMode}" mode`);
-      return;
-    }
-    let cwd: string;
-    try {
-      cwd = realpathSync(message.cwd);
-    } catch {
-      this.fail(message.spawn, `${message.cwd} does not exist on this Host`);
-      return;
-    }
-    if (!underRoots(cwd, this.roots)) {
-      this.fail(message.spawn, `${message.cwd} is not under this Host's folders`);
-      return;
-    }
+    const { request } = checked;
     const sessionId = randomUUID();
     const entry: HostedAgent = {
-      agent: agentIdFor(config.person, message.cli, sessionId),
+      agent: agentIdFor(this.options.config.person, request.cli, sessionId),
       sessionId,
-      cwd,
-      ...(message.nickname === undefined ? {} : { nickname: message.nickname }),
-      ...(message.model === undefined ? {} : { model: message.model }),
-      permissionMode: mode,
+      cwd: request.cwd,
+      ...(request.nickname === undefined ? {} : { nickname: request.nickname }),
+      ...(request.model === undefined ? {} : { model: request.model }),
+      permissionMode: request.permissionMode,
     };
-    this.options.log(`spawn ${message.spawn} from ${message.lead ?? message.by}: ${entry.agent} in ${cwd}`);
+    this.options.log(`spawn ${request.spawn} from ${request.lead ?? request.by}: ${entry.agent} in ${entry.cwd}`);
     this.launch(entry, {
       resume: false,
-      spawn: message.spawn,
-      ...(message.brief === undefined
+      spawn: request.spawn,
+      ...(request.brief === undefined
         ? {}
-        : { prompt: briefPrompt(message.by, this.hostId, message.brief, message.lead) }),
+        : { prompt: briefPrompt(request.by, this.hostId, request.brief, request.lead) }),
     });
   }
 
@@ -302,10 +316,12 @@ export class HostSupervisor {
 
   private launch(entry: HostedAgent, how: { resume: boolean; spawn?: string; prompt?: string }): void {
     const { env, settings } = this.options;
-    if (!existsSync(entry.cwd)) {
-      this.options.log(`not starting ${entry.agent}: ${entry.cwd} is gone`);
+    // A resume is checked again: the folder or the Host's own limits may have changed since.
+    const allowed = checkFolderAndMode(entry.cwd, entry.permissionMode, this.limits);
+    if (!allowed.ok) {
+      this.options.log(`not starting ${entry.agent}: ${allowed.reason}`);
       this.forget(entry.agent);
-      if (how.spawn !== undefined) this.fail(how.spawn, `${entry.cwd} does not exist on this Host`);
+      if (how.spawn !== undefined) this.fail(how.spawn, allowed.reason);
       return;
     }
     const log = new CappedLog(agentLogPath(entry.agent, env));
@@ -335,9 +351,11 @@ export class HostSupervisor {
     running.timer = setTimeout(() => {
       if (running.spawn === undefined && running.registered) return;
       if (running.spawn !== undefined) {
+        // The terminal's last line stays in the Host's log: on the Channel, everyone would see it.
+        this.options.log(`${entry.agent} did not start: ${lastLine(running.tail)}`);
         this.fail(
           running.spawn,
-          `its session did not start within ${REGISTER_TIMEOUT_MS / 1000} s: ${lastLine(running.tail)}`,
+          `its session did not start within ${REGISTER_TIMEOUT_MS / 1000} s; see the Host's log`,
         );
         running.spawn = undefined;
       }
@@ -376,22 +394,22 @@ export class HostSupervisor {
       if (this.closed) return;
       const unanswered = running.spawn !== undefined;
       if (running.spawn !== undefined) {
-        this.fail(
-          running.spawn,
-          `switchboard run exited (${exitCode}) before the session started: ${lastLine(running.tail)}`,
-        );
+        this.options.log(`${entry.agent} exited before its session started: ${lastLine(running.tail)}`);
+        this.fail(running.spawn, `switchboard run exited (${exitCode}) before the session started; see the Host's log`);
       }
-      if (unanswered || running.stopping || !running.registered || exitCode === 0) {
+      // node-pty reports a kill -9 (say, the OOM killer) as exit code 0 with the signal.
+      const clean = exitCode === 0 && !signal;
+      if (unanswered || running.stopping || !running.registered || clean) {
         this.options.log(`${entry.agent} ended (${exitCode})`);
         this.forget(entry.agent);
         return;
       }
-      this.crashed(entry, exitCode);
+      this.crashed(entry, signal ? `signal ${signal}` : `${exitCode}`);
     });
   }
 
   /** A wrapper ended on its own: resumed, unless it already was too often lately. */
-  private crashed(entry: HostedAgent, exitCode: number): void {
+  private crashed(entry: HostedAgent, exitCode: string): void {
     const now = Date.now();
     const recent = (this.resumes.get(entry.agent) ?? []).filter((at) => now - at < RESUME_WINDOW_MS);
     if (recent.length >= MAX_RESUMES) {
@@ -408,15 +426,21 @@ export class HostSupervisor {
   }
 
   private remember(entry: HostedAgent): void {
-    const agents = readAgents(this.options.env).filter((a) => a.agent !== entry.agent);
-    writeAgents([...agents, entry], this.options.env);
+    this.known.set(entry.agent, entry);
+    this.save();
   }
 
   private forget(agent: AgentId): void {
-    writeAgents(
-      readAgents(this.options.env).filter((a) => a.agent !== agent),
-      this.options.env,
-    );
+    this.known.delete(agent);
+    this.save();
+  }
+
+  private save(): void {
+    try {
+      writeAgents([...this.known.values()], this.options.env);
+    } catch (error) {
+      this.options.log(`could not save the Agents to resume: ${(error as Error).message}`);
+    }
   }
 }
 
