@@ -6,7 +6,7 @@ import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Glyph } from "@/components/domain/state";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useChannel, useMe, useStore } from "@/data/store";
-import { ago } from "@/lib/format";
+import { ago, localTime } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { useNow } from "./usage";
@@ -27,7 +27,7 @@ export function PendingApproval({ agent, className }: { agent: Agent; className?
   const mine = agent.person === me;
   const canDeny = a.deniable === true && a.deniedBy === undefined && mine;
   const zone = snapshot?.persons.find((p) => p.name === agent.person)?.timeZone;
-  const theirTime = zone ? localTime(now, zone) : null;
+  const theirTime = zone ? localTime(now, zone) || null : null;
   return (
     <section aria-label={`${agent.nickname ?? agent.id} wants to run ${a.tool}`} className={cn("flex min-w-0 flex-col gap-2", className)}>
       <div className="flex min-w-0 items-baseline gap-2">
@@ -64,14 +64,6 @@ export function PendingApproval({ agent, className }: { agent: Agent; className?
       )}
     </section>
   );
-}
-
-function localTime(now: number, timeZone: string): string | null {
-  try {
-    return new Date(now).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone });
-  } catch {
-    return null;
-  }
 }
 
 /** Deny the prompt from the Channel, with a message the Agent reads (ADR 0014). */
@@ -134,7 +126,7 @@ function DenyAction({ agent, id, tool }: { agent: Agent; id: string; tool: strin
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder="Not now. Use the cached build instead."
-                className="resize-none rounded-[var(--r)] border border-rule-2 bg-paper px-3 py-2 text-row text-ink hover:bg-paper-2 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus max-sm:text-[16px]"
+                className="resize-none rounded-[var(--r)] border border-rule-2 bg-paper px-3 py-2 text-row text-ink hover:bg-paper-2 max-sm:text-[16px]"
               />
             </label>
             <DialogFooter>

@@ -15,7 +15,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAgentStates } from "@/components/domain/state";
+import { needsYou } from "@/lib/state";
 import { useChannel, useMe, useStore } from "@/data/store";
+import { localTime } from "@/lib/format";
 import { href, type Route } from "@/lib/router";
 import { signOut } from "@/lib/session";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
@@ -43,8 +45,7 @@ export function useCounts() {
   const { agents, tasks } = useChannel();
   const states = useAgentStates();
   return useMemo(() => {
-    let needYou = 0;
-    for (const s of states.values()) if (s === "needs" || s === "stale") needYou++;
+    const needYou = needsYou(states.values());
     const open = tasks.filter((t) => t.status !== "done").length;
     return { agents: agents.length, needYou, tasks: open };
   }, [agents, tasks, states]);
@@ -61,10 +62,11 @@ export function Mark({ className }: { className?: string }) {
 }
 
 /** The count that means you are needed: the one coloured count on the Dashboard. */
-function SignalCount({ n, label }: { n: number; label: string }) {
+function SignalCount({ n }: { n: number }) {
   return (
-    <span aria-label={label} className="rounded-[2px] bg-signal px-[5px] py-px text-[12px] leading-[1.35] font-semibold text-signal-fg tabular-nums">
+    <span className="rounded-[2px] bg-signal px-[5px] py-px text-label leading-[1.35] font-semibold text-signal-fg tabular-nums">
       {n}
+      <span className="sr-only">{n === 1 ? " needs you" : " need you"}</span>
     </span>
   );
 }
@@ -82,7 +84,7 @@ function Key({ view, current, count, needYou }: { view: (typeof VIEWS)[number]; 
     >
       {view.title}
       {needYou ? (
-        <SignalCount n={needYou} label={`${needYou} need you`} />
+        <SignalCount n={needYou} />
       ) : (
         count !== undefined && <span className={cn("text-[12px] tabular-nums", current ? "text-paper/70" : "text-ink-3")}>{count}</span>
       )}
@@ -157,7 +159,7 @@ export function TabBar({ route }: { route: Route }) {
   const tab = (on: boolean) =>
     cn(
       "relative flex min-h-11 flex-col items-center justify-center text-small font-medium hover:no-underline",
-      on ? "text-ink before:absolute before:top-0 before:h-0.5 before:w-7 before:bg-ink" : "text-ink-3",
+      on ? "text-ink before:absolute before:top-0 before:left-1/2 before:h-0.5 before:w-7 before:-translate-x-1/2 before:bg-ink" : "text-ink-3",
     );
   return (
     <nav
@@ -168,7 +170,7 @@ export function TabBar({ route }: { route: Route }) {
         <a key={v.id} href={href({ view: v.id })} aria-current={v.id === current ? "page" : undefined} className={tab(v.id === current)}>
           <span className="inline-flex items-center gap-1.5">
             {v.title}
-            {v.id === "agents" && c.needYou > 0 && <SignalCount n={c.needYou} label={`${c.needYou} need you`} />}
+            {v.id === "agents" && c.needYou > 0 && <SignalCount n={c.needYou} />}
           </span>
         </a>
       ))}
@@ -186,13 +188,7 @@ function useClock() {
   return now;
 }
 
-const clock = (at: Date, timeZone: string) => {
-  try {
-    return at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone });
-  } catch {
-    return at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-  }
-};
+const clock = (at: Date, timeZone: string) => localTime(at, timeZone) || localTime(at, Intl.DateTimeFormat().resolvedOptions().timeZone);
 
 /** Shown only while the Channel's live stream is down. */
 function Connection() {

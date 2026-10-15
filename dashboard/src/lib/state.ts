@@ -25,6 +25,21 @@ export function needsPerson(state: GlyphState): boolean {
   return state === "needs" || state === "needs-other" || state === "stale" || state === "review" || state === "review-other";
 }
 
+/**
+ * Whether a state waits on the Person using the Dashboard: a prompt on their own Agent, or
+ * a Stale Claim, which anyone may take over. Another Person's prompt is theirs, not yours.
+ */
+export function isNeedsYou(state: AgentState): boolean {
+  return state === "needs" || state === "stale";
+}
+
+/** How many lines need you: the one count the top bar, the Agents view and the canvas show. */
+export function needsYou(states: Iterable<AgentState>): number {
+  let n = 0;
+  for (const s of states) if (isNeedsYou(s)) n++;
+  return n;
+}
+
 /** The state's word. `person` names whose prompt waits, for "needs-other". */
 export function stateWord(state: GlyphState, person?: PersonName): string {
   switch (state) {

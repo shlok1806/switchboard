@@ -1,63 +1,10 @@
-"use client";
-
 import { useEffect, useState } from "react";
 
-/* ─────────────────────────────────────────────────────────
- * LOADING STATE - pixel-grid loader for long-running work
- *
- * Variants:
- *   Drive  - square cells, chevron wavefront driving right;
- *            the 650ms cycle is shorter than the sweep, so
- *            two fronts are always in flight
- *   Dots   - same wavefront, circular cells
- *   Orbit  - a comet lapping the grid perimeter
- *
- * Paired with a plain label and a live elapsed timer in
- * tabular figures. Reduced motion freezes the grid to its
- * dim state; the timer still ticks.
- * ───────────────────────────────────────────────────────── */
-
-const chevron = Array.from({ length: 9 }, (_, i) => {
-  const r = Math.floor(i / 3), c = i % 3;
-  return (c + Math.abs(r - 1)) * 90;
-});
-
-const ORBIT_ORDER = [0, 1, 2, 5, 8, 7, 6, 3];
-const orbit = Array.from({ length: 9 }, (_, i) => {
-  const k = ORBIT_ORDER.indexOf(i);
-  return k === -1 ? null : k * 110;
-});
-
-const PATTERNS: Record<string, { delays: (number | null)[]; dur: number; round: boolean }> = {
-  Drive: { delays: chevron, dur: 650, round: false },
-  Dots: { delays: chevron, dur: 650, round: true },
-  Orbit: { delays: orbit, dur: 950, round: false },
-};
-
-function LoaderGrid({
-  delays,
-  dur,
-  round,
-}: {
-  delays: (number | null)[];
-  dur: number;
-  round: boolean;
-}) {
-  return (
-    <span aria-hidden className="grid shrink-0 grid-cols-[repeat(3,4px)] gap-[1.5px]">
-      {delays.map((delay, index) => (
-        <span
-          key={index}
-          className={`size-[4px] bg-ink ${round ? "rounded-full" : "rounded-[1px]"}`}
-          style={{
-            opacity: delay === null ? 0.07 : 0.15,
-            animation: delay === null ? "none" : `pixel-on ${dur}ms ease-in-out ${delay}ms infinite`,
-          }}
-        />
-      ))}
-    </span>
-  );
-}
+/*
+ * Long-running work (design.md's loading state): a 12px half ring turning, the label, and
+ * the time it has taken in tabular figures. Reduced motion leaves the ring still; the
+ * timer still ticks.
+ */
 
 function useElapsed() {
   const [ds, setDs] = useState(0);
@@ -70,14 +17,16 @@ function useElapsed() {
   return `${Math.floor(total / 60)}m ${(total % 60).toFixed(1)}s`;
 }
 
-export default function LoadingState({ label = "Loading", variant = "Drive" }: { label?: string; variant?: string }) {
+export default function LoadingState({ label = "Loading" }: { label?: string }) {
   const elapsed = useElapsed();
-  const { delays, dur, round } = PATTERNS[variant] ?? PATTERNS.Drive;
   return (
     <div role="status" className="flex w-fit items-center gap-3">
-      <LoaderGrid delays={delays} dur={dur} round={round} />
-      <span className="text-body font-medium text-ink">{label}</span>
-      <span className="text-body text-ink-3 tabular-nums">{elapsed}</span>
+      <svg viewBox="0 0 12 12" aria-hidden className="size-3 shrink-0 animate-spin text-ink">
+        <circle cx="6" cy="6" r="4.75" fill="none" stroke="var(--rule-2)" strokeWidth="1.5" />
+        <path d="M6 1.25 A4.75 4.75 0 0 1 10.75 6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </svg>
+      <span className="text-row font-medium text-ink">{label}</span>
+      <span className="text-row text-ink-3 tabular-nums">{elapsed}</span>
     </div>
   );
 }

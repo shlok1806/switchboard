@@ -161,7 +161,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
               onBlur={() => setFocused(false)}
               className={cn(
                 "overflow-x-auto rounded-md bg-page p-3 font-mono text-small leading-[1.45] whitespace-pre text-ink-2" /* taste-skill-ignore: a terminal screen is literal text */,
-                canType && "cursor-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+                canType && "cursor-text",
               )}
             >
               <Screen frame={screen} cursor={canType && focused} />

@@ -33,7 +33,7 @@ const MODE_HINT: Record<PermissionMode, string> = {
 };
 
 const FIELD =
-  "h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-ink max-md:text-[16px]";
+  "h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink placeholder:text-ink-3 max-md:text-[16px]";
 
 /** Text whose `backticked` parts are commands or paths, set as code. */
 export function WithCode({ text }: { text: string }) {
@@ -277,7 +277,7 @@ export function StartAgentForm({
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
           placeholder="Fix the login redirect, then open a PR."
-          className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-ink max-md:text-[16px]"
+          className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink placeholder:text-ink-3 max-md:text-[16px]"
         />
       </Field>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">

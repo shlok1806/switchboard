@@ -163,7 +163,7 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
         }}
         aria-roledescription="Task card"
         ref={setNodeRef}
-        className="rounded-md outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+        className="rounded-md"
       >
         <div
           className={cn(

@@ -113,7 +113,7 @@ export function AgentDetail({ id }: { id: string }) {
                 <Glyph state={state} />
                 {agent.nickname ?? agent.id}
                 <span title={`Last seen ${ago(agent.lastSeenAt)}`}>
-                  <State state={state} person={agent.person} className="text-row [&>svg]:hidden" />
+                  <State state={state} person={agent.person} glyph={false} className="text-row" />
                 </span>
               </h1>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-ink-3">
@@ -328,7 +328,7 @@ function RenameSection({ agent }: { agent: Agent }) {
           maxLength={MAX_NICKNAME_LENGTH}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-ink max-md:text-[16px]"
+          className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink placeholder:text-ink-3 max-md:text-[16px]"
         />
         <Button type="submit" size="sm" variant="primary" disabled={!changed || busy} className="h-9">
           Rename

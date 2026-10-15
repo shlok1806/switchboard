@@ -12,7 +12,7 @@ export const buttonVariants = cva(
   `inline-flex items-center justify-center rounded-[var(--r)] border font-medium select-none whitespace-nowrap
    transition-[background-color,border-color,color] duration-[var(--dur)] ease-[var(--ease-out)]
    active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none
-   focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus`,
+  `,
   {
     variants: {
       variant: {

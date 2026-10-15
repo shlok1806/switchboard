@@ -191,7 +191,7 @@ export function FeedView({ selected }: { selected?: string }) {
                   <button
                     type="button"
                     onClick={showOlder}
-                    className="inline-flex h-8 items-center rounded-md bg-inset px-3 text-ink-2 transition-colors hover:bg-inset-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-focus"
+                    className="inline-flex h-8 items-center rounded-md bg-inset px-3 text-ink-2 transition-colors hover:bg-inset-2 hover:text-ink"
                   >
                     Show older Events
                   </button>

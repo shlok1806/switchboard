@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import type { Agent, AgentId, Task } from "@shared/index";
 import { fit, lanes, place, slotRect, zoomAt, type Point, type Rect } from "@/lib/canvas-layout";
-import { stateOf } from "@/lib/state";
+import { needsYou, stateOf } from "@/lib/state";
 
 let n = 0;
 function agent(person: string, extra: Partial<Agent> = {}): Agent {
@@ -112,6 +112,22 @@ describe("an Agent's state", () => {
   it("names whose prompt it is: yours, or another Person's", () => {
     expect(stateOf(agent("maya", { approval }), [], "shlok")).toBe("needs-other");
     expect(stateOf(agent("maya", { approval }), [], "maya")).toBe("needs");
+  });
+
+  it("counts as needing you your own prompts and any Stale Claim, not another Person's prompt", () => {
+    const mine = agent("shlok", { approval });
+    const theirs = agent("maya", { approval });
+    const stale = agent("maya", { presence: "gone" });
+    const fleet: [Agent, Task[]][] = [
+      [mine, []],
+      [theirs, []],
+      [stale, [task(4, stale, true)]],
+      [agent("dev"), []],
+      [agent("dev", { presence: "idle" }), []],
+    ];
+    expect(needsYou(fleet.map(([a, claims]) => stateOf(a, claims, "shlok")))).toBe(2);
+    expect(needsYou(fleet.map(([a, claims]) => stateOf(a, claims, "maya")))).toBe(2);
+    expect(needsYou(fleet.map(([a, claims]) => stateOf(a, claims, "dev")))).toBe(1);
   });
 });
 

@@ -42,16 +42,7 @@
   /* Spline Sans Mono: commands, paths, branches, hashes, ids, keyboard hints, the terminal. Never prose. */
   --font-code-face: "Spline Sans Mono Variable"; /* taste-skill-ignore: the face for literal code only */
 
-  /* space: a 4px base */
-  --s-1: 4px;
-  --s-2: 8px;
-  --s-3: 12px;
-  --s-4: 16px;
-  --s-5: 20px;
-  --s-6: 24px;
-  --s-8: 32px;
-  --s-10: 40px;
-  --s-12: 48px;
+  /* space: Tailwind's 4px spacing step (p-1 is 4px), so no space variables of its own */
 
   /* radius: 3 on controls, chips, command blocks and glyph squares; 6 on the terminal only */
   --r: 3px;

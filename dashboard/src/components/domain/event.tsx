@@ -75,7 +75,7 @@ export function EventRow({
           }
         }}
         className={cn(
-          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-md px-3 text-left outline-none transition-colors duration-150 hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus",
+          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-md px-3 text-left transition-colors duration-150 hover:bg-hover focus-visible:-outline-offset-2",
           continued ? "py-1.5" : "pt-3.5 pb-1.5",
           selected && "bg-paper-3 hover:bg-paper-3",
         )}
@@ -277,7 +277,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
           {exitCode !== undefined && (
             <dl className="grid grid-cols-2 gap-3">
               <Field label="Exit code">
-                <span className={cn("text-body font-medium tabular-nums", exitCode === 0 ? "text-ink" : "text-ink")}>{exitCode}</span>
+                <span className="text-body font-medium text-ink tabular-nums">{exitCode}</span>
               </Field>
             </dl>
           )}

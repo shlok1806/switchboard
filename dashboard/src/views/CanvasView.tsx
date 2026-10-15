@@ -35,7 +35,7 @@ import { CLI_LABEL } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Glyph, State, useAgentStates } from "@/components/domain/state";
-import { countStates, needsPerson, stateWord, type AgentState } from "@/lib/state";
+import { countStates, needsPerson, needsYou, stateWord, type AgentState } from "@/lib/state";
 
 const STATE_HINT: Record<AgentState, string> = {
   needs: "A permission prompt is waiting for you",
@@ -133,7 +133,7 @@ const Node = memo(function Node({
       style={{ left: at.x, top: at.y, width: NODE_W, height: NODE_H }}
       className={cn(
         "absolute flex cursor-grab flex-col gap-1.5 rounded-[var(--r)] border border-rule-2 bg-paper p-3 text-left transition-[opacity,background-color] duration-[var(--dur)] select-none active:cursor-grabbing",
-        "hover:bg-paper-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+        "hover:bg-paper-2",
         state === "needs" && "border-2 border-signal p-[11px]",
         selected && "border-2 border-ink p-[11px]",
         faded && "opacity-55",
@@ -457,6 +457,7 @@ export function CanvasView({ selected }: { selected?: string }) {
 
   const chosen = selected ? agents.find((a) => a.id === selected) : undefined;
   const n = countStates(states.values());
+  const mine = needsYou(states.values());
   const held = agents.filter((a) => claims.has(a.id)).length;
 
   if (agents.length === 0) {
@@ -494,7 +495,7 @@ export function CanvasView({ selected }: { selected?: string }) {
           facts={[
             `${agents.length} ${agents.length === 1 ? "Agent" : "Agents"}`,
             `${n.running} running`,
-            n.needs > 0 && <span className="font-semibold text-signal">{n.needs} {n.needs === 1 ? "needs" : "need"} you</span>,
+            mine > 0 && <span className="font-semibold text-signal">{mine} {mine === 1 ? "needs" : "need"} you</span>,
             `${held} holding a Task`,
             "a line is who started whom",
           ]}
@@ -519,7 +520,7 @@ export function CanvasView({ selected }: { selected?: string }) {
             if (suppressClick.current) suppressClick.current = false;
             else select();
           }}
-          className="relative min-w-0 flex-1 cursor-default touch-none overflow-clip bg-canvas-bg focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus"
+          className="relative min-w-0 flex-1 cursor-default touch-none overflow-clip bg-canvas-bg focus-visible:-outline-offset-2"
         >
           <div
             data-ground

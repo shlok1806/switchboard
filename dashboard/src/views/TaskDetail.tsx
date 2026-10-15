@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
+import { taskGlyph } from "@/components/domain/moves";
 import { ExternalLink, GitBranch, GitPullRequest } from "lucide-react";
 import type { ChannelEvent, EventType } from "@shared/index";
-import { useCapabilities, useChannel, useIndex } from "@/data/store";
+import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { IssueLink } from "@/components/domain/pending";
 import { IssueBody } from "@/components/domain/issue-body";
 import { SegmentedControl } from "@/components/atoms/SegmentedControl";
@@ -13,7 +14,7 @@ import {
   SnippetTabsContent,
 } from "@/components/kibo-ui/snippet";
 import { AgentLink, CaptureIcon, PresencePill, TaskLink, VerdictTally } from "@/components/domain/pills";
-import { COLUMN_GLYPH, COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from "@/components/domain/task";
+import { COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from "@/components/domain/task";
 import { ClaimAction } from "@/components/domain/claim";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { EventBody } from "@/components/domain/event";
@@ -57,6 +58,7 @@ export function TaskDetail({ number }: { number: number }) {
   const { snapshot } = useChannel();
   const can = useCapabilities();
   const { agentById, taskByNumber } = useIndex();
+  const me = useMe();
   const [scope, setScope] = useState<(typeof SCOPES)[number]>("Work");
   const task = taskByNumber.get(number);
   const threshold = snapshot?.relay.interruptThreshold ?? 0.6;
@@ -95,7 +97,7 @@ export function TaskDetail({ number }: { number: number }) {
           <header className="flex flex-col gap-4">
             <h1 className="max-w-[var(--column)] text-title font-semibold text-ink [overflow-wrap:anywhere] sm:text-display">{task.title}</h1>
             <div className="flex flex-wrap items-center gap-2 text-small text-ink-3">
-              <State state={COLUMN_GLYPH[col]} word={COLUMN_LABEL[col]} className="text-small" />
+              <State state={taskGlyph(task, me, agentById)} word={COLUMN_LABEL[col]} className="text-small" />
               <span className="tabular-nums">#{task.number}</span>
               {task.parent && (
                 <span className="inline-flex min-w-0 items-center gap-1">
@@ -149,7 +151,7 @@ export function TaskDetail({ number }: { number: number }) {
                           <span className="text-small text-ink-3 tabular-nums">#{n}</span> {s.title}
                         </span>
                         {sp.total > 0 && <Progress done={sp.done} total={sp.total} noun="" />}
-                        <State state={COLUMN_GLYPH[columnOf(s)]} word={COLUMN_LABEL[columnOf(s)]} className="text-small" />
+                        <State state={taskGlyph(s, me, agentById)} word={COLUMN_LABEL[columnOf(s)]} className="text-small" />
                       </a>
                     </li>
                   );

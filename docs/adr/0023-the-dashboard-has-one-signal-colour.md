@@ -1,6 +1,6 @@
 # The Dashboard has one signal colour
 
-Status: proposed on 2026-10-15. Supersedes ADR 0016 in part: its palette, its typeface and type scale, its state colours, its CLI hues, its page layout and its list of `inspect.mjs` allowances. The rest of ADR 0016 stands: the token layers, flat surfaces separated by tone, state as shape and word, and the checked gate. Records Shlok's approval of the Dashboard design "Ringdown" (v3). The full system, with every component, is `dashboard/design.md`; this ADR records the decisions in it that code depends on.
+Status: accepted on 2026-10-15. Supersedes ADR 0016 in part: its palette, its typeface and type scale, its state colours, its CLI hues, its page layout and its list of `inspect.mjs` allowances. The rest of ADR 0016 stands: the token layers, flat surfaces separated by tone, state as shape and word, and the checked gate. Records Shlok's approval of the Dashboard design "Ringdown" (v3). The full system, with every component, is `dashboard/design.md`; this ADR records the decisions in it that code depends on.
 
 ## Context
 
@@ -39,7 +39,7 @@ ADR 0016's names (`page`, `panel`, `accent`, `green`, `orange`, `red`, the `stat
 
 ### Type
 
-Spline Sans (SIL OFL 1.1) for everything that is not literal code, at 400, 500 and 600. Spline Sans Mono only for commands, paths, branches, hashes, ids where they are ids, the channel path, keyboard hints and the terminal, always in a `<code>`, `<kbd>`, `<pre>` or the terminal. The two are one superfamily, so a command inside a sentence reads as the same voice.
+Spline Sans (SIL OFL 1.1) for everything that is not literal code, at 400, 500 and 600. Spline Sans Mono only for commands, paths, branches, hashes, ids where they are ids, the channel path, keyboard hints and the terminal, always in a `<code>`, `<kbd>`, `<pre>` or the terminal. The two are one superfamily, so a command inside a sentence reads as the same voice. Both are self-hosted from `@fontsource-variable/spline-sans` and `@fontsource-variable/spline-sans-mono`, so the Dashboard loads no font from a third party.
 
 | Step | Size / line height | Use |
 | --- | --- | --- |
@@ -54,11 +54,11 @@ No uppercase, no italic, tabular figures on the root. `tailwind-merge` is told e
 
 ### Scales
 
-Space on a 4px base, `--s-1` 4 to `--s-12` 48; the page gutter is 24, 16 on a phone. Radius `--r` 3px on controls, chips and command blocks, `--r-2` 6px on the terminal only; glyph discs and rings are round and nothing is a pill. Motion `--ease-out` cubic-bezier(.16, 1, .3, 1) and `--dur` 140ms, on colour and a 1px press only; data never animates in, and a changed row may tint to `--paper-2` and fade back over 600ms. Elevation is flat; one shadow exists for menus and the palette. Rows are 36px, or 30px with `data-density="compact"`.
+Space on a 4px base, which is Tailwind's own spacing step, so there are no space variables; the page gutter (`--gutter`) is 24, 16 on a phone. Radius `--r` 3px on controls, chips and command blocks, `--r-2` 6px on the terminal only; glyph discs and rings are round and nothing is a pill. Motion `--ease-out` cubic-bezier(.16, 1, .3, 1) and `--dur` 140ms, on colour and a 1px press only; data never animates in, and a changed row may tint to `--paper-2` and fade back over 600ms. Elevation is flat; one shadow exists for menus and the palette. An Agents row is at least `--row` tall: 36px, or 30px with `data-density="compact"` on the root (set by `?density=compact` or saved per browser).
 
 ### The shell
 
-A 44px top bar on every screen, not sticky: the jack mark and "Switchboard", the channel path in mono, the views as keycaps with their counts (the current key pressed, solid ink), each Person's local time, and Search with its `⌘K` hint. The Agents key carries the needs-a-Person count as a signal chip, the only coloured count. No rail, no sidebar, no avatars in the bar.
+A 44px top bar on every screen, not sticky: the jack mark and "Switchboard", the channel path in mono, the views as keycaps with their counts (the current key pressed, solid ink), each Person's local time, and Search with its `⌘K` hint. The Agents key carries the needs-you count as a signal chip, the only coloured count. One helper, `needsYou`, gives that count everywhere it appears (the top bar, the Agents view, the canvas): a prompt on your own Agent or any Stale Claim; another Person's prompt is theirs. No rail, no sidebar, no avatars in the bar. Below 1180px the People strip is hidden, and below 900px the channel path.
 
 Each view opens with a page head: one 20/600 line, then its facts in ink-3 on the same baseline, joined by middle dots. Never a row of KPI tiles. Lists put the selected row in a 352px inspector at the right.
 

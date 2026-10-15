@@ -66,10 +66,11 @@ a {
 }
 
 :focus-visible {
-  outline-color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
-/* Code takes the mono face at 93% so it sits on the sans's x-height (design.md). */
+/* Spline Sans Mono, for literal code only (design.md). */
 code,
 kbd,
 pre,
@@ -125,52 +126,6 @@ samp {
   animation: row-fresh 600ms var(--ease-out) both;
 }
 
-@keyframes fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes pop-in {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* pixel-grid loader: brighten plateau, staggered per cell */
-@keyframes pixel-on {
-  0%,
-  100% {
-    opacity: 0.15;
-  }
-  18%,
-  42% {
-    opacity: 1;
-  }
-  62% {
-    opacity: 0.15;
-  }
-}
-
 /* A loading placeholder fades gently in and out, slower than a Live dot so the two never read alike.
    Reduced motion stops it (the block at the end), leaving a still tone step. */
 @keyframes loading-pulse {
@@ -184,7 +139,7 @@ samp {
 }
 
 .loading-pulse {
-  animation: loading-pulse 1.8s var(--ease-in-out) infinite;
+  animation: loading-pulse 1.8s var(--ease-out) infinite;
 }
 
 @keyframes collapsible-down {

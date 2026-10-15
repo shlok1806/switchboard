@@ -18,9 +18,9 @@ import { Section } from "@/components/shell/section";
 import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { claimsByAgent } from "@/lib/canvas-layout";
-import { CLI_LABEL, ago, elapsed, hostName } from "@/lib/format";
+import { CLI_LABEL, ago, elapsed, hostName, localTime } from "@/lib/format";
 import { go, href } from "@/lib/router";
-import { byState, countStates, type AgentState } from "@/lib/state";
+import { byState, countStates, isNeedsYou, needsYou, type AgentState } from "@/lib/state";
 import { modelLabel } from "@shared/index";
 import { cn } from "@/lib/utils";
 
@@ -45,14 +45,6 @@ const name = (a: Agent) => a.nickname ?? a.id;
 /** The CLI's short name, as the Agent ID spells it. */
 const cliShort = (a: Agent) => a.id.split("/")[1] ?? CLI_LABEL[a.cli];
 const place = (zone: string) => zone.split("/").pop()?.replaceAll("_", " ") ?? zone;
-
-function localTime(now: number, timeZone: string) {
-  try {
-    return new Date(now).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone });
-  } catch {
-    return "";
-  }
-}
 
 /** How long the Agent has run; a waiting prompt's own age is in the Working on line. */
 const since = (a: Agent) => a.startedAt;
@@ -109,21 +101,21 @@ export function AgentsView() {
   }
 
   const n = countStates(lines.map((l) => l.state));
-  const needPerson = n.needs + n["needs-other"] + n.stale;
+  const needYou = needsYou(lines.map((l) => l.state));
   const persons = new Set(agents.map((a) => a.person)).size;
   const q = find.trim().toLowerCase();
   const shown = lines.filter((l) => {
     const keep =
       filter === "all" ||
-      (filter === "needs" && (l.state === "needs" || l.state === "needs-other" || l.state === "stale")) ||
+      (filter === "needs" && isNeedsYou(l.state)) ||
       (filter === "mine" && l.agent.person === me) ||
       l.state === filter;
     if (!keep || !q) return keep;
     return [l.agent.id, l.agent.nickname, l.agent.host, ...l.claims.map((t) => `#${t.number} ${t.title}`)].some((s) => s?.toLowerCase().includes(q));
   });
-  const chips: { id: Filter; label: string; n: number; signal?: boolean }[] = [
+  const chips: { id: Filter; label: string; n: number }[] = [
     { id: "all", label: "All", n: lines.length },
-    { id: "needs", label: "Needs a Person", n: needPerson, signal: true },
+    { id: "needs", label: "Needs you", n: needYou },
     { id: "running", label: "Live", n: n.running },
     { id: "idle", label: "Idle", n: n.idle },
     { id: "gone", label: "Gone", n: n.gone },
@@ -141,7 +133,7 @@ export function AgentsView() {
           facts={[
             `${lines.length} for ${persons} ${persons === 1 ? "Person" : "People"}`,
             `${n.running} live`,
-            needPerson > 0 && `${needPerson} ${needPerson === 1 ? "needs" : "need"} a Person`,
+            needYou > 0 && `${needYou} ${needYou === 1 ? "needs" : "need"} you`,
           ]}
         />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
@@ -153,12 +145,12 @@ export function AgentsView() {
                 aria-pressed={filter === c.id}
                 onClick={() => setFilter(c.id)}
                 className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-[var(--r)] border px-2 text-label font-medium whitespace-nowrap transition-colors duration-[var(--dur)]",
+                  "inline-flex h-[26px] items-center gap-1.5 rounded-[var(--r)] border px-2 text-label font-medium whitespace-nowrap transition-colors duration-[var(--dur)]",
                   filter === c.id ? "border-ink text-ink" : "border-rule text-ink-2 hover:border-ink-3 hover:text-ink",
                 )}
               >
                 {c.label}
-                <span className={cn("tabular-nums", c.signal && c.n > 0 ? "font-semibold text-signal" : "text-ink-3")}>{c.n}</span>
+                <span className="text-ink-3 tabular-nums">{c.n}</span>
               </button>
             ))}
           </div>
@@ -170,7 +162,7 @@ export function AgentsView() {
               value={find}
               onChange={(e) => setFind(e.target.value)}
               placeholder="name, Task or Host"
-              className="h-[30px] w-56 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus max-sm:flex-1 max-sm:text-[16px]"
+              className="h-[30px] w-56 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:flex-1 max-sm:text-[16px]"
             />
           </label>
           <StartAgentButton />
@@ -285,7 +277,6 @@ function Row({ line, selected, onSelect }: { line: Line; selected: boolean; onSe
   return (
     <tr
       tabIndex={0}
-      aria-selected={selected}
       onClick={onSelect}
       onKeyDown={(e) => {
         if (e.key === "Enter") go({ view: "agent", id: a.id });
@@ -295,7 +286,7 @@ function Row({ line, selected, onSelect }: { line: Line; selected: boolean; onSe
         }
       }}
       className={cn(
-        "cursor-pointer border-b border-rule align-top transition-colors duration-[var(--dur)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus",
+        "h-[var(--row)] cursor-pointer border-b border-rule align-top transition-colors duration-[var(--dur)] focus-visible:-outline-offset-2",
         selected ? "bg-paper-3" : "hover:bg-paper-2",
       )}
     >
@@ -374,7 +365,7 @@ function Inspector({ line }: { line: Line }) {
         <h2 className="flex flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
           <Glyph state={state} />
           {name(a)}
-          <State state={state} person={a.person} className="[&>svg]:hidden" />
+          <State state={state} person={a.person} glyph={false} />
         </h2>
         <p className="text-row text-ink-2">{fact}</p>
         <div className="flex flex-wrap gap-2 pt-1">

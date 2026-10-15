@@ -344,3 +344,12 @@ function wokenFor(queued: number, directives: number): string {
   ];
   return parts.length > 0 ? parts.join(" and ") : "nothing";
 }
+
+/** The time of day in a Person's time zone, as 15:02; an unknown zone gives "". */
+export function localTime(at: number | Date, timeZone: string): string {
+  try {
+    return new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone });
+  } catch {
+    return "";
+  }
+}

@@ -40,6 +40,7 @@ export function State({
   state,
   person,
   word,
+  glyph = true,
   className,
 }: {
   state: GlyphState;
@@ -47,6 +48,8 @@ export function State({
   person?: string;
   /** Replaces the word, as on a board column ("In review"). */
   word?: string;
+  /** False beside a heading that already draws the glyph. */
+  glyph?: boolean;
   className?: string;
 }) {
   const signal = needsPerson(state);
@@ -58,7 +61,7 @@ export function State({
         className,
       )}
     >
-      <Glyph state={state} />
+      {glyph && <Glyph state={state} />}
       {word ?? stateWord(state, person)}
     </span>
   );

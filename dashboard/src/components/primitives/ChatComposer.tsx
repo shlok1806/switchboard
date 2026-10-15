@@ -99,7 +99,7 @@ export default function ChatComposer<T extends string>({
                     e.stopPropagation();
                     onTabChange(item);
                   }}
-                  className={`h-8 rounded-sm px-3 text-small transition-colors focus-visible:outline-2 focus-visible:outline-focus ${tab === item ? "bg-surface font-medium text-ink" : "text-ink-3 hover:text-ink"}`}
+                  className={`h-8 rounded-sm px-3 text-small transition-colors ${tab === item ? "bg-surface font-medium text-ink" : "text-ink-3 hover:text-ink"}`}
                 >
                   {item}
                 </button>
@@ -116,7 +116,7 @@ export default function ChatComposer<T extends string>({
                 e.stopPropagation();
                 void send();
               }}
-              className="grid size-9 shrink-0 place-items-center rounded-md transition-[background-color,color,transform] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus enabled:bg-ink enabled:text-page enabled:hover:bg-ink-2 enabled:active:scale-[0.96] disabled:bg-hover-2 disabled:text-ink-3"
+              className="grid size-9 shrink-0 place-items-center rounded-md transition-[background-color,color,transform] duration-200 enabled:bg-ink enabled:text-page enabled:hover:bg-ink-2 enabled:active:scale-[0.96] disabled:bg-hover-2 disabled:text-ink-3"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M12 19V5M5 12l7-7 7 7" />

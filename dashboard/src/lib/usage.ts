@@ -1,8 +1,8 @@
-// Usage (ADR 0011) as the Dashboard shows it: one card per account, with its limits
-// from Claude Code's `/usage`, the Agents running on it now and what each used.
+// Usage (ADR 0011) as the Dashboard shows it: an Agent's account limits from Claude
+// Code's `/usage`, their tone, how stale a reading is and when each window resets.
 
-import type { AccountUsage, Agent, LimitsReading, SessionUsage, UsagePoint } from "@shared/index";
-import { SESSION_WINDOW_MS, USAGE_STALE_MS } from "@shared/index";
+import type { AccountUsage, Agent, LimitsReading } from "@shared/index";
+import { USAGE_STALE_MS } from "@shared/index";
 
 /** A meter's colour: green under 70%, amber from 70% to 90%, red over 90%. */
 export type MeterTone = "green" | "amber" | "red";
@@ -52,80 +52,6 @@ export function resetText(limit: { resetsAt?: string; resets?: string }, now: nu
   return `resets ${weekday}${clockOf(at, timeZone)}, in ${duration(left)}`;
 }
 
-/** One Agent running on an account, and its share of what the account's Agents used. */
-export interface AccountAgent {
-  agent: Agent;
-  session?: SessionUsage;
-  /** 0 to 1, by estimated cost when every Agent has one, else by tokens. */
-  share: number;
-}
-
-/** One account card: the account, its latest limits and the Agents on it now. */
-export interface AccountCard {
-  email: string;
-  plan?: string;
-  limits?: LimitsReading;
-  history: UsagePoint[];
-  agents: AccountAgent[];
-  /** What the Agents on it used, added up. */
-  total: SessionUsage;
-}
-
-function tokensOf(s: SessionUsage): number {
-  return s.inputTokens + s.outputTokens + s.cacheReadTokens + s.cacheWriteTokens;
-}
-
-function add(a: SessionUsage, b: SessionUsage): SessionUsage {
-  const cost = a.costUsd === undefined && b.costUsd === undefined ? undefined : (a.costUsd ?? 0) + (b.costUsd ?? 0);
-  return {
-    requests: a.requests + b.requests,
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
-    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
-    ...(cost === undefined ? {} : { costUsd: cost }),
-  };
-}
-
-const NONE: SessionUsage = { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-
-/**
- * One card per account the Channel knows: every account with `/usage` readings, and
- * every account an Agent reported without them (an API key has no limits). An
- * Agent counts as running on it while it is not Gone. Most recently read first.
- */
-export function accountCards(accounts: AccountUsage[], agents: Agent[]): AccountCard[] {
-  const cards = new Map<string, AccountCard>();
-  for (const a of accounts) {
-    cards.set(a.email, { email: a.email, plan: a.plan, limits: a.limits, history: a.history, agents: [], total: NONE });
-  }
-  for (const agent of agents) {
-    const email = agent.usage?.email ?? agent.usage?.accountId;
-    if (email === undefined) continue;
-    let card = cards.get(email);
-    if (card === undefined) {
-      card = { email, plan: agent.usage?.plan, limits: agent.usage?.limits, history: [], agents: [], total: NONE };
-      cards.set(email, card);
-    }
-    // A newer reading from an Agent than the account's own (the stream is behind).
-    const theirs = agent.usage?.limits;
-    if (theirs !== undefined && (card.limits === undefined || theirs.readAt > card.limits.readAt)) card.limits = theirs;
-    card.plan ??= agent.usage?.plan;
-    if (agent.presence === "gone") continue;
-    card.agents.push({ agent, session: agent.usage?.session, share: 0 });
-  }
-  for (const card of cards.values()) {
-    card.agents.sort((x, y) => x.agent.startedAt.localeCompare(y.agent.startedAt));
-    card.total = card.agents.reduce((sum, a) => (a.session ? add(sum, a.session) : sum), NONE);
-    const byCost = card.agents.every((a) => a.session?.costUsd !== undefined);
-    const weight = (s?: SessionUsage) => (s === undefined ? 0 : byCost ? (s.costUsd ?? 0) : tokensOf(s));
-    const all = card.agents.reduce((sum, a) => sum + weight(a.session), 0);
-    for (const a of card.agents) a.share = all === 0 ? 0 : weight(a.session) / all;
-  }
-  const readAt = (c: AccountCard) => c.limits?.readAt ?? "";
-  return [...cards.values()].sort((x, y) => readAt(y).localeCompare(readAt(x)) || x.email.localeCompare(y.email));
-}
-
 /** The latest limits for an Agent's account: the account's own, or the Agent's when newer. */
 export function limitsFor(agent: Agent, accounts: AccountUsage[]): LimitsReading | undefined {
   const theirs = agent.usage?.limits;
@@ -134,18 +60,6 @@ export function limitsFor(agent: Agent, accounts: AccountUsage[]): LimitsReading
   if (account === undefined) return theirs;
   if (theirs === undefined) return account;
   return theirs.readAt > account.readAt ? theirs : account;
-}
-
-/**
- * The session percent over the current session window (the 5 hours before it
- * resets), or the last 5 hours when the reset is unknown, oldest first.
- */
-export function sessionHistory(card: Pick<AccountCard, "history" | "limits">, now: number): { at: number; percent: number }[] {
-  const resets = card.limits?.session?.resetsAt;
-  const from = resets === undefined ? now - SESSION_WINDOW_MS : Date.parse(resets) - SESSION_WINDOW_MS;
-  return card.history
-    .filter((p): p is UsagePoint & { session: number } => p.session !== undefined && Date.parse(p.at) >= from)
-    .map((p) => ({ at: Date.parse(p.at), percent: p.session }));
 }
 
 /** "$1.24", or "<$0.01". */
