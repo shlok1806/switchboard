@@ -30,6 +30,7 @@ import {
   agentPath,
   approvalDenyPath,
   attachKeyFingerprint,
+  MAX_HISTORY_LIMIT,
   nicknamePath,
   REVIEW_LABEL,
   STANDING_RULE,
@@ -148,8 +149,20 @@ async function agents(): Promise<Agent[]> {
   return (await api<AgentsResponse>("/api/agents")).agents;
 }
 
+/** Every Event on the Channel, oldest first: `/api/events` gives a page of at most MAX_HISTORY_LIMIT. */
+async function history(): Promise<HistoryResponse> {
+  const events: ChannelEvent[] = [];
+  let after = 0;
+  for (;;) {
+    const page = await api<HistoryResponse>(`/api/events?after=${after}&limit=${MAX_HISTORY_LIMIT}`);
+    events.push(...page.events);
+    if (page.events.length < MAX_HISTORY_LIMIT) return { events, cursor: page.cursor };
+    after = page.cursor;
+  }
+}
+
 async function agentEvents(id: string): Promise<ChannelEvent[]> {
-  const { events } = await api<HistoryResponse>("/api/events");
+  const { events } = await history();
   return events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === id);
 }
 
@@ -1306,9 +1319,7 @@ describe("Stale Claims and Takeover", () => {
 
     expect((await takeOver(number, "dev", { kind: "person", person: "dev" })).status).toBe(200);
     expect(await claimOf(number)).toMatchObject({ holder: { kind: "person", person: "dev" }, stale: false });
-    const handOff = (await api<HistoryResponse>("/api/events")).events.find(
-      (e) => e.type === "takeover" && e.task === number,
-    );
+    const handOff = (await history()).events.find((e) => e.type === "takeover" && e.task === number);
     expect(handOff).toMatchObject({
       actor: { kind: "person", person: "dev" },
       payload: {
@@ -1492,7 +1503,7 @@ describe("the Relay and Queue delivery (ADR 0005)", () => {
 
     // The Verdict is on the Channel with Jev's probabilities.
     const verdict = await waitFor("the Verdict", async () =>
-      (await api<HistoryResponse>("/api/events")).events.find(
+      (await history()).events.find(
         (e): e is Extract<ChannelEvent, { type: "verdict" }> =>
           e.type === "verdict" && e.payload.agent === aId && e.payload.state?.event.type === "push",
       ),
@@ -1704,7 +1715,7 @@ describe("Interrupt delivery", () => {
     return waitFor(
       "the Verdict",
       async () => {
-        const { events } = await api<HistoryResponse>("/api/events");
+        const { events } = await history();
         const pushEvent = events.find((e) => e.type === "push" && e.payload.commit === commit);
         const verdict = events.find(
           (e): e is Extract<ChannelEvent, { type: "verdict" }> =>
@@ -1899,7 +1910,7 @@ describe("Directives (ADR 0005)", () => {
     return waitFor(
       "the Directive's delivery",
       async () =>
-        (await api<HistoryResponse>("/api/events")).events.find(
+        (await history()).events.find(
           (e): e is Extract<ChannelEvent, { type: "directive.delivery" }> =>
             e.type === "directive.delivery" && e.payload.directive === event,
         )?.payload,
@@ -2026,7 +2037,7 @@ describe("Permission prompts on the Channel (ADR 0013, ADR 0014)", () => {
       /FAKE-CLAUDE permission deny by hook message="Denied by e2e from the Switchboard Channel\. Use the cached build\."/,
     );
     await closed();
-    const { events } = await api<HistoryResponse>("/api/events");
+    const { events } = await history();
     const mine = events.filter(
       (e) =>
         (e.actor.kind === "agent" && e.actor.agentId === id && e.type.startsWith("approval.")) ||
@@ -2069,7 +2080,7 @@ describe("Permission prompts on the Channel (ADR 0013, ADR 0014)", () => {
     const directive = ((await sent.json()) as { event: ChannelEvent }).event.id;
     expect(
       await waitFor("the Directive's delivery", async () =>
-        (await api<HistoryResponse>("/api/events")).events.find(
+        (await history()).events.find(
           (e): e is Extract<ChannelEvent, { type: "directive.delivery" }> =>
             e.type === "directive.delivery" && e.payload.directive === directive,
         ),
@@ -2658,7 +2669,7 @@ describe("switchboard run codex and gemini", () => {
     return waitFor(
       "the Directive's delivery",
       async () =>
-        (await api<HistoryResponse>("/api/events")).events.find(
+        (await history()).events.find(
           (e): e is Extract<ChannelEvent, { type: "directive.delivery" }> =>
             e.type === "directive.delivery" && e.payload.directive === event,
         )?.payload,
@@ -3339,7 +3350,7 @@ describe("switchboard host", () => {
     expect(args.at(-1)).toMatch(/started this Agent on e2e\/studio:\n> Fix the login bug$/);
     expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId, sessionId, cwd })]);
 
-    const { events } = await api<HistoryResponse>("/api/events");
+    const { events } = await history();
     const spawn = events.find((e) => e.type === "agent.spawn");
     expect(spawn?.payload).toMatchObject({ host: `e2e/${HOST}`, cwd, permissionMode: "acceptEdits" });
     expect(events.find((e) => e.type === "agent.spawned")?.payload).toMatchObject({
@@ -3408,7 +3419,7 @@ describe("switchboard host", () => {
     await waitForPresence(agentId as AgentId, "gone", 20_000);
     await waitForSupervisor(new RegExp(`${agentId} ended`));
     expect(await hostedAgents()).toEqual([]);
-    const { events } = await api<HistoryResponse>("/api/events");
+    const { events } = await history();
     expect(events.find((e) => e.type === "agent.stop")?.payload).toEqual({ agent: agentId, host: `e2e/${HOST}` });
   });
 
@@ -3511,7 +3522,7 @@ describe("switchboard host", () => {
 
     expect(await callTool(term, "agent_stop", { agent: "helper" })).toContain(`Asked e2e/${HOST} to stop ${id}.`);
     await waitForPresence(id, "gone", 20_000);
-    const { events } = await api<HistoryResponse>("/api/events");
+    const { events } = await history();
     const by = (type: string) =>
       events.filter((e) => e.type === type && e.actor.kind === "agent" && e.actor.agentId === lead);
     expect(by("agent.spawn")).toHaveLength(1);
@@ -3755,13 +3766,13 @@ describe("Reading another session's transcript (ADR 0019)", () => {
     ]);
 
     // The Channel kept none of it, only who read whose transcript.
-    const history = await api<{ events: { type: string; actor: unknown; payload: unknown }[] }>("/api/events");
-    const reads = history.events.filter((e) => e.type === "transcript.read");
+    const { events } = await history();
+    const reads = events.filter((e) => e.type === "transcript.read");
     expect(reads.map((e) => e.actor)).toEqual([
       { kind: "agent", agentId: readerId },
       { kind: "agent", agentId: readerId },
     ]);
-    expect(JSON.stringify(history)).not.toContain("Checking the API");
+    expect(JSON.stringify(events)).not.toContain("Checking the API");
 
     // A session that has left is not read.
     writer.type("quit\r");

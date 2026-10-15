@@ -276,6 +276,10 @@ describe("switchboard attach", () => {
     await chmod(join(dir, "attach.json"), 0o000);
     expect((await list()).keys).toMatchObject([{ fingerprint: FP }]);
     await chmod(join(dir, "attach.json"), 0o600);
+    // An edit in place that keeps the size, as an editor saving over the file makes, is seen too.
+    const path = join(dir, "attach.json");
+    await writeFile(path, (await readFile(path, "utf8")).replace('"bob"', '"bub"'));
+    expect((await list()).keys).toMatchObject([{ person: "bub" }]);
     await attachCommand(["revoke", FP], env);
     expect((await list()).keys).toEqual([]);
   });

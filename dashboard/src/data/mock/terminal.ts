@@ -45,7 +45,11 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
     send(frame: Omit<TerminalInputFrame, "type" | "from">) {
       if (closed) return false;
       typed = true;
-      for (const ch of frame.text) {
+      // A bracketed paste is one piece of text: its line breaks do not submit it.
+      const text = frame.text.replace(/\x1b\[200~([\s\S]*?)\x1b\[201~/g, (_m, pasted: string) =>
+        pasted.replace(/\r/g, " "),
+      );
+      for (const ch of text) {
         if (ch === "\r") {
           if (input.trim() !== "") history.push(`> ${input}`, "", "  Understood.", "");
           input = "";
