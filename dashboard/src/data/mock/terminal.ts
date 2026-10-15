@@ -1,25 +1,34 @@
 // A simulated Agent terminal for the demo Channel (ADR 0021): a CLI screen that echoes
 // what is typed into its prompt. It checks no signatures; the real wrapper does.
 
-import type { AgentId, TerminalInputFrame } from "@shared/index";
+import type { AgentId, PendingApproval, TerminalInputFrame } from "@shared/index";
 import { attachKeyFingerprint, fromBase64, TERMINAL_HOLD_IDLE_MS } from "@shared/index";
 import type { TerminalFrame, TerminalLink } from "../source";
 
 const COLS = 72;
-const ROWS = 14;
+const ROWS = 18;
 
-/** The demo screen of one Agent, as its wrapper would send it. */
-export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: TerminalFrame) => void): TerminalLink {
+/**
+ * The demo screen of one Agent, as its wrapper would send it: tool calls as Claude Code
+ * draws them, and its permission prompt at the bottom while one is open.
+ */
+export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: TerminalFrame) => void, approval?: PendingApproval): TerminalLink {
   const history = [
-    "  Read web/src/users.tsx",
-    "  Edit web/src/users.tsx  +12 -3",
+    "● Read(web/src/users.tsx)",
+    "  ⎿  Read 182 lines",
     "",
-    "  The list now pages by 50. Running the tests next.",
+    "● Update(web/src/users.tsx)",
+    "  ⎿  Updated with 12 additions and 3 removals",
     "",
-    "  Bash npm test -- users",
-    "  ✓ 14 passed", // taste-skill-ignore: a test runner's own check mark, as the CLI prints it
+    "● The list now pages by 50. Running the tests next.",
+    "",
+    "● Bash(npm test -- users)",
+    "  ⎿  14 passed",
     "",
   ];
+  const asking = approval
+    ? [`? Run ${approval.detail ?? approval.tool}`, "  1. Yes   2. Yes, and don't ask again this session   3. No", ""]
+    : [];
   let input = "";
   let typed = false;
   let closed = false;
@@ -38,9 +47,10 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
   };
   const send = () => {
     if (closed) return;
-    const prompt = `> ${input}`;
-    const body = history.slice(-(ROWS - 3));
-    const lines = [...body, "", "─".repeat(COLS), prompt];
+    const prompt = asking.length ? `  ${input}` : `> ${input}`;
+    const tail = asking.length ? [...asking.slice(0, -1), prompt] : ["─".repeat(COLS), prompt];
+    const body = history.slice(-(ROWS - tail.length - 1));
+    const lines = [...body, ...tail];
     onFrame({
       type: "terminal.screen",
       agent,
@@ -50,7 +60,7 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
       lines: [...lines, ...Array(Math.max(0, ROWS - lines.length)).fill("")],
       cursor: { x: prompt.length, y: Math.min(ROWS, lines.length) - 1 },
       attached: typed ? [{ person: me, key: "MOCK" }] : [],
-      prompt: false,
+      prompt: asking.length > 0,
       paste: true,
       holder: holder === null ? null : { person: me, key: holder },
     });

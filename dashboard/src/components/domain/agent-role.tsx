@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useMe, useStore } from "@/data/store";
+import { useStore } from "@/data/store";
 
 /** An Agent its Person made a lead (ADR 0018). */
 export function LeadLabel() {
@@ -26,60 +26,49 @@ export function LeadLabel() {
   );
 }
 
-/**
- * Make one of this Person's own Agents a lead, or take the role back (ADR 0018). Making
- * one asks first, since it lets a model start processes on the Person's Hosts.
- */
-export function LeadButton({ agent }: { agent: Agent }) {
+/** Grants or takes back the lead role on one of this Person's own Agents (ADR 0018). */
+export function useSetLead(agent: Agent) {
   const store = useStore();
-  const me = useMe();
-  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  if (agent.person !== me) return null;
-  const lead = agent.role === "lead";
   const name = agent.nickname ?? agent.id;
-
-  const set = async () => {
+  const set = async (lead: boolean) => {
     setBusy(true);
-    const result = await store.source.setRole(agent.id, lead ? null : "lead");
+    const result = await store.source.setRole(agent.id, lead ? "lead" : null);
     setBusy(false);
-    setConfirming(false);
     if (!result.ok) toast.error(result.reason);
-    else toast.success(lead ? `${name} is no longer a lead` : `${name} is a lead now`);
+    else toast.success(lead ? `${name} is a lead now` : `${name} is no longer a lead`);
+    return result.ok;
   };
+  return { busy, set };
+}
 
-  if (lead) {
-    return (
-      <Button size="sm" variant="ghost" disabled={busy} onClick={set}>
-        {busy ? "Revoking" : "Revoke lead"}
-      </Button>
-    );
-  }
+/**
+ * Asks before making an Agent a lead, since it lets a model start processes on the
+ * Person's Hosts. Taking the role back needs no question.
+ */
+export function LeadDialog({ agent, open, onOpenChange }: { agent: Agent; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { busy, set } = useSetLead(agent);
+  const name = agent.nickname ?? agent.id;
   return (
-    <>
-      <Button size="sm" variant="ghost" onClick={() => setConfirming(true)} className="gap-1.5">
-        <Network className="size-3.5" aria-hidden /> <span>Make lead</span>
-      </Button>
-      <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Make {name} a lead?</DialogTitle>
-            <DialogDescription>
-              It may start Claude Code Agents on your Hosts, in their folders and permission modes, and stop and send
-              Directives to the Agents it starts. Its Directives carry instruction weight for them; your own word still
-              wins. Every step it takes is on the Channel, and you can revoke this at any time.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" size="sm" onClick={() => setConfirming(false)}>
-              Cancel
-            </Button>
-            <Button type="button" variant="primary" size="sm" disabled={busy} onClick={set}>
-              {busy ? "Granting" : "Make lead"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Make {name} a lead?</DialogTitle>
+          <DialogDescription>
+            It may start Claude Code Agents on your Hosts, in their folders and permission modes, and stop and send
+            Directives to the Agents it starts. Its Directives carry instruction weight for them; your own word still
+            wins. Every step it takes is on the Channel, and you can revoke this at any time.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" size="sm" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button type="button" variant="primary" size="sm" disabled={busy} onClick={() => void set(true).then(() => onOpenChange(false))}>
+            {busy ? "Granting" : "Make lead"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

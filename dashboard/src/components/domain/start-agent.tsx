@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Square } from "lucide-react";
 import { toast } from "sonner";
 import type { Agent, Host, PermissionMode } from "@shared/index";
 import {
@@ -383,8 +382,8 @@ export function StopAgentButton({ agent }: { agent: Agent }) {
 
   return (
     <>
-      <Button size="sm" disabled={stopping} onClick={() => setConfirming(true)} className="gap-1.5">
-        <Square className="size-3 fill-current" aria-hidden /> <span>{stopping ? "Stopping" : "Stop"}</span>
+      <Button disabled={stopping} onClick={() => setConfirming(true)}>
+        {stopping ? "Stopping" : "Stop"}
       </Button>
       <Dialog open={confirming} onOpenChange={(next) => (busy && !next ? undefined : setConfirming(next))}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
