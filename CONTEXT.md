@@ -46,6 +46,10 @@ _Avoid_: Memory entry, fact, summary
 What an Agent's wrapper adds to its context at its next turn: one line for each Memory Note other Agents wrote since it was last shown one, newest first, decisions before anything else, capped at about 1,500 tokens. A Memory Note never wakes an Agent.
 _Avoid_: Summary, recap
 
+**Transcript Read**:
+A page of a running Agent's session that another Agent or a Person pulled through the Channel (ADR 0019). The Agent's wrapper reads it from the session file, condenses and always redacts it before it leaves the machine; the Channel keeps none of it, only a `transcript.read` Event. A Gone Agent's transcript cannot be read.
+_Avoid_: Log, history, export
+
 **Capture**:
 The route by which an Event reached the channel. Proxy captures come from the model's API traffic. Hook captures come from the agent CLI's lifecycle events. Tool captures come from the Agent calling Switchboard's own tools.
 _Avoid_: Source, integration, feed

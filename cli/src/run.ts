@@ -28,6 +28,9 @@ import type {
   TerminalInputFrame,
   TerminalRefusedFrame,
   TerminalScreenFrame,
+  TranscriptPageFrame,
+  TranscriptRequestMessage,
+  TranscriptResponse,
   WakeCappedMessage,
   WakeMessage,
 } from "../../shared/src/index";
@@ -66,6 +69,7 @@ import { cachedAttachList } from "./terminal/attach-keys";
 import { AttachGate } from "./terminal/gate";
 import { TerminalPresence, terminalNotification } from "./terminal/presence";
 import { ScreenStream, TerminalScreen } from "./terminal/screen";
+import { TranscriptReader } from "./transcript";
 import { readAccount } from "./usage/limits";
 import { UsageSchedule } from "./usage/schedule";
 import { SessionTally } from "./usage/session";
@@ -373,6 +377,28 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       stream.send(JSON.stringify(attachedFrame));
     }
   };
+  // Another session on the Channel reads this one's transcript (ADR 0019): read from the
+  // session file, condensed and always redacted here, before it leaves the machine.
+  const transcripts = new TranscriptReader(adapter.cli);
+  const transcribed = async (message: TranscriptRequestMessage) => {
+    const reply = (answer: { page: Omit<TranscriptResponse, "agent"> } | { error: string }) => {
+      const frame: TranscriptPageFrame = { type: "transcript.page", agent: message.agent, id: message.id, ...answer };
+      stream.send(JSON.stringify(frame));
+    };
+    try {
+      const path = await contextReader?.file();
+      if (path === undefined) {
+        reply({ error: "The session has not written its transcript yet." });
+        return;
+      }
+      const page = await transcripts.page(path, message.from);
+      log(`sent transcript entries ${message.from}+${page.entries.length}, ${page.redacted} redacted`);
+      reply({ page });
+    } catch (error) {
+      log(`could not read the transcript: ${(error as Error).message}`);
+      reply({ error: "The session's transcript could not be read." });
+    }
+  };
   const interrupted = async (message: InterruptMessage) => {
     log(`Interrupt ${message.delivery.id} from the Relay`);
     const outcome = await typer.type(interruptNotice(message.delivery));
@@ -507,6 +533,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         stream.send(JSON.stringify(ack));
       }
       if (message.type === "directive.interrupt" && message.agent === agentId) void directed(message);
+      if (message.type === "transcript.request" && message.agent === agentId) void transcribed(message);
       if (message.type === "approval.deny" && message.agent === agentId) {
         const { person } = message;
         const denied = denyGate?.deny(message.id, denyReason(person, message.message)) ?? Promise.resolve(false);

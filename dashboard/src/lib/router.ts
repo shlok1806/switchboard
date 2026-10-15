@@ -7,6 +7,7 @@ export type Route =
   | { view: "task"; number: number }
   | { view: "agents" }
   | { view: "agent"; id: string }
+  | { view: "canvas"; agent?: string }
   | { view: "compare"; turn?: string };
 
 export function parse(hash: string): Route {
@@ -19,6 +20,8 @@ export function parse(hash: string): Route {
       return a ? { view: "agent", id: a } : { view: "agents" };
     case "compare":
       return { view: "compare", turn: a };
+    case "canvas":
+      return { view: "canvas", agent: a };
     default:
       return { view: "feed", event: a };
   }
@@ -36,6 +39,8 @@ export function href(route: Route): string {
       return "#/agents";
     case "agent":
       return `#/agents/${encodeURIComponent(route.id)}`;
+    case "canvas":
+      return route.agent ? `#/canvas/${encodeURIComponent(route.agent)}` : "#/canvas";
     case "compare":
       return route.turn ? `#/compare/${encodeURIComponent(route.turn)}` : "#/compare";
   }

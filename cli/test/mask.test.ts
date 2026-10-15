@@ -143,6 +143,37 @@ const cases: { name: string; input: string; output: string; count: number }[] = 
   { name: "a name that only contains a secret word", input: "MONKEY=banana", output: "MONKEY=banana", count: 0 },
   { name: "an already masked value", input: "sk-ant-****", output: "sk-ant-****", count: 0 },
   { name: "a short sk- word", input: "sk-learn is a library", output: "sk-learn is a library", count: 0 },
+  {
+    name: "a database URL's password",
+    input: "DATABASE_URL_HOST postgres://app:s3cr3t-Pa55@db.internal:5432/main",
+    output: "DATABASE_URL_HOST postgres://app:****@db.internal:5432/main",
+    count: 1,
+  },
+  {
+    name: "a token as a git remote's password, whole",
+    input: "git clone https://x-access-token:ghs_1234567890abcdefghijABCDEF@github.com/o/r.git",
+    output: "git clone https://x-access-token:****@github.com/o/r.git",
+    count: 1,
+  },
+  {
+    name: "credentials in a JSON-quoted URL",
+    input: '{"url":"redis://default:hunter2hunter2@cache:6379"}',
+    output: '{"url":"redis://default:****@cache:6379"}',
+    count: 1,
+  },
+  { name: "a URL with only a user", input: "ssh://git@github.com/o/r", output: "ssh://git@github.com/o/r", count: 0 },
+  {
+    name: "a URL with a port and no user",
+    input: "http://localhost:8787/api",
+    output: "http://localhost:8787/api",
+    count: 0,
+  },
+  {
+    name: "a URL whose password is a variable",
+    input: "postgres://app:$PGPASSWORD@db/main",
+    output: "postgres://app:$PGPASSWORD@db/main",
+    count: 0,
+  },
 ];
 
 describe("secret masking", () => {
@@ -271,6 +302,8 @@ describe("secret masking time", () => {
     ["unfinished JWTs", "eyJAAAAA.".repeat(15_000)],
     ["unfinished key blocks", "-----BEGIN RSA PRIVATE KEY-----\n".repeat(3_000)],
     ["key prefixes", "sk-ant-x sk-x ghp_x AKIA xoxb- ".repeat(5_000)],
+    ["URL schemes with no @", "a://u:p ".repeat(20_000)],
+    ["a long userinfo with no @", `a://u:${"p".repeat(70_000)}`],
   ])("stays linear on %s", (_name, text) => {
     expect(timed(text)).toBeLessThan(500);
   });

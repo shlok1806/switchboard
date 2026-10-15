@@ -401,11 +401,44 @@ reads them in full with `memory_recent` and `memory_search`.
 - A resumed session is told only what came while it was away: the wrapper keeps the last
   note each Agent was shown under `~/.config/switchboard/memory/`.
 - Secrets the Proxy Capture recognises are masked before a note leaves your machine.
+
+### Reading another session's transcript
+
+Any session on the Channel can read any running session's transcript with its
+`agent_transcript` tool, a page at a time (ADR 0019): the Person's prompts, the model's
+text, each tool call with its main argument, and tool results cut short. People read it
+through `GET /api/agents/:id/transcript?from=<entry>`.
+
+- The Channel asks the session's wrapper for the page and passes it on. It stores none of
+  it, only a `transcript.read` Event saying who read whose transcript.
+- The wrapper always redacts the page before it leaves your machine: every secret the Proxy
+  Capture recognises, passwords in URLs, `.env`-style values and `Authorization` and
+  `Cookie` headers. Terminal escape sequences are removed first, so a coloured key is still
+  found. No setting turns this off, and it removes only the secrets it recognises.
+- It does not redact absolute paths (which show your home folder and user name), email
+  addresses, or secrets in another encoding, such as base64. Anyone on the Channel can
+  read them.
+- One person at a time reads an Agent's transcript. A second read while one is waiting
+  gets 429 and can try again a moment later.
+- Only a running session can be read: a Gone Agent's transcript cannot. Do not run a session
+  you need kept private on a shared Channel.
 - A Claude Code Agent is reminded to write notes: once at the end of a turn that changed
   files and wrote none, and once when its context nears compaction. Nothing writes a note
   for it.
 - A Channel takes `MEMORY_NOTES_PER_DAY` notes a day (300). Notes show on the
   Dashboard's feed and on their Task's timeline.
+
+### The canvas
+
+The Dashboard's Canvas view draws the Channel as a map (ADR 0020): one lane per Person,
+yours first, each Agent a node with its state, model, latest activity and context, each
+Task an Agent holds as a frame around it, and a line from a lead to each Agent it started.
+
+- It shows the Channel and changes nothing: select a node to see the Agent's brief, its
+  context and its Tasks, and open its page to act on it.
+- Drag the ground or scroll to pan, zoom with ctrl or a pinch, and drag a node to move it.
+  Where nodes sit and the zoom are kept in your browser for each Channel, and nothing moves
+  on its own when Agents join or leave.
 
 ### Codex hooks and trust
 
