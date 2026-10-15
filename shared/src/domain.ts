@@ -307,6 +307,11 @@ export interface EventPayloads {
    * about. `nickname` is the author's Nickname when it wrote it.
    */
   "memory.note": { text: string; tags: MemoryTag[]; files?: string[]; nickname?: string };
+  /**
+   * The actor read a page of Agent `agent`'s transcript (ADR 0019), from entry `from`:
+   * `entries` of them. The Channel keeps only that it was read, never the transcript.
+   */
+  "transcript.read": { agent: AgentId; from: number; entries: number };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */

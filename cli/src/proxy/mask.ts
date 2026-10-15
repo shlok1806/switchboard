@@ -84,6 +84,13 @@ const RULES: Rule[] = [
       /-----BEGIN ([A-Z0-9 ]{0,40})PRIVATE KEY-----(?:(?!-----BEGIN )[\s\S]){0,16384}?-----END \1PRIVATE KEY-----/g,
     replace: (_match, kind = "") => `-----BEGIN ${kind}PRIVATE KEY-----${MASK}-----END ${kind}PRIVATE KEY-----`,
   },
+  // A password or token in a URL's userinfo: `postgres://app:pw@db`, `https://x:ghp_...@github.com`.
+  // The scheme and user keep. Before the token rules, so a token there goes whole.
+  {
+    pattern: /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/)([^\s:@/?#'"<>]{1,256}):([^\s@/?#'"<>]{1,1024})@/g,
+    replace: (_match, scheme = "", user = "", password = "") =>
+      password.startsWith("$") ? null : `${scheme}${user}:${MASK}@`,
+  },
   // Anthropic, before OpenAI: both start with `sk-`.
   { pattern: token(/sk-ant-[A-Za-z0-9_-]{8,}/), replace: keepPrefix("sk-ant-") },
   // OpenAI, including project, service account and admin keys. Not inside a name or a

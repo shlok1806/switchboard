@@ -259,7 +259,8 @@ export class SessionContextReader {
       this.parser = new ContextParser(this.cli, this.env, this.accountId);
     }
   }
-  async read(): Promise<{ context: AgentContext; usage?: ReportedUsage }> {
+  /** The session's file, once the CLI has written it; it is found once and then followed. */
+  async file(): Promise<string | undefined> {
     if (!this.path)
       this.path =
         this.cli === "claude-code"
@@ -270,6 +271,11 @@ export class SessionContextReader {
                 : join(this.env.GEMINI_CLI_HOME || homedir(), ".gemini", "tmp"),
               this.id,
             );
+    return this.path;
+  }
+
+  async read(): Promise<{ context: AgentContext; usage?: ReportedUsage }> {
+    await this.file();
     if (this.path) {
       if (this.cli === "gemini") {
         try {

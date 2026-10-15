@@ -75,6 +75,8 @@ export const SWITCHBOARD_TOOLS = [
   "memory_note",
   "memory_recent",
   "memory_search",
+  // ADR 0019: another session's transcript, pulled from its wrapper and redacted there.
+  "agent_transcript",
 ] as const;
 
 export type SwitchboardTool = (typeof SWITCHBOARD_TOOLS)[number];

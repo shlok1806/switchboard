@@ -152,6 +152,8 @@ export const LIVE: Beat[] = [
   beat(7.2, "update", S, "tool", { text: "Renamed getJson to request in web/src/api. Callers in web/src/pages still import getJson until the next push." }, { task: 12, turn: "shlok-t88" }),
   beat(7.5, "memory.note", S, "tool", { text: "Keeping getJson as an alias of request breaks tree-shaking in the pages bundle. Rename the callers instead.", tags: ["dead-end"], files: ["web/src/api/client.ts"] }, { task: 12, turn: "shlok-t88" }),
   beat(7.8, "turn.end", S, "hook", { turn: 88 }, { turn: "shlok-t88" }),
+  // Maya's Claude reads what shlok's did before it touches the callers (ADR 0019).
+  beat(8.4, "transcript.read", M, "tool", { agent: A.shlokClaude, from: 0, entries: 42 }),
   beat(9, "command", S, "hook", { command: "git push origin task/12-rename-getjson" }, { task: 12 }),
   named(
     beat(9.8, "push", S, null, {
