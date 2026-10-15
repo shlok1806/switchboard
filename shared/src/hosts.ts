@@ -154,7 +154,7 @@ export interface HostSpawnMessage {
   permissionMode: PermissionMode;
   /** The Person who asked, or for whom their lead asked. */
   by: PersonName;
-  /** The lead that asked for `by` (ADR 0017); the brief is its Directive. */
+  /** The lead that asked for `by` (ADR 0018); the brief is its Directive. */
   lead?: AgentId;
 }
 

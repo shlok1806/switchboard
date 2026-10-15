@@ -128,7 +128,7 @@ const ROUTES = new Set([
 /**
  * What an Agent token may call (ADR 0007): read the Channel, and act for its own Agent
  * only. A Directive, a spawn and a stop also reach the Channel, which refuses them
- * unless the Agent is a lead acting on its own subtree (ADR 0017).
+ * unless the Agent is a lead acting on its own subtree (ADR 0018).
  */
 const AGENT_ROUTES = new Set([
   "GET /api/events",

@@ -6,7 +6,7 @@
 //   switchboard host status
 //   switchboard spawn [--host N] [--cwd DIR] [--nickname N] [--model M] [--permission-mode M] [--repo R] [brief...]
 //   switchboard stop <agent> [--repo R]
-//   switchboard role grant <agent> lead | revoke <agent> [--repo R]   (ADR 0017)
+//   switchboard role grant <agent> lead | revoke <agent> [--repo R]   (ADR 0018)
 //
 // `spawn` and `stop` work from anywhere: they ask the Channel, which asks the Host.
 // `role` makes one of the Person's Agents a lead, which may spawn and stop on their
@@ -319,7 +319,7 @@ function oneAgent(agents: Agent[], name: string): Agent {
   return found[0] as Agent;
 }
 
-/** Grants one of the Person's Agents a role, or takes it back (ADR 0017). */
+/** Grants one of the Person's Agents a role, or takes it back (ADR 0018). */
 export function roleCommand(args: string[]): Promise<number> {
   return command(async () => {
     const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { repo: { type: "string" } } });

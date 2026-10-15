@@ -73,9 +73,9 @@ export interface Agent {
   presence: Presence;
   /** The Host that runs it (ADR 0015). Absent for an Agent started in a terminal. */
   host?: HostId;
-  /** The role its Person granted it (ADR 0017). Absent for a plain Agent. */
+  /** The role its Person granted it (ADR 0018). Absent for a plain Agent. */
   role?: AgentRole;
-  /** The lead that started it (ADR 0017). Absent for an Agent a Person started. */
+  /** The lead that started it (ADR 0018). Absent for an Agent a Person started. */
   parent?: AgentId;
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */
@@ -90,7 +90,7 @@ export interface Agent {
 }
 
 /**
- * The roles a Person may grant one of their own Agents (ADR 0017). A lead starts Agents
+ * The roles a Person may grant one of their own Agents (ADR 0018). A lead starts Agents
  * on its Person's Hosts, and stops and sends Directives to the Agents it started.
  */
 export const AGENT_ROLES = ["lead"] as const;
@@ -271,7 +271,7 @@ export interface EventPayloads {
   /** The Agent's own Person denied prompt `id` of Agent `agent` from the Channel (ADR 0014). */
   "approval.denied": { agent: AgentId; id: string; message?: string };
   /**
-   * A Person, or a lead for them (ADR 0017), asked their Host `host` to start an Agent
+   * A Person, or a lead for them (ADR 0018), asked their Host `host` to start an Agent
    * (ADR 0015). The Event's ID names the request. `brief`, the session's first prompt,
    * counts as that Person's words, or as the lead's Directive. `parent` is the lead,
    * which the new Agent gets as its parent.
@@ -290,11 +290,11 @@ export interface EventPayloads {
   "agent.spawned": { spawn: string; host: HostId; agent: AgentId; parent?: AgentId };
   /** Host `host` could not start what spawn `spawn` asked for, or never answered. The actor is its Person. */
   "agent.spawn.failed": { spawn: string; host: HostId; reason: string };
-  /** A Person, or the lead over it (ADR 0017), asked Host `host` to stop Agent `agent`, which it runs. */
+  /** A Person, or the lead over it (ADR 0018), asked Host `host` to stop Agent `agent`, which it runs. */
   "agent.stop": { agent: AgentId; host: HostId };
-  /** Agent `agent`'s own Person granted it `role` (ADR 0017). The actor is that Person. */
+  /** Agent `agent`'s own Person granted it `role` (ADR 0018). The actor is that Person. */
   "agent.role.granted": { agent: AgentId; role: AgentRole };
-  /** Agent `agent`'s own Person took `role` back (ADR 0017). The actor is that Person. */
+  /** Agent `agent`'s own Person took `role` back (ADR 0018). The actor is that Person. */
   "agent.role.revoked": { agent: AgentId; role: AgentRole };
   /** Host `host` attached to the Channel after being Offline. The actor is its Person. */
   "host.online": { host: HostId };

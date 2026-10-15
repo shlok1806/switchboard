@@ -1,4 +1,4 @@
-// Directives (ADR 0005, ADR 0017): the one message with instruction weight. A Person
+// Directives (ADR 0005, ADR 0018): the one message with instruction weight. A Person
 // sends one to one Agent, or a lead sends one to an Agent in its subtree for its
 // Person (the Channel checks that); it is recorded as a `directive` Event naming both, and delivered
 // to that Agent without the Relay. A Directive is addressed and always delivered,
@@ -51,7 +51,7 @@ export interface DirectivesHost {
   waitUntil(work: Promise<unknown>): void;
 }
 
-/** Who sends a Directive: a Person, or a lead for its Person (ADR 0017). */
+/** Who sends a Directive: a Person, or a lead for its Person (ADR 0018). */
 export type DirectiveSender = { person: PersonName; lead?: AgentId };
 
 export type DirectiveResult = { ok: true; event: ChannelEvent } | { ok: false; status: 403 | 404; reason: string };

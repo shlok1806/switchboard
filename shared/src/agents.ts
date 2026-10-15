@@ -294,7 +294,7 @@ export interface EndSessionRequest {
   detail?: string;
 }
 
-/** The path that grants (PUT) or revokes (DELETE) one Agent's role (ADR 0017). */
+/** The path that grants (PUT) or revokes (DELETE) one Agent's role (ADR 0018). */
 export function rolePath(id: AgentId): string {
   return `${agentPath(id)}/role`;
 }
@@ -304,7 +304,7 @@ export interface GrantRoleRequest {
   role: AgentRole;
 }
 
-/** The longest chain of leads the Channel follows to find a lead's subtree (ADR 0017). */
+/** The longest chain of leads the Channel follows to find a lead's subtree (ADR 0018). */
 export const MAX_LEAD_DEPTH = 8;
 
 /** The most Agents in one lead's subtree that are not Gone, unless LEAD_AGENTS_LIVE_CAP says otherwise. */

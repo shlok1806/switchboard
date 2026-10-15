@@ -555,7 +555,7 @@ export class Channel extends DurableObject<Env> {
 
   /**
    * A Person sending a Directive to one Agent, or a lead sending one to an Agent in its
-   * subtree (ADR 0017). Refused through any other Agent's credentials.
+   * subtree (ADR 0018). Refused through any other Agent's credentials.
    */
   sendDirective(caller: Caller, to: AgentId, text: string): DirectiveResult {
     if (caller.agent === undefined) {
@@ -575,7 +575,7 @@ export class Channel extends DurableObject<Env> {
   }
 
   /**
-   * Agent `agent`, calling with its token, holds the lead role (ADR 0017). Otherwise a
+   * Agent `agent`, calling with its token, holds the lead role (ADR 0018). Otherwise a
    * refusal saying that only a Person may `act`, unless they make the Agent a lead.
    */
   private lead(agent: AgentId, act: string): { ok: true } | { ok: false; status: 403; reason: string } {
@@ -585,11 +585,11 @@ export class Channel extends DurableObject<Env> {
       status: 403,
       reason:
         `Only a Person may ${act}, or a lead for them. ${agent} is not a lead: its Person can make it one ` +
-        `(\`switchboard role grant ${agent} lead\`, ADR 0017). Agents post Updates instead.`,
+        `(\`switchboard role grant ${agent} lead\`, ADR 0018). Agents post Updates instead.`,
     };
   }
 
-  /** The Agent's own Person grants it a role, or takes it back with null (ADR 0017). Never an Agent. */
+  /** The Agent's own Person grants it a role, or takes it back with null (ADR 0018). Never an Agent. */
   setAgentRole(caller: Caller, id: AgentId, role: AgentRole | null): RosterResult {
     if (caller.agent !== undefined) {
       return {
@@ -951,7 +951,7 @@ export class Channel extends DurableObject<Env> {
     return this.hosts.remove(person, name);
   }
 
-  /** Starts an Agent on one of the caller's Person's Hosts (ADR 0015), for the Person or their lead (ADR 0017). */
+  /** Starts an Agent on one of the caller's Person's Hosts (ADR 0015), for the Person or their lead (ADR 0018). */
   async spawnAgent(caller: Caller, request: SpawnAgentRequest): Promise<SpawnResult> {
     if (caller.agent === undefined) {
       this.join(caller.person);

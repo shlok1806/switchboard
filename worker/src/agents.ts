@@ -99,7 +99,7 @@ export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(AGENTS_SCHEMA);
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
   // ADR 0012: context. ADR 0013: the pending approval. ADR 0015: the Host that runs it.
-  // ADR 0017: its role, and the lead that started it.
+  // ADR 0018: its role, and the lead that started it.
   for (const column of ["account", "model", "effort", "usage", "context", "approval", "host", "role", "parent"]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
@@ -318,7 +318,7 @@ export class AgentRoster {
 
   /**
    * Grants Agent `id` a role, or takes its role back (`role` null), for its own Person
-   * only (ADR 0017). Records `agent.role.granted` or `agent.role.revoked` when it changed.
+   * only (ADR 0018). Records `agent.role.granted` or `agent.role.revoked` when it changed.
    */
   setRole(person: PersonName, id: AgentId, role: AgentRole | null): RosterResult {
     const row = this.row(id);
@@ -354,14 +354,14 @@ export class AgentRoster {
     return { ok: true, agent };
   }
 
-  /** Agent `id` was started by lead `parent` (ADR 0017). Set once, when its spawn is answered. */
+  /** Agent `id` was started by lead `parent` (ADR 0018). Set once, when its spawn is answered. */
   setParent(id: AgentId, parent: AgentId): void {
     this.host.sql.exec("UPDATE agents SET parent = ? WHERE id = ? AND parent IS NULL", parent, id);
     const agent = this.find(id);
     if (agent !== null) this.host.broadcast({ type: "agent", agent });
   }
 
-  /** Whether Agent `id` is in lead `lead`'s subtree: its chain of parents reaches `lead` (ADR 0017). */
+  /** Whether Agent `id` is in lead `lead`'s subtree: its chain of parents reaches `lead` (ADR 0018). */
   inSubtree(lead: AgentId, id: AgentId): boolean {
     let at = this.row(id)?.parent ?? null;
     for (let depth = 0; at !== null && depth < MAX_LEAD_DEPTH; depth++) {
@@ -371,7 +371,7 @@ export class AgentRoster {
     return false;
   }
 
-  /** How many Agents in lead `lead`'s subtree are not Gone (ADR 0017). */
+  /** How many Agents in lead `lead`'s subtree are not Gone (ADR 0018). */
   liveInSubtree(lead: AgentId): number {
     return this.host.sql
       .exec<{ n: number }>(

@@ -324,7 +324,7 @@ and Hosts on a Channel run at most `HOST_AGENTS_LIVE_CAP` Agents at once (20).
 
 ### Leads: an Agent that runs a team
 
-You can make one of your Agents a lead (ADR 0017). It may then start Agents on your
+You can make one of your Agents a lead (ADR 0018). It may then start Agents on your
 Hosts with its `agent_spawn` tool, and steer and stop the Agents it starts with
 `send_directive` and `agent_stop`. Grant and revoke it from a terminal, or with
 **Make lead** on the Agent's page:

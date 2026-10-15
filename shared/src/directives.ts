@@ -26,7 +26,7 @@ export const MAX_DIRECTIVE_LENGTH = 4000;
 /**
  * `POST /api/directives`: a Person sends a Directive to one Agent. Through an Agent's
  * token it is refused, unless that Agent is a lead and the target is in its subtree
- * (ADR 0017).
+ * (ADR 0018).
  */
 export interface SendDirectiveRequest {
   to: AgentId;
@@ -48,7 +48,7 @@ export interface DirectiveDelivery {
   at: string;
   /** The Person who sent it, or for whom its lead sent it. */
   from: PersonName;
-  /** The lead that sent it for `from` (ADR 0017). Absent when the Person sent it. */
+  /** The lead that sent it for `from` (ADR 0018). Absent when the Person sent it. */
   lead?: AgentId;
   to: AgentId;
   text: string;
@@ -110,7 +110,7 @@ export function describeDirective(directive: DirectiveDelivery): string {
 
 /**
  * The framed notice for the Agent's context: instructions from named Persons, or from
- * the lead a Person put over the Agent (ADR 0017). Unlike the Relay's Deliveries,
+ * the lead a Person put over the Agent (ADR 0018). Unlike the Relay's Deliveries,
  * which are information from Agents, these carry instruction weight, and the Agent's
  * own Person still has the final say.
  */

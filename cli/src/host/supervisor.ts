@@ -100,7 +100,7 @@ export function showsTrustDialog(screen: string): boolean {
   return TRUST_DIALOG.some((words) => squeezed.includes(words));
 }
 
-/** The session's first prompt: the brief, labelled as the requesting Person's words, or their lead's (ADR 0017). */
+/** The session's first prompt: the brief, labelled as the requesting Person's words, or their lead's (ADR 0018). */
 export function briefPrompt(by: string, host: string, brief: string, lead?: AgentId): string {
   return [
     `${directiveHeading(by, lead)}, ${lead === undefined ? "who" : "which"} started this Agent on ${host}:`,

@@ -7,7 +7,7 @@
 //   POST   /api/agents/:id/stop     stop an Agent one of the caller's Hosts runs
 //
 // Every route needs a Person's session, except that a lead's Agent token may spawn and
-// stop (ADR 0017): the Channel checks the role and the lead's subtree. Any other Agent
+// stop (ADR 0018): the Channel checks the role and the lead's subtree. Any other Agent
 // token is refused (ADR 0005).
 
 import type {
@@ -66,9 +66,9 @@ export function matchHostRoute(method: string, pathname: string): HostRoute | nu
 }
 
 export const HOST_AGENT_REFUSED =
-  "An Agent cannot list, register or remove Hosts, or attach as one: only a Person can (ADR 0015, ADR 0017).";
+  "An Agent cannot list, register or remove Hosts, or attach as one: only a Person can (ADR 0015, ADR 0018).";
 
-/** Whether an Agent token may call `route`: a lead may spawn and stop, the Channel decides the rest (ADR 0017). */
+/** Whether an Agent token may call `route`: a lead may spawn and stop, the Channel decides the rest (ADR 0018). */
 export function agentMayCall(route: HostRoute): boolean {
   return route.kind === "spawn" || route.kind === "stop";
 }

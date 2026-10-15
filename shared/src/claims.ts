@@ -67,7 +67,7 @@ export const SWITCHBOARD_TOOLS = [
   "finish_task",
   "rename",
   "list_agents",
-  // ADR 0015, ADR 0017: refused for every Agent but a lead, which acts on its own subtree.
+  // ADR 0015, ADR 0018: refused for every Agent but a lead, which acts on its own subtree.
   "agent_spawn",
   "agent_stop",
   "send_directive",

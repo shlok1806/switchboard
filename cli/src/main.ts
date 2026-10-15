@@ -9,7 +9,7 @@
 //   switchboard host install|uninstall|run|status   (ADR 0015)
 //   switchboard spawn [--host <name>] [--cwd <folder>] [...] [brief]
 //   switchboard stop <agent>
-//   switchboard role grant <agent> lead | revoke <agent>   (ADR 0017)
+//   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
@@ -74,7 +74,7 @@ prompt; \`stop\` stops one. Both work from any machine.
 
 \`role grant <agent> lead\` makes one of your Agents a lead: it may start Agents on your
 Hosts, and stop and send Directives to the Agents it starts, within the Channel's
-LEAD_AGENTS_LIVE_CAP. \`role revoke\` takes that back (ADR 0017).`;
+LEAD_AGENTS_LIVE_CAP. \`role revoke\` takes that back (ADR 0018).`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({

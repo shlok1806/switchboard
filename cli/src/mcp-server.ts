@@ -406,7 +406,7 @@ export class SwitchboardTools {
     });
   }
 
-  /** Sends Agent `target` a Directive. The Channel decides whether this Agent may: a lead, to its subtree (ADR 0017). */
+  /** Sends Agent `target` a Directive. The Channel decides whether this Agent may: a lead, to its subtree (ADR 0018). */
   sendDirective(target: string, text: string) {
     return this.run("send_directive", target.slice(0, 80), undefined, async (agent) => {
       const to = await this.findAgent(agent, target, false);
@@ -631,7 +631,7 @@ export function createMcpServer(tools: SwitchboardTools): McpServer {
       description:
         "Starts a Claude Code Agent on one of your Person's Hosts, in a folder under that Host's roots, with an " +
         "optional brief as its first prompt, which it reads as your Directive. It becomes one of your Agents. Only " +
-        "a lead may: an Agent its Person made one (ADR 0017); otherwise the Channel refuses, saying so.",
+        "a lead may: an Agent its Person made one (ADR 0018); otherwise the Channel refuses, saying so.",
       inputSchema: {
         cwd: z.string().max(MAX_PATH_LENGTH).describe("The folder to run in: an absolute path on the Host."),
         host: z.string().optional().describe("The Host's name; else the Person's most recently seen Live Host."),
@@ -647,7 +647,7 @@ export function createMcpServer(tools: SwitchboardTools): McpServer {
     "agent_stop",
     {
       description:
-        "Stops one of the Agents you started on a Host. Only a lead may, and only for its own Agents (ADR 0017).",
+        "Stops one of the Agents you started on a Host. Only a lead may, and only for its own Agents (ADR 0018).",
       inputSchema: { agent: z.string().describe("The Agent's ID or Nickname.") },
     },
     ({ agent }) => answer(tools.stopAgent(agent)),
@@ -657,7 +657,7 @@ export function createMcpServer(tools: SwitchboardTools): McpServer {
     {
       description:
         "Sends one of the Agents you started a Directive: an instruction it reads as from you, the lead its Person " +
-        "put over it. Only a lead may, and only to its own Agents (ADR 0017). To tell anyone else something, " +
+        "put over it. Only a lead may, and only to its own Agents (ADR 0018). To tell anyone else something, " +
         "post an Update.",
       inputSchema: {
         agent: z.string().describe("The Agent's ID or Nickname."),

@@ -51,7 +51,7 @@ A short summary of one model turn: model, token counts, reply text and tool call
 _Avoid_: Summary, redacted event
 
 **Directive**:
-A message from a Person to an Agent, labelled as coming from that Person, or from a Lead to an Agent it started, labelled as from the Lead its Person put over that Agent (ADR 0017). It is the only channel message that carries instruction weight. Everything else an Agent receives from another Agent is information.
+A message from a Person to an Agent, labelled as coming from that Person, or from a Lead to an Agent it started, labelled as from the Lead its Person put over that Agent (ADR 0018). It is the only channel message that carries instruction weight. Everything else an Agent receives from another Agent is information.
 _Avoid_: Command, order, instruction
 
 **Relay**:
@@ -97,7 +97,7 @@ A machine one Person lets the Channel start Agents on, such as `shlok1806/studio
 _Avoid_: Worker, machine, runner, node
 
 **Lead**:
-An Agent its own Person made a lead (ADR 0017). It may start Agents on that Person's Hosts, and stop and send Directives to the Agents it started and theirs, its subtree, within the Channel's cap. Only that Person grants or revokes the role, and nothing outside the subtree is a Lead's to act on.
+An Agent its own Person made a lead (ADR 0018). It may start Agents on that Person's Hosts, and stop and send Directives to the Agents it started and theirs, its subtree, within the Channel's cap. Only that Person grants or revokes the role, and nothing outside the subtree is a Lead's to act on.
 _Avoid_: Manager, orchestrator, admin
 
 **Presence**:

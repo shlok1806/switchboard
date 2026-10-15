@@ -15,7 +15,7 @@
 // - The Agents Hosts run, and the spawns still starting, are capped per Channel.
 // - A stop is recorded (`agent.stop`) and sent to the Host that runs the Agent. The
 //   Agent goes Gone the usual way, when its wrapper ends the session.
-// - A lead (ADR 0017) spawns and stops for its Person: on that Person's Hosts, and
+// - A lead (ADR 0018) spawns and stops for its Person: on that Person's Hosts, and
 //   only Agents in its own subtree, within `leadCap`. The Agent a lead's spawn starts
 //   gets the lead as its parent. Whether the caller holds the role is the Channel's check.
 
@@ -90,7 +90,7 @@ type HostRow = {
 
 type SpawnRow = { id: string; person: string; host: string; state: string; requested_at: number; lead: string | null };
 
-/** Who asks a Host for something: a Person, or a lead for its Person (ADR 0017). */
+/** Who asks a Host for something: a Person, or a lead for its Person (ADR 0018). */
 export type HostActing = { person: PersonName; lead?: AgentId };
 
 function actorOf(acting: HostActing): Extract<Actor, { kind: "agent" | "person" }> {
@@ -115,7 +115,7 @@ export interface HostsDeps {
   /** Closes Host `id`'s sockets, for a Host that was removed. */
   close(id: HostId): void;
   findAgent(id: AgentId): Agent | null;
-  /** Whether Agent `id` is in lead `lead`'s subtree (ADR 0017). */
+  /** Whether Agent `id` is in lead `lead`'s subtree (ADR 0018). */
   inSubtree(lead: AgentId, id: AgentId): boolean;
   /** How many Agents in lead `lead`'s subtree are not Gone. */
   liveInSubtree(lead: AgentId): number;
@@ -156,7 +156,7 @@ export class Hosts {
 
   constructor(private readonly deps: HostsDeps) {
     deps.sql.exec(HOSTS_SCHEMA);
-    // ADR 0017: the lead that asked, on a table made before it.
+    // ADR 0018: the lead that asked, on a table made before it.
     try {
       deps.sql.exec("ALTER TABLE host_spawns ADD COLUMN lead TEXT");
     } catch {

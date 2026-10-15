@@ -64,7 +64,7 @@ describe("main-session context", () => {
     p.entry({ type: "user", message: { content: prompt } });
     expect(p.context.brief).toBe("Fix the login redirect.\n\nThen open a PR.");
     expect(p.context.task).toBe("Fix the login redirect.");
-    // A lead's brief is its Directive, read the same way (ADR 0017).
+    // A lead's brief is its Directive, read the same way (ADR 0018).
     const fromLead = new ContextParser("claude-code");
     fromLead.entry({
       type: "user",

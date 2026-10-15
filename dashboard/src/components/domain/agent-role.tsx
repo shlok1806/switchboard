@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { useMe, useStore } from "@/data/store";
 
-/** An Agent its Person made a lead (ADR 0017). */
+/** An Agent its Person made a lead (ADR 0018). */
 export function LeadLabel() {
   return (
     <span
@@ -27,7 +27,7 @@ export function LeadLabel() {
 }
 
 /**
- * Make one of this Person's own Agents a lead, or take the role back (ADR 0017). Making
+ * Make one of this Person's own Agents a lead, or take the role back (ADR 0018). Making
  * one asks first, since it lets a model start processes on the Person's Hosts.
  */
 export function LeadButton({ agent }: { agent: Agent }) {

@@ -302,7 +302,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const directed = async (message: DirectiveInterruptMessage) => {
     const { directive } = message;
     log(`Directive ${directive.id} from ${directive.lead ?? directive.from}`);
-    // Only its Person's word lets the Agent be woken again, never a lead's (ADR 0017).
+    // Only its Person's word lets the Agent be woken again, never a lead's (ADR 0018).
     if (directive.lead === undefined) waker?.reset(`Directive from ${directive.from}`);
     const outcome = await typer.type(directivesNotice([directive]));
     log(
@@ -358,7 +358,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     : null;
   const addForNextTurn = (items: NextTurnItems) => {
     const kept = nextTurn.add(items);
-    // A Person's Directive is their word: the Agent may be woken again. A lead's is not (ADR 0017).
+    // A Person's Directive is their word: the Agent may be woken again. A lead's is not (ADR 0018).
     if ((items.directives ?? []).some((d) => d.lead === undefined && kept.includes(d.id))) {
       waker?.reset("a Directive from its Person");
     }

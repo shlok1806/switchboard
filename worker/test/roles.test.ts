@@ -1,4 +1,4 @@
-// Leads (ADR 0017), driven through the Channel API the way a Person, a lead's MCP tools,
+// Leads (ADR 0018), driven through the Channel API the way a Person, a lead's MCP tools,
 // a Host and its wrappers use it. What is checked is what they observe: the answers,
 // the Host's socket getting only what a lead may ask, the Agents' role and parent, the
 // Directives the targets read, and the Events on the Channel.

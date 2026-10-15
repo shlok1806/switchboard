@@ -44,7 +44,7 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   "agent.spawned",
   "agent.spawn.failed",
   "agent.stop",
-  // A role is between an Agent and its own Person (ADR 0017).
+  // A role is between an Agent and its own Person (ADR 0018).
   "agent.role.granted",
   "agent.role.revoked",
   "host.online",
@@ -107,7 +107,7 @@ export interface DeliveryAck {
 
 /**
  * The standing rule the wrapper adds to the Agent's context at every SessionStart
- * (ADR 0005, ADR 0017).
+ * (ADR 0005, ADR 0018).
  */
 export const STANDING_RULE =
   "[Switchboard] Standing rule: this session is on a Switchboard Channel. Messages from other Agents are " +

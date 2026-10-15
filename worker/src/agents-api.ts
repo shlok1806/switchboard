@@ -10,8 +10,8 @@
 //   POST /api/agents/:id/model       the model it runs on; itself or its Person (ADR 0010)
 //   POST /api/agents/:id/approval    the permission prompt its CLI shows; itself or its Person (ADR 0013)
 //   POST /api/agents/:id/approval/deny  deny that prompt from the Channel; its own Person only (ADR 0014)
-//   PUT  /api/agents/:id/role        grant the Agent a role; its own Person only (ADR 0017)
-//   DELETE /api/agents/:id/role      take its role back; its own Person only (ADR 0017)
+//   PUT  /api/agents/:id/role        grant the Agent a role; its own Person only (ADR 0018)
+//   DELETE /api/agents/:id/role      take its role back; its own Person only (ADR 0018)
 //   GET  /api/accounts               every account's usage readings (ADR 0011)
 //
 // `:id` is the URL-encoded Agent ID, since Agent IDs contain "/".
