@@ -445,6 +445,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     if (hookDir) await rm(hookDir, { recursive: true, force: true });
   };
   const childEnv: Record<string, string> = { ...(env as Record<string, string>) };
+  for (const name of adapter.parentEnv ?? []) delete childEnv[name];
   if (plan.kind !== "none" && proxySetting !== "off") {
     // The Proxy Capture: model traffic goes through a local proxy. If it cannot
     // start, the CLI runs as it would without Switchboard.
