@@ -67,9 +67,10 @@ export const SWITCHBOARD_TOOLS = [
   "finish_task",
   "rename",
   "list_agents",
-  // ADR 0015: refused for every Agent until a Person grants it the role (the roles ADR).
+  // ADR 0015, ADR 0018: refused for every Agent but a lead, which acts on its own subtree.
   "agent_spawn",
   "agent_stop",
+  "send_directive",
 ] as const;
 
 export type SwitchboardTool = (typeof SWITCHBOARD_TOOLS)[number];

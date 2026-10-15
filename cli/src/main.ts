@@ -9,13 +9,14 @@
 //   switchboard host install|uninstall|run|status   (ADR 0015)
 //   switchboard spawn [--host <name>] [--cwd <folder>] [...] [brief]
 //   switchboard stop <agent>
+//   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
 import { ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig } from "./config";
-import { HOST_USAGE, hostCommand, spawnCommand, stopCommand } from "./host/commands";
+import { HOST_USAGE, hostCommand, ROLE_USAGE, roleCommand, spawnCommand, stopCommand } from "./host/commands";
 import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
 import { renameAgent } from "./rename";
@@ -31,6 +32,7 @@ const USAGE = `Usage:
   switchboard spawn [--host <name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--repo <owner>/<repo>] [brief...]
   switchboard stop <agent> [--repo <owner>/<repo>]
 ${HOST_USAGE.replace("Usage:\n", "")}
+${ROLE_USAGE.replace("Usage:\n", "")}
 
 \`login\` signs you in with GitHub (a code to enter at github.com), once: the session
 works for every Channel on that host whose repo you have write access to. The
@@ -68,7 +70,11 @@ starts and stops Claude Code Agents for the Channel with no window. --root names
 folders Agents may run in (repeat it); --max-permission-mode is the loosest mode they
 may run in (default "default"). \`spawn\` starts an Agent on one of your Hosts (--host,
 else the one you used last) in --cwd (else this folder), with the brief as its first
-prompt; \`stop\` stops one. Both work from any machine.`;
+prompt; \`stop\` stops one. Both work from any machine.
+
+\`role grant <agent> lead\` makes one of your Agents a lead: it may start Agents on your
+Hosts, and stop and send Directives to the Agents it starts, within the Channel's
+LEAD_AGENTS_LIVE_CAP. \`role revoke\` takes that back (ADR 0018).`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -159,6 +165,8 @@ async function main(argv: string[]): Promise<number> {
       return spawnCommand(rest);
     case "stop":
       return stopCommand(rest);
+    case "role":
+      return roleCommand(rest);
     case "mcp":
       return runMcpServer();
     case "run": {

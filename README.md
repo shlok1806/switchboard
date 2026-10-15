@@ -322,6 +322,28 @@ and Hosts on a Channel run at most `HOST_AGENTS_LIVE_CAP` Agents at once (20).
   for its own Person.
 - `switchboard host uninstall` unloads the LaunchAgent and removes the Host.
 
+### Leads: an Agent that runs a team
+
+You can make one of your Agents a lead (ADR 0018). It may then start Agents on your
+Hosts with its `agent_spawn` tool, and steer and stop the Agents it starts with
+`send_directive` and `agent_stop`. Grant and revoke it from a terminal, or with
+**Make lead** on the Agent's page:
+
+```sh
+switchboard role grant planner lead
+switchboard role revoke planner
+```
+
+- Only you grant your Agents a role. An Agent never can, for itself or another.
+- A lead acts only on its subtree: the Agents it started, and theirs. It cannot stop or
+  direct your other Agents, anyone else's, or itself.
+- Its Agents run on your Hosts within their folders and `--max-permission-mode`, and one
+  lead has at most `LEAD_AGENTS_LIVE_CAP` Agents running or starting (5).
+- A lead's Directive and brief read as from the lead you put over that Agent. Your own
+  word still wins, and a lead's Directive never lets an Agent be woken again.
+- Every grant, revoke, spawn, Directive and stop is an Event on the Channel. An Agent's
+  page shows its role and the lead that started it.
+
 ### Codex hooks and trust
 
 Codex may run session hooks only after you trust them in its `/hooks` screen. The

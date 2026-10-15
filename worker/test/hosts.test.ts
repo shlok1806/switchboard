@@ -3,158 +3,34 @@
 // getting the spawns and stops meant for it (and nothing else), the answers to spawn
 // and stop, the Agent's `host`, and the Events on the Channel.
 
-import { reset, runDurableObjectAlarm } from "cloudflare:test";
+import { runDurableObjectAlarm } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
-  AgentId,
-  AgentResponse,
-  ChannelEvent,
   ErrorResponse,
   HistoryResponse,
   HostResponse,
-  HostSpawnMessage,
   HostStopMessage,
-  HostsResponse,
   SpawnAgentResponse,
   StopAgentResponse,
 } from "../../shared/src/index";
 import { agentPath } from "../../shared/src/index";
 import { OFFLINE_GRACE_MS, SPAWN_EXPIRES_MS } from "../src/hosts";
-import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
+import { channelStub, streamQuery, url } from "./client";
+import {
+  call,
+  cleanUp,
+  closeAfterTest,
+  events,
+  FakeHost,
+  hosts,
+  post,
+  spawnAndStart,
+  waitFor,
+  wrapperRegisters,
+} from "./hosts-harness";
 
-async function call(path: string, person: string, init: { method?: string; body?: unknown } = {}, agent?: AgentId) {
-  const response = await exports.default.fetch(
-    new Request(url(path), {
-      method: init.method ?? "GET",
-      headers: {
-        Authorization: await bearer({ person, ...(agent === undefined ? {} : { agent }) }),
-        "Content-Type": "application/json",
-      },
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-    }),
-  );
-  if (path === "/api/agents" && response.ok) remember(await response.clone().json<AgentResponse>());
-  return response;
-}
-
-const post = (path: string, person: string, body: unknown = {}, agent?: AgentId) =>
-  call(path, person, { method: "POST", body }, agent);
-
-async function events(): Promise<ChannelEvent[]> {
-  return (await (await call("/api/events", "dashboard")).json<HistoryResponse>()).events;
-}
-
-async function hosts(): Promise<HostsResponse> {
-  return (await call("/api/hosts", "dashboard")).json<HostsResponse>();
-}
-
-async function waitFor<T>(check: () => Promise<T | undefined> | T | undefined, ms = 4000): Promise<T> {
-  const deadline = Date.now() + ms;
-  for (;;) {
-    const value = await check();
-    if (value !== undefined) return value;
-    if (Date.now() > deadline) throw new Error("Timed out");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
-
-const open: WebSocket[] = [];
-
-/** One Host: registered, and with its socket attached when `connect` is called. */
-class FakeHost {
-  readonly frames: Array<{ type: string } & Record<string, unknown>> = [];
-  private socket: WebSocket | null = null;
-
-  constructor(
-    readonly person: string,
-    readonly name: string,
-  ) {}
-
-  get id(): string {
-    return `${this.person}/${this.name}`;
-  }
-
-  static async registered(person: string, name: string, roots = ["/work"], maxPermissionMode?: string) {
-    const response = await post("/api/hosts", person, {
-      name,
-      roots,
-      ...(maxPermissionMode === undefined ? {} : { maxPermissionMode }),
-    });
-    expect(response.status).toBe(200);
-    return new FakeHost(person, name);
-  }
-
-  async connect(): Promise<void> {
-    const query = await streamQuery(this.person, { host: this.name });
-    const response = await exports.default.fetch(
-      new Request(url(`/api/stream?${query}`), { headers: { Upgrade: "websocket" } }),
-    );
-    const socket = response.webSocket;
-    if (!socket) throw new Error(`No WebSocket: ${response.status} ${await response.text()}`);
-    socket.accept();
-    socket.addEventListener("message", (message) => this.frames.push(JSON.parse(message.data as string)));
-    this.socket = socket;
-    open.push(socket);
-  }
-
-  close(): void {
-    this.socket?.close();
-    this.socket = null;
-  }
-
-  send(frame: unknown): void {
-    this.socket?.send(JSON.stringify(frame));
-  }
-
-  spawns(): HostSpawnMessage[] {
-    return this.frames.filter((f) => f.type === "host.spawn") as unknown as HostSpawnMessage[];
-  }
-
-  nextSpawn(): Promise<HostSpawnMessage> {
-    const seen = this.spawns().length;
-    return waitFor(() => this.spawns()[seen]);
-  }
-}
-
-let sessions = 0;
-
-/** What `switchboard run claude` does when a Host starts it: registers with the Host and the spawn. */
-async function wrapperRegisters(person: string, host?: string, spawn?: string): Promise<AgentResponse> {
-  sessions += 1;
-  const response = await post("/api/agents", person, {
-    cli: "claude-code",
-    sessionId: `${sessions.toString(16).padStart(4, "0")}eeee-0000-4000-8000-000000000000`,
-    resumed: false,
-    cwd: "/work/app",
-    ...(host === undefined ? {} : { host }),
-    ...(spawn === undefined ? {} : { spawn }),
-  });
-  expect(response.status).toBe(200);
-  return response.json<AgentResponse>();
-}
-
-/** Starts an Agent on `host` the way the Host does when the spawn reaches it. */
-async function spawnAndStart(host: FakeHost, body: Record<string, unknown> = {}) {
-  const spawning = post("/api/agents/spawn", host.person, { cli: "claude-code", cwd: "/work/app", ...body });
-  const spawn = await host.nextSpawn();
-  const registered = await wrapperRegisters(host.person, host.name, spawn.spawn);
-  const response = await spawning;
-  return { spawn, registered, response };
-}
-
-afterEach(async () => {
-  vi.useRealTimers();
-  forgetTokens();
-  for (const socket of open.splice(0)) {
-    try {
-      socket.close();
-    } catch {
-      // Already closed.
-    }
-  }
-  await reset();
-});
+afterEach(cleanUp);
 
 describe("registering a Host", () => {
   it("lists it, Live only while its socket is attached, and records coming Live", async () => {
@@ -331,7 +207,7 @@ describe("starting an Agent", () => {
     const { agent } = await wrapperRegisters("shlok");
     const fromAgent = await post("/api/agents/spawn", "shlok", { cli: "claude-code", cwd: "/work/app" }, agent.id);
     expect(fromAgent.status).toBe(403);
-    expect((await fromAgent.json<ErrorResponse>()).reason).toContain("ADR 0005");
+    expect((await fromAgent.json<ErrorResponse>()).reason).toContain("is not a lead");
   });
 
   it("caps the Agents Hosts run on the Channel, counting those still starting", async () => {
@@ -387,7 +263,7 @@ describe("starting an Agent", () => {
       if (!socket) throw new Error(`No WebSocket: ${response.status}`);
       socket.accept();
       sockets.push(socket);
-      open.push(socket);
+      closeAfterTest(socket);
     }
     const spawning = post("/api/agents/spawn", "shlok", { cli: "claude-code", cwd: "/work/app" });
     const { spawn } = await studio.nextSpawn();

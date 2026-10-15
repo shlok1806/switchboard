@@ -32,6 +32,8 @@ const vars = {
   RELAY_INTERRUPT_INTERVAL_SECONDS: "20",
   // Small, so the tests reach the cap with a few spawns.
   HOST_AGENTS_LIVE_CAP: "3",
+  // Smaller still, so a lead reaches its own cap before the Channel's.
+  LEAD_AGENTS_LIVE_CAP: "2",
   // Short, so a spawn the Host never answers comes back without the Agent quickly.
   HOST_SPAWN_WAIT_SECONDS: "2",
   GITHUB_API_URL: "",

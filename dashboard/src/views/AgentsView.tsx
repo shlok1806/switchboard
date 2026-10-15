@@ -10,6 +10,7 @@ import { AccountLabel, ModelLabel, PresenceDot, RawBadge, StalePill, TaskLink } 
 import { AgentUsage, AccountsPanel } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
 import { StartAgentButton, useHostsSupported } from "@/components/domain/start-agent";
+import { LeadLabel } from "@/components/domain/agent-role";
 import { CLI_LABEL, PRESENCE_LABEL, ago, hostName } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -174,6 +175,7 @@ function AgentRow({ agent: a, held }: { agent: Agent; held: Task[] }) {
             <span>{CLI_LABEL[a.cli]}</span>
             <span>{a.person}</span>
             {a.host && <HostLabel host={a.host} />}
+            {a.role === "lead" && <LeadLabel />}
             {a.account && !a.usage?.email && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
             {a.model && <ModelLabel model={a.model} effort={a.effort} className="flex min-w-0 shrink items-center gap-1" />}
           </span>
