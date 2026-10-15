@@ -89,7 +89,7 @@ One coding-agent session run by a Person. A resumed session is the same Agent, a
 _Avoid_: Bot, worker, model
 
 **Agent ID**:
-The permanent name of an Agent, made of its Person, its CLI and a short form of its session ID, such as `shlok1806/claude/7f3a`. The short form is the session ID's first 4 characters, or its last 4 for Codex, whose session IDs start with the clock. It traces any piece of work back to the exact session that did it.
+The permanent name of an Agent, made of its Person, its CLI and a short form of its session ID, such as `shlok1806/claude/7f3a`. The short form is the session ID's first 4 characters, or its last 4 for Codex, whose session IDs start with the clock. Two of a Person's sessions can share a short form: when Switchboard picked the new session's ID itself, it picks another before the CLI starts; otherwise the Channel refuses the second session. It traces any piece of work back to the exact session that did it.
 _Avoid_: Agent name, handle
 
 **Host**:

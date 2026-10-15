@@ -21,8 +21,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NO_SESSION_FLAGS = new Set(["-h", "--help", "-v", "--version"]);
 
 export type SessionPlan =
-  /** The session ID is known before launch. */
-  | { kind: "known"; args: string[]; sessionId: string; resumed: boolean }
+  /**
+   * The session ID is known before launch. `picked` when we picked it, as `--session-id`
+   * in the arguments, so we may pick another (see `withSessionId`).
+   */
+  | { kind: "known"; args: string[]; sessionId: string; resumed: boolean; picked?: true }
   /** Claude Code's picker chooses the session; find it once it is picked. */
   | { kind: "picker"; args: string[] }
   /** Not a session at all (`--help`, `--version`): run Claude Code as is. */
@@ -77,7 +80,7 @@ export async function planSession(args: string[], options: PlanOptions): Promise
   }
   if ((resume || continuing) && fork) {
     const sessionId = newId();
-    return { kind: "known", args: [...args, "--session-id", sessionId], sessionId, resumed: false };
+    return { kind: "known", args: [...args, "--session-id", sessionId], sessionId, resumed: false, picked: true };
   }
   if (resume) {
     if (resume.value && UUID.test(resume.value)) {
@@ -92,7 +95,14 @@ export async function planSession(args: string[], options: PlanOptions): Promise
     return { kind: "known", args: ["--resume", latest.id, ...rest], sessionId: latest.id, resumed: true };
   }
   const sessionId = newId();
-  return { kind: "known", args: ["--session-id", sessionId, ...args], sessionId, resumed: false };
+  return { kind: "known", args: ["--session-id", sessionId, ...args], sessionId, resumed: false, picked: true };
+}
+
+/** `args` with the `--session-id` we picked, `from`, changed to `to`. */
+export function withSessionId(args: string[], from: string, to: string): string[] {
+  const at = args.findIndex((arg, i) => arg === from && args[i - 1] === "--session-id");
+  if (at === -1) throw new Error(`No --session-id ${from} to change`);
+  return args.map((arg, i) => (i === at ? to : arg));
 }
 
 /** Claude Code's config directory: `$CLAUDE_CONFIG_DIR`, else `~/.claude`. */

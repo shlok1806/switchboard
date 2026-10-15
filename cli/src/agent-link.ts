@@ -10,6 +10,7 @@
 // again within the session sends what the Channel last said, never what the
 // wrapper started with, so a change made meanwhile is not undone.
 
+import { randomUUID } from "node:crypto";
 import type {
   Agent,
   AgentContext,
@@ -21,6 +22,9 @@ import type {
 } from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
 import type { NextTurnItems } from "./next-turn";
+
+/** The most session IDs `registerPicked` tries before it gives up. */
+const MAX_PICKS = 5;
 
 export interface AgentSession {
   cli: Cli;
@@ -69,7 +73,7 @@ export class AgentLink {
 
   constructor(
     private readonly client: ChannelClient,
-    private readonly session: AgentSession,
+    private session: AgentSession,
     private readonly heartbeatMs: number,
     private readonly log: (line: string) => void,
     /** Called each time the Channel registers the Agent, with the Agent token it issued. */
@@ -92,11 +96,49 @@ export class AgentLink {
     return this.agent?.id ?? null;
   }
 
+  /** The session's ID: the one it started with, or the one `registerPicked` picked instead. */
+  get sessionId(): string {
+    return this.session.sessionId;
+  }
+
+  /**
+   * Registers a new session whose ID Switchboard picked, before the CLI starts. An Agent
+   * ID keeps only 4 characters of the session ID, so another of the Person's sessions
+   * may already hold this one's, and the Channel refuses it (409). Then it picks another
+   * session ID, up to MAX_PICKS in all; `sessionId` is the one it registered with.
+   */
+  async registerPicked(pick: () => string = randomUUID): Promise<Agent & { nicknameRefused?: string }> {
+    for (let picks = 1; ; picks++) {
+      try {
+        return await this.register();
+      } catch (error) {
+        const taken = error instanceof ChannelError && error.status === 409;
+        if (!taken || picks >= MAX_PICKS || this.registered) throw error;
+        const next = pick();
+        this.log(`${(error as Error).message} Picked session ${next} instead of ${this.session.sessionId}.`);
+        this.session = { ...this.session, sessionId: next };
+      }
+    }
+  }
+
   /**
    * Registers the Agent. Throws on refusals and network failures; the caller decides.
    * A Nickname the Channel would not set (another Agent holds it) is in `nicknameRefused`.
+   *
+   * It waits its turn behind any heartbeat, and a heartbeat asked for meanwhile (a
+   * usage reading, a Presence change) waits for it: two registrations in flight at once
+   * would both look like the session's first, and the Channel would start it twice.
    */
-  async register(): Promise<Agent & { nicknameRefused?: string }> {
+  register(): Promise<Agent & { nicknameRefused?: string }> {
+    const registered = this.inFlight.then(() => this.registerNow());
+    this.inFlight = registered.then(
+      () => {},
+      () => {},
+    );
+    return registered;
+  }
+
+  private async registerNow(): Promise<Agent & { nicknameRefused?: string }> {
     const known = this.known;
     const nickname = known === null ? this.session.nickname : (known.nickname ?? null);
     const proxyMode = known === null ? this.session.proxyMode : known.proxyMode;
@@ -208,7 +250,7 @@ export class AgentLink {
     try {
       // Registering again answers a spawn: a failed try is tried again on the next beat.
       if (!this.agent || this.spawnUnanswered()) {
-        await this.register();
+        await this.registerNow();
         // A fresh registration is Live; say so if we are not.
         if (this.presence === "live") return;
       }

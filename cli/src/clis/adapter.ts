@@ -12,8 +12,11 @@ import type { ApiFormat } from "../proxy/api";
 
 /** Which session a launch will be. */
 export type SessionPlan =
-  /** The session ID is known before launch. */
-  | { kind: "known"; args: string[]; sessionId: string; resumed: boolean }
+  /**
+   * The session ID is known before launch. `picked` when Switchboard picked it for a
+   * new session, as `--session-id`: it may pick another if its Agent ID is taken.
+   */
+  | { kind: "known"; args: string[]; sessionId: string; resumed: boolean; picked?: true }
   /**
    * The session ID is only known once the CLI has started (a new Codex session, a
    * picker): from the first hook that reports it, or from the adapter's `discover`.
