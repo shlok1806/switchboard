@@ -13,6 +13,7 @@ export * from "./hosts";
 export * from "./memory";
 export * from "./proxy";
 export * from "./relay";
+export * from "./terminal";
 export * from "./transcript";
 export * from "./usage";
 export * from "./wakes";

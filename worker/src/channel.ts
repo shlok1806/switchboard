@@ -46,6 +46,10 @@ import type {
   StreamMessage,
   Task,
   TaskNumber,
+  TerminalInputFrame,
+  TerminalRefusedFrame,
+  TerminalScreenFrame,
+  TerminalWatchersMessage,
   TouchedFile,
   TranscriptRequestMessage,
   TranscriptResponse,
@@ -79,6 +83,15 @@ import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
 import { type NewTask, type TaskResult, Tasks, workingTasks } from "./tasks";
+import {
+  InputRate,
+  MAX_WATCHED,
+  parseAttached,
+  parseInput,
+  parseRefused,
+  parseScreen,
+  type WatchAttachment,
+} from "./terminal";
 import { AccountUsageStore } from "./usage";
 import { Wakes } from "./wakes";
 
@@ -349,6 +362,7 @@ export class Channel extends DurableObject<Env> {
   private readonly hosts: Hosts;
   /** Records the wrappers' idle wakes. */
   private readonly wakes: Wakes;
+  private readonly inputRate = new InputRate();
   /** Who may use the Channel: membership of the repo, and Agent tokens (ADR 0007). */
   private readonly access: Access;
   /** Each Issue's one status comment (issue #2). */
@@ -1189,7 +1203,12 @@ export class Channel extends DurableObject<Env> {
       type !== "wake" &&
       type !== "wake.capped" &&
       type !== "transcript.page" &&
-      type !== "host.spawn.failed"
+      type !== "host.spawn.failed" &&
+      type !== "terminal.watch" &&
+      type !== "terminal.input" &&
+      type !== "terminal.screen" &&
+      type !== "terminal.refused" &&
+      type !== "terminal.attached"
     ) {
       return;
     }
@@ -1206,6 +1225,33 @@ export class Channel extends DurableObject<Env> {
     // The Agent whose token opened this socket; a Person's socket speaks for no Agent.
     const socketAgent = tag?.startsWith(AGENT_TAG) ? (tag.slice(AGENT_TAG.length) as AgentId) : null;
     const body = frame as Record<string, unknown>;
+    if (type === "terminal.watch" || type === "terminal.input") {
+      // Only a Person's own socket, the Dashboard's, watches and types (ADR 0021).
+      if (tag !== undefined) return;
+      if (type === "terminal.watch") this.terminalWatch(ws, body);
+      else this.terminalInput(ws, person, body);
+      return;
+    }
+    if (type === "terminal.screen" || type === "terminal.refused" || type === "terminal.attached") {
+      // Only the Agent's own wrapper speaks for its terminal.
+      if (socketAgent === null || body.agent !== socketAgent) return;
+      if (type === "terminal.attached") {
+        const attached = parseAttached(body, socketAgent);
+        if (attached === null) return;
+        const { type: _, ...payload } = attached;
+        this.append({
+          type: "terminal.attached",
+          actor: { kind: "agent", agentId: socketAgent },
+          capture: null,
+          payload,
+        });
+        return;
+      }
+      const out = type === "terminal.screen" ? parseScreen(body, socketAgent) : parseRefused(body, socketAgent);
+      if (out === null) return;
+      for (const watcher of this.watchersOf(socketAgent)) send(watcher, out);
+      return;
+    }
     if (type === "interrupt.attach" || type === "interrupt.result" || type === "directive.result") {
       // Only the Agent's own wrapper may speak for it.
       const agent = body.agent;
@@ -1216,6 +1262,8 @@ export class Channel extends DurableObject<Env> {
         ws.serializeAttachment(attached);
         // Tells the wrapper its Agent's Interrupts and Directives come here from now on.
         send(ws, { type: "interrupt.attached", agent: agent as AgentId });
+        // And whether anyone watches its terminal, so a new run of the wrapper starts streaming.
+        send(ws, this.watchersMessage(agent as AgentId));
         return;
       }
       const result = parseInterruptResult(body);
@@ -1271,7 +1319,13 @@ export class Channel extends DurableObject<Env> {
    */
   private interruptTo(
     id: AgentId,
-    message: InterruptMessage | DirectiveInterruptMessage | ApprovalDenyMessage | TranscriptRequestMessage,
+    message:
+      | InterruptMessage
+      | DirectiveInterruptMessage
+      | ApprovalDenyMessage
+      | TranscriptRequestMessage
+      | TerminalWatchersMessage
+      | TerminalInputFrame,
   ): boolean {
     const person = this.agents.find(id)?.person;
     if (person === undefined) return false;
@@ -1308,6 +1362,58 @@ export class Channel extends DurableObject<Env> {
     if (person !== undefined && tag?.startsWith(HOST_TAG)) {
       await this.hosts.detached(person, tag.slice(HOST_TAG.length + person.length + 1));
     }
+    if (tag === undefined) {
+      // A watcher left: each Agent it watched is told how many are left.
+      const watched = (ws.deserializeAttachment() as WatchAttachment | null)?.watch ?? [];
+      for (const agent of watched) this.tellWatchers(agent);
+    }
+  }
+
+  /** `terminal.watch` from a Person's socket: start or stop watching an Agent's terminal. */
+  private terminalWatch(ws: WebSocket, body: Record<string, unknown>): void {
+    const { agent, on } = body;
+    if (typeof agent !== "string" || typeof on !== "boolean" || !this.agents.has(agent as AgentId)) return;
+    const id = agent as AgentId;
+    const watch = (ws.deserializeAttachment() as WatchAttachment | null)?.watch ?? [];
+    const next = on ? (watch.includes(id) ? watch : [...watch, id]) : watch.filter((a) => a !== id);
+    if (next.length > MAX_WATCHED) return;
+    ws.serializeAttachment({ watch: next } satisfies WatchAttachment);
+    this.tellWatchers(id);
+  }
+
+  /** `terminal.input` from a Person's socket: carried to the Agent's wrapper, which decides. */
+  private terminalInput(ws: WebSocket, person: string, body: Record<string, unknown>): void {
+    const input = parseInput(body, person);
+    if (input === null) return;
+    const refuse = (reason: string) =>
+      send(ws, { type: "terminal.refused", agent: input.agent, fingerprint: "", seq: input.seq, reason });
+    if (!this.inputRate.take(ws)) {
+      refuse("too many keystrokes a second; this one was dropped");
+      return;
+    }
+    if (!this.agents.has(input.agent) || !this.interruptTo(input.agent, input)) {
+      refuse("the Agent's wrapper is not connected");
+    }
+  }
+
+  /** Every open Person's socket watching Agent `id`. A closing one is not open. */
+  private watchersOf(id: AgentId): WebSocket[] {
+    return this.ctx.getWebSockets().filter((ws) => {
+      if (ws.readyState !== WebSocket.READY_STATE_OPEN) return false;
+      if (this.ctx.getTags(ws)[1] !== undefined) return false;
+      return (ws.deserializeAttachment() as WatchAttachment | null)?.watch?.includes(id) === true;
+    });
+  }
+
+  /** Tells Agent `id`'s wrapper who watches it, so it streams only while someone does. */
+  private tellWatchers(id: AgentId): void {
+    this.interruptTo(id, this.watchersMessage(id));
+  }
+
+  private watchersMessage(id: AgentId): TerminalWatchersMessage {
+    const watchers = this.watchersOf(id);
+    const persons = [...new Set(watchers.map((ws) => this.ctx.getTags(ws)[0] ?? ""))].filter((p) => p !== "").sort();
+    return { type: "terminal.watchers", agent: id, count: watchers.length, persons };
   }
 
   /** Every Host on the Channel, with whether it is Live. */
@@ -1468,7 +1574,11 @@ function send(
     | TranscriptRequestMessage
     | HostSpawnMessage
     | HostSpawnedMessage
-    | HostStopMessage,
+    | HostStopMessage
+    | TerminalWatchersMessage
+    | TerminalInputFrame
+    | TerminalScreenFrame
+    | TerminalRefusedFrame,
 ): boolean {
   try {
     ws.send(JSON.stringify(message));

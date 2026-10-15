@@ -29,6 +29,7 @@ import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AccountLabel, ActorAvatar, AgentLink, ModelLabel } from "@/components/domain/pills";
 import { AgentUsage } from "@/components/domain/usage";
+import { TerminalPanel } from "@/components/domain/terminal";
 
 /** Newest first here, so a group is the same sender within two minutes going back. */
 function sameSender(prev: ChannelEvent, e: ChannelEvent) {
@@ -166,6 +167,8 @@ export function AgentDetail({ id }: { id: string }) {
               </div>
             ))}
           </dl>
+
+          <TerminalPanel key={agent.id} agent={agent} />
 
           <section className="flex min-w-0 flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
