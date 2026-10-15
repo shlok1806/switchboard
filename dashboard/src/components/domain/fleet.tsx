@@ -8,7 +8,7 @@ import type { Agent, Task } from "@shared/index";
 import { State, useAgentStates } from "@/components/domain/state";
 import { useChannel } from "@/data/store";
 import { claimsByAgent } from "@/lib/canvas-layout";
-import { CLI_LABEL, elapsed, hostName, localTime } from "@/lib/format";
+import { CLI_LABEL, elapsed, hostName, localTime, zoneCity } from "@/lib/format";
 import { href } from "@/lib/router";
 import { byState, type AgentState } from "@/lib/state";
 import { modelLabel } from "@shared/index";
@@ -53,7 +53,6 @@ export const agentName = (a: Agent) => a.nickname ?? a.id;
 export const shortName = (a: Agent) => a.nickname ?? a.id.split("/").slice(1).join("/");
 /** The CLI's short name, as the Agent ID spells it. */
 const cliShort = (a: Agent) => a.id.split("/")[1] ?? CLI_LABEL[a.cli];
-const place = (zone: string) => zone.split("/").pop()?.replaceAll("_", " ") ?? zone;
 
 /** How long the Agent has run; a waiting prompt's own age is on its Ask. */
 export const since = (a: Agent) => a.startedAt;
@@ -69,7 +68,7 @@ export function GroupLine({ person, me, zone, count }: { person: string; me: str
   return (
     <p className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
       <span className="font-semibold text-ink">{person}</span>
-      {[person === me && "you", zone && `${place(zone)} ${localTime(Date.now(), zone)}`, `${count} ${count === 1 ? "Agent" : "Agents"}`]
+      {[person === me && "you", zone && `${zoneCity(zone)} ${localTime(Date.now(), zone)}`, `${count} ${count === 1 ? "Agent" : "Agents"}`]
         .filter(Boolean)
         .join(" · ")}
     </p>
@@ -97,7 +96,7 @@ export function contextPercent(a: Agent): number | undefined {
 }
 
 /** A line on a phone: state and age; the name and its context; the Task. It opens the Agent. */
-export function StackedRow({ line }: { line: Line }) {
+export function StackedRow({ line, model = true }: { line: Line; /** False where the row has no room for the model. */ model?: boolean }) {
   const { agent: a, state } = line;
   const percent = contextPercent(a);
   return (
@@ -110,7 +109,7 @@ export function StackedRow({ line }: { line: Line }) {
         <span className="flex items-start justify-between gap-3">
           <span className="min-w-0">
             <span className="block text-row font-semibold [overflow-wrap:anywhere] text-ink">{shortName(a)}</span>
-            <Secondary agent={a} />
+            <Secondary agent={a} model={model} />
           </span>
           {percent !== undefined && <span className="shrink-0 text-row text-ink tabular-nums">{percent}%</span>}
         </span>

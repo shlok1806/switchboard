@@ -1,7 +1,7 @@
-import type { Agent, AgentId, Holder, PersonName, Task } from "@shared/index";
+import type { Agent, AgentId, PersonName, Task } from "@shared/index";
 import { holderName } from "@/lib/format";
 import { COLUMN_GLYPH, COLUMN_LABEL, columnOf, type Column } from "./task";
-import type { GlyphState } from "@/lib/state";
+import { heldByMe, type GlyphState } from "@/lib/state";
 
 /**
  * What dropping a card on another column asks the Channel to do. Only two moves
@@ -11,12 +11,6 @@ import type { GlyphState } from "@/lib/state";
  * the backend cannot make.
  */
 export type Move = { kind: "claim" } | { kind: "release" } | { kind: "refuse"; reason: string };
-
-/** True when this Person holds the Claim, directly or through one of their Agents. */
-export function heldByMe(holder: Holder, me: PersonName, agentById: Map<AgentId, Agent>): boolean {
-  if (holder.kind === "person") return holder.person === me;
-  return agentById.get(holder.agentId)?.person === me || holder.agentId.split("/")[0] === me;
-}
 
 /**
  * One Task's glyph. A Task in review is filled when it is yours to review (someone else

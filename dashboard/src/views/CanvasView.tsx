@@ -34,8 +34,8 @@ import {
 import { CLI_LABEL } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
-import { Glyph, State, useAgentStates } from "@/components/domain/state";
-import { countStates, needsPerson, needsYou, stateWord, type AgentState } from "@/lib/state";
+import { Glyph, State, useAgentStates, useNeedsYou } from "@/components/domain/state";
+import { countStates, needsPerson, stateWord, type AgentState } from "@/lib/state";
 
 const STATE_HINT: Record<AgentState, string> = {
   needs: "A permission prompt is waiting for you",
@@ -457,7 +457,7 @@ export function CanvasView({ selected }: { selected?: string }) {
 
   const chosen = selected ? agents.find((a) => a.id === selected) : undefined;
   const n = countStates(states.values());
-  const mine = needsYou(states.values());
+  const mine = useNeedsYou();
   const held = agents.filter((a) => claims.has(a.id)).length;
 
   if (agents.length === 0) {

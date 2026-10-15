@@ -13,7 +13,7 @@ import { ContextWindow } from "@/components/domain/context";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { StartAgentButton, useHostsSupported } from "@/components/domain/start-agent";
 import { GroupLine, Secondary, StackedRow, agentName, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
-import { Glyph, State } from "@/components/domain/state";
+import { Glyph, State, useNeedsYou } from "@/components/domain/state";
 import { AgentUsage } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
@@ -21,7 +21,7 @@ import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { CLI_LABEL, ago, elapsed, hostName } from "@/lib/format";
 import { go, href } from "@/lib/router";
-import { countStates, isNeedsYou, needsYou } from "@/lib/state";
+import { countStates, isNeedsYou } from "@/lib/state";
 import { modelLabel } from "@shared/index";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +38,7 @@ export function AgentsView() {
   const [picked, setPicked] = useState<string | null>(null);
 
   const lines = useLines();
+  const needYou = useNeedsYou();
 
   if (agents.length === 0) {
     return (
@@ -65,7 +66,6 @@ export function AgentsView() {
   }
 
   const n = countStates(lines.map((l) => l.state));
-  const needYou = needsYou(lines.map((l) => l.state));
   const persons = new Set(agents.map((a) => a.person)).size;
   const q = find.trim().toLowerCase();
   const shown = lines.filter((l) => {
@@ -79,7 +79,7 @@ export function AgentsView() {
   });
   const chips: { id: Filter; label: string; n: number }[] = [
     { id: "all", label: "All", n: lines.length },
-    { id: "needs", label: "Needs you", n: needYou },
+    { id: "needs", label: "Needs you", n: lines.filter((l) => isNeedsYou(l.state)).length },
     { id: "running", label: "Live", n: n.running },
     { id: "idle", label: "Idle", n: n.idle },
     { id: "gone", label: "Gone", n: n.gone },
@@ -141,20 +141,20 @@ export function AgentsView() {
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-rule text-label font-medium text-ink-3">
-                <th className="w-[9.5rem] py-2 pr-3 pl-3 font-medium">State</th>
-                <th className="py-2 pr-3 font-medium">Agent</th>
-                <th className="py-2 pr-3 font-medium">Working on</th>
-                <th className="w-[7.5rem] py-2 pr-3 text-right font-medium">Context</th>
-                <th className="py-2 pr-3 font-medium max-[900px]:hidden">Host</th>
-                <th className="w-20 py-2 pr-3 text-right font-medium">Since</th>
+                <th scope="col" className="w-[9.5rem] py-2 pr-3 pl-3 font-medium">State</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Agent</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Working on</th>
+                <th scope="col" className="w-[7.5rem] py-2 pr-3 text-right font-medium">Context</th>
+                <th scope="col" className="py-2 pr-3 font-medium max-[900px]:hidden">Host</th>
+                <th scope="col" className="w-20 py-2 pr-3 text-right font-medium">Since</th>
               </tr>
             </thead>
             {byPerson.map(([person, group]) => (
               <tbody key={person}>
                 <tr>
-                  <td colSpan={6} className="p-0">
+                  <th scope="rowgroup" colSpan={6} className="p-0 text-left font-normal">
                     <GroupLine person={person} me={me} zone={zones.get(person)} count={group.length} />
-                  </td>
+                  </th>
                 </tr>
                 {group.map((l) => (
                   <Row key={l.agent.id} line={l} selected={l === selected} onSelect={() => setPicked(l.agent.id)} />

@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import type { Agent } from "@shared/index";
 import { useChannel, useMe } from "@/data/store";
 import { claimsByAgent } from "@/lib/canvas-layout";
+import { needsYouCount } from "@/lib/queue";
 import { needsPerson, stateOf, stateWord, type AgentState, type GlyphState } from "@/lib/state";
 import { cn } from "@/lib/utils";
 
@@ -75,6 +76,13 @@ export function useAgentStates(): Map<string, AgentState> {
     const claims = claimsByAgent(tasks);
     return new Map(agents.map((a) => [a.id, stateOf(a, claims.get(a.id) ?? [], me)]));
   }, [agents, tasks, me]);
+}
+
+/** How many lines need you, from the one count the Now queue gives (lib/queue). */
+export function useNeedsYou(): number {
+  const { agents, tasks } = useChannel();
+  const me = useMe();
+  return useMemo(() => needsYouCount(agents, tasks, me), [agents, tasks, me]);
 }
 
 /** One Agent's state. */

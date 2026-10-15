@@ -1,6 +1,6 @@
 // One state vocabulary (ADR 0023, design.md): every view reads an Agent's state from
 // stateOf, so the Agents list, the canvas, the board and the top bar's counts agree.
-import type { Agent, PersonName, Task } from "@shared/index";
+import type { Agent, AgentId, Holder, PersonName, Task } from "@shared/index";
 
 /** An Agent's one state, in the order a Person reads them. */
 export const AGENT_STATES = ["needs", "needs-other", "stale", "running", "idle", "gone"] as const;
@@ -14,7 +14,8 @@ export type GlyphState = AgentState | "review" | "review-other" | "done";
  * that is `me`), then a Stale Claim, then its Presence.
  */
 export function stateOf(agent: Agent, claims: readonly Task[], me: PersonName): AgentState {
-  if (agent.approval) return agent.person === me ? "needs" : "needs-other";
+  // A Gone Agent's prompt can no longer be answered, so it waits on nobody (the Now queue agrees).
+  if (agent.approval && agent.presence !== "gone") return agent.person === me ? "needs" : "needs-other";
   if (agent.presence === "gone" && claims.some((t) => t.claim?.stale)) return "stale";
   if (agent.presence === "live") return "running";
   return agent.presence;
@@ -26,18 +27,18 @@ export function needsPerson(state: GlyphState): boolean {
 }
 
 /**
- * Whether a state waits on the Person using the Dashboard: a prompt on their own Agent, or
- * a Stale Claim, which anyone may take over. Another Person's prompt is theirs, not yours.
+ * Whether an Agent's state waits on the Person using the Dashboard: a prompt on their own
+ * Agent, or a Stale Claim, which anyone may take over. Another Person's prompt is theirs.
+ * How many lines need you is `needsYouCount` in lib/queue, which also counts reviews.
  */
 export function isNeedsYou(state: AgentState): boolean {
   return state === "needs" || state === "stale";
 }
 
-/** How many lines need you: the one count the top bar, the Agents view and the canvas show. */
-export function needsYou(states: Iterable<AgentState>): number {
-  let n = 0;
-  for (const s of states) if (isNeedsYou(s)) n++;
-  return n;
+/** True when this Person holds the Claim, directly or through one of their Agents. */
+export function heldByMe(holder: Holder, me: PersonName, agentById: Map<AgentId, Agent>): boolean {
+  if (holder.kind === "person") return holder.person === me;
+  return agentById.get(holder.agentId)?.person === me || holder.agentId.split("/")[0] === me;
 }
 
 /** The state's word. `person` names whose prompt waits, for "needs-other". */

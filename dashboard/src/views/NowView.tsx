@@ -11,17 +11,16 @@ import { buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { PendingApproval } from "@/components/domain/approval";
 import { GroupLine, Secondary, StackedRow, contextPercent, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
-import { State, useAgentStates } from "@/components/domain/state";
+import { State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { useNow } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
 import { SectionHead } from "@/components/shell/section";
 import { useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { actorName, elapsed, holderName, localTime, summarize } from "@/lib/format";
+import { actorName, elapsed, holderName, localTime, summarize, zoneCity } from "@/lib/format";
 import { isMine, needsQueue, type QueueItem } from "@/lib/queue";
 import { href } from "@/lib/router";
-import { needsYou } from "@/lib/state";
 import { cn } from "@/lib/utils";
 
 /** What the log leaves out: the machine's own bookkeeping, which Activity still shows. */
@@ -43,23 +42,21 @@ const QUIET: ReadonlySet<EventType> = new Set<EventType>([
 
 const TAG_LABEL: Record<MemoryTag, string> = { decision: "Decision", fact: "Fact", "dead-end": "Dead end", question: "Question", files: "Files" };
 
-const place = (zone: string) => zone.split("/").pop()?.replaceAll("_", " ") ?? zone;
-
 export function NowView() {
   const { agents, tasks, events, snapshot } = useChannel();
   const me = useMe();
-  const states = useAgentStates();
   const lines = useLines();
   const now = useNow(15_000);
   const [mineOnly, setMineOnly] = useState(false);
 
-  const queue = useMemo(() => needsQueue(agents, tasks, me), [agents, tasks, me]);
+  const queue = useMemo(() => needsQueue(agents, tasks, me, events), [agents, tasks, me, events]);
   const zones = new Map((snapshot?.persons ?? []).map((p: Person) => [p.name, p.timeZone]));
   const myZone = zones.get(me) ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-  const needYou = needsYou(states.values());
+  // Every count here is read off the queue, as the Now key's is (needsYouCount).
+  const needYou = queue.filter(isMine).length;
   const others = new Map<string, number>();
-  for (const a of agents) if (states.get(a.id) === "needs-other") others.set(a.person, (others.get(a.person) ?? 0) + 1);
+  for (const i of queue) if (i.kind === "ask" && !i.mine) others.set(i.agent.person, (others.get(i.agent.person) ?? 0) + 1);
   const title = [
     needYou > 0 ? `${needYou} ${needYou === 1 ? "line needs" : "lines need"} you` : "Nothing needs you",
     ...[...others].map(([p, k]) => `${k} ${k === 1 ? "needs" : "need"} ${p}`),
@@ -69,7 +66,6 @@ export function NowView() {
   const count = (p: Agent["presence"]) => agents.filter((a) => a.presence === p).length;
   const open = tasks.filter((t) => t.status !== "done").length;
   const shown = mineOnly ? queue.filter(isMine) : queue;
-  const forYou = queue.filter(isMine).length;
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -82,7 +78,7 @@ export function NowView() {
             `${count("idle")} idle`,
             `${count("gone")} gone`,
             `${open} open ${open === 1 ? "Task" : "Tasks"}`,
-            `${today}, ${localTime(now, myZone)} in ${place(myZone)}`,
+            `${today}, ${localTime(now, myZone)} in ${zoneCity(myZone)}`,
           ]}
         />
         <div className="flex flex-wrap items-start gap-x-10 gap-y-7">
@@ -92,7 +88,7 @@ export function NowView() {
                 title="Needs a Person"
                 meta={
                   <>
-                    {forYou} for you
+                    {needYou} for you
                     {[...others].map(([p, k]) => (
                       <span key={p} className="max-sm:hidden"> · {k} for {p}</span>
                     ))}
@@ -140,7 +136,7 @@ export function NowView() {
 /** One line of the queue. An Ask is the shared Ask; a Stale Claim and a review are drawn here. */
 function QueueLine({ item, now }: { item: QueueItem; now: number }) {
   if (item.kind === "ask") return <PendingApproval agent={item.agent} word />;
-  return item.kind === "stale" ? <StaleLine task={item.task} now={now} /> : <ReviewLine task={item.task} yours={item.yours} now={now} />;
+  return item.kind === "stale" ? <StaleLine task={item.task} at={item.at} now={now} /> : <ReviewLine task={item.task} yours={item.yours} at={item.at} now={now} />;
 }
 
 function Entry({
@@ -180,15 +176,6 @@ function Entry({
   );
 }
 
-/** When the Claim went Stale, from the Channel's own Event; else the Task's last change. */
-function staleSince(task: Task, events: ChannelEvent[]): string {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
-    if (e.type === "claim.stale" && e.task === task.number) return e.at;
-  }
-  return task.updatedAt;
-}
-
 function lastUpdate(task: Task, events: ChannelEvent[]): string | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
@@ -197,7 +184,7 @@ function lastUpdate(task: Task, events: ChannelEvent[]): string | undefined {
   return undefined;
 }
 
-function StaleLine({ task, now }: { task: Task; now: number }) {
+function StaleLine({ task, at, now }: { task: Task; at: string; now: number }) {
   const { events } = useChannel();
   const { agentById } = useIndex();
   const holder = task.claim!.holder;
@@ -209,7 +196,7 @@ function StaleLine({ task, now }: { task: Task; now: number }) {
     <Entry
       state="stale"
       title={`#${task.number} ${task.title} lost its Agent`}
-      at={staleSince(task, events)}
+      at={at}
       now={now}
       meta={
         <>
@@ -247,7 +234,7 @@ function prUrl(task: Task, events: ChannelEvent[]): string | undefined {
   return task.pr !== undefined && task.url ? task.url.replace(/\/issues\/\d+$/, `/pull/${task.pr}`) : undefined;
 }
 
-function ReviewLine({ task, yours, now }: { task: Task; yours: boolean; now: number }) {
+function ReviewLine({ task, yours, at, now }: { task: Task; yours: boolean; at: string; now: number }) {
   const { events } = useChannel();
   const { agentById } = useIndex();
   const me = useMe();
@@ -262,7 +249,7 @@ function ReviewLine({ task, yours, now }: { task: Task; yours: boolean; now: num
     <Entry
       state={yours ? "review" : "review-other"}
       title={yours ? `${pr} is ready for your review` : `${pr} waits for a review`}
-      at={task.updatedAt}
+      at={at}
       now={now}
       meta={
         <>
@@ -307,13 +294,19 @@ function Log({ events, now }: { events: ChannelEvent[]; now: number }) {
         <ol>
           {recent.map((e) => {
             const who = e.actor.kind === "agent" ? agentById.get(e.actor.agentId) : undefined;
+            const name = who ? shortName(who) : actorName(e.actor);
+            const recently = now - Date.parse(e.at) < 60_000;
             return (
               <li key={e.id} className="grid grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b border-rule py-2 text-row">
-                <a href={href({ view: "feed", event: e.id })} className="text-small text-ink-3 tabular-nums hover:text-ink">
-                  <time dateTime={e.at}>{now - Date.parse(e.at) < 60_000 ? "now" : elapsed(e.at, now)}</time>
+                <a
+                  href={href({ view: "feed", event: e.id })}
+                  aria-label={`${name}, ${recently ? "just now" : `${elapsed(e.at, now)} ago`}: open in Activity`}
+                  className="text-small text-ink-3 tabular-nums hover:text-ink"
+                >
+                  <time dateTime={e.at}>{recently ? "now" : elapsed(e.at, now)}</time>
                 </a>
                 <span className="min-w-0 [overflow-wrap:anywhere]">
-                  <span className="font-semibold text-ink">{who ? shortName(who) : actorName(e.actor)}</span> <Said event={e} />
+                  <span className="font-semibold text-ink">{name}</span> <Said event={e} />
                 </span>
               </li>
             );
@@ -326,6 +319,7 @@ function Log({ events, now }: { events: ChannelEvent[]; now: number }) {
 
 /** What the Event says, as the rest of a sentence after its actor: the verb quiet, literal code in mono. */
 function Said({ event: e }: { event: ChannelEvent }) {
+  const { taskByNumber } = useIndex();
   const k = (t: string) => <span className="text-ink-3">{t}</span>;
   const on = e.task !== undefined ? ` #${e.task}` : "";
   switch (e.type) {
@@ -357,7 +351,7 @@ function Said({ event: e }: { event: ChannelEvent }) {
       return (
         <>
           {k("claimed")}
-          {on}
+          {on} {e.task !== undefined && taskByNumber.get(e.task)?.title}
         </>
       );
     case "claim.stale":
@@ -402,7 +396,7 @@ function Fleet({ lines, me, zones }: { lines: Line[]; me: string; zones: Map<str
               <GroupLine person={person} me={me} zone={zones.get(person)} count={group.length} />
               <ul>
                 {group.map((l) => (
-                  <StackedRow key={l.agent.id} line={l} />
+                  <StackedRow key={l.agent.id} line={l} model={false} />
                 ))}
               </ul>
             </li>
@@ -412,19 +406,29 @@ function Fleet({ lines, me, zones }: { lines: Line[]; me: string; zones: Map<str
         <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-rule text-label font-medium text-ink-3">
-              <th className="w-[7.5rem] py-2 pr-3 pl-3 font-medium">State</th>
-              <th className="w-[11rem] py-2 pr-3 font-medium">Agent</th>
-              <th className="py-2 pr-3 font-medium">Task</th>
-              <th className="py-2 pr-3 text-right font-medium">Context</th>
-              <th className="py-2 pr-3 text-right font-medium">Since</th>
+              <th scope="col" className="w-[7.5rem] py-2 pr-3 pl-3 font-medium">
+                State
+              </th>
+              <th scope="col" className="w-[11rem] py-2 pr-3 font-medium">
+                Agent
+              </th>
+              <th scope="col" className="py-2 pr-3 font-medium">
+                Task
+              </th>
+              <th scope="col" className="py-2 pr-3 text-right font-medium">
+                Context
+              </th>
+              <th scope="col" className="py-2 pr-3 text-right font-medium">
+                Since
+              </th>
             </tr>
           </thead>
           {byPerson.map(([person, group]) => (
             <tbody key={person}>
               <tr>
-                <td colSpan={5} className="p-0">
+                <th scope="rowgroup" colSpan={5} className="p-0 text-left font-normal">
                   <GroupLine person={person} me={me} zone={zones.get(person)} count={group.length} />
-                </td>
+                </th>
               </tr>
               {group.map((l) => (
                 <FleetRow key={l.agent.id} line={l} />
@@ -479,6 +483,7 @@ function FleetRow({ line }: { line: Line }) {
 
 /** The latest notes Agents left for each other (ADR 0019), newest first. */
 function Memory({ events, now }: { events: ChannelEvent[]; now: number }) {
+  const { agentById } = useIndex();
   const notes = useMemo(
     () =>
       events
@@ -500,7 +505,10 @@ function Memory({ events, now }: { events: ChannelEvent[]; now: number }) {
               <p className="mt-1 text-label text-ink-3">
                 <span className="font-semibold text-ink-2">{n.tags.map((t) => TAG_LABEL[t]).join(", ")}</span>
                 {" · "}
-                {n.nickname ?? n.author.split("/").slice(1).join("/")}
+                {(() => {
+                  const a = agentById.get(n.author);
+                  return a ? shortName(a) : (n.nickname ?? n.author);
+                })()}
                 {n.task !== undefined && ` on #${n.task}`} · {elapsed(n.at, now)}
               </p>
             </li>

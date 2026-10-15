@@ -1,8 +1,8 @@
 // The Now view's queue: what waits on a Person, in the order a Person answers it, and
 // which of it is yours.
 import { describe, expect, it } from "vitest";
-import type { Agent, AgentId, Task } from "@shared/index";
-import { isMine, needsQueue } from "@/lib/queue";
+import type { Agent, AgentId, ChannelEvent, Task } from "@shared/index";
+import { isMine, needsQueue, needsYouCount } from "@/lib/queue";
 
 function agent(id: string, extra: Partial<Agent> = {}): Agent {
   return { id: id as AgentId, person: id.split("/")[0]!, cli: "claude-code", presence: "live", startedAt: "2026-10-15T09:00:00.000Z", ...extra } as Agent;
@@ -32,8 +32,8 @@ describe("needsQueue", () => {
   });
 
   it("leaves out a Gone Agent's prompt and a Task that waits on nobody", () => {
-    expect(keys).not.toContain("ask shlok/claude/d");
-    expect(keys).not.toContain("claimed #12");
+    expect(keys.some((k) => k.includes("shlok/claude/d"))).toBe(false);
+    expect(keys.some((k) => k.endsWith("#12"))).toBe(false);
   });
 
   it("gives you a review only when someone else finished the Task", () => {
@@ -46,5 +46,30 @@ describe("needsQueue", () => {
 
   it("counts a Stale Claim as yours, since anyone may take it over, and another Person's Ask as theirs", () => {
     expect(queue.filter(isMine).map((i) => i.kind)).toEqual(["ask", "ask", "stale", "review"]);
+  });
+});
+
+describe("needsYouCount", () => {
+  it("counts each line that waits on you: your Asks, every Stale Claim, and reviews asked of you", () => {
+    const tasks = [plain, theirReview, stale, myReview];
+    expect(needsYouCount([mineLate, devs, goneWithPrompt, mineEarly, myCodex], tasks, "shlok")).toBe(4);
+    expect(needsYouCount([mineLate, devs, mineEarly], tasks, "dev")).toBe(4);
+  });
+
+  it("counts two Stale Claims of one Gone Agent as two lines", () => {
+    const holder = { kind: "agent", agentId: "maya/gemini/x" as AgentId } as const;
+    const two = [17, 18].map((n) => task(n, { claim: { task: n, holder, claimedAt: "", stale: true } }));
+    expect(needsYouCount([agent("maya/gemini/x", { presence: "gone" })], two, "shlok")).toBe(2);
+  });
+});
+
+describe("a line's age", () => {
+  it("is when the Claim went Stale or the PR opened, from the Channel's Events", () => {
+    const events = [
+      { type: "claim.stale", task: 17, at: "2026-10-15T08:00:00.000Z" },
+      { type: "task.review", task: 19, at: "2026-10-15T08:30:00.000Z" },
+    ] as ChannelEvent[];
+    const queue = needsQueue([], [stale, myReview, theirReview], "shlok", events);
+    expect(queue.map((i) => i.at)).toEqual(["2026-10-15T08:00:00.000Z", "2026-10-15T08:30:00.000Z", theirReview.updatedAt]);
   });
 });

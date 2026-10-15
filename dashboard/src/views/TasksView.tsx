@@ -8,7 +8,8 @@ import { NewTaskButton } from "@/components/domain/new-task";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { COLUMN_GLYPH, COLUMN_LABEL, columnOf, type Column } from "@/components/domain/task";
 import { Glyph } from "@/components/domain/state";
-import { decideMove, heldByMe } from "@/components/domain/moves";
+import { decideMove } from "@/components/domain/moves";
+import { heldByMe } from "@/lib/state";
 import { FilterSelect } from "@/components/domain/filters";
 import { TakeoverAction } from "@/components/domain/takeover";
 import {

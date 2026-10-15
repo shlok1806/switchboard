@@ -14,8 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useAgentStates } from "@/components/domain/state";
-import { needsYou } from "@/lib/state";
+import { useNeedsYou } from "@/components/domain/state";
 import { useChannel, useMe, useStore } from "@/data/store";
 import { localTime } from "@/lib/format";
 import { href, type Route } from "@/lib/router";
@@ -44,12 +43,11 @@ export function viewOf(route: Route): ViewId {
 /** What each key counts: every Agent and every open Task, and the lines that need you. */
 export function useCounts() {
   const { agents, tasks } = useChannel();
-  const states = useAgentStates();
+  const needYou = useNeedsYou();
   return useMemo(() => {
-    const needYou = needsYou(states.values());
     const open = tasks.filter((t) => t.status !== "done").length;
     return { agents: agents.length, needYou, tasks: open };
-  }, [agents, tasks, states]);
+  }, [agents, tasks, needYou]);
 }
 
 /** The mark: a jack, a square socket with its plug seated. */

@@ -6,7 +6,7 @@ import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Glyph, State } from "@/components/domain/state";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useChannel, useMe, useStore } from "@/data/store";
-import { elapsed, hostName, localTime } from "@/lib/format";
+import { elapsed, hostName, localTime, zoneCity } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { useNow } from "./usage";
@@ -28,7 +28,7 @@ export function PendingApproval({ agent, word = false, className }: { agent: Age
   const canDeny = a.deniable === true && a.deniedBy === undefined && mine;
   const zone = snapshot?.persons.find((p) => p.name === agent.person)?.timeZone;
   const theirTime = zone ? localTime(now, zone) || null : null;
-  const where = zone?.split("/").pop()?.replaceAll("_", " ");
+  const where = zone && zoneCity(zone);
   const task = tasks.find((t) => t.claim?.holder.kind === "agent" && t.claim.holder.agentId === agent.id && t.status !== "done");
   const meta = [
     `${mine ? "Your Agent" : `${agent.person}'s Agent`} ${agent.host ? `on ${hostName(agent.host)}` : "in a terminal"}`,
