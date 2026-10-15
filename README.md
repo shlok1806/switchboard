@@ -242,6 +242,37 @@ setting for the session only. Gemini routes Google sign-in through
 `GOOGLE_GEMINI_BASE_URL`. Custom Codex providers and Gemini Vertex AI sessions
 run without Proxy Capture, with a notice explaining the unsupported route.
 
+### Permission prompts and unattended Agents
+
+An Agent stops whenever its CLI asks its Person to approve something: Codex's
+approval dialog when a command needs to leave its sandbox (building and running a
+daemon, `tart`, VMs), and Claude Code's permission prompt in its `default` mode. While
+the prompt is open, the Agent card on the Dashboard shows **Waiting for approval**: the
+tool, what it asks to run (the command or path, with detected secrets masked), the
+CLI's reason, and since when (ADR 0013). The Channel API carries the same thing as the
+Agent's `approval` in `GET /api/agents`, and the feed records an `approval.pending`
+Event and an `approval.closed` Event. It is read-only. Answer the prompt at the
+Agent's terminal.
+
+An Agent meant to run unattended needs a policy that never asks. `switchboard run`
+passes every argument it does not own to the CLI unchanged, so the CLI's own flags work:
+
+```sh
+# Codex: never ask. Commands that need to leave the sandbox fail, and the model sees the failure.
+switchboard run codex -a never -s workspace-write
+# Codex: never ask, and no sandbox. Every command runs with your full rights.
+switchboard run codex --dangerously-bypass-approvals-and-sandbox
+# Claude Code: its auto mode, where a classifier approves or refuses each action instead of you.
+switchboard run claude --permission-mode auto
+# Claude Code: no permission checks at all.
+switchboard run claude --dangerously-skip-permissions
+```
+
+Pick the narrowest policy the work allows. Without a sandbox and without prompts,
+nothing stands between a bad command and your machine: not one the model gets wrong,
+and not one a file, issue or web page talked it into. Switchboard's own MCP tools are
+approved for the session either way.
+
 ### Codex hooks and trust
 
 Codex may run session hooks only after you trust them in its `/hooks` screen. The

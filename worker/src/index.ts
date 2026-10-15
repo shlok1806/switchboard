@@ -125,6 +125,7 @@ const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
   "touched-files",
   "nickname",
   "model",
+  "approval",
 ]);
 
 const AGENT_REFUSED =

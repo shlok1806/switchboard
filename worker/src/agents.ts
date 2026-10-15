@@ -25,6 +25,7 @@ import type {
   EventPayloads,
   EventType,
   LostClaim,
+  PendingApproval,
   PersonName,
   Presence,
   ProxyMode,
@@ -46,6 +47,7 @@ type AgentRow = {
   effort: string | null;
   usage: string | null;
   context: string | null;
+  approval: string | null;
   presence: string;
   proxy_mode: string;
   secret_masking: number;
@@ -66,6 +68,7 @@ export const AGENTS_SCHEMA = `
     effort TEXT,
     usage TEXT,
     context TEXT,
+    approval TEXT,
     presence TEXT NOT NULL,
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
@@ -79,7 +82,8 @@ export const AGENTS_SCHEMA = `
 export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(AGENTS_SCHEMA);
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
-  for (const column of ["account", "model", "effort", "usage", "context"]) {
+  // ADR 0012: context. ADR 0013: the pending approval.
+  for (const column of ["account", "model", "effort", "usage", "context", "approval"]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
     } catch {
@@ -140,6 +144,7 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.effort === null ? {} : { effort: row.effort }),
     ...(row.usage === null ? {} : { usage: JSON.parse(row.usage) as AgentUsage }),
     ...(row.context == null ? {} : { context: JSON.parse(row.context) as AgentContext }),
+    ...(row.approval == null ? {} : { approval: JSON.parse(row.approval) as PendingApproval }),
     presence: row.presence as Presence,
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
@@ -248,6 +253,8 @@ export class AgentRoster {
 
     if (request.context !== undefined)
       this.host.sql.exec("UPDATE agents SET context = ? WHERE id = ?", JSON.stringify(request.context), id);
+    // A prompt left open by an earlier run of the wrapper is gone with it; a prompt still open is reported again.
+    if (existing) this.closeApproval(existing);
     const agent = this.agent(id);
     // Once per session: a wrapper registering again within its session (it went Gone) starts none.
     if (!request.rejoin || existing === undefined) {
@@ -307,6 +314,43 @@ export class AgentRoster {
     const agent = this.agent(id);
     this.host.broadcast({ type: "agent", agent });
     return { ok: true, agent };
+  }
+
+  /**
+   * The permission prompt the Agent's CLI shows, or null once it closed, as its wrapper
+   * reports it (ADR 0013): only the Agent itself or its own Person. Opening one is an
+   * `approval.pending` Event, closing it `approval.closed`; a new prompt in place of an
+   * open one closes that one first. Reporting what the Channel holds already changes nothing.
+   */
+  setApproval(person: PersonName, id: AgentId, approval: PendingApproval | null): RosterResult {
+    const found = this.owned(person, id);
+    if (!found.ok) return found;
+    const held = found.row.approval == null ? null : (JSON.parse(found.row.approval) as PendingApproval);
+    if (held?.id === approval?.id) return { ok: true, agent: rowToAgent(found.row) };
+    // A Gone Agent shows no prompt: it may come back with a heartbeat, and report it again.
+    if (approval !== null && found.row.presence === "gone") return { ok: true, agent: rowToAgent(found.row) };
+    this.closeApproval(found.row);
+    if (approval !== null) {
+      this.host.sql.exec("UPDATE agents SET approval = ? WHERE id = ?", JSON.stringify(approval), id);
+      const { openedAt: _, ...payload } = approval;
+      this.host.append({ type: "approval.pending", actor: { kind: "agent", agentId: id }, capture: "hook", payload });
+    }
+    const agent = this.agent(id);
+    this.host.broadcast({ type: "agent", agent });
+    return { ok: true, agent };
+  }
+
+  /** Clears the prompt the row holds, if any, recording `approval.closed`. The caller broadcasts. */
+  private closeApproval(row: AgentRow): void {
+    if (row.approval == null) return;
+    const held = JSON.parse(row.approval) as PendingApproval;
+    this.host.sql.exec("UPDATE agents SET approval = NULL WHERE id = ?", row.id);
+    this.host.append({
+      type: "approval.closed",
+      actor: { kind: "agent", agentId: row.id as AgentId },
+      capture: "hook",
+      payload: { id: held.id },
+    });
   }
 
   private modelChanged(
@@ -405,6 +449,7 @@ export class AgentRoster {
     if (!found.ok) return found;
     if (found.row.presence === "gone") return { ok: true, agent: rowToAgent(found.row) };
     this.host.sql.exec("UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?", Date.now(), id);
+    this.closeApproval(found.row);
     const agent = this.agent(id);
     this.record(id, "session.end", { reason: "exit", ...(detail ? { detail: detail.slice(0, 40) } : {}) });
     this.changed(id, "gone");
@@ -427,7 +472,9 @@ export class AgentRoster {
       .toArray();
     for (const row of silent) {
       this.changed(row.id as AgentId, "gone");
-      this.host.broadcast({ type: "agent", agent: rowToAgent(row) });
+      // Silent for minutes: whatever prompt it reported is no longer known to be open.
+      this.closeApproval(row);
+      this.host.broadcast({ type: "agent", agent: this.agent(row.id) });
     }
     await this.watch();
   }

@@ -1,6 +1,6 @@
 # Answering an Agent's permission prompts away from its terminal
 
-Status: proposed. The owner chooses between the options below. Nothing that lets a remote party approve a command ships before that choice.
+Status: accepted on 2026-10-15. The owner chose the recommendation: B (pending approvals on the Dashboard and in the Channel API, read-only) and A's documentation first, then D (remote deny) for Claude Code. C (remote approve) is rejected for now: no remote party approves a command.
 
 ## The problem
 
@@ -57,3 +57,10 @@ Like C, but the Channel can only answer `deny`, with a message the Agent reads: 
 ## Recommendation
 
 Ship B for both CLIs and document A's pass-through. Then add D for Claude Code. Add C only if the owner chooses it, for Claude Code first, opt-in and own-Person only. For Codex, wire in D or C only after testing whether a waiting hook hides its dialog.
+
+## Decision
+
+B and A's documentation, then D for Claude Code. No C. B in detail:
+- The wrapper reports the prompt when its CLI's PermissionRequest hook opens one, and `null` when it closes. It closes when that call's PostToolUse arrives (another call's result leaves it open), when the Person presses Enter or Escape, when the turn ends, or when the session starts or ends. The report goes to `POST /api/agents/:id/approval` with the Agent's token. Only the latest state is sent, and a failed report is retried.
+- The Worker keeps the open prompt on the Agent as `approval`. It records `approval.pending` and `approval.closed` with the Hook Capture, and drops the prompt when the Agent registers again, ends its session or goes Gone. The Relay never considers these Events: they are for People.
+- Questions (AskUserQuestion, ExitPlanMode, Codex's request_user_input) are not approvals and are not reported.

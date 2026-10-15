@@ -123,3 +123,7 @@ _Avoid_: Quota, billing, limits report
 
 **Context Reading**:
 The latest main-session context fullness, automatic compactions when known, first prompt brief, current activity, model and working location, read by the wrapper and sent with each heartbeat (ADR 0012). Separate from cumulative session usage and account limits.
+
+**Pending Approval**:
+A permission prompt an Agent's CLI is waiting on (Codex's approval dialog, Claude Code's permission prompt), as its wrapper reports it: the tool, what it asks for with secrets masked, the CLI's reason and when it opened. The Agent carries it until the prompt closes, which is an `approval.closed` Event. Read-only: it is answered at the Agent's terminal (ADR 0013). A question the CLI asks (AskUserQuestion, a plan to accept) is not one.
+_Avoid_: Permission request, approval request

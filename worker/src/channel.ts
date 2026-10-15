@@ -23,6 +23,7 @@ import type {
   InterruptAttached,
   InterruptMessage,
   InterruptResult,
+  PendingApproval,
   Person,
   PersonName,
   ProxyCaptureReply,
@@ -503,6 +504,18 @@ export class Channel extends DurableObject<Env> {
       };
     }
     return this.agents.setModel(caller.person, id, model, effort, via === "proxy" ? "proxy" : null);
+  }
+
+  /** The permission prompt an Agent's CLI shows, from its wrapper (ADR 0013): the Agent's own token or its own Person. */
+  setAgentApproval(caller: Caller, id: AgentId, approval: PendingApproval | null): RosterResult {
+    if (caller.agent !== undefined && caller.agent !== id) {
+      return {
+        ok: false,
+        status: 403,
+        reason: `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`,
+      };
+    }
+    return this.agents.setApproval(caller.person, id, approval);
   }
 
   /** Sets an Agent's Proxy mode; only its own Person may. Its wrapper hears on the stream. */

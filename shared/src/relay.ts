@@ -34,6 +34,9 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   // About names, not work (ADR 0009).
   "agent.rename",
   "agent.model",
+  // A permission prompt waits for the Agent's own Person, not for other Agents (ADR 0013).
+  "approval.pending",
+  "approval.closed",
   "session.start",
   "session.end",
   "claim.refused",

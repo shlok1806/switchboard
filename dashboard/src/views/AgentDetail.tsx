@@ -1,3 +1,4 @@
+import { PendingApproval } from "@/components/domain/approval";
 import { AgentBrief, ContextWindow } from "@/components/domain/context";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -90,6 +91,7 @@ export function AgentDetail({ id }: { id: string }) {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto grid max-w-6xl gap-6 px-4 py-5 sm:px-6 sm:py-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-10">
         <div className="flex min-w-0 flex-col gap-6">
+          <PendingApproval agent={agent} />
           <div className="rounded-xl border border-line bg-surface p-4"><ContextWindow agent={agent} /></div>
           <AgentBrief agent={agent} />
           <header className="flex items-start gap-4">

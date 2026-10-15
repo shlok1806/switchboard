@@ -19,7 +19,7 @@ import type {
   StreamMessage,
   TaskListResponse,
 } from "../../shared/src/index";
-import { agentPath, modelPath, nicknamePath } from "../../shared/src/index";
+import { agentPath, approvalPath, modelPath, nicknamePath } from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
 import { type As, bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
@@ -624,5 +624,113 @@ describe("The model an Agent runs on (ADR 0010)", () => {
     expect((await report("shlok", agent.id, { model: 5 })).status).toBe(400);
     expect((await report("shlok", agent.id, { model: "gpt-5-codex", via: "config" })).status).toBe(200);
     expect((await shlok.agents()).find((a) => a.id === agent.id)?.model).toBe("gpt-5-codex");
+  });
+});
+
+describe("A pending approval: the permission prompt an Agent's CLI shows (ADR 0013)", () => {
+  async function report(as: As | string, id: AgentId, approval: unknown): Promise<Response> {
+    return call(approvalPath(id), {
+      method: "POST",
+      headers: { Authorization: await bearer(as) },
+      body: JSON.stringify({ approval }),
+    });
+  }
+
+  async function approvalEvents(as: string): Promise<[string, unknown][]> {
+    const response = await call("/api/events", { headers: { Authorization: await bearer(as) } });
+    return (await response.json<HistoryResponse>()).events
+      .filter((e) => e.type === "approval.pending" || e.type === "approval.closed")
+      .map((e) => [e.type, e.payload]);
+  }
+
+  const PROMPT = {
+    id: "a1",
+    tool: "Bash",
+    detail: "tart run greenroom-base",
+    reason: "Start the VM",
+    openedAt: "2026-10-15T03:08:00.000Z",
+  };
+
+  it("shows the open prompt on the Agent until it closes, to everyone, with one Event each way", async () => {
+    const shlok = person("shlok");
+    const ana = person("ana");
+    const agent = await shlok.registered("aaaa0000-0000-4000-8000-000000000013");
+    await ana.subscribe();
+    const me = { person: "shlok", agent: agent.id };
+
+    const opened = await report(me, agent.id, PROMPT);
+    expect(opened.status).toBe(200);
+    expect((await opened.json<AgentResponse>()).agent.approval).toEqual(PROMPT);
+    expect(
+      await waitUntil(() => ana.received.find((m) => m.type === "agent" && m.agent.approval?.id === "a1")),
+    ).toBeDefined();
+    // The same prompt reported again (a retry) changes nothing.
+    expect((await report(me, agent.id, PROMPT)).status).toBe(200);
+    expect((await ana.agents()).find((a) => a.id === agent.id)?.approval).toEqual(PROMPT);
+
+    const closed = await report(me, agent.id, null);
+    expect((await closed.json<AgentResponse>()).agent.approval).toBeUndefined();
+    expect((await report(me, agent.id, null)).status).toBe(200);
+    expect(await approvalEvents("ana")).toEqual([
+      ["approval.pending", { id: "a1", tool: "Bash", detail: "tart run greenroom-base", reason: "Start the VM" }],
+      ["approval.closed", { id: "a1" }],
+    ]);
+  });
+
+  it("closes an open prompt when a new one takes its place, the session ends, or the Agent goes silent", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const shlok = person("shlok");
+    const agent = await shlok.registered("aaaa0000-0000-4000-8000-000000000014");
+    await report("shlok", agent.id, PROMPT);
+    await report("shlok", agent.id, { ...PROMPT, id: "a2" });
+    await shlok.end(agent.id);
+    expect((await shlok.agents())[0]?.approval).toBeUndefined();
+    // A Gone Agent shows none.
+    await report("shlok", agent.id, { ...PROMPT, id: "a3" });
+    expect((await shlok.agents())[0]?.approval).toBeUndefined();
+
+    await shlok.registered("aaaa0000-0000-4000-8000-000000000014", { resumed: true });
+    await report("shlok", agent.id, { ...PROMPT, id: "a4" });
+    advance(TEN_MINUTES + 1000);
+    expect(await runDurableObjectAlarm(channelStub())).toBe(true);
+    expect((await shlok.agents())[0]?.approval).toBeUndefined();
+    expect((await approvalEvents("shlok")).map(([type, payload]) => [type, (payload as { id: string }).id])).toEqual([
+      ["approval.pending", "a1"],
+      ["approval.closed", "a1"],
+      ["approval.pending", "a2"],
+      ["approval.closed", "a2"],
+      ["approval.pending", "a4"],
+      ["approval.closed", "a4"],
+    ]);
+  });
+
+  it("drops a prompt an earlier run of the wrapper left open when the Agent registers again", async () => {
+    const shlok = person("shlok");
+    const agent = await shlok.registered("aaaa0000-0000-4000-8000-000000000015");
+    await report("shlok", agent.id, PROMPT);
+    expect(
+      (await shlok.registered("aaaa0000-0000-4000-8000-000000000015", { resumed: true })).approval,
+    ).toBeUndefined();
+  });
+
+  it("lets only the Agent itself or its own Person report it, and refuses a malformed one", async () => {
+    const shlok = person("shlok");
+    const agent = await shlok.registered("aaaa0000-0000-4000-8000-000000000016");
+    const other = await shlok.registered("bbbb0000-0000-4000-8000-000000000016");
+    expect((await report({ person: "shlok", agent: other.id }, agent.id, PROMPT)).status).toBe(403);
+    expect((await report("ana", agent.id, PROMPT)).status).toBe(403);
+    for (const bad of [
+      undefined,
+      "a1",
+      { ...PROMPT, id: "" },
+      { ...PROMPT, tool: 5 },
+      { ...PROMPT, openedAt: "soon" },
+    ]) {
+      expect((await report("shlok", agent.id, bad)).status).toBe(400);
+    }
+    const long = await report("shlok", agent.id, { ...PROMPT, detail: `echo \u001b[31m${"x".repeat(3000)}` });
+    const kept = (await long.json<AgentResponse>()).agent.approval;
+    expect(kept?.detail).toHaveLength(2000);
+    expect(kept?.detail).not.toContain("\u001b");
   });
 });

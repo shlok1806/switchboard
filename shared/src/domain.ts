@@ -4,6 +4,7 @@
  */
 
 import type { AgentContext } from "./agent-context";
+import type { PendingApproval } from "./approvals";
 import type { AgentUsage } from "./usage";
 
 /* ── Participants ─────────────────────────────────────────── */
@@ -63,6 +64,11 @@ export interface Agent {
    */
   usage?: AgentUsage;
   context?: AgentContext;
+  /**
+   * The permission prompt its CLI shows right now, waiting for its Person (ADR 0013).
+   * Absent when none is open, or the Agent is Gone.
+   */
+  approval?: PendingApproval;
   presence: Presence;
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */
@@ -237,6 +243,13 @@ export interface EventPayloads {
    * The actor is the Agent; the Capture is `proxy` when the Proxy Capture saw it.
    */
   "agent.model": { from?: string; to?: string; effort?: string };
+  /**
+   * The Agent's CLI opened a permission prompt and waits for its Person to answer it at
+   * the terminal (ADR 0013). What it asks for, masked on the laptop. Hook Capture.
+   */
+  "approval.pending": Omit<PendingApproval, "openedAt">;
+  /** That prompt closed: answered at the terminal, or gone with its turn or session. `id` names it. */
+  "approval.closed": { id: string };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */
