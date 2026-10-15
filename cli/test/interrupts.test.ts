@@ -44,7 +44,7 @@ describe("InputLine", () => {
     expect(line.empty).toBe(true);
     line.keys("ab");
     expect(line.empty).toBe(false);
-    expect(line.keys("\r")).toEqual({ enter: true, cancel: false, submitted: true });
+    expect(line.keys("\r")).toEqual({ typed: true, enter: true, cancel: false, submitted: true });
     expect(line.empty).toBe(true);
     line.setIdle(true);
     line.keys("x");
@@ -68,7 +68,7 @@ describe("InputLine", () => {
     expect(line.empty).toBe(true);
     line.keys("u");
     expect(line.empty).toBe(false);
-    expect(line.keys("\x1b[13u")).toEqual({ enter: true, cancel: false, submitted: true });
+    expect(line.keys("\x1b[13u")).toEqual({ typed: true, enter: true, cancel: false, submitted: true });
     expect(line.empty).toBe(true);
     line.setIdle(true);
     expect(line.keys("\x1b[27u").cancel).toBe(true);
@@ -298,6 +298,141 @@ describe("InputLine, Ctrl+C", () => {
     const { line } = lineAt({ idle: false });
     line.keys("half a thought\x03");
     expect(line.empty).toBe(false);
+  });
+});
+
+/**
+ * What WezTerm 20240203 sent to Claude Code's stdin at startup, before any key was
+ * pressed: its name and version (XTVERSION), device attributes, a mode's setting,
+ * a kitty graphics reply and its cell size, as captured from a real session.
+ */
+const WEZTERM_STARTUP = [
+  "\x1bP>|WezTerm 20240203-110809-5046fc22\x1b\\\x1b[?65;4;6;18;22c",
+  "\x1b[?2026;2$y",
+  "\x1b_Gi=31;OK\x1b\\",
+  "\x1b[6;40;18t\x1b[?1016;2$y\x1b[?65;4;6;18;22c",
+];
+
+describe("InputLine, the terminal's replies to the CLI's queries", () => {
+  it("is still empty after WezTerm answers Claude Code's startup queries", () => {
+    const { line } = lineAt();
+    for (const reply of WEZTERM_STARTUP) line.keys(reply);
+    expect(line.empty).toBe(true);
+  });
+
+  for (const [name, reply] of [
+    ["a colour, ended by BEL", "\x1b]11;rgb:1e1e/1e1e/2e2e\x07"],
+    ["a colour, ended by ST", "\x1b]10;rgb:ffff/ffff/ffff\x1b\\"],
+    ["the kitty keyboard flags", "\x1b[?1u"],
+    ["secondary device attributes", "\x1b[>1;10;0c"],
+    ["a mode's setting in ANSI form", "\x1b[4;2$y"],
+    ["the cursor position", "\x1b[12;40R"],
+    ["the terminal's status", "\x1b[0n"],
+    ["focus in", "\x1b[I"],
+    ["focus out", "\x1b[O"],
+  ] as const) {
+    it(`reads ${name} as no key, also split across reads after its Escape`, () => {
+      const { line } = lineAt();
+      line.keys(reply);
+      expect(line.empty).toBe(true);
+      // An Escape alone at the end of a read is taken as the Escape key.
+      for (let at = 2; at < reply.length; at++) {
+        const split = lineAt().line;
+        split.keys(reply.slice(0, at));
+        split.keys(reply.slice(at));
+        expect(split.empty).toBe(true);
+      }
+    });
+  }
+
+  it("keeps what the Person typed around a reply", () => {
+    const { line } = lineAt();
+    line.keys("fix");
+    line.keys(WEZTERM_STARTUP[0] ?? "");
+    expect(line.empty).toBe(false);
+    line.keys("\x7f\x7f\x7f");
+    expect(line.empty).toBe(true);
+  });
+
+  it("still clears on a double Escape with a reply between the Escapes", () => {
+    const { line } = lineAt();
+    line.keys("fix");
+    line.keys("\x1b");
+    line.keys("\x1b[?2026;2$y");
+    line.keys("\x1b");
+    expect(line.empty).toBe(true);
+  });
+
+  it("reads Alt+P or Alt+] as a key, not the start of a reply that never ends", () => {
+    for (const alt of ["\x1bP", "\x1b]"]) {
+      const { line } = lineAt();
+      line.keys(alt);
+      // Not yet known: it may be the start of a reply, or a key.
+      expect(line.empty).toBe(false);
+      line.keys("x");
+      line.keys("\x7f");
+      // It was a key, which the wrapper cannot follow.
+      expect(line.empty).toBe(false);
+    }
+  });
+
+  it("reads what the Person types after Alt+P as keys, whatever ends it later", () => {
+    const { line } = lineAt();
+    line.keys("\x1bP");
+    line.keys("fix");
+    line.keys("\x1b\\");
+    expect(line.empty).toBe(false);
+  });
+});
+
+describe("InputLine, the mouse", () => {
+  it("is still empty after the mouse moves, a button is let go, or the line is clicked", () => {
+    const { line } = lineAt();
+    line.keys("\x1b[<35;16;13M\x1b[<0;16;13M\x1b[<0;16;13m");
+    expect(line.empty).toBe(true);
+  });
+
+  it("no delete can take the line to empty after a click, which may move the cursor", () => {
+    const { line } = lineAt();
+    line.keys("fix");
+    line.keys("\x1b[<0;3;20M\x1b[<0;3;20m");
+    line.keys("\x7f\x7f\x7f");
+    expect(line.empty).toBe(false);
+  });
+
+  it("is not empty after the wheel, which may recall history", () => {
+    const { line } = lineAt();
+    line.keys("\x1b[<64;16;13M");
+    expect(line.empty).toBe(false);
+  });
+});
+
+describe("InterruptTyper in a terminal that answers the CLI's queries", () => {
+  it("types a Directive at the idle prompt after the replies, which are not the Person typing", async () => {
+    const clock = { now: 0 };
+    const written: string[] = [];
+    const t = new InterruptTyper({
+      write: (d) => written.push(d),
+      waitMs: 0,
+      log: () => {},
+      idleClears: true,
+      now: () => clock.now,
+    });
+    t.hook({ hook_event_name: "SessionStart", source: "startup" });
+    t.output("\x1b[?2004h");
+    clock.now = 60_000;
+    for (const reply of WEZTERM_STARTUP) t.personTyped(reply);
+    expect(await t.type("[Switchboard] Directive from octocat")).toEqual({ typed: true });
+  });
+
+  it("still waits for a Person who typed just now", async () => {
+    const clock = { now: 0 };
+    const t = new InterruptTyper({ write: () => {}, waitMs: 0, log: () => {}, idleClears: true, now: () => clock.now });
+    t.hook({ hook_event_name: "SessionStart", source: "startup" });
+    t.output("\x1b[?2004h");
+    clock.now = 60_000;
+    t.personTyped("x\x7f");
+    expect(await t.type("[Switchboard] Directive from octocat")).toEqual({ typed: false, reason: "person-typing" });
   });
 });
 
