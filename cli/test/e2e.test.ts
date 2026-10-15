@@ -731,7 +731,7 @@ describe("Switchboard's tools (the Tool Capture)", () => {
 
     expect(await call("list_tasks", {})).toContain(`#${held} Dashboard [claimed] held by dev`);
     expect(term.output).toContain(
-      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","list_agents","rename","finish_task"]',
+      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","list_agents","rename","finish_task","agent_spawn","agent_stop"]',
     );
     expect(await call("claim_task", { task: held })).toBe(`claim_task ERROR: Task #${held} is held by dev.`);
     expect(await call("claim_task", { task: claims })).toContain(`claim_task: You hold Task #${claims} now`);
@@ -2947,6 +2947,279 @@ describe("file changes made through the shell (#57)", () => {
     expect(await fileEdits(id, EXPECTED.length)).toEqual(EXPECTED);
     term.type("quit\r");
     expect(await term.exited).toBe(0);
+  });
+});
+
+// A Host (ADR 0015): `switchboard host run` started directly, as launchd would start
+// it, with no terminal. The Person asks the Channel; the Host starts and stops the
+// Agents in ptys of its own.
+describe("switchboard host", () => {
+  const HOST = "studio";
+  let supervisor: ChildProcess | null = null;
+  let supervisorOutput = "";
+  const hostDir = () => join(scratch, "config", "host");
+  const hostEnv = () => ({
+    ...env,
+    SWITCHBOARD_LAUNCH_AGENTS_DIR: join(scratch, "LaunchAgents"),
+    SWITCHBOARD_LAUNCHCTL: join(scratch, "launchctl.sh"),
+  });
+  const cli = (...args: string[]) => promisify(execFile)(process.execPath, [CLI, ...args], { env: hostEnv(), cwd });
+  const agentLog = (id: string) =>
+    readFile(join(hostDir(), "logs", `${id.replaceAll("/", "-")}.log`), "utf8").catch(() => "");
+  const hostedAgents = async () =>
+    JSON.parse(await readFile(join(hostDir(), "agents.json"), "utf8").catch(() => "[]")) as { agent: string }[];
+  const hostLive = async () => {
+    const { hosts } = (await (await asPerson("e2e", "/api/hosts")).json()) as {
+      hosts: { id: string; live: boolean }[];
+    };
+    return hosts.find((h) => h.id === `e2e/${HOST}`)?.live;
+  };
+  const waitForSupervisor = (pattern: RegExp) =>
+    waitFor(`the Host to log ${pattern}`, () => pattern.exec(supervisorOutput) ?? undefined, 30_000).catch((error) => {
+      throw new Error(`${error.message}. The Host logged:\n${supervisorOutput}`);
+    });
+
+  async function startHost(): Promise<void> {
+    supervisorOutput = "";
+    supervisor = spawn(process.execPath, [CLI, "host", "run"], { env: hostEnv(), stdio: ["ignore", "pipe", "pipe"] });
+    supervisor.stdout?.on("data", (d) => {
+      supervisorOutput += d;
+    });
+    supervisor.stderr?.on("data", (d) => {
+      supervisorOutput += d;
+    });
+    await waitFor("the Host to be Live", async () => ((await hostLive()) ? true : undefined));
+  }
+
+  async function stopHost(): Promise<void> {
+    const running = supervisor;
+    if (running === null || running.exitCode !== null) return;
+    const exited = new Promise((resolve) => running.once("exit", resolve));
+    running.kill("SIGTERM");
+    await exited;
+    supervisor = null;
+  }
+
+  afterAll(async () => {
+    await stopHost();
+  });
+
+  it("installs as a background LaunchAgent and registers the Host on the Channel", async () => {
+    const calls = join(scratch, "launchctl.log");
+    await writeFile(join(scratch, "launchctl.sh"), `#!/bin/sh\necho "$@" >> '${calls}'\n`, { mode: 0o755 });
+    const { stdout } = await cli(
+      "host",
+      "install",
+      "--name",
+      HOST,
+      "--root",
+      cwd,
+      "--max-permission-mode",
+      "acceptEdits",
+      "--max-agents",
+      "1",
+      "--repo",
+      github.repo,
+    );
+    expect(stdout).toContain(`e2e/${HOST} is installed for ${github.repo}`);
+    expect(stdout).toContain("Agents at once: at most 1");
+    const plist = await readFile(join(scratch, "LaunchAgents", "dev.switchboard.host.plist"), "utf8");
+    expect(plist).toContain("<string>host</string>\n      <string>run</string>");
+    expect(plist).toContain("<key>ProcessType</key>\n    <string>Background</string>");
+    expect(plist).toContain(`<string>${join(scratch, "config")}</string>`);
+    const uid = process.getuid?.() ?? 0;
+    expect(await readFile(calls, "utf8")).toContain(
+      `bootstrap gui/${uid} ${join(scratch, "LaunchAgents", "dev.switchboard.host.plist")}`,
+    );
+    const { hosts } = (await (await asPerson("e2e", "/api/hosts")).json()) as {
+      hosts: { id: string; roots: string[]; maxPermissionMode: string; live: boolean }[];
+    };
+    expect(hosts.find((h) => h.id === `e2e/${HOST}`)).toMatchObject({
+      roots: [cwd],
+      maxPermissionMode: "acceptEdits",
+      live: false,
+    });
+  });
+
+  let agentId = "";
+  let sessionId = "";
+
+  it("starts an Agent the Person asks for from another terminal, in the folder and mode asked for", async () => {
+    await startHost();
+    const { stdout } = await cli(
+      "spawn",
+      "--host",
+      HOST,
+      "--cwd",
+      cwd,
+      "--nickname",
+      "builder",
+      "--permission-mode",
+      "acceptEdits",
+      "--repo",
+      github.repo,
+      "Fix the login bug",
+    );
+    const id = /^(e2e\/claude\/\S+) "builder" is running on e2e\/studio\./m.exec(stdout)?.[1];
+    expect(id, stdout).toBeDefined();
+    agentId = id ?? "";
+    const agent = (await agents()).find((a) => a.id === agentId);
+    expect(agent).toMatchObject({ nickname: "builder", host: `e2e/${HOST}` });
+
+    const log = await waitFor("the Agent's log", async () => {
+      const text = await agentLog(agentId);
+      return /FAKE-CLAUDE session=/.test(text) ? text : undefined;
+    });
+    sessionId = /FAKE-CLAUDE session=([\w-]+)/.exec(log)?.[1] ?? "";
+    const args = JSON.parse(/FAKE-CLAUDE args=(\[.*\])/.exec(log)?.[1] ?? "[]") as string[];
+    expect(args).toEqual(expect.arrayContaining(["--permission-mode", "acceptEdits", "--session-id", sessionId]));
+    // The brief is the session's first prompt, labelled as the Person's words.
+    expect(args.at(-1)).toMatch(/started this Agent on e2e\/studio:\n> Fix the login bug$/);
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId, sessionId, cwd })]);
+
+    const { events } = await api<HistoryResponse>("/api/events");
+    const spawn = events.find((e) => e.type === "agent.spawn");
+    expect(spawn?.payload).toMatchObject({ host: `e2e/${HOST}`, cwd, permissionMode: "acceptEdits" });
+    expect(events.find((e) => e.type === "agent.spawned")?.payload).toMatchObject({
+      spawn: spawn?.id,
+      agent: agentId,
+    });
+  });
+
+  it("refuses a spawn past its own cap on Agents at once, whatever the Channel's allows", async () => {
+    const response = await asPerson("e2e", "/api/agents/spawn", {
+      method: "POST",
+      body: JSON.stringify({ host: HOST, cli: "claude-code", cwd }),
+    });
+    expect(response.status).toBe(502);
+    expect(((await response.json()) as { reason: string }).reason).toBe(
+      `e2e/${HOST} could not start the Agent: this Host runs at most 1 Agent at once`,
+    );
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
+  });
+
+  it("resumes an Agent whose CLI crashes, in the same session", async () => {
+    const pid = Number(/FAKE-CLAUDE pid=(\d+)/.exec(await agentLog(agentId))?.[1]);
+    process.kill(pid, "SIGKILL");
+    await waitForSupervisor(new RegExp(`${agentId} crashed \\(\\d+\\); resuming it`));
+    const resumed = await waitFor("the resumed session", async () => {
+      const runs = (await agentLog(agentId)).split("[host]").filter((run) => run.includes("FAKE-CLAUDE args="));
+      return runs.length === 2 ? runs[1] : undefined;
+    });
+    const args = JSON.parse(/FAKE-CLAUDE args=(\[.*\])/.exec(resumed ?? "")?.[1] ?? "[]") as string[];
+    expect(args).toEqual(expect.arrayContaining(["--resume", sessionId]));
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
+  });
+
+  it("resumes an Agent whose wrapper is killed, which node-pty reports as exit code 0 with a signal", async () => {
+    // The process under the pty is the wrapper, `<node> <cli> run ...`; the fake CLI is below it.
+    const parentOf = async (pid: number) => {
+      const { stdout } = await promisify(execFile)("ps", ["-o", "ppid=,command=", "-p", String(pid)]);
+      const [, ppid = "0", command = ""] = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim()) ?? [];
+      return { ppid: Number(ppid), command };
+    };
+    let pid = Number([...(await agentLog(agentId)).matchAll(/FAKE-CLAUDE pid=(\d+)/g)].at(-1)?.[1]);
+    for (let up = await parentOf(pid); !/ run claude/.test(up.command); up = await parentOf(pid)) {
+      expect(up.ppid, "the wrapper above the fake CLI").toBeGreaterThan(1);
+      pid = up.ppid;
+    }
+    process.kill(pid, "SIGKILL");
+    await waitForSupervisor(new RegExp(`${agentId} crashed \\(signal 9\\); resuming it`));
+    await waitFor("the session resumed again", async () => {
+      const runs = (await agentLog(agentId)).split("[host]").filter((run) => run.includes("FAKE-CLAUDE args="));
+      return runs.length === 3 ? true : undefined;
+    });
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
+  });
+
+  it("resumes its Agents when it starts again after it was ended", async () => {
+    await stopHost();
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId, sessionId })]);
+    await startHost();
+    await waitForSupervisor(new RegExp(`resuming ${agentId}`));
+    await waitForSupervisor(new RegExp(`${agentId} is on the Channel`));
+  });
+
+  it("stops an Agent when the Person asks: its session ends and the Agent is Gone", async () => {
+    const { stdout } = await cli("stop", "builder", "--repo", github.repo);
+    expect(stdout).toContain(`Asked e2e/${HOST} to stop ${agentId}.`);
+    await waitForPresence(agentId as AgentId, "gone", 20_000);
+    await waitForSupervisor(new RegExp(`${agentId} ended`));
+    expect(await hostedAgents()).toEqual([]);
+    const { events } = await api<HistoryResponse>("/api/events");
+    expect(events.find((e) => e.type === "agent.stop")?.payload).toEqual({ agent: agentId, host: `e2e/${HOST}` });
+  });
+
+  it("fails a spawn in a folder Claude Code has not trusted, and never answers the dialog", async () => {
+    const untrusted = join(cwd, "untrusted");
+    await mkdir(untrusted);
+    await writeFile(join(untrusted, ".fake-claude-untrusted"), "");
+    try {
+      const response = await asPerson("e2e", "/api/agents/spawn", {
+        method: "POST",
+        body: JSON.stringify({ host: HOST, cli: "claude-code", cwd: untrusted }),
+      });
+      expect(response.status).toBe(502);
+      expect(((await response.json()) as { reason: string }).reason).toBe(
+        `e2e/${HOST} could not start the Agent: the folder is not trusted: run claude there once`,
+      );
+      await waitForSupervisor(/spawn \S+ failed: the folder is not trusted/);
+      await waitFor("the wrapper to end", async () => ((await hostedAgents()).length === 0 ? true : undefined));
+    } finally {
+      await rm(untrusted, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resume an Agent whose folder its Person has since taken off the Host's", async () => {
+    await stopHost();
+    const settings = join(hostDir(), "host.json");
+    const installed = await readFile(settings, "utf8");
+    const narrowed = join(cwd, "narrowed");
+    await mkdir(narrowed);
+    const agent = "e2e/claude/0000aaaa";
+    try {
+      await writeFile(settings, JSON.stringify({ ...JSON.parse(installed), roots: [narrowed] }));
+      await writeFile(
+        join(hostDir(), "agents.json"),
+        JSON.stringify([{ agent, sessionId: randomUUID(), cwd, permissionMode: "default" }]),
+      );
+      await startHost();
+      await waitForSupervisor(new RegExp(`not starting ${agent}: ${cwd} is not under this Host's folders`));
+      expect(await hostedAgents()).toEqual([]);
+      expect(await agentLog(agent)).toBe("");
+    } finally {
+      await stopHost();
+      await writeFile(settings, installed);
+      await rm(narrowed, { recursive: true, force: true });
+      await startHost();
+    }
+  });
+
+  it("refuses agent_spawn and agent_stop to an Agent: only a Person starts and stops Agents for now", async () => {
+    const term = new Terminal(["run", "claude"]);
+    const { agentEnv: self } = await term.started();
+    await waitForPresence(self as AgentId, "live");
+    for (const [tool, input] of [
+      ["agent_spawn", { cwd }],
+      ["agent_stop", { agent: self }],
+    ] as const) {
+      const answer = await callTool(term, tool, input);
+      expect(answer).toContain(`${tool} ERROR`);
+      expect(answer).toContain("An Agent cannot start or stop Agents, or manage Hosts: only a Person can");
+    }
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  });
+
+  it("uninstalls: the LaunchAgent is unloaded and removed, and the Host leaves the Channel", async () => {
+    await stopHost();
+    const { stdout } = await cli("host", "uninstall");
+    expect(stdout).toContain(`e2e/${HOST} is uninstalled.`);
+    await expect(stat(join(scratch, "LaunchAgents", "dev.switchboard.host.plist"))).rejects.toThrow();
+    expect(await readFile(join(scratch, "launchctl.log"), "utf8")).toContain(
+      `bootout gui/${process.getuid?.() ?? 0}/dev.switchboard.host`,
+    );
+    expect(await hostLive()).toBeUndefined();
   });
 });
 

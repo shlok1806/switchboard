@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { AgentContext, Cli, ReportedUsage, UsageLimit } from "../../shared/src/index";
+import { directiveText } from "../../shared/src/index";
 import { claudeConfigDir, projectDir } from "./claude-session";
 import { maskSecrets } from "./proxy/mask";
 
@@ -95,7 +96,9 @@ export class ContextParser {
   ) {}
 
   private prompt(value: unknown): void {
-    const brief = text(value);
+    const said = text(value);
+    // A Directive as the first prompt (how a Host starts an Agent): the brief is the Person's words.
+    const brief = directiveText(said) ?? said;
     if (!brief || this.context.brief || brief.startsWith("<local-command") || brief.startsWith("<command-")) return;
     // Mask before clipping: clipping a secret can make it no longer recognisable.
     this.context.brief = maskSecrets(brief).text;

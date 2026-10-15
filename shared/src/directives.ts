@@ -80,6 +80,18 @@ export function directiveHeading(from: PersonName): string {
   return `[Switchboard] Directive from ${from} (a Person on the Channel)`;
 }
 
+/**
+ * The Person's words in a prompt that is one Directive as the Agent reads it (a heading,
+ * then the text quoted line by line), or null for any other prompt. A Host's brief is
+ * such a prompt (ADR 0015).
+ */
+export function directiveText(prompt: string): string | null {
+  const [heading, ...lines] = prompt.split("\n");
+  if (!heading?.startsWith("[Switchboard] Directive from ") || lines.length === 0) return null;
+  if (!lines.every((line) => line === ">" || line.startsWith("> "))) return null;
+  return lines.map((line) => line.slice(2)).join("\n");
+}
+
 /** One Directive as the Agent reads it. */
 export function describeDirective(directive: DirectiveDelivery): string {
   return [

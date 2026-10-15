@@ -23,6 +23,8 @@ import type {
   ChannelEvent,
   HistoryResponse,
   PostUpdateResponse,
+  SpawnAgentResponse,
+  StopAgentResponse,
   SwitchboardTool,
   Task,
   TaskActionResponse,
@@ -31,16 +33,21 @@ import type {
 } from "../../shared/src/index";
 import {
   agentDeliverables,
+  agentPath,
   branchPath,
   claimPath,
   finishPath,
   holderName,
+  MAX_BRIEF_LENGTH,
   MAX_FINISH_SUMMARY_LENGTH,
   MAX_HISTORY_LIMIT,
+  MAX_MODEL_LENGTH,
   MAX_NICKNAME_LENGTH,
+  MAX_PATH_LENGTH,
   MAX_UPDATE_LENGTH,
   modelLabel,
   nicknamePath,
+  PERMISSION_MODES,
   releasePath,
   stepPath,
   taskBranch,
@@ -48,6 +55,7 @@ import {
 import { ChannelChoiceError, chooseChannel } from "./channel-choice";
 import { ChannelClient } from "./channel-client";
 import { type Config, readConfig } from "./config";
+import { matchAgents } from "./rename";
 import { adoptTaskBranch, openTaskWorktree, pushTaskBranch, type TaskWorktree } from "./task-worktree";
 
 /** The env var naming the file the wrapper writes the session's Agent ID into. */
@@ -364,6 +372,47 @@ export class SwitchboardTools {
     });
   }
 
+  /** Asks one of this Agent's Person's Hosts to start an Agent. The Channel decides whether this Agent may. */
+  spawnAgent(request: {
+    cwd: string;
+    host?: string;
+    nickname?: string;
+    model?: string;
+    brief?: string;
+    permissionMode?: string;
+  }) {
+    return this.run("agent_spawn", (request.nickname ?? request.cwd).slice(0, 80), undefined, async (agent) => {
+      const answer = await this.post<SpawnAgentResponse>(agent, "/api/agents/spawn", {
+        cli: "claude-code",
+        ...request,
+      });
+      return answer.agent === undefined
+        ? `${answer.host} is still starting it (spawn ${answer.spawn}); the Channel records agent.spawned when it is on.`
+        : `${answer.agent.id}${answer.agent.nickname ? ` "${answer.agent.nickname}"` : ""} is running on ${answer.host}.`;
+    });
+  }
+
+  /** Asks the Host that runs Agent `target` to stop it. The Channel decides whether this Agent may. */
+  stopAgent(target: string) {
+    return this.run("agent_stop", target.slice(0, 80), undefined, async (agent) => {
+      const { agents } = await this.as<AgentsResponse>(agent, "/api/agents");
+      const found = matchAgents(
+        agents.filter((a) => a.presence !== "gone"),
+        target,
+      );
+      if (found.length !== 1) {
+        throw new Error(
+          found.length === 0
+            ? `No running Agent is called ${target}.`
+            : `${target} could be ${found.map((a) => a.id).join(", ")}; use the full Agent ID.`,
+        );
+      }
+      const [stopping] = found as [Agent];
+      const answer = await this.post<StopAgentResponse>(agent, `${agentPath(stopping.id)}/stop`);
+      return `Asked ${answer.host} to stop ${answer.agent}.`;
+    });
+  }
+
   readChannel(limit = DEFAULT_READ_LIMIT) {
     return this.run("read_channel", `last ${limit}`, undefined, async (agent) => {
       // The Relay's Verdicts are about what Agents hear, not what happened: read past them.
@@ -432,6 +481,11 @@ function agentFromFile(path: string | undefined): () => Promise<{ id: AgentId; t
       return null;
     }
   };
+}
+
+/** `input` without the keys a tool call left out. */
+function withoutUndefined<T extends Record<string, unknown>>(input: T): { [K in keyof T]: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as never;
 }
 
 export function createMcpServer(tools: SwitchboardTools): McpServer {
@@ -553,6 +607,34 @@ export function createMcpServer(tools: SwitchboardTools): McpServer {
       },
     },
     ({ task, summary }) => answer(tools.finishTask(task, summary)),
+  );
+  server.registerTool(
+    "agent_spawn",
+    {
+      description:
+        "Starts a Claude Code Agent on one of your Person's Hosts, in a folder under that Host's roots, with an " +
+        "optional brief as its first prompt. Only an Agent its Person granted that role may; until then the " +
+        "Channel refuses, saying so (ADR 0015).",
+      inputSchema: {
+        cwd: z.string().max(MAX_PATH_LENGTH).describe("The folder to run in: an absolute path on the Host."),
+        host: z.string().optional().describe("The Host's name; else the Person's most recently seen Live Host."),
+        nickname: z.string().max(MAX_NICKNAME_LENGTH).optional(),
+        model: z.string().max(MAX_MODEL_LENGTH).optional(),
+        brief: z.string().max(MAX_BRIEF_LENGTH).optional().describe("The new Agent's first prompt."),
+        permissionMode: z.enum(PERMISSION_MODES).optional(),
+      },
+    },
+    (input) => answer(tools.spawnAgent(withoutUndefined(input))),
+  );
+  server.registerTool(
+    "agent_stop",
+    {
+      description:
+        "Stops an Agent one of your Person's Hosts runs. Only an Agent its Person granted that role may; until " +
+        "then the Channel refuses, saying so (ADR 0015).",
+      inputSchema: { agent: z.string().describe("The Agent's ID or Nickname.") },
+    },
+    ({ agent }) => answer(tools.stopAgent(agent)),
   );
   return server;
 }
