@@ -187,6 +187,18 @@ export function summarize(e: ChannelEvent): string {
       return e.payload.message
         ? `Denied ${e.payload.agent}'s approval prompt: ${e.payload.message}`
         : `Denied ${e.payload.agent}'s approval prompt`;
+    case "agent.spawn":
+      return `Asked ${e.payload.host} to start ${e.payload.nickname ?? "an Agent"} in ${e.payload.cwd}`;
+    case "agent.spawned":
+      return `Started on ${e.payload.host}`;
+    case "agent.spawn.failed":
+      return `${e.payload.host} could not start an Agent: ${e.payload.reason}`;
+    case "agent.stop":
+      return `Asked ${e.payload.host} to stop ${e.payload.agent}`;
+    case "host.online":
+      return `${e.payload.host} is Live`;
+    case "host.offline":
+      return `${e.payload.host} went Offline`;
     case "agent.rename": {
       const { agent, from, to } = e.payload;
       const who = e.actor.kind === "agent" && e.actor.agentId === agent ? "Renamed itself" : `Renamed ${agent}`;
@@ -220,6 +232,12 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "approval.pending": "Approval",
   "approval.closed": "Approval",
   "approval.denied": "Approval",
+  "agent.spawn": "Start",
+  "agent.spawned": "Started",
+  "agent.spawn.failed": "Start failed",
+  "agent.stop": "Stop",
+  "host.online": "Host",
+  "host.offline": "Host",
   "tool.call": "Tool call",
   "file.edit": "File edit",
   command: "Command",

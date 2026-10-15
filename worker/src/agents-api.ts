@@ -33,6 +33,7 @@ import {
   cleanModelField,
   cleanNickname,
   cleanUsage,
+  HOST_NAME_PATTERN,
   MAX_ACCOUNT_LABEL_LENGTH,
   MAX_DENY_MESSAGE_LENGTH,
   MAX_EFFORT_LENGTH,
@@ -135,6 +136,8 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
     rejoin,
     usage,
     context,
+    host,
+    spawn,
   } = body;
   const cleanedUsage = cleanUsage(usage);
   const cleanedContext = cleanContext(context);
@@ -168,6 +171,12 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
   if (interrupts !== undefined && typeof interrupts !== "boolean") {
     return { ok: false, reason: '"interrupts" must be true or false.' };
   }
+  if (host !== undefined && (typeof host !== "string" || !HOST_NAME_PATTERN.test(host))) {
+    return { ok: false, reason: '"host" must be the name of one of your Hosts.' };
+  }
+  if (spawn !== undefined && (typeof spawn !== "string" || host === undefined)) {
+    return { ok: false, reason: '"spawn" must be the ID of the spawn its "host" was asked for.' };
+  }
   return {
     ok: true,
     value: {
@@ -186,6 +195,8 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
       ...(rejoin === undefined ? {} : { rejoin }),
       ...(cleanedContext === undefined ? {} : { context: cleanedContext }),
       ...(cleanedUsage === undefined ? {} : { usage: cleanedUsage }),
+      ...(host === undefined ? {} : { host }),
+      ...(spawn === undefined ? {} : { spawn: spawn as string }),
     },
   };
 }

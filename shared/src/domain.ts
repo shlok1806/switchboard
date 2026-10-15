@@ -5,6 +5,7 @@
 
 import type { AgentContext } from "./agent-context";
 import type { PendingApproval } from "./approvals";
+import type { HostId, PermissionMode } from "./hosts";
 import type { AgentUsage } from "./usage";
 
 /* ── Participants ─────────────────────────────────────────── */
@@ -70,6 +71,8 @@ export interface Agent {
    */
   approval?: PendingApproval;
   presence: Presence;
+  /** The Host that runs it (ADR 0015). Absent for an Agent started in a terminal. */
+  host?: HostId;
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */
   secretMasking: boolean;
@@ -252,6 +255,29 @@ export interface EventPayloads {
   "approval.closed": { id: string };
   /** The Agent's own Person denied prompt `id` of Agent `agent` from the Channel (ADR 0014). */
   "approval.denied": { agent: AgentId; id: string; message?: string };
+  /**
+   * A Person asked their Host `host` to start an Agent (ADR 0015). The Event's ID names
+   * the request. `brief`, the session's first prompt, counts as that Person's words.
+   */
+  "agent.spawn": {
+    host: HostId;
+    cli: Cli;
+    cwd: string;
+    nickname?: string;
+    model?: string;
+    permissionMode: PermissionMode;
+    brief?: string;
+  };
+  /** The Agent spawn `spawn` asked for registered. The actor is the new Agent. */
+  "agent.spawned": { spawn: string; host: HostId; agent: AgentId };
+  /** Host `host` could not start what spawn `spawn` asked for, or never answered. The actor is its Person. */
+  "agent.spawn.failed": { spawn: string; host: HostId; reason: string };
+  /** A Person asked Host `host` to stop Agent `agent`, which it runs. */
+  "agent.stop": { agent: AgentId; host: HostId };
+  /** Host `host` attached to the Channel after being Offline. The actor is its Person. */
+  "host.online": { host: HostId };
+  /** Host `host` has been gone from the Channel for a while. The actor is its Person. */
+  "host.offline": { host: HostId };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */
