@@ -22,7 +22,13 @@ export interface HostSettings {
   repo: string;
   roots: string[];
   maxPermissionMode: PermissionMode;
+  /** How many Agents this Host runs at once (ADR 0017). A `host.json` from before it has none. */
+  maxAgents: number;
 }
+
+/** The local cap when `host.json` names none, and the largest `--max-agents` takes. */
+export const DEFAULT_MAX_AGENTS = 8;
+export const MAX_MAX_AGENTS = 100;
 
 /** One Agent the Host runs, as `agents.json` keeps it. */
 export interface HostedAgent {
@@ -84,13 +90,17 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env): HostSettings
   } catch {
     return null;
   }
-  const { name, repo, roots, maxPermissionMode } = parsed;
+  const { name, repo, roots, maxPermissionMode, maxAgents } = parsed;
   if (typeof name !== "string" || typeof repo !== "string" || !Array.isArray(roots)) return null;
   return {
     name,
     repo,
     roots: roots.filter((r): r is string => typeof r === "string"),
     maxPermissionMode: isPermissionMode(maxPermissionMode) ? maxPermissionMode : "default",
+    maxAgents:
+      Number.isInteger(maxAgents) && (maxAgents as number) >= 1 && (maxAgents as number) <= MAX_MAX_AGENTS
+        ? (maxAgents as number)
+        : DEFAULT_MAX_AGENTS,
   };
 }
 

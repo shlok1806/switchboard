@@ -150,6 +150,7 @@ export class HostSupervisor {
     this.limits = {
       roots: resolveRoots(options.settings.roots),
       maxPermissionMode: options.settings.maxPermissionMode,
+      maxAgents: options.settings.maxAgents,
     };
     this.hostId = `${options.config.person}/${options.settings.name}`;
   }
@@ -218,12 +219,16 @@ export class HostSupervisor {
     });
     ws.addEventListener("message", (event) => {
       if (event.data === LIVE_PONG) return;
-      let frame: { type?: unknown } & Record<string, unknown>;
+      let parsed: unknown;
       try {
-        frame = JSON.parse(String(event.data));
+        parsed = JSON.parse(String(event.data));
       } catch {
         return;
       }
+      // Valid JSON need not be an object: null, a number or a list is no frame.
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
+      const frame = parsed as { type?: unknown } & Record<string, unknown>;
+      const type = typeof frame.type === "string" ? frame.type.slice(0, 40) : "untyped";
       // Whatever a frame holds, it must never take the supervisor, and every Agent, down.
       try {
         if (frame.type === "host.spawn") this.spawn(frame);
@@ -231,7 +236,9 @@ export class HostSupervisor {
           this.spawned(frame as unknown as HostSpawnedMessage);
         } else if (frame.type === "host.stop" && typeof frame.agent === "string") this.stop(frame.agent as AgentId);
       } catch (error) {
-        this.options.log(`could not handle a ${String(frame.type)} frame: ${(error as Error).message}`);
+        this.options.log(
+          `could not handle a ${type} frame: ${error instanceof Error ? error.message : "unknown error"}`,
+        );
       }
     });
     ws.addEventListener("close", (event) => {
@@ -262,6 +269,12 @@ export class HostSupervisor {
       return;
     }
     const { request } = checked;
+    // This machine's own cap, whatever the Channel's allows (ADR 0017).
+    if (this.running.size >= this.limits.maxAgents) {
+      const most = this.limits.maxAgents;
+      this.fail(request.spawn, `this Host runs at most ${most} Agent${most === 1 ? "" : "s"} at once`);
+      return;
+    }
     const sessionId = randomUUID();
     const entry: HostedAgent = {
       agent: agentIdFor(this.options.config.person, request.cli, sessionId),
@@ -287,7 +300,8 @@ export class HostSupervisor {
     if (running === undefined) return;
     running.spawn = undefined;
     running.watchingTrust = false;
-    clearTimeout(running.timer);
+    // The timer stays armed until the wrapper says it registered: the Channel's word alone does not end it.
+    if (running.registered) clearTimeout(running.timer);
     this.options.log(`${running.entry.agent} started its session`);
   }
 
@@ -330,7 +344,8 @@ export class HostSupervisor {
       name: "xterm-256color",
       cols: COLUMNS,
       rows: ROWS,
-      cwd: entry.cwd,
+      // The folder as just resolved and allowed, not as recorded: a link may have changed since.
+      cwd: allowed.cwd,
       env: {
         ...(env as Record<string, string>),
         SWITCHBOARD_HOST: settings.name,

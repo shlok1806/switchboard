@@ -9,6 +9,7 @@ import type { AgentId, PermissionMode } from "../../../shared/src/index";
 import {
   cleanAbsolutePath,
   isPermissionMode,
+  LOGIN_PATTERN,
   MAX_BRIEF_LENGTH,
   MAX_MODEL_LENGTH,
   MAX_NICKNAME_LENGTH,
@@ -21,6 +22,8 @@ import {
 export interface LocalLimits {
   roots: readonly string[];
   maxPermissionMode: PermissionMode;
+  /** How many Agents this Host runs at once, whatever the Channel's cap allows. */
+  maxAgents: number;
 }
 
 /** A spawn request, checked: every field has its type, the folder is resolved and allowed, the mode allowed. */
@@ -76,9 +79,16 @@ export function checkFolderAndMode(
   return { ok: true, cwd: real, permissionMode: mode };
 }
 
+/**
+ * Text passed to `switchboard run claude` as a flag's value. One that starts with "-"
+ * would read as a flag of its own (`--model -r` turns a new session into the picker),
+ * and a line break has no place in either.
+ */
 function optionalText(value: unknown, max: number): string | undefined | null {
   if (value === undefined) return undefined;
-  return typeof value === "string" && value.length <= max ? value : null;
+  return typeof value === "string" && value.length <= max && !value.startsWith("-") && !/[\r\n]/.test(value)
+    ? value
+    : null;
 }
 
 /** Checks a `host.spawn` frame as it came off the socket. `spawn` is null when even that is missing. */
@@ -90,15 +100,22 @@ export function checkSpawn(
   const refuse = (reason: string) => ({ ok: false as const, spawn, reason });
   if (spawn === null) return refuse("the request names no spawn");
   if (frame.cli !== "claude-code") return refuse("this Host starts only claude-code Agents");
-  if (typeof frame.by !== "string") return refuse("the request names no Person");
+  // The Person's name goes into the brief's heading, so it must be a name and nothing else.
+  if (typeof frame.by !== "string" || !LOGIN_PATTERN.test(frame.by)) return refuse("the request names no Person");
   // An Agent ID is `<person>/<cli>/<suffix>`; the Host only names it in the brief.
   const lead = frame.lead;
   if (lead !== undefined && (typeof lead !== "string" || !/^[^/\s]+\/[^/\s]+\/[^/\s]+$/.test(lead)))
     return refuse("the lead is not an Agent ID");
   const nickname = optionalText(frame.nickname, MAX_NICKNAME_LENGTH);
   const model = optionalText(frame.model, MAX_MODEL_LENGTH);
-  const brief = optionalText(frame.brief, MAX_BRIEF_LENGTH);
-  if (nickname === null || model === null || brief === null) return refuse("the nickname, model or brief is not text");
+  const brief =
+    frame.brief === undefined
+      ? undefined
+      : typeof frame.brief === "string" && frame.brief.length <= MAX_BRIEF_LENGTH
+        ? frame.brief
+        : null;
+  if (nickname === null || model === null || brief === null)
+    return refuse('the nickname, model or brief is not text, or starts with "-"');
   const place = checkFolderAndMode(frame.cwd, frame.permissionMode, limits);
   if (!place.ok) return refuse(place.reason);
   return {

@@ -43,6 +43,11 @@ export const DOWNGRADE_LABEL: Record<DowngradeReason, string> = {
   "no-answer": "the wrapper did not answer in time",
 };
 
+/** A Host by the name its Person gave it: its id without the person part, which the row's actor says. */
+export function hostName(id: string): string {
+  return id.slice(id.indexOf("/") + 1);
+}
+
 export function actorName(actor: Actor): string {
   if (actor.kind === "agent") return actor.agentId;
   if (actor.kind === "person") return actor.person;
@@ -188,23 +193,23 @@ export function summarize(e: ChannelEvent): string {
         ? `Denied ${e.payload.agent}'s approval prompt: ${e.payload.message}`
         : `Denied ${e.payload.agent}'s approval prompt`;
     case "agent.spawn":
-      return `Asked ${e.payload.host} to start ${e.payload.nickname ?? "an Agent"} in ${e.payload.cwd}`;
+      return `Asked ${hostName(e.payload.host)} to start ${e.payload.nickname ?? "an Agent"} in ${e.payload.cwd}`;
     case "agent.spawned":
       return e.payload.parent === undefined
-        ? `Started on ${e.payload.host}`
-        : `Started on ${e.payload.host} by ${e.payload.parent}`;
+        ? `Started on ${hostName(e.payload.host)}`
+        : `Started on ${hostName(e.payload.host)} by ${e.payload.parent}`;
     case "agent.spawn.failed":
-      return `${e.payload.host} could not start an Agent: ${e.payload.reason}`;
+      return `${hostName(e.payload.host)} could not start an Agent: ${e.payload.reason}`;
     case "agent.stop":
-      return `Asked ${e.payload.host} to stop ${e.payload.agent}`;
+      return `Asked ${hostName(e.payload.host)} to stop ${e.payload.agent}`;
     case "agent.role.granted":
       return `Made ${e.payload.agent} a ${e.payload.role}`;
     case "agent.role.revoked":
       return `Took back ${e.payload.agent}'s ${e.payload.role} role`;
     case "host.online":
-      return `${e.payload.host} is Live`;
+      return `${hostName(e.payload.host)} is Live`;
     case "host.offline":
-      return `${e.payload.host} went Offline`;
+      return `${hostName(e.payload.host)} went Offline`;
     case "agent.rename": {
       const { agent, from, to } = e.payload;
       const who = e.actor.kind === "agent" && e.actor.agentId === agent ? "Renamed itself" : `Renamed ${agent}`;

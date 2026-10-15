@@ -367,11 +367,11 @@ export class MockChannelSource implements ChannelSource {
       return { ok: false, reason: `You have no Host named ${request.host}. Run \`switchboard host install\` on it.` };
     }
     if (!underRoots(request.cwd, host.roots)) {
-      return { ok: false, reason: `${request.cwd} is not under ${host.id}'s folders (${host.roots.join(", ")}).` };
+      return { ok: false, reason: `${request.cwd} is not under ${host.name}'s folders (${host.roots.join(", ")}).` };
     }
     const mode = request.permissionMode ?? DEFAULT_PERMISSION_MODE;
     if (!permissionModeWithin(mode, host.maxPermissionMode)) {
-      return { ok: false, reason: `${host.id} starts Agents in at most the "${host.maxPermissionMode}" permission mode.` };
+      return { ok: false, reason: `${host.name} starts Agents in at most the "${host.maxPermissionMode}" permission mode.` };
     }
     const at = new Date().toISOString();
     const me = person(this.me);
