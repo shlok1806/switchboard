@@ -57,13 +57,13 @@ describe("starting an Agent", () => {
     const spawnAgent = vi.fn(
       async (): Promise<SpawnResult> => ({
         ok: false,
-        reason: "/tmp is not under shlok/studio's folders. Run `switchboard host install` again to add it.",
+        reason: "/tmp is not under studio's folders. Run `switchboard host install` again to add it.",
       }),
     );
     const start = await openStartDialog(source({ spawnAgent }));
     fireEvent.click(start);
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("is not under shlok/studio's folders");
+    expect(alert.textContent).toContain("is not under studio's folders");
     expect(alert.querySelector("code")?.textContent).toBe("switchboard host install");
     expect(screen.getByRole("button", { name: "Start Agent" })).toBeTruthy();
   });
@@ -85,6 +85,23 @@ describe("starting an Agent", () => {
     await act(async () => answer.settle({ ok: false, reason: "studio is Offline." }));
     expect((await screen.findByRole("alert")).textContent).toBe("studio is Offline.");
   });
+
+  it("asks the Channel again after it could not say whether it has Hosts", async () => {
+    let calls = 0;
+    const hosts = vi.fn(async (): Promise<HostsResponse> => {
+      calls += 1;
+      if (calls === 1) throw new Error("Failed to fetch");
+      return { hosts: [host], cap: 4, running: 0 };
+    });
+    const wrapper = withChannel(source({ hosts }));
+    const first = render(<StartAgentButton />, { wrapper });
+    await waitFor(() => expect(hosts).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "Start an Agent" })).toBeNull();
+    first.unmount();
+
+    render(<StartAgentButton />, { wrapper });
+    expect(await screen.findByRole("button", { name: "Start an Agent" })).toBeTruthy();
+  });
 });
 
 describe("stopping an Agent", () => {
@@ -101,7 +118,7 @@ describe("stopping an Agent", () => {
     host: "shlok/studio",
   };
 
-  it("cannot be asked twice: Stop waits, disabled, until the Agent's Presence changes", async () => {
+  it("cannot be asked twice: Stop waits, disabled, until the Agent is Gone", async () => {
     const stopAgent = vi.fn(async (): Promise<ActionResult> => ({ ok: true }));
     const wrapper = withChannel(source({ stopAgent }));
     const { rerender } = render(<StopAgentButton agent={agent} />, { wrapper });
@@ -113,6 +130,10 @@ describe("stopping an Agent", () => {
     fireEvent.click(stopping);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(stopAgent).toHaveBeenCalledTimes(1);
+
+    // Its session going Idle on the way out is not the answer: Stop stays off.
+    rerender(<StopAgentButton agent={{ ...agent, presence: "idle" }} />);
+    expect((screen.getByRole("button", { name: "Stopping" }) as HTMLButtonElement).disabled).toBe(true);
 
     // Its Host answered: the Agent went Gone, and there is nothing left to stop.
     rerender(<StopAgentButton agent={{ ...agent, presence: "gone" }} />);

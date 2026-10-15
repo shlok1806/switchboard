@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Plus, Square } from "lucide-react";
 import { toast } from "sonner";
-import type { Agent, Host, PermissionMode, Presence } from "@shared/index";
+import type { Agent, Host, PermissionMode } from "@shared/index";
 import {
   DEFAULT_PERMISSION_MODE,
   MAX_BRIEF_LENGTH,
@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useMe, useStore } from "@/data/store";
+import { hostName } from "@/lib/format";
 import { go } from "@/lib/router";
 
 /** What each permission mode lets the Agent do without asking. */
@@ -33,11 +34,6 @@ const MODE_HINT: Record<PermissionMode, string> = {
 
 const FIELD =
   "h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]";
-
-/** A Host by the name its Person gave it. On this Person's own Dashboard the person part says nothing. */
-export function hostName(id: string): string {
-  return id.slice(id.indexOf("/") + 1);
-}
 
 /** Text whose `backticked` parts are commands or paths, set as code. */
 export function WithCode({ text }: { text: string }) {
@@ -68,13 +64,15 @@ export function useHostsSupported(): boolean | null {
     let live = true;
     let asked = hostsSupported.get(store);
     if (asked === undefined) {
-      asked = store.source.hosts().then(
-        (r) => r !== null,
-        () => false,
-      );
+      // Only an answer is kept: a failed read is asked again by the next button or view that mounts.
+      asked = store.source.hosts().then((r) => r !== null);
       hostsSupported.set(store, asked);
+      asked.catch(() => hostsSupported.delete(store));
     }
-    asked.then((s) => live && setSupported(s));
+    asked.then(
+      (s) => live && setSupported(s),
+      () => live && setSupported(false),
+    );
     return () => {
       live = false;
     };
@@ -349,6 +347,9 @@ function FolderChoices({ host, value, onPick }: { host: Host; value: string; onP
   );
 }
 
+/** How long Stop waits for the Agent to go Gone before it may be asked again. */
+const STOP_WAIT_MS = 30_000;
+
 /** Stop an Agent one of this Person's Hosts runs: its session ends and it goes Gone. */
 export function StopAgentButton({ agent }: { agent: Agent }) {
   const store = useStore();
@@ -356,9 +357,14 @@ export function StopAgentButton({ agent }: { agent: Agent }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const asking = useRef(false);
-  // Asked to stop: the Presence it had then. Stop stays off until the Host's answer changes it.
-  const [stoppingFrom, setStoppingFrom] = useState<Presence | null>(null);
-  const stopping = stoppingFrom !== null && stoppingFrom === agent.presence;
+  // Asked to stop: Stop stays off until the Agent is Gone (and this button with it), or the
+  // Host has had long enough that asking again is fair. Live to Idle on the way is not an answer.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!stopping) return;
+    const timer = setTimeout(() => setStopping(false), STOP_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [stopping]);
   if (agent.host === undefined || agent.person !== me || agent.presence === "gone") return null;
   const name = agent.nickname ?? agent.id;
 
@@ -371,7 +377,7 @@ export function StopAgentButton({ agent }: { agent: Agent }) {
     setBusy(false);
     setConfirming(false);
     if (!result.ok) return toast.error(result.reason);
-    setStoppingFrom(agent.presence);
+    setStopping(true);
     toast.success(`Asked ${hostName(agent.host ?? "")} to stop ${name}`);
   };
 

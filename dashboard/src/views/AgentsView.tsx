@@ -10,7 +10,7 @@ import { AccountLabel, ModelLabel, PresenceDot, RawBadge, StalePill, TaskLink } 
 import { AgentUsage, AccountsPanel } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
 import { StartAgentButton, useHostsSupported } from "@/components/domain/start-agent";
-import { CLI_LABEL, PRESENCE_LABEL, ago } from "@/lib/format";
+import { CLI_LABEL, PRESENCE_LABEL, ago, hostName } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
@@ -46,7 +46,7 @@ export function HostLabel({ host }: { host: string }) {
   return (
     <span className="inline-flex min-w-0 items-center gap-1" title={`Started by a Host, with no terminal: ${host}`}>
       <Server className="size-3.5 shrink-0" aria-hidden />
-      <span className="truncate">{host.slice(host.indexOf("/") + 1)}</span>
+      <span className="truncate">{hostName(host)}</span>
     </span>
   );
 }
