@@ -1,11 +1,11 @@
 /*
- * The Dashboard's navigation: four views, always in the same place. On a desk
+ * The Dashboard's navigation: five views, always in the same place. On a desk
  * they are tabs in the top bar; on a phone they move to a tab bar at the
  * bottom, where a thumb reaches them. The account menu (theme, sign out) sits at
  * the right end of the top bar on both.
  */
 import { useEffect, useState } from "react";
-import { Bot, Check, Columns3, LogOut, MessagesSquare, Monitor, Moon, Search, SquareKanban, Sun, type LucideIcon } from "lucide-react";
+import { Bot, Check, Columns3, LogOut, MessagesSquare, Monitor, Moon, Search, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,12 +21,13 @@ import { signOut } from "@/lib/session";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-export type ViewId = "feed" | "tasks" | "agents" | "compare";
+export type ViewId = "feed" | "tasks" | "agents" | "canvas" | "compare";
 
 export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
   { id: "feed", title: "Activity", icon: MessagesSquare },
   { id: "tasks", title: "Board", icon: SquareKanban },
   { id: "agents", title: "Agents", icon: Bot },
+  { id: "canvas", title: "Canvas", icon: Workflow },
   { id: "compare", title: "Compare", icon: Columns3 },
 ];
 
@@ -111,7 +112,7 @@ export function TabBar({ route }: { route: Route }) {
   return (
     <nav
       aria-label="Views"
-      className="fixed inset-x-0 bottom-0 z-40 grid h-[var(--tabbar-h)] grid-cols-4 bg-inset pb-[env(safe-area-inset-bottom)]"
+      className="fixed inset-x-0 bottom-0 z-40 grid h-[var(--tabbar-h)] grid-cols-5 bg-inset pb-[env(safe-area-inset-bottom)]"
     >
       {VIEWS.map((v) => {
         const on = v.id === current;

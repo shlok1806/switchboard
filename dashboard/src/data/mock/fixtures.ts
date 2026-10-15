@@ -107,6 +107,8 @@ export const agents: Agent[] = [
     person: "shlok",
     cli: "claude-code",
     nickname: "api-client",
+    // A lead (ADR 0018): it started the Codex Agent below, so the canvas draws an edge between them.
+    role: "lead",
     account: "sh…@illinois.edu",
     model: "claude-opus-5-5",
     effort: "high",
@@ -133,6 +135,7 @@ export const agents: Agent[] = [
     id: A.shlokCodex,
     person: "shlok",
     cli: "codex",
+    parent: A.shlokClaude,
     account: "work",
     model: "gpt-5-codex",
     presence: "idle",

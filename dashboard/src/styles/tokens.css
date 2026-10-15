@@ -110,6 +110,7 @@
   --canvas-bg: var(--canvas);
   --canvas-grid: var(--stone-300);
   --node-bg: var(--surface);
+  --node-hover: var(--hover);
   --node-selected: var(--accent);
   --frame-bg: color-mix(in srgb, var(--hover) 70%, transparent);
   --frame-label: var(--ink-3);
@@ -232,6 +233,9 @@
   --cli-gemini: #7da2f0;
 
   --canvas-grid: #262d3c;
+  /* A node sits a step above its Task frame, which sits a step above the ground. */
+  --node-bg: var(--hover-2);
+  --node-hover: color-mix(in srgb, var(--hover-2) 88%, var(--ink));
 
   --tooltip-bg: #e8ebf2;
   --tooltip-fg: #141c33;
@@ -285,6 +289,7 @@
   --color-canvas-bg: var(--canvas-bg);
   --color-canvas-grid: var(--canvas-grid);
   --color-node-bg: var(--node-bg);
+  --color-node-hover: var(--node-hover);
   --color-node-selected: var(--node-selected);
   --color-frame-bg: var(--frame-bg);
   --color-frame-label: var(--frame-label);
