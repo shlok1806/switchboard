@@ -136,6 +136,18 @@ export class Tasks {
         value TEXT NOT NULL
       );
     `);
+    // The Agent holding the Task's Claim, so the hot paths (every Hook Event, the
+    // Relay) read only the Tasks Agents hold instead of every Task.
+    const columns = host.storage.sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('tasks')").toArray();
+    if (!columns.some((c) => c.name === "holder_agent")) {
+      host.storage.sql.exec("ALTER TABLE tasks ADD COLUMN holder_agent TEXT");
+      host.storage.sql.exec(
+        "UPDATE tasks SET holder_agent = json_extract(data, '$.claim.holder.agentId') WHERE json_extract(data, '$.claim.holder.kind') = 'agent'",
+      );
+    }
+    host.storage.sql.exec(
+      "CREATE INDEX IF NOT EXISTS tasks_by_holder_agent ON tasks (holder_agent) WHERE holder_agent IS NOT NULL",
+    );
   }
 
   /** Every Task, lowest Issue number first. Runs the first reconcile if there has never been one. */
@@ -353,12 +365,21 @@ export class Tasks {
     this.host.append({ type: "task.remove", actor: { kind: "github" }, capture: null, task: number, payload: { via } });
   }
 
-  /** Every stored Task, without syncing first. Synchronous, like `read`. */
-  stored(): Task[] {
-    return this.host.storage.sql
-      .exec<TaskRow>("SELECT * FROM tasks ORDER BY number")
-      .toArray()
-      .map((row) => JSON.parse(row.data) as Task);
+  /**
+   * Every stored Task whose Claim an Agent holds, done or not, or only Agent
+   * `agent`'s, without syncing first. Synchronous, like `read`.
+   */
+  held(agent?: AgentId): Task[] {
+    const rows =
+      agent === undefined
+        ? this.host.storage.sql.exec<TaskRow>(
+            "SELECT * FROM tasks INDEXED BY tasks_by_holder_agent WHERE holder_agent IS NOT NULL ORDER BY number",
+          )
+        : this.host.storage.sql.exec<TaskRow>(
+            "SELECT * FROM tasks INDEXED BY tasks_by_holder_agent WHERE holder_agent = ? ORDER BY number",
+            agent,
+          );
+    return rows.toArray().map((row) => JSON.parse(row.data) as Task);
   }
 
   /** The stored Task, or null. Synchronous, so a caller can check and write it atomically. */
@@ -370,9 +391,10 @@ export class Tasks {
   /** Stores a Task and tells every client. Callers own only the Switchboard fields (ADR 0001). */
   write(task: Task): void {
     this.host.storage.sql.exec(
-      "INSERT OR REPLACE INTO tasks (number, data) VALUES (?, ?)",
+      "INSERT OR REPLACE INTO tasks (number, data, holder_agent) VALUES (?, ?, ?)",
       task.number,
       JSON.stringify(task),
+      task.claim?.holder.kind === "agent" ? task.claim.holder.agentId : null,
     );
     this.host.broadcast({ type: "task", task });
   }

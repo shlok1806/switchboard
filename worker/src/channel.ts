@@ -79,6 +79,63 @@ export interface NewEvent<K extends EventType> {
   turn?: string;
 }
 
+/**
+ * Creates the `events` table, which is append-only: this object only ever INSERTs
+ * into it, apart from the one-time backfill of the actor columns below.
+ *
+ * The table holds the Channel's whole history, so every query on a hot path must
+ * reach its rows through an index; Durable Objects bill each row a query reads. The
+ * partial indexes cover the few Event types that are looked up later: pushes and
+ * merges (the Relay's recent code) and Updates (the status comment, Takeovers).
+ * `actor_kind` and `actor_id` copy the actor's kind and Agent ID or Person name out
+ * of the JSON, so an index can find one holder's Updates.
+ */
+export function createEventsTable(sql: SqlStorage): void {
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL UNIQUE,
+      at TEXT NOT NULL,
+      type TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      capture TEXT,
+      task INTEGER,
+      turn TEXT,
+      payload TEXT NOT NULL,
+      actor_kind TEXT,
+      actor_id TEXT
+    );
+  `);
+  const columns = sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('events')").toArray();
+  if (!columns.some((c) => c.name === "actor_kind")) {
+    // A table made before the actor columns: add them and fill them in, once.
+    sql.exec("ALTER TABLE events ADD COLUMN actor_kind TEXT");
+    sql.exec("ALTER TABLE events ADD COLUMN actor_id TEXT");
+    sql.exec(`
+      UPDATE events SET
+        actor_kind = json_extract(actor, '$.kind'),
+        actor_id = coalesce(json_extract(actor, '$.agentId'), json_extract(actor, '$.person'))
+    `);
+  }
+  sql.exec(`
+    CREATE INDEX IF NOT EXISTS events_code ON events (seq) WHERE type IN ('push', 'merge');
+    CREATE INDEX IF NOT EXISTS events_updates_by_task ON events (task, seq) WHERE type = 'update';
+    CREATE INDEX IF NOT EXISTS events_updates_by_actor ON events (actor_kind, actor_id, seq) WHERE type = 'update';
+  `);
+}
+
+/** The actor's kind and its Agent ID or Person name, as `actor_kind` and `actor_id` keep them. */
+function actorColumns(actor: Actor): [string, string | null] {
+  switch (actor.kind) {
+    case "agent":
+      return [actor.kind, actor.agentId];
+    case "person":
+      return [actor.kind, actor.person];
+    default:
+      return [actor.kind, null];
+  }
+}
+
 function rowToEvent(row: EventRow): ChannelEvent {
   return {
     id: row.id,
@@ -137,19 +194,8 @@ export class Channel extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // Events are append-only: this object only ever INSERTs into `events`.
+    createEventsTable(ctx.storage.sql);
     ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
-        at TEXT NOT NULL,
-        type TEXT NOT NULL,
-        actor TEXT NOT NULL,
-        capture TEXT,
-        task INTEGER,
-        turn TEXT,
-        payload TEXT NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS persons (
         name TEXT PRIMARY KEY,
         time_zone TEXT NOT NULL,
@@ -228,8 +274,8 @@ export class Channel extends DurableObject<Env> {
     });
     this.relay = new Relay({
       sql: ctx.storage.sql,
-      agents: () => this.agents.list(),
-      tasks: () => this.tasks.stored(),
+      heldTasks: () => this.tasks.held(),
+      liveAgents: () => this.agents.live(),
       task: (number) => this.tasks.read(number),
       touchedFiles: (id) => this.hooks.touchedFiles(id),
       jev: () => jevFor(env),
@@ -722,7 +768,7 @@ export class Channel extends DurableObject<Env> {
    * Its Hook and Proxy Events are about this Task as they arrive.
    */
   private currentTask(id: AgentId): TaskNumber | null {
-    return workingTasks(this.tasks.stored(), id)[0]?.number ?? null;
+    return workingTasks(this.tasks.held(id), id)[0]?.number ?? null;
   }
 
   /** The files Agent `id` has edited, most recently first, or null when the Channel has no such Agent. */
@@ -748,8 +794,8 @@ export class Channel extends DurableObject<Env> {
   private insert<K extends EventType>(id: string, event: NewEvent<K>): ChannelEvent | null {
     const row = this.ctx.storage.sql
       .exec<EventRow>(
-        `INSERT INTO events (id, at, type, actor, capture, task, turn, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING RETURNING *`,
+        `INSERT INTO events (id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING RETURNING *`,
         id,
         new Date().toISOString(),
         event.type,
@@ -758,6 +804,7 @@ export class Channel extends DurableObject<Env> {
         event.task ?? null,
         event.turn ?? null,
         JSON.stringify(event.payload),
+        ...actorColumns(event.actor),
       )
       .toArray()[0];
     if (!row) return null;
