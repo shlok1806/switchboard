@@ -33,6 +33,8 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   "presence",
   // Shared memory reaches every Agent in its next turn's digest instead (ADR 0019).
   "memory.note",
+  // Who read whose transcript is for the Dashboard: the read is the reader's business (ADR 0019).
+  "transcript.read",
   // About names, not work (ADR 0009).
   "agent.rename",
   "agent.model",

@@ -187,6 +187,7 @@ const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
   "heartbeat",
   "end",
   "touched-files",
+  "transcript",
   "nickname",
   "model",
   "approval",
@@ -243,6 +244,8 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       agentRoute !== null &&
       "id" in agentRoute &&
       agentRoute.kind !== "touched-files" &&
+      // Any session on the Channel may read any session's transcript (ADR 0019).
+      agentRoute.kind !== "transcript" &&
       agentRoute.id !== caller.agent
     ) {
       return fail(403, `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`);
@@ -251,7 +254,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
 
   if (taskRoute) return handleTaskRoute(request, inner, channel, caller);
   if (hostRoute !== null) return handleHostRoute(hostRoute, request, channel, caller);
-  if (agentRoute !== null) return handleAgentRoute(agentRoute, request, channel, caller);
+  if (agentRoute !== null) return handleAgentRoute(agentRoute, request, inner, channel, caller);
   if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel, caller);
   if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel, caller);
   if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);

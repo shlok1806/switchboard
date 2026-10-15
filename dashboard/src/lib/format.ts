@@ -146,6 +146,12 @@ export function summarize(e: ChannelEvent): string {
       return e.payload.text;
     case "memory.note":
       return `${e.payload.tags.join(", ")}: ${e.payload.text}`;
+    case "transcript.read": {
+      const { agent, from, entries } = e.payload;
+      return entries === 0
+        ? `Read ${agent}'s transcript from entry ${from}: nothing new`
+        : `Read ${agent}'s transcript, entries ${from} to ${from + entries - 1}`;
+    }
     case "directive.delivery":
       return e.payload.delivered === "interrupt"
         ? `Directive from ${e.payload.from} typed into the session right away`
@@ -270,6 +276,7 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   update: "Update",
   directive: "Directive",
   "memory.note": "Note",
+  "transcript.read": "Transcript read",
   "directive.delivery": "Directive delivery",
   wake: "Wake",
   takeover: "Takeover",
@@ -306,6 +313,8 @@ export function unrelayedReason(type: EventType): string | null {
       return "Not relayed: model context and replies stay on the Dashboard.";
     case "memory.note":
       return "Not relayed: a note reaches every Agent in its next turn's digest.";
+    case "transcript.read":
+      return "Not relayed: who read whose transcript is on the Channel, for its Persons.";
     default:
       return "Not relayed (lifecycle Event).";
   }

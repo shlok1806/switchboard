@@ -5,6 +5,7 @@
 //   POST /api/agents/:id/heartbeat   the Agent is still running, Live or Idle
 //   POST /api/agents/:id/end         the session ended; the Agent goes Gone
 //   GET  /api/agents/:id/touched-files  the files the Agent has edited (Hook Capture)
+//   GET  /api/agents/:id/transcript  a page of its session, from its wrapper, redacted; anyone (ADR 0019)
 //   POST /api/agents/:id/proxy-mode  set the Agent's Proxy mode; its own Person only
 //   POST /api/agents/:id/nickname    rename the Agent; itself, or any Person (ADR 0009)
 //   POST /api/agents/:id/model       the model it runs on; itself or its Person (ADR 0010)
@@ -25,6 +26,7 @@ import type {
   ProxyMode,
   RegisterAgentRequest,
   TouchedFilesResponse,
+  TranscriptResponse,
 } from "../../shared/src/index";
 import {
   AGENT_ROLES,
@@ -58,6 +60,7 @@ export type AgentRoute =
   | { kind: "heartbeat"; id: AgentId }
   | { kind: "end"; id: AgentId }
   | { kind: "touched-files"; id: AgentId }
+  | { kind: "transcript"; id: AgentId }
   | { kind: "proxy-mode"; id: AgentId }
   | { kind: "nickname"; id: AgentId }
   | { kind: "model"; id: AgentId }
@@ -67,11 +70,12 @@ export type AgentRoute =
   | { kind: "role-revoke"; id: AgentId };
 
 const AGENT_ACTION =
-  /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|proxy-mode|nickname|model|approval|approval\/deny|role)$/;
+  /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|transcript|proxy-mode|nickname|model|approval|approval\/deny|role)$/;
 const METHODS: Record<string, readonly string[]> = {
   heartbeat: ["POST"],
   end: ["POST"],
   "touched-files": ["GET"],
+  transcript: ["GET"],
   "proxy-mode": ["POST"],
   nickname: ["POST"],
   model: ["POST"],
@@ -229,6 +233,7 @@ function answer(result: RosterResult, status = 200): Response {
 export async function handleAgentRoute(
   route: AgentRoute,
   request: Request,
+  url: URL,
   channel: DurableObjectStub<Channel>,
   caller: Caller,
 ): Promise<Response> {
@@ -257,6 +262,12 @@ export async function handleAgentRoute(
       const files = await channel.touchedFiles(route.id);
       if (files === null) return fail(404, `No Agent ${route.id} on this Channel.`);
       return json<TouchedFilesResponse>({ agent: route.id, files });
+    }
+    case "transcript": {
+      const from = url.searchParams.get("from") ?? "0";
+      if (!/^\d{1,9}$/.test(from)) return fail(400, '"from" must be an entry number, from 0.');
+      const result = await channel.readTranscript(caller, route.id, Number(from));
+      return result.ok ? json<TranscriptResponse>(result.page) : fail(result.status, result.reason);
     }
     case "proxy-mode": {
       const { mode } = await readJson(request);

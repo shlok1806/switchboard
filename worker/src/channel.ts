@@ -47,8 +47,11 @@ import type {
   Task,
   TaskNumber,
   TouchedFile,
+  TranscriptRequestMessage,
+  TranscriptResponse,
 } from "../../shared/src/index";
 import {
+  cleanTranscriptPage,
   DEFAULT_GONE_AFTER_SECONDS,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
   DEFAULT_LEAD_AGENTS_LIVE_CAP,
@@ -57,6 +60,7 @@ import {
   LIVE_PING,
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
+  TRANSCRIPT_WAIT_MS,
 } from "../../shared/src/index";
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
 import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
@@ -271,6 +275,11 @@ export function buildHistoryIndexes(
 }
 
 /** The answer to a scoped history read whose index is not built yet: it is built on a later day. */
+/** A transcript page, or why there is none: no such Agent, Gone, no wrapper, or no answer in time. */
+export type TranscriptResult =
+  | { ok: true; page: TranscriptResponse }
+  | { ok: false; status: 400 | 403 | 404 | 409 | 502 | 503 | 504; reason: string };
+
 export type IndexPending = { pending: HistoryIndex };
 
 /** The answer to a scoped history read whose index covers too many Events to build. */
@@ -346,6 +355,13 @@ export class Channel extends DurableObject<Env> {
   private readonly status: StatusComments;
   /** The notes Agents write for each other (ADR 0019). */
   private readonly memory: Memory;
+  /** How long a transcript read waits for the wrapper's page: TRANSCRIPT_WAIT_MS, or shorter in tests. */
+  private readonly transcriptWaitMs: number;
+  /** Transcript reads waiting for their wrapper's page, by request ID. In memory: a read lasts one request. */
+  private readonly transcriptReads = new Map<
+    string,
+    { agent: AgentId; answer: (page: Omit<TranscriptResponse, "agent"> | string) => void }
+  >();
   /** The history indexes built so far (`buildHistoryIndexes`), and the UTC day they were last tried. */
   private historyIndexes: HistoryIndexes;
   private historyIndexesDay = utcDay();
@@ -468,6 +484,8 @@ export class Channel extends DurableObject<Env> {
       waitUntil: (work) => this.ctx.waitUntil(work),
     });
     this.wakes = new Wakes({ sql: ctx.storage.sql, append: (event) => this.append(event) });
+    const transcriptWait = Number((env as { TRANSCRIPT_WAIT_SECONDS?: string }).TRANSCRIPT_WAIT_SECONDS);
+    this.transcriptWaitMs = transcriptWait > 0 ? transcriptWait * 1000 : TRANSCRIPT_WAIT_MS;
     const wait = Number((env as { HOST_SPAWN_WAIT_SECONDS?: string }).HOST_SPAWN_WAIT_SECONDS);
     this.hosts = new Hosts({
       sql: ctx.storage.sql,
@@ -905,6 +923,62 @@ export class Channel extends DurableObject<Env> {
     return { ok: true, note: this.memory.keep(event) };
   }
 
+  /**
+   * A page of Agent `id`'s transcript from entry `from`, for any Person or Agent on the
+   * Channel (ADR 0019). Asked of its wrapper, which reads, condenses and redacts it; the
+   * Channel keeps none of it, and records only that it was read.
+   */
+  async readTranscript(caller: Caller, id: AgentId, from: number): Promise<TranscriptResult> {
+    const agent = this.agents.find(id);
+    if (agent === null) return { ok: false, status: 404, reason: `No Agent ${id} on this Channel.` };
+    if (agent.presence === "gone") {
+      return {
+        ok: false,
+        status: 409,
+        reason: `${id} is Gone. A transcript is read from its running session, so it can be read again once the session resumes.`,
+      };
+    }
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    const request = crypto.randomUUID();
+    const answered = new Promise<Omit<TranscriptResponse, "agent"> | string | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.transcriptReads.delete(request);
+        resolve(null);
+      }, this.transcriptWaitMs);
+      this.transcriptReads.set(request, {
+        agent: id,
+        answer: (page) => {
+          clearTimeout(timer);
+          this.transcriptReads.delete(request);
+          resolve(page);
+        },
+      });
+    });
+    const message: TranscriptRequestMessage = { type: "transcript.request", agent: id, id: request, from };
+    if (!this.interruptTo(id, message)) {
+      this.transcriptReads.get(request)?.answer("");
+      return {
+        ok: false,
+        status: 503,
+        reason: `${id}'s wrapper is not connected to the Channel, so its transcript cannot be read now.`,
+      };
+    }
+    const page = await answered;
+    if (page === null) {
+      return { ok: false, status: 504, reason: `${id}'s wrapper did not send its transcript in time.` };
+    }
+    if (typeof page === "string")
+      return { ok: false, status: 502, reason: `${id}'s wrapper could not read it: ${page}` };
+    this.append({
+      type: "transcript.read",
+      actor: who.acting.actor,
+      capture: who.acting.capture,
+      payload: { agent: id, from, entries: page.entries.length },
+    });
+    return { ok: true, page: { agent: id, ...page } };
+  }
+
   /** The Channel's notes, for any Person or Agent on it (ADR 0019). */
   readMemory(query: MemoryQuery): MemoryReadResult {
     return this.memory.read(query);
@@ -1106,6 +1180,7 @@ export class Channel extends DurableObject<Env> {
       type !== "directive.result" &&
       type !== "wake" &&
       type !== "wake.capped" &&
+      type !== "transcript.page" &&
       type !== "host.spawn.failed"
     ) {
       return;
@@ -1139,6 +1214,18 @@ export class Channel extends DurableObject<Env> {
       if (result === null) return;
       if (type === "interrupt.result") this.relay.interruptAnswered(result);
       else this.directives.answered(result.agent, result.id, result.typed ? "typed" : result.reason);
+      return;
+    }
+    if (type === "transcript.page") {
+      // Only the read Agent's own wrapper answers for its transcript, and only what was asked of it.
+      const read = typeof body.id === "string" ? this.transcriptReads.get(body.id) : undefined;
+      if (read === undefined || body.agent !== read.agent || body.agent !== socketAgent) return;
+      if (typeof body.error === "string") {
+        read.answer(body.error.slice(0, 300) || "no reason given");
+        return;
+      }
+      const page = cleanTranscriptPage(body.page);
+      read.answer(page ?? "its page was not one the Channel can read");
       return;
     }
     if (type === "wake" || type === "wake.capped") {
@@ -1176,7 +1263,7 @@ export class Channel extends DurableObject<Env> {
    */
   private interruptTo(
     id: AgentId,
-    message: InterruptMessage | DirectiveInterruptMessage | ApprovalDenyMessage,
+    message: InterruptMessage | DirectiveInterruptMessage | ApprovalDenyMessage | TranscriptRequestMessage,
   ): boolean {
     const person = this.agents.find(id)?.person;
     if (person === undefined) return false;
@@ -1370,6 +1457,7 @@ function send(
     | DirectiveMessage
     | DirectiveInterruptMessage
     | ApprovalDenyMessage
+    | TranscriptRequestMessage
     | HostSpawnMessage
     | HostSpawnedMessage
     | HostStopMessage,

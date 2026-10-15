@@ -35,6 +35,8 @@
 //         -> the context was compacted: SessionStart with source "compact"
 //   usage <model> <tokens>
 //         -> one model reply in the transcript, on <model>, with <tokens> of context
+//   log <json>
+//         -> one entry in the session file, as Claude Code writes it (<json> is the line)
 //   busy <seconds>
 //         -> works for a while, printing as it goes, like a long model turn
 //   permission <tool>
@@ -348,6 +350,11 @@ async function answer(command) {
     const message = { model: usage[1], usage: { input_tokens: Number(usage[2]) }, content: [] };
     appendFileSync(transcript, `${JSON.stringify({ type: "assistant", message })}\n`);
     console.log("FAKE-CLAUDE usage written");
+  }
+  const logged = /^log (\{.*\})$/.exec(command);
+  if (logged) {
+    appendFileSync(transcript, `${JSON.stringify(JSON.parse(logged[1]))}\n`);
+    console.log("FAKE-CLAUDE logged");
   }
   const busy = /^busy (\d+(?:\.\d+)?)$/.exec(command);
   if (busy) {
