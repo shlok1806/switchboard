@@ -109,20 +109,45 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
     send("take", "");
   }, [taking, key, screen, send]);
 
-  const take = () => {
+  const take = useCallback(() => {
     setTyping(true);
     setTaking(true);
-  };
+  }, []);
+  const canTake = watching && screen !== null && !mine;
+  // `t` takes the keyboard (design.md), unless a field or the screen itself has the keys.
+  useEffect(() => {
+    if (!canTake) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "t" || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, pre, [contenteditable=true], [role=dialog]")) return;
+      e.preventDefault();
+      take();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canTake, take]);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
   const release = () => {
     send("release", "");
     setTyping(false);
   };
-  const where = agent.host ? hostName(agent.host) : "terminal";
+  const where = agent.host ? hostName(agent.host) : "in a terminal";
   const keyboard =
     holder === null ? "free" : mine ? "yours" : holder.key === null ? `${holder.person}, at the terminal` : `${holder.person}'s`;
 
   return (
-    <section aria-label={`${agent.nickname ?? agent.id}'s terminal`} className="flex min-w-0 flex-col overflow-hidden rounded-[var(--r-2)] bg-term-bg text-term-fg">
+    <section
+      id="terminal"
+      tabIndex={-1}
+      aria-label={`${agent.nickname ?? agent.id}'s terminal`}
+      // The ink focus ring would vanish on the dark screen in the light theme.
+      className="[--focus:var(--term-fg)] flex min-w-0 flex-col overflow-hidden rounded-[var(--r-2)] bg-term-bg text-term-fg">
       <div className="flex min-h-9 flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-rule px-4 py-2 text-small text-term-dim">
         <h2 className="text-small font-medium text-term-fg">{where}</h2>
         {screen && (
@@ -137,7 +162,10 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
         )}
         {screen?.prompt && <span className="text-term-signal">A dialog is open</span>}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {watching && screen !== null && (mine ? <TermButton onClick={release}>Release the keyboard</TermButton> : <TermButton onClick={take}>Take the keyboard</TermButton>)}
+          {watching && screen !== null && (mine ? <TermButton onClick={release}>Release the keyboard</TermButton> : <TermButton onClick={take}>
+                Take the keyboard
+                <kbd className="ml-2 rounded-[2px] border border-current px-1 pt-0.5 pb-px text-[11.5px] leading-none opacity-55">t</kbd>
+              </TermButton>)}
           <TermButton quiet onClick={() => setWatching((w) => !w)} pressed={watching}>
             {watching ? "Stop watching" : "Watch"}
           </TermButton>
@@ -179,7 +207,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
               </p>
               <div className="flex min-w-0 items-start gap-2">
                 <code className="min-w-0 flex-1 rounded-[var(--r)] bg-term-bg-2 px-2.5 py-1.5 [overflow-wrap:anywhere] text-term-fg">{command}</code>
-                <TermButton onClick={() => void navigator.clipboard?.writeText(command ?? "")}>Copy</TermButton>
+                <TermButton onClick={() => void navigator.clipboard?.writeText(command ?? "").then(() => setCopied(true))}>{copied ? "Copied" : "Copy"}</TermButton>
               </div>
             </>
           )}
@@ -212,18 +240,33 @@ function TermButton({ quiet = false, pressed, onClick, children }: { quiet?: boo
   );
 }
 
-/** A tool call or its result, as Claude Code draws them: shown in the dim ink. */
-const TOOL_LINE = /^\s*(?:[●⏺]\s*[\w.-]+\(|⎿|\s+⎿)/;
-/** Where an open dialog starts: Claude Code's question or its numbered choices. */
-const DIALOG_LINE = /^\s*(?:\?\s|Do you want|❯\s*\d)/; // taste-skill-ignore
+/** A tool call, as Claude Code draws it: shown in the dim ink. Its result stays plain. */
+const TOOL_LINE = /^\s*[●⏺]\s*[\w.-]+\(/;
+/** An open dialog's question, and its numbered choices. Box borders around it are skipped. */
+const QUESTION = /^(?:\?\s|Do you want)/;
+const CHOICE = /^(?:❯\s*)?\d+\.\s/; // taste-skill-ignore
+const BORDER = /^[\s│╭╮╰╯─]*/;
+
+/**
+ * The first line of the dialog open at the bottom of the screen, or -1. Read up from the
+ * bottom over blank lines and choices to the question; anything else ends the dialog, so an
+ * old question higher on the screen never counts.
+ */
+export function dialogStart(lines: readonly string[]): number {
+  for (let y = lines.length - 1; y >= 0; y--) {
+    const line = lines[y]!.replace(BORDER, "");
+    if (QUESTION.test(line)) return y;
+    if (line.trim() !== "" && !CHOICE.test(line)) return -1;
+  }
+  return -1;
+}
 
 /**
  * The screen's lines, tool lines dim and an open dialog in the signal colour (design.md),
  * with a block cursor where the wrapper says it is. The cursor does not blink.
  */
-function Screen({ frame }: { frame: TerminalScreenFrame }) {
-  let dialog = -1;
-  if (frame.prompt) for (let y = frame.lines.length - 1; y >= 0; y--) if (DIALOG_LINE.test(frame.lines[y]!)) dialog = y;
+export function Screen({ frame }: { frame: TerminalScreenFrame }) {
+  const dialog = frame.prompt ? dialogStart(frame.lines) : -1;
   return frame.lines.map((line, y) => {
     const here = y === frame.cursor.y;
     const padded = here ? line.padEnd(frame.cursor.x + 1) : line;

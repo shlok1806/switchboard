@@ -141,7 +141,15 @@ function AgentPage({ agent }: { agent: Agent }) {
               <>
                 {asking && (
                   <div className="border-b border-rule-2 pb-4">
-                    <PendingApproval agent={agent} />
+                    <PendingApproval
+                      agent={agent}
+                      heading="h2"
+                      onOpenTerminal={() => {
+                        const t = document.getElementById("terminal");
+                        t?.scrollIntoView({ block: "start", behavior: "smooth" });
+                        t?.focus({ preventScroll: true });
+                      }}
+                    />
                   </div>
                 )}
                 <TerminalPanel agent={agent} />
@@ -205,7 +213,8 @@ function MoreActions({ agent, onRename }: { agent: Agent; onRename: () => void }
     if (!r.ok) toast.error(r.reason);
     else toast.success(raw ? "It shares digests again" : "It shares raw turns now");
   };
-  if (!mine && !agent.nickname) return null;
+  // Another Person's Agent has nothing here the Rename button does not already offer.
+  if (!mine) return null;
   return (
     <>
       <DropdownMenu>
@@ -234,7 +243,10 @@ function MoreActions({ agent, onRename }: { agent: Agent; onRename: () => void }
 
 /** A Task the Agent holds, with its Steps: done, the one it is on, and the rest. */
 function Steps({ task }: { task: Task }) {
-  const next = task.steps.findIndex((s) => !s.done);
+  const blockedBy = task.claim?.blockedBy ?? [];
+  // A Stale or blocked Claim is not working on any Step, so none is shown in progress.
+  const halted = task.claim?.stale === true || blockedBy.length > 0;
+  const next = halted ? -1 : task.steps.findIndex((s) => !s.done);
   return (
     <Section
       title={
@@ -246,6 +258,7 @@ function Steps({ task }: { task: Task }) {
         <>
           {task.steps.length > 0 && `${task.stepsDone} of ${task.steps.length} Steps`}
           {task.claim?.stale && <State state="stale" word="Stale Claim" className="ml-3 text-small" />}
+          {blockedBy.length > 0 && <span className="ml-3">blocked by {blockedBy.map((n) => `#${n}`).join(", ")}</span>}
         </>
       }
       action={
@@ -465,7 +478,8 @@ function Relay({ agent, events, partial }: { agent: Agent; events: ChannelEvent[
     <Section title="Relay">
       <Facts
         rows={[
-          ["Events", plus(own.length, partial), last && (ago(last.at) === "now" ? "the last one just now" : `the last one ${ago(last.at)}`)],
+          // Only the Events it sent itself; the History count also has Directives and renames about it.
+          ["Sent", `${plus(own.length, partial)} Events`, last && (ago(last.at) === "now" ? "the last one just now" : `the last one ${ago(last.at)}`)],
           captures.length > 0 && ["Captures", captures.join(", ")],
           can.verdicts && ["Heard", `${plus(interrupts, olderBefore !== undefined)} Interrupts, ${plus(queued, olderBefore !== undefined)} Queued`, !agent.canReceiveInterrupts && `${CLI_LABEL[agent.cli]} gets Interrupts as Queue`],
           ["Proxy mode", agent.proxyMode === "raw" ? "Raw, full turns" : "Digest", !agent.secretMasking && "Secret masking is off"],

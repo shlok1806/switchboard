@@ -12,7 +12,7 @@ const ROWS = 18;
  * The demo screen of one Agent, as its wrapper would send it: tool calls as Claude Code
  * draws them, and its permission prompt at the bottom while one is open.
  */
-export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: TerminalFrame) => void, approval?: PendingApproval): TerminalLink {
+export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: TerminalFrame) => void, approval: () => PendingApproval | undefined): TerminalLink {
   const history = [
     "● Read(web/src/users.tsx)",
     "  ⎿  Read 182 lines",
@@ -26,9 +26,12 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
     "  ⎿  14 passed",
     "",
   ];
-  const asking = approval
-    ? [`? Run ${approval.detail ?? approval.tool}`, "  1. Yes   2. Yes, and don't ask again this session   3. No", ""]
-    : [];
+  /** The prompt as it is now: a denied one is gone from the screen, as the CLI moves on. */
+  const asked = () => {
+    const a = approval();
+    return a && a.deniedBy === undefined ? [`? Run ${a.detail ?? a.tool}`, "  1. Yes   2. Yes, and don't ask again this session   3. No", ""] : [];
+  };
+  let shown = "";
   let input = "";
   let typed = false;
   let closed = false;
@@ -47,6 +50,8 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
   };
   const send = () => {
     if (closed) return;
+    const asking = asked();
+    shown = asking.join("\n");
     const prompt = asking.length ? `  ${input}` : `> ${input}`;
     const tail = asking.length ? [...asking.slice(0, -1), prompt] : ["─".repeat(COLS), prompt];
     const body = history.slice(-(ROWS - tail.length - 1));
@@ -66,6 +71,10 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
     });
   };
   const first = setTimeout(send, 300);
+  // The wrapper redraws when the prompt changes: answered, denied or a new one.
+  const watch = setInterval(() => {
+    if (asked().join("\n") !== shown) send();
+  }, 500);
   return {
     send(frame: Omit<TerminalInputFrame, "type" | "from">) {
       if (closed) return false;
@@ -76,6 +85,7 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
     close() {
       closed = true;
       clearTimeout(first);
+      clearInterval(watch);
       clearTimeout(idle);
     },
   };

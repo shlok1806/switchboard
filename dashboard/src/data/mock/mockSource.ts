@@ -128,7 +128,7 @@ export class MockChannelSource implements ChannelSource {
   }
 
   terminal(agent: AgentId, onFrame: (frame: TerminalFrame) => void): TerminalLink {
-    return mockTerminal(agent, this.me, onFrame, this.agents.find((a) => a.id === agent)?.approval);
+    return mockTerminal(agent, this.me, onFrame, () => this.agents.find((a) => a.id === agent)?.approval);
   }
 
   private emit(m: StreamMessage) {
