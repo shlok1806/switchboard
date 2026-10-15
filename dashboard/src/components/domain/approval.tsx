@@ -23,6 +23,7 @@ export function PendingApproval({
   word = false,
   heading: H = "h3",
   onOpenTerminal,
+  openLink = true,
   className,
 }: {
   agent: Agent;
@@ -32,6 +33,8 @@ export function PendingApproval({
   heading?: "h2" | "h3";
   /** On the Agent's own page the terminal is below the Ask: go to it rather than link to this page. */
   onOpenTerminal?: () => void;
+  /** False where the same link already sits just above, as in the canvas inspector. */
+  openLink?: boolean;
   className?: string;
 }) {
   const now = useNow();
@@ -84,7 +87,7 @@ export function PendingApproval({
           </p>
           <div data-acts className="flex flex-wrap items-center gap-2 pt-1">
             {canDeny && <DenyAction agent={agent} id={a.id} tool={a.tool} />}
-            {onOpenTerminal ? (
+            {!openLink ? null : onOpenTerminal ? (
               <button type="button" onClick={onOpenTerminal} className={buttonVariants({ variant: mine ? "ghost" : "secondary" })}>
                 {mine ? "Open the terminal" : "Watch"}
               </button>
@@ -101,7 +104,7 @@ export function PendingApproval({
 }
 
 /** Deny the prompt from the Channel, with a message the Agent reads (ADR 0014). */
-function DenyAction({ agent, id, tool }: { agent: Agent; id: string; tool: string }) {
+export function DenyAction({ agent, id, tool, size }: { agent: Agent; id: string; tool: string; size?: "sm" | "md" }) {
   const store = useStore();
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
@@ -130,6 +133,7 @@ function DenyAction({ agent, id, tool }: { agent: Agent; id: string; tool: strin
     <>
       <Button
         variant="secondary"
+        size={size}
         onClick={(e) => {
           e.stopPropagation();
           setMessage("");

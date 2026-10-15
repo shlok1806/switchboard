@@ -377,7 +377,9 @@ export class MockChannelSource implements ChannelSource {
   async hosts(): Promise<HostsResponse> {
     await new Promise((r) => setTimeout(r, 120));
     const running = this.agents.filter((a) => a.host !== undefined && a.presence !== "gone").length;
-    return clone({ hosts: [this.host], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
+    // The other Persons' Hosts the demo Agents run on; a Person starts Agents only on their own.
+    const others = (["maya/maya-mbp", "dev/devbox"] as const).map((id): Host => ({ ...this.host, id, person: id.split("/")[0]!, name: id.split("/")[1]! }));
+    return clone({ hosts: [this.host, ...others], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
   }
 
   /** Like the Worker and the Host: checked, then an Agent that registers a moment later. */

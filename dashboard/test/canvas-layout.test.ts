@@ -1,9 +1,9 @@
-// Where the canvas puts each Agent (ADR 0020): lanes per Person, a lead's Agents after
+// Where the canvas puts each Agent (ADR 0020): frames per Host, a lead's Agents after
 // it, and nothing drawn ever moving when others join.
 
 import { describe, expect, it } from "vitest";
-import type { Agent, AgentId, Task } from "@shared/index";
-import { fit, lanes, place, slotRect, zoomAt, type Point, type Rect } from "@/lib/canvas-layout";
+import type { Agent, AgentId, HostId, Task } from "@shared/index";
+import { edgePoints, fit, frameRect, groups, nodeRect, place, zoomAt, type Point, type Rect } from "@/lib/canvas-layout";
 import { stateOf } from "@/lib/state";
 
 let n = 0;
@@ -38,17 +38,26 @@ function apart(a: Rect, b: Rect) {
 }
 
 function expectNoOverlap(at: Map<AgentId, Point>) {
-  const rects = [...at.values()].map(slotRect);
+  const rects = [...at.values()].map(nodeRect);
   for (let i = 0; i < rects.length; i++)
     for (let j = i + 1; j < rects.length; j++) expect(apart(rects[i]!, rects[j]!), `${i} and ${j}`).toBe(true);
 }
 
-describe("canvas lanes", () => {
-  it("puts the signed-in Person's lane first, then the others by name", () => {
+describe("canvas frames", () => {
+  it("puts each Host in its own frame and a Person's hand-started Agents in one, the signed-in Person first", () => {
     const zoe = agent("zoe");
+    const anaHost = agent("ana", { host: "ana/box" as HostId });
     const ana = agent("ana");
+    const meHost = agent("shlok", { host: "shlok/studio" as HostId });
     const me = agent("shlok");
-    expect(lanes([zoe, ana, me], [], "shlok").map((l) => l.person)).toEqual(["shlok", "ana", "zoe"]);
+    const list = groups([zoe, ana, anaHost, me, meHost], [], "shlok");
+    expect(list.map((g) => [g.person, g.host ?? "terminals"])).toEqual([
+      ["shlok", "shlok/studio"],
+      ["shlok", "terminals"],
+      ["ana", "ana/box"],
+      ["ana", "terminals"],
+      ["zoe", "terminals"],
+    ]);
   });
 
   it("draws a lead's Agents right after it, and Agents holding a Task before those without", () => {
@@ -57,7 +66,7 @@ describe("canvas lanes", () => {
     const holder = agent("shlok");
     const child = agent("shlok", { parent: lead.id });
     const grandchild = agent("shlok", { parent: child.id });
-    const order = lanes([loose, grandchild, child, holder, lead], [task(1, holder)], "shlok");
+    const order = groups([loose, grandchild, child, holder, lead], [task(1, holder)], "shlok");
     expect(ids(order)).toEqual([[holder.id, lead.id, child.id, grandchild.id, loose.id]]);
   });
 
@@ -66,33 +75,91 @@ describe("canvas lanes", () => {
     const a = agent("maya");
     const b = agent("maya", { parent: a.id });
     a.parent = b.id;
-    expect(ids(lanes([orphan, a, b], [], "shlok")).flat().sort()).toEqual([orphan.id, a.id, b.id].sort());
+    expect(ids(groups([orphan, a, b], [], "shlok")).flat().sort()).toEqual([orphan.id, a.id, b.id].sort());
+  });
+
+  it("draws a frame around its nodes, so a dragged node takes its frame with it", () => {
+    const at = place(groups([agent("shlok"), agent("shlok")], [], "shlok"), {});
+    const nodes = [...at.values()];
+    const frame = frameRect(nodes)!;
+    for (const p of nodes) {
+      expect(p.x).toBeGreaterThan(frame.x);
+      expect(p.y).toBeGreaterThan(frame.y);
+      expect(p.x + nodeRect(p).w).toBeLessThan(frame.x + frame.w);
+    }
+    const moved = frameRect([nodes[0]!, { x: 2000, y: 900 }])!;
+    expect(moved.x + moved.w).toBeGreaterThan(2000 + nodeRect(nodes[0]!).w);
   });
 });
 
 describe("placing nodes", () => {
-  it("never moves a placed node when another joins its lane, and never lets them overlap", () => {
+  it("never moves a placed node when another joins its frame, and never lets them overlap", () => {
     const first = [agent("shlok"), agent("shlok"), agent("maya")];
-    const before = place(lanes(first, [], "shlok"), {});
+    const before = place(groups(first, [], "shlok"), {});
     expectNoOverlap(before);
-    // The first Agent leaves and two join: one in shlok's lane, one for a new Person.
+    // The first Agent leaves and two join: one in shlok's frame, one for a new Person.
     const joined = agent("shlok");
     const dev = agent("dev");
     const now = [first[1]!, first[2]!, joined, dev];
-    const after = place(lanes(now, [], "shlok"), Object.fromEntries(before));
+    const after = place(groups(now, [], "shlok"), Object.fromEntries(before));
     for (const a of now.slice(0, 2)) expect(after.get(a.id)).toEqual(before.get(a.id));
-    // The place the leaver had is free again; nothing else is shared.
     expectNoOverlap(after);
-    // A Person new to a drawn canvas gets a lane below everything, not between the others.
-    const bottom = Math.max(...[...before.values()].map((p) => slotRect(p).y + slotRect(p).h));
+    // A frame new to a drawn canvas opens below everything, not between the others.
+    const bottom = Math.max(...[...before.values()].map((p) => nodeRect(p).y + nodeRect(p).h));
     expect(after.get(dev.id)!.y).toBeGreaterThan(bottom);
   });
 
-  it("wraps a long lane into rows instead of one endless line", () => {
-    const many = Array.from({ length: 12 }, () => agent("shlok"));
-    const at = place(lanes(many, [], "shlok"), {});
+  it("a new Agent joins beside its siblings after an earlier frame has grown", () => {
+    const box = agent("ana", { host: "ana/box" as HostId });
+    const studio = Array.from({ length: 4 }, () => agent("shlok", { host: "shlok/studio" as HostId }));
+    const first = [...studio, box];
+    const saved = Object.fromEntries(place(groups(first, [], "shlok"), {}));
+    const joinedStudio = agent("shlok", { host: "shlok/studio" as HostId });
+    const joinedBox = agent("ana", { host: "ana/box" as HostId });
+    const now = [...first, joinedStudio, joinedBox];
+    const list = groups(now, [], "shlok");
+    const at = place(list, saved);
+    for (const a of first) expect(at.get(a.id)).toEqual(saved[a.id]);
+    expectNoOverlap(at);
+    const frames = list.map((g) => frameRect(g.agents.map((a) => at.get(a.id)!))!);
+    for (let i = 0; i < frames.length; i++)
+      for (let j = i + 1; j < frames.length; j++) expect(apart(frames[i]!, frames[j]!), `frames ${i} and ${j}`).toBe(true);
+    // Each newcomer sits inside the frame drawn around its siblings before it joined.
+    const inside = (p: Point, r: Rect) => p.x >= r.x && p.y >= r.y && p.x + 212 <= r.x + r.w && p.y + 128 <= r.y + r.h;
+    for (const [joined, siblings] of [
+      [joinedStudio, studio],
+      [joinedBox, [box]],
+    ] as const) {
+      const own = frameRect([...siblings.map((a) => at.get(a.id)!), at.get(joined.id)!])!;
+      expect(inside(at.get(joined.id)!, own)).toBe(true);
+      // Next to its siblings: within one row or column of their frame, not across the canvas.
+      const before = frameRect(siblings.map((a) => at.get(a.id)!))!;
+      expect(at.get(joined.id)!.x).toBeLessThan(before.x + before.w + 212 + 48);
+      expect(at.get(joined.id)!.y).toBeLessThan(before.y + before.h + 128 + 48);
+    }
+  });
+
+  it("lays a large frame out in rows of three, and wraps a row of frames", () => {
+    const many = Array.from({ length: 9 }, () => agent("shlok"));
+    const at = place(groups(many, [], "shlok"), {});
     expectNoOverlap(at);
     expect(new Set([...at.values()].map((p) => p.y)).size).toBe(3);
+    const hosts = ["a", "b", "c", "d", "e", "f"].map((h) => agent("shlok", { host: `shlok/${h}` as HostId }));
+    const spread = place(groups(hosts, [], "shlok"), {});
+    expectNoOverlap(spread);
+    expect(new Set([...spread.values()].map((p) => p.y)).size).toBeGreaterThan(1);
+  });
+});
+
+describe("a lead's line", () => {
+  it("runs down through the gutter to an Agent below, and sideways to one beside, in straight segments", () => {
+    const down = edgePoints({ x: 0, y: 0 }, { x: 300, y: 300 });
+    expect(down.at(-1)).toEqual({ x: 300 + 106, y: 300 });
+    const side = edgePoints({ x: 0, y: 0 }, { x: 400, y: 20 });
+    expect(side[0]).toEqual({ x: 212, y: 64 });
+    expect(side.at(-1)).toEqual({ x: 400, y: 84 });
+    // Every segment is horizontal or vertical.
+    for (const pts of [down, side]) for (let i = 1; i < pts.length; i++) expect(pts[i]!.x === pts[i - 1]!.x || pts[i]!.y === pts[i - 1]!.y).toBe(true);
   });
 });
 
@@ -124,6 +191,11 @@ describe("the camera", () => {
     const large = fit({ x: 0, y: 0, w: 4000, h: 3000 }, 1000, 800, 0.85);
     expect(large.k).toBe(0.85);
     expect(large.y).toBe(40);
+    // From the top left, without a floor, as a phone first sees it: all of it, zoomed out.
+    const phone = fit({ x: 0, y: 0, w: 4000, h: 3000 }, 390, 600, undefined, 16, "start");
+    expect(phone.k).toBeLessThan(0.85);
+    expect(phone.x).toBe(16);
+    expect(phone.y).toBe(16);
     // Fitting without a floor zooms out instead.
     expect(fit({ x: 0, y: 0, w: 4000, h: 3000 }, 1000, 800).k).toBeLessThan(0.85);
   });

@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import type { Agent, AgentId, ChannelEvent, Task } from "@shared/index";
+import type { Agent, AgentId, ChannelEvent } from "@shared/index";
 import { MAX_NICKNAME_LENGTH, modelLabel } from "@shared/index";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
@@ -19,6 +19,7 @@ import { contextPercent, shortName, useClaimsOf } from "@/components/domain/flee
 import { OlderRow } from "@/components/domain/older";
 import { IssueLink } from "@/components/domain/pending";
 import { StopAgentButton } from "@/components/domain/start-agent";
+import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
 import { Glyph, State, useAgentState, useAgentStates } from "@/components/domain/state";
 import { TerminalPanel } from "@/components/domain/terminal";
 import { useNow } from "@/components/domain/usage";
@@ -241,50 +242,6 @@ function MoreActions({ agent, onRename }: { agent: Agent; onRename: () => void }
   );
 }
 
-/** A Task the Agent holds, with its Steps: done, the one it is on, and the rest. */
-function Steps({ task }: { task: Task }) {
-  const blockedBy = task.claim?.blockedBy ?? [];
-  // A Stale or blocked Claim is not working on any Step, so none is shown in progress.
-  const halted = task.claim?.stale === true || blockedBy.length > 0;
-  const next = halted ? -1 : task.steps.findIndex((s) => !s.done);
-  return (
-    <Section
-      title={
-        <a href={href({ view: "task", number: task.number })} className="hover:underline">
-          #{task.number} {task.title}
-        </a>
-      }
-      meta={
-        <>
-          {task.steps.length > 0 && `${task.stepsDone} of ${task.steps.length} Steps`}
-          {task.claim?.stale && <State state="stale" word="Stale Claim" className="ml-3 text-small" />}
-          {blockedBy.length > 0 && <span className="ml-3">blocked by {blockedBy.map((n) => `#${n}`).join(", ")}</span>}
-        </>
-      }
-      action={
-        <a href={href({ view: "task", number: task.number })} className="text-ink-2 hover:text-ink">
-          Open the Task
-        </a>
-      }
-      bodyClassName="pt-0"
-    >
-      {task.steps.length > 0 ? (
-        <ol>
-          {task.steps.map((s, i) => (
-            <li key={s.index} className={cn("flex items-baseline gap-2.5 border-b border-rule py-2 text-row", s.done || i === next ? "text-ink" : "text-ink-3")}>
-              <Glyph state={s.done ? "done" : i === next ? "running" : "idle"} className="relative top-px" />
-              <span className="sr-only">{s.done ? "Done:" : i === next ? "In progress:" : "To do:"}</span>
-              <span className="min-w-0 max-w-[72ch] [overflow-wrap:anywhere]">{s.text}</span>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="pt-3 text-small text-ink-3">No Steps on this Task.</p>
-      )}
-    </Section>
-  );
-}
-
 /** The Agents this one started, as a lead (ADR 0018). */
 function Children({ agents }: { agents: Agent[] }) {
   const states = useAgentStates();
@@ -411,25 +368,6 @@ function DirectiveForm({ agent, events, inputRef }: { agent: Agent; events: Chan
         </div>
       </form>
     </Section>
-  );
-}
-
-type Row = [label: string, value: React.ReactNode, note?: React.ReactNode] | false | undefined | "";
-
-/** Label and value pairs, a small note under a value (design.md's facts list). */
-function Facts({ rows }: { rows: Row[] }) {
-  return (
-    <dl className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-3 gap-y-2 text-row">
-      {rows.filter((r): r is Exclude<Row, false | undefined | ""> => Boolean(r)).map(([label, value, note]) => (
-        <div key={label} className="contents">
-          <dt className="text-ink-3">{label}</dt>
-          <dd className="min-w-0 [overflow-wrap:anywhere] text-ink">
-            {value}
-            {note && <span className="block text-small text-ink-3">{note}</span>}
-          </dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 
