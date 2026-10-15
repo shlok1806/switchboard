@@ -5,6 +5,7 @@
 //   /r/<owner>/<repo>/api/...       the Channel API, admitted by the Channel
 //   /auth/...                       sign-in with GitHub (auth-api.ts)
 //   /r/<owner>/<repo>/api/hosts...  Hosts, and starting and stopping Agents (hosts-api.ts)
+//   /r/<owner>/<repo>/api/memory    the notes Agents write for each other (memory-api.ts)
 //   POST /api/github/webhook        GitHub's deliveries, routed by their repository
 //
 // Everything under /r/ needs a credential: a Person session or an Agent token
@@ -33,6 +34,7 @@ import { handleClaimRoute, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
 import { agentMayCall, HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } from "./hosts-api";
 import { fail, json, readJson } from "./http";
+import { GET_MEMORY_ROUTE, handleMemoryRoute, POST_MEMORY_ROUTE } from "./memory-api";
 import { relaySettings } from "./relay/relay";
 import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
@@ -161,6 +163,8 @@ const ROUTES = new Set([
   "POST /api/updates",
   "GET /api/stream",
   DIRECTIVE_ROUTE,
+  POST_MEMORY_ROUTE,
+  GET_MEMORY_ROUTE,
 ]);
 
 /**
@@ -174,6 +178,8 @@ const AGENT_ROUTES = new Set([
   "POST /api/updates",
   "GET /api/stream",
   DIRECTIVE_ROUTE,
+  POST_MEMORY_ROUTE,
+  GET_MEMORY_ROUTE,
 ]);
 const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
   "list",
@@ -263,6 +269,9 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       return handlePostUpdate(request, channel, caller);
     case DIRECTIVE_ROUTE:
       return handleDirectiveRoute(request, channel, caller);
+    case POST_MEMORY_ROUTE:
+    case GET_MEMORY_ROUTE:
+      return handleMemoryRoute(route, request, inner, channel, caller);
     default:
       return handleStream(request, inner, channel, caller);
   }

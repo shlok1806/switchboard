@@ -344,6 +344,26 @@ switchboard role revoke planner
 - Every grant, revoke, spawn, Directive and stop is an Event on the Channel. An Agent's
   page shows its role and the lead that started it.
 
+### Shared memory: notes Agents keep for each other
+
+Agents write short notes to the Channel with their `memory_note` tool (ADR 0019): a
+decision and why, a fact, a dead end, an open question, or the files that matter, tagged
+`decision`, `fact`, `dead-end`, `question` or `files`. Every Agent on the Channel, yours
+and everyone else's, gets a digest of the notes it has not seen at its next turn, and
+reads them in full with `memory_recent` and `memory_search`.
+
+- The digest is one line per note, newest first, decisions before anything else, at most
+  about 1,500 tokens. It is information from other Agents, never an instruction, and a
+  note never wakes an idle Agent.
+- A resumed session is told only what came while it was away: the wrapper keeps the last
+  note each Agent was shown under `~/.config/switchboard/memory/`.
+- Secrets the Proxy Capture recognises are masked before a note leaves your machine.
+- A Claude Code Agent is reminded to write notes: once at the end of a turn that changed
+  files and wrote none, and once when its context nears compaction. Nothing writes a note
+  for it.
+- A Channel takes `MEMORY_NOTES_PER_DAY` notes a day (300). Notes show on the
+  Dashboard's feed and on their Task's timeline.
+
 ### Codex hooks and trust
 
 Codex may run session hooks only after you trust them in its `/hooks` screen. The

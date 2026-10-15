@@ -20,6 +20,7 @@ import type {
   InterruptAttach,
   InterruptMessage,
   InterruptResult,
+  MemoryResponse,
   SetApprovalRequest,
   SetModelRequest,
   WakeCappedMessage,
@@ -47,6 +48,7 @@ import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
 import { prepareSessionTools, type SessionTools } from "./mcp-config";
+import { MemoryInbox, MemoryNudges } from "./memory";
 import { configuredModel, ModelWatch } from "./model-watch";
 import { NextTurn, type NextTurnItems } from "./next-turn";
 import { IdleWatch } from "./presence";
@@ -318,9 +320,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     };
     stream.send(JSON.stringify(result));
   };
+  // Notes other Agents wrote to the Channel's shared memory, for the next turn's digest (ADR 0019).
+  const memory = new MemoryInbox({
+    dir: join(configDir(), "memory"),
+    read: (path) => client.request<MemoryResponse>(path),
+    log,
+  });
   // What the Agent is told at its next turn: Claims it lost to a Takeover while it
-  // was Gone, Queued Events, Directives, and the standing rule at SessionStart.
-  const nextTurn = new NextTurn();
+  // was Gone, Queued Events, Directives, notes, and the standing rule at SessionStart.
+  const nextTurn = new NextTurn(memory);
   // False once a CLI whose hooks need the Person's trust is seen not to run them:
   // what the Agent must be told then goes to the read_channel tool instead of a hook.
   let hooksRunning = true;
@@ -369,6 +377,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const stream = client.follow(
     (message) => {
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
+      if (message.type === "event") memory.event(message.event);
       if (message.type === "proxy.ack" || message.type === "proxy.refused") proxy?.reply(message);
       if (message.type === "agent") {
         proxy?.agentChanged(message.agent);
@@ -515,6 +524,13 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   let link: AgentLink | null = null;
   let idle: IdleWatch | null = null;
   let contextReader: SessionContextReader | null = null;
+  // One reading at a time: the reader follows the session file from where it left off.
+  let contextReading: Promise<unknown> = Promise.resolve();
+  const readContext = (reader: SessionContextReader) => {
+    const reading = contextReading.catch(() => undefined).then(() => reader.read());
+    contextReading = reading;
+    return reading;
+  };
   const watchContext = (sessionId: string) => {
     contextReader = new SessionContextReader(
       adapter.cli,
@@ -524,8 +540,17 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       `Codex · ${config.person} · ${account ?? sessionId.slice(-8)}`,
     );
     const reader = contextReader;
-    if (link) link.readContext = () => reader.read();
+    if (link) link.readContext = () => readContext(reader);
   };
+  // Asks the model for memory notes when a turn changed files, and before compaction (ADR 0019).
+  const nudges =
+    adapter.cli === "claude-code"
+      ? new MemoryNudges({
+          context: async () => (contextReader === null ? undefined : (await readContext(contextReader)).context),
+          env,
+          log,
+        })
+      : null;
   const onRegistered = (agent: Agent, token: string | undefined) => {
     agentId = agent.id;
     hooks?.setAgent(agent.id);
@@ -535,6 +560,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     void models.flush();
     approvals.registered();
     attach();
+    void memory.registered(agent.id);
   };
   const linkTo = (sessionId: string, resumed: boolean) => {
     if (link !== null) return;
@@ -559,7 +585,11 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         send: (frame) => stream.send(frame),
         log,
         context: (hook) => nextTurn.take(hook),
+        ...(nudges === null
+          ? {}
+          : { decide: (input) => nudges.decide(input), onEvents: (events) => nudges.events(events) }),
         onHook: (input) => {
+          nudges?.hook(input);
           if (input.hook_event_name === "SessionStart") {
             sawSessionStart = true;
             link?.sessionStarted();

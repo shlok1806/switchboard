@@ -34,6 +34,7 @@ const WORK: EventType[] = [
   "takeover",
   "update",
   "directive",
+  "memory.note",
   "push",
   "merge",
   "task.branch",

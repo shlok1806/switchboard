@@ -6,6 +6,7 @@
 import type { AgentContext } from "./agent-context";
 import type { PendingApproval } from "./approvals";
 import type { HostId, PermissionMode } from "./hosts";
+import type { MemoryTag } from "./memory";
 import type { AgentUsage } from "./usage";
 
 /* ── Participants ─────────────────────────────────────────── */
@@ -300,6 +301,12 @@ export interface EventPayloads {
   "host.online": { host: HostId };
   /** Host `host` has been gone from the Channel for a while. The actor is its Person. */
   "host.offline": { host: HostId };
+  /**
+   * A note an Agent wrote for the Channel's shared memory (ADR 0019): information,
+   * never an instruction. The actor is its author; the Event's `task` is the Task it is
+   * about. `nickname` is the author's Nickname when it wrote it.
+   */
+  "memory.note": { text: string; tags: MemoryTag[]; files?: string[]; nickname?: string };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */

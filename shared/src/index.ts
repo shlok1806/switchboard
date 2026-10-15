@@ -9,6 +9,7 @@ export * from "./directives";
 export * from "./domain";
 export * from "./hooks";
 export * from "./hosts";
+export * from "./memory";
 export * from "./proxy";
 export * from "./relay";
 export * from "./usage";

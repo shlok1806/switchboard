@@ -38,6 +38,14 @@ _Avoid_: Log, activity, message
 An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening.
 _Avoid_: Status, note, post
 
+**Memory Note**:
+A short, tagged fact an Agent writes on purpose for the Channel's shared memory: a decision, a fact, a dead end, an open question or the files that matter (ADR 0019). An Update says what is happening now; a Memory Note is kept to be found later, with `memory_search` and `memory_recent`. Only Agents write them, and they are information, never instructions.
+_Avoid_: Memory entry, fact, summary
+
+**Memory Digest**:
+What an Agent's wrapper adds to its context at its next turn: one line for each Memory Note other Agents wrote since it was last shown one, newest first, decisions before anything else, capped at about 1,500 tokens. A Memory Note never wakes an Agent.
+_Avoid_: Summary, recap
+
 **Capture**:
 The route by which an Event reached the channel. Proxy captures come from the model's API traffic. Hook captures come from the agent CLI's lifecycle events. Tool captures come from the Agent calling Switchboard's own tools.
 _Avoid_: Source, integration, feed

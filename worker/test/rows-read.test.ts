@@ -8,7 +8,15 @@
 import { env, reset, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import type { AgentId, AgentResponse, ChannelEvent, HookEvent, Task } from "../../shared/src/index";
+import type {
+  AgentId,
+  AgentResponse,
+  ChannelEvent,
+  HookEvent,
+  MemoryNote,
+  MemoryResponse,
+  Task,
+} from "../../shared/src/index";
 import { agentPath } from "../../shared/src/index";
 import { Channel } from "../src/channel";
 import { installJev } from "../src/relay/jev";
@@ -28,6 +36,8 @@ const GONE_AGENTS = 300;
 const TASKS = 200;
 /** Files each live Agent has edited. */
 const TOUCHED_FILES = 100;
+/** Notes Agents wrote (ADR 0019), every one with the word "progress". */
+const NOTES = 3000;
 
 /** Generous for what each call needs, far below one scan of any seeded table. */
 const BUDGET = 150;
@@ -209,6 +219,22 @@ async function seed(live: AgentId[]): Promise<void> {
         );
       }
     }
+    for (let n = 0; n < NOTES; n++) {
+      const seq = EVENTS + 1000 + n;
+      const author = n % 2 === 0 ? `shlok/claude/g${n % GONE_AGENTS}` : (live[n % live.length] as AgentId);
+      const tag = (["decision", "fact", "dead-end", "question", "files"] as const)[n % 5];
+      const text = `Note ${n}: progress on word${n}`;
+      const note = { seq, id: `note-${n}`, at: new Date().toISOString(), author, person: "shlok", tags: [tag], text };
+      sql.exec(
+        "INSERT INTO memory_notes (seq, author, task, note) VALUES (?, ?, ?, ?)",
+        seq,
+        author,
+        (n % TASKS) + 1,
+        JSON.stringify(note),
+      );
+      sql.exec("INSERT INTO memory_tags (tag, seq) VALUES (?, ?)", tag, seq);
+      sql.exec("INSERT INTO memory_fts (rowid, text, files) VALUES (?, ?, '')", seq, text);
+    }
     const tasks = (channel as unknown as { tasks: { write(task: Task): void } }).tasks;
     for (let n = 1; n <= TASKS; n++) tasks.write(task(n, n % 40 === 0 ? live[n % live.length] : undefined));
   });
@@ -330,6 +356,47 @@ it("paging back through older Events reads only that page", async () => {
     expect(events.map((e) => e.seq)).toEqual(Array.from({ length: 100 }, (_, i) => 4901 + i));
   });
   expect(read).toBeLessThan(BUDGET);
+});
+
+async function memory(query: string, agent?: AgentId): Promise<MemoryNote[]> {
+  const response = await call(`/api/memory${query}`, {
+    headers: { Authorization: await bearer(agent === undefined ? "shlok" : { person: "shlok", agent }) },
+  });
+  expect(response.status).toBe(200);
+  return ((await response.json()) as MemoryResponse).notes;
+}
+
+it("writing a note reads a bounded number of rows", async () => {
+  const read = await rowsRead(async () => {
+    const response = await call("/api/memory", {
+      method: "POST",
+      headers: { Authorization: await bearer({ person: "shlok", agent: measured }) },
+      body: JSON.stringify({ text: "The cache key includes the tenant.", tags: ["decision"] }),
+    });
+    expect(response.status).toBe(201);
+  });
+  expect(read).toBeLessThan(BUDGET);
+});
+
+it("reading notes, latest or narrowed or caught up, reads only the notes it answers with", async () => {
+  const author = live[1] as AgentId;
+  for (const query of ["", "?tag=question", `?author=${encodeURIComponent(author)}`, "?task=7", `?after=${EVENTS}`]) {
+    const read = await rowsRead(async () => {
+      expect((await memory(`${query}${query === "" ? "?" : "&"}limit=50`, measured)).length).toBeGreaterThan(0);
+    });
+    expect(read, query).toBeLessThan(BUDGET);
+  }
+});
+
+it("searching notes reads a bounded number of rows, for a word one note has or every note has", async () => {
+  const one = await rowsRead(async () => {
+    expect((await memory("?q=word1234")).map((n) => n.text)).toEqual(["Note 1234: progress on word1234"]);
+  });
+  expect(one).toBeLessThan(BUDGET);
+  const every = await rowsRead(async () => {
+    expect(await memory("?q=progress&limit=5")).toHaveLength(5);
+  });
+  expect(every).toBeLessThan(BUDGET);
 });
 
 it("an Agent's or a Task's latest Events read only that page", async () => {

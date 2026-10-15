@@ -36,6 +36,8 @@ const vars = {
   LEAD_AGENTS_LIVE_CAP: "2",
   // Short, so a spawn the Host never answers comes back without the Agent quickly.
   HOST_SPAWN_WAIT_SECONDS: "2",
+  // Small, so a test reaches the daily cap on notes with a few of them.
+  MEMORY_NOTES_PER_DAY: "5",
   GITHUB_API_URL: "",
   GITHUB_WEB_URL: "",
   JEV_API_URL: "",
