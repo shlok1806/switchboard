@@ -58,10 +58,10 @@ const DOT: Partial<Record<EventType, string>> = {
   "task.review": "bg-green",
   update: "bg-ink-2",
   "step.complete": "bg-accent",
-  "claim.refused": "bg-orange",
+  "claim.refused": "bg-red",
 };
 
-const COLUMN_TONE = { stale: "red", open: "neutral", claimed: "accent", review: "orange", done: "green" } as const;
+const COLUMN_TONE = { stale: "red", open: "neutral", claimed: "accent", review: "accent", done: "green" } as const;
 
 export function TaskDetail({ number }: { number: number }) {
   const { snapshot } = useChannel();
@@ -103,6 +103,7 @@ export function TaskDetail({ number }: { number: number }) {
       <div className="mx-auto grid max-w-6xl gap-8 px-[var(--gutter)] pt-6 pb-12 sm:pt-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-12">
         <div className="flex min-w-0 flex-col gap-8">
           <header className="rise flex flex-col gap-4">
+            <h1 className="max-w-[var(--column)] text-title font-semibold text-ink [overflow-wrap:anywhere] sm:text-display">{task.title}</h1>
             <div className="flex flex-wrap items-center gap-2 text-small text-ink-3">
               <StatusPill tone={COLUMN_TONE[col]} className="h-6 text-small">
                 {COLUMN_LABEL[col]}
@@ -117,7 +118,6 @@ export function TaskDetail({ number }: { number: number }) {
                 GitHub <ExternalLink className="size-3.5" aria-hidden />
               </a>
             </div>
-            <h1 className="max-w-[var(--column)] text-title font-semibold text-ink [overflow-wrap:anywhere] sm:text-display">{task.title}</h1>
             <IssueBody text={task.description} />
             {labels.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
@@ -294,7 +294,7 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
         </div>
         {e.type === "push" || e.type === "merge" || e.type === "takeover" ? (
           <>
-            <p className="max-w-[68ch] text-body text-ink-2">{summarize(e)}</p>
+            <p className="max-w-[60ch] text-body text-ink-2">{summarize(e)}</p>
             <Reasoning>
               <ReasoningTrigger className="text-small text-ink-3">
                 {e.type === "push" || e.type === "merge" ? `${e.payload.files.length} ${e.payload.files.length === 1 ? "file" : "files"}` : "Hand-off"}
@@ -305,7 +305,7 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
             </Reasoning>
           </>
         ) : (
-          <p className={cn("max-w-[68ch] text-body leading-snug", e.type === "update" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
+          <p className={cn("max-w-[60ch] text-body leading-snug", e.type === "update" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
         )}
         {asked.length > 0 && (
           <Reasoning>

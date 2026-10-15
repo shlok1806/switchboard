@@ -74,7 +74,7 @@ export function TakeoverAction({ task, compact = false }: { task: Task; compact?
                 key={i}
                 className={cn(
                   "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md px-3 text-body transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent",
-                  pick === i ? "bg-accent-tint text-ink" : "bg-inset hover:bg-hover",
+                  pick === i ? "bg-accent-tint text-ink" : "bg-inset hover:bg-inset-2",
                 )}
               >
                 <input type="radio" name="takeover-to" checked={pick === i} onChange={() => setPick(i)} className="sr-only" />

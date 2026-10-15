@@ -18,7 +18,7 @@ export function Section({
   bodyClassName?: string;
 }) {
   return (
-    <section className={cn("rounded-md", tone === "alert" ? "bg-red-tint" : "bg-inset", className)}>
+    <section className={cn("rounded-md", tone === "alert" ? "bg-red-tint" : "bg-panel", className)}>
       <header className="flex min-h-10 items-center gap-2 px-4 pt-3">
         <h2 className={cn("text-body font-medium", tone === "alert" ? "text-red" : "text-ink")}>{title}</h2>
         {action && <span className="ml-auto">{action}</span>}

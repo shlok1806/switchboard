@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/albert-sans";
+@import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 @import "./styles/tokens.css";
 
@@ -33,8 +33,10 @@ body {
   background: var(--page);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: var(--text-body);
-  line-height: 1.5;
+  font-size: var(--text-row);
+  line-height: 1.45;
+  /* Counts and times line up in columns everywhere (ADR 0023). */
+  font-variant-numeric: tabular-nums;
 }
 
 #root {
@@ -42,7 +44,7 @@ body {
 }
 
 ::selection {
-  background: var(--accent-tint);
+  background: var(--link-tint);
   color: var(--ink);
 }
 
@@ -64,7 +66,7 @@ a {
 }
 
 :focus-visible {
-  outline-color: var(--accent);
+  outline-color: var(--focus);
 }
 
 .tabular {
@@ -81,7 +83,7 @@ a {
 /* Scroll bars stay visible, thin and quiet, so a Person can always see there is more. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--hover-2) transparent;
+  scrollbar-color: var(--inset-2) transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
@@ -91,7 +93,7 @@ a {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--hover-2);
+  background: var(--inset-2);
   border: 3px solid transparent;
   border-radius: 999px;
   background-clip: padding-box;

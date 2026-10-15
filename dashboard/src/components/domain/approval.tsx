@@ -38,7 +38,7 @@ export function PendingApproval({ agent, className }: { agent: Agent; className?
           {a.detail}
         </pre>
       )}
-      {a.reason && <p className="max-w-[68ch] text-body break-words text-ink-2">The Agent says: {a.reason}</p>}
+      {a.reason && <p className="max-w-[60ch] text-body break-words text-ink-2">The Agent says: {a.reason}</p>}
       {a.deniedBy ? (
         <p className="inline-flex items-center gap-2 text-body text-ink-2">
           <span aria-hidden className="breathe size-1.5 shrink-0 rounded-full bg-state-idle" />

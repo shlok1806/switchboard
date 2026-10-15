@@ -194,7 +194,11 @@ function Frame({ tasks, at }: { tasks: Task[]; at: Point }) {
           <span className="min-w-0 truncate">{first.title}</span>
           {more.length > 0 && <span className="shrink-0 tabular-nums">+{more.length}</span>}
         </span>
-        <span className="min-w-0 truncate font-mono">{first.branch ?? "No branch yet"}</span>
+        {first.branch ? (
+          <code className="min-w-0 truncate font-mono">{first.branch}</code> /* taste-skill-ignore: a branch name is code */
+        ) : (
+          <span className="min-w-0 truncate">No branch yet</span>
+        )}
       </span>
     </div>
   );

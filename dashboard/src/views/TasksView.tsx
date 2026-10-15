@@ -295,7 +295,7 @@ function Toggle({ on, onClick, label, children }: { on: boolean; onClick: () => 
       title={label}
       className={cn(
         "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-small transition-colors focus-visible:outline-2 focus-visible:outline-accent max-md:px-2.5 max-sm:px-2",
-        on ? "bg-accent-tint font-medium text-accent-ink" : "bg-inset text-ink-2 hover:bg-hover hover:text-ink",
+        on ? "bg-accent-tint font-medium text-accent-ink" : "bg-inset text-ink-2 hover:bg-inset-2 hover:text-ink",
       )}
     >
       {children}

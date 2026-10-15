@@ -444,7 +444,7 @@ export default function ToolChips({
             transformOrigin: preview.top === undefined ? "bottom left" : "top left",
           }}
         >
-          <div className="flex items-center justify-between bg-inset px-3 py-2 font-mono text-small">{/* taste-skill-ignore: a diff header is code */}
+          <div className="flex items-center justify-between bg-panel px-3 py-2 font-mono text-small">{/* taste-skill-ignore: a diff header is code */}
             <span className="min-w-0 truncate text-ink-2">{preview.file}</span>
             <span className="shrink-0 tabular-nums">
               <span className="text-green">+{diffs.find((diff) => diff.file === preview.file)?.add}</span>

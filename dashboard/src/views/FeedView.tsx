@@ -199,7 +199,7 @@ export function FeedView({ selected }: { selected?: string }) {
                   <button
                     type="button"
                     onClick={showOlder}
-                    className="inline-flex h-8 items-center rounded-md bg-inset px-3 text-ink-2 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+                    className="inline-flex h-8 items-center rounded-md bg-inset px-3 text-ink-2 transition-colors hover:bg-inset-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
                   >
                     Show older Events
                   </button>
@@ -291,7 +291,7 @@ export function FeedView({ selected }: { selected?: string }) {
           <ResizableHandle />
           <ResizablePanel id="event" defaultSize="42" minSize="28" className="min-h-0">
             {/* Keyed per Event, so a newly picked Event opens at its top. */}
-            <div key={selectedEvent?.id} className="h-full overflow-y-auto bg-inset px-6 py-6">
+            <div key={selectedEvent?.id} className="h-full overflow-y-auto bg-panel px-6 py-6">
               {detail}
             </div>
           </ResizablePanel>

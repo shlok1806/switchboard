@@ -22,11 +22,11 @@ const TONE: Partial<Record<ChannelEvent["type"], string>> = {
   push: "text-green",
   merge: "text-green",
   "task.review": "text-green",
-  "claim.refused": "text-orange",
+  "claim.refused": "text-red",
   "task.create": "text-green",
-  "task.reopen": "text-orange",
+  "task.reopen": "text-ink-2",
   "task.remove": "text-red",
-  "mirror.failed": "text-orange",
+  "mirror.failed": "text-red",
 };
 
 function Actor({ event, agentById, compact }: { event: ChannelEvent; agentById: Map<AgentId, Agent>; compact?: boolean }) {
@@ -75,7 +75,7 @@ export function EventRow({
           }
         }}
         className={cn(
-          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-md px-3 text-left outline-none transition-colors duration-150 hover:bg-inset focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+          "group relative grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-x-3 rounded-md px-3 text-left outline-none transition-colors duration-150 hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
           continued ? "py-1.5" : "pt-3.5 pb-1.5",
           selected && "bg-accent-tint hover:bg-accent-tint",
         )}
@@ -110,7 +110,7 @@ export function EventRow({
           </div>
           <p
             className={cn(
-              "line-clamp-2 max-w-[68ch] min-w-0 text-body leading-normal text-ink-2",
+              "line-clamp-2 max-w-[60ch] min-w-0 text-body leading-normal text-ink-2",
               TONE[event.type],
               isMessage && "text-ink",
               event.type === "directive" && "font-medium",
@@ -161,7 +161,7 @@ function WakeBody({ event }: { event: Extract<ChannelEvent, { type: "wake" }> })
   const byId = useEventsById(delivered);
   return (
     <div className="flex flex-col gap-2.5">
-      <p className="max-w-[68ch] text-body leading-relaxed text-ink">
+      <p className="max-w-[60ch] text-body leading-relaxed text-ink">
         The Agent was idle, so its wrapper typed what was waiting for its next turn as one prompt, which started a
         turn. Its Person did not write that prompt.
       </p>
@@ -322,7 +322,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
     case "task.create":
       return (
         <div className="flex flex-col gap-2">
-          <p className="max-w-[68ch] text-body leading-relaxed text-ink">{event.payload.title}</p>
+          <p className="max-w-[60ch] text-body leading-relaxed text-ink">{event.payload.title}</p>
           <a href={event.payload.url} target="_blank" rel="noreferrer" className="self-start text-small text-accent-ink underline-offset-4 hover:underline">
             Issue on GitHub
           </a>
@@ -341,7 +341,7 @@ export function EventBody({ event }: { event: ChannelEvent }) {
         </div>
       );
     default:
-      return <p className="max-w-[68ch] text-body leading-relaxed text-ink">{summarize(event)}</p>;
+      return <p className="max-w-[60ch] text-body leading-relaxed text-ink">{summarize(event)}</p>;
   }
 }
 

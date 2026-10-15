@@ -139,7 +139,7 @@ export function AgentDetail({ id }: { id: string }) {
           </header>
           <PendingApproval agent={agent} className="rise [--i:1]" />
 
-          <div className="rise grid gap-6 rounded-md bg-inset p-4 [--i:1] sm:grid-cols-[minmax(0,1fr)_13rem] sm:gap-8">
+          <div className="rise grid gap-6 rounded-md bg-panel p-4 [--i:1] sm:grid-cols-[minmax(0,1fr)_13rem] sm:gap-8">
             <AgentBrief agent={agent} />
             <ContextWindow agent={agent} />
           </div>
@@ -200,13 +200,13 @@ export function AgentDetail({ id }: { id: string }) {
 
         <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
           {!can.directives ? (
-            <p className="rounded-md bg-inset p-4 text-small text-ink-3">
+            <p className="rounded-md bg-panel p-4 text-small text-ink-3">
               Directives arrive with <IssueLink capability="directives" />.
             </p>
           ) : agent.presence !== "gone" ? (
             <Composer key={agent.id} defaultAgent={agent.id} />
           ) : (
-            <p className="rounded-md bg-inset p-4 text-small text-ink-3">Gone. A Directive waits until it resumes.</p>
+            <p className="rounded-md bg-panel p-4 text-small text-ink-3">Gone. A Directive waits until it resumes.</p>
           )}
 
           <RenameSection agent={agent} />
@@ -251,7 +251,7 @@ export function AgentDetail({ id }: { id: string }) {
               onChange={(m) => void setMode(m)}
               className={mine && can.proxyMode ? "w-full" : "pointer-events-none w-full opacity-60"}
             />
-            {!agent.secretMasking && <p className="text-small text-orange">Secret masking is off</p>}
+            {!agent.secretMasking && <p className="text-small text-red">Secret masking is off</p>}
             {!can.proxyMode && (
               <p className="text-small text-ink-3">
                 Arrives with <IssueLink capability="proxyMode" />.

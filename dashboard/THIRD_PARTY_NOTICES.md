@@ -34,7 +34,7 @@ Every file above is re-skinned and says so in a header comment where it changed.
 | tw-animate-css | MIT | (c) 2025 Wombosvideo |
 | class-variance-authority, clsx, tailwind-merge | Apache-2.0 / MIT / MIT | their authors |
 | Tailwind CSS, Vite, React | MIT | their authors |
-| Albert Sans (`@fontsource-variable/albert-sans`) | SIL OFL 1.1 | (c) 2021 The Albert Sans Project Authors |
+| Geist (`@fontsource-variable/geist`) | SIL OFL 1.1 | (c) 2024 The Geist Project Authors |
 | Geist Mono (`@fontsource-variable/geist-mono`) | SIL OFL 1.1 | (c) 2023 Vercel |
 | Lucide (`lucide-react`) | ISC | (c) Lucide Contributors 2022; portions (c) 2013-2022 Cole Bemis (Feather, MIT) |
 | NumberFlow (`@number-flow/react`) | MIT | (c) 2024 Maxwell Barvian |

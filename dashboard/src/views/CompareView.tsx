@@ -64,7 +64,7 @@ export function CompareView({ turn }: { turn?: string }) {
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <nav
         aria-label="Model turns"
-        className="flex shrink-0 gap-1.5 overflow-x-auto bg-inset px-[var(--gutter)] py-3 lg:w-72 lg:flex-col lg:gap-0.5 lg:overflow-y-auto lg:px-3 lg:py-4"
+        className="flex shrink-0 gap-1.5 overflow-x-auto bg-panel px-[var(--gutter)] py-3 lg:w-72 lg:flex-col lg:gap-0.5 lg:overflow-y-auto lg:px-3 lg:py-4"
       >
         <h2 className="hidden items-center gap-1.5 px-2.5 pb-2 text-body font-medium text-ink lg:flex">
           Model turns
@@ -146,7 +146,7 @@ export function CompareView({ turn }: { turn?: string }) {
 
 function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelEvent[] }) {
   return (
-    <section className="flex min-w-0 flex-col rounded-md bg-inset">
+    <section className="flex min-w-0 flex-col rounded-md bg-panel">
       <header className="flex items-center gap-2 px-4 pt-3 pb-1">
         <h2 className="text-body font-medium text-ink">{CAPTURE_LABEL[capture]}</h2>
         <span className="text-body text-ink-3 tabular-nums">{events.length}</span>

@@ -68,7 +68,7 @@ export default function ChatComposer<T extends string>({
       <div
         role="presentation"
         onClick={() => inputRef.current?.focus()}
-        className="flex cursor-text flex-col gap-2 rounded-md bg-inset px-4 py-3 ring-line-strong transition-[background-color,box-shadow] duration-150 focus-within:bg-field focus-within:ring-1"
+        className="flex cursor-text flex-col gap-2 rounded-md bg-panel px-4 py-3 ring-line-strong transition-[background-color,box-shadow] duration-150 focus-within:bg-field focus-within:ring-1"
       >
         {aside && <div className="flex min-w-0 items-center gap-1">{aside}</div>}
         <textarea

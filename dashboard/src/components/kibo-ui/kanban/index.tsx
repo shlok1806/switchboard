@@ -106,7 +106,7 @@ export const KanbanBoard = ({ id, children, className }: KanbanBoardProps) => {
   return (
     <div
       className={cn(
-        "relative flex size-full min-h-40 flex-col rounded-md bg-canvas text-small transition-colors duration-150",
+        "relative flex size-full min-h-40 flex-col rounded-md bg-panel text-small transition-colors duration-150",
         isOver && "bg-accent-tint",
         className,
       )}

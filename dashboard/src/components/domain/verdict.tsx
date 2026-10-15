@@ -113,7 +113,7 @@ export function VerdictTable({
   return (
     <ul className="@container flex flex-col gap-0.5 overflow-hidden rounded-md">
       {sorted.map((v) => (
-        <li key={v.agent} className="grid gap-2 bg-inset px-3 py-3 @xl:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] @xl:gap-4">
+        <li key={v.agent} className="grid gap-2 bg-panel px-3 py-3 @xl:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] @xl:gap-4">
           <div className="flex min-w-0 flex-col gap-1">
             <AgentLink id={v.agent} agent={agentById.get(v.agent as AgentId)} />
             <div className="flex flex-wrap items-center gap-1.5">
@@ -128,7 +128,7 @@ export function VerdictTable({
             {(v.overlap.files.length > 0 || v.overlap.symbols.length > 0) && (
               <div className="flex flex-wrap items-center gap-1 text-small" aria-label="Overlap">
                 {v.overlap.symbols.map((s) => (
-                  <code key={s} className="rounded-sm bg-orange-tint px-1.5 py-px font-mono text-orange">{s}</code> /* taste-skill-ignore: a symbol */
+                  <code key={s} className="rounded-sm bg-hover px-1.5 py-px font-mono text-ink-2">{s}</code> /* taste-skill-ignore: a symbol */
                 ))}
                 {v.overlap.files.map((f) => (
                   <code key={f} className="rounded-sm bg-hover px-1.5 py-px font-mono text-ink-2">{f}</code> /* taste-skill-ignore: a path */

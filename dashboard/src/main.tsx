@@ -7,9 +7,11 @@ import { ChannelProvider, ChannelStore } from "@/data/store";
 import { HttpChannelSource } from "@/data/http";
 import { NoChannelScreen, SignInScreen } from "@/components/domain/join";
 import { apiBase, channelBase, channelRepo, devSignIn, signIn, wantsMock } from "@/lib/session";
+import { initDensity } from "@/lib/density";
 import { initTheme } from "@/lib/theme";
 
 initTheme();
+initDensity();
 
 // After a deploy, an open tab may ask for route chunks that no longer exist.
 // Reload once to pick up the new build instead of showing a blank view.

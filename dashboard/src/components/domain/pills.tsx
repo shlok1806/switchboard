@@ -71,7 +71,7 @@ export function RawBadge() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex h-6 items-center rounded-sm bg-orange-tint px-2 text-small font-medium text-orange">Raw</span>
+        <span className="inline-flex h-6 items-center rounded-sm bg-hover px-2 text-small font-medium text-ink-2">Raw</span>
       </TooltipTrigger>
       <TooltipContent>Raw proxy mode: full model turns, context included, are shared.</TooltipContent>
     </Tooltip>

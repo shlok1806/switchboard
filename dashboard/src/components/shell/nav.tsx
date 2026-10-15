@@ -71,7 +71,7 @@ export function Mark({ className }: { className?: string }) {
     <svg viewBox="0 0 24 24" aria-hidden className={cn("size-6 shrink-0 text-ink", className)}>
       <rect width="24" height="24" rx="4" fill="currentColor" />
       <circle cx="8" cy="15" r="2.4" fill="var(--page)" />
-      <circle cx="16" cy="9" r="2.4" fill="var(--action)" />
+      <circle cx="16" cy="9" r="2.4" fill="var(--attention)" />
       <path d="M8 15 C 8 10, 16 14, 16 9" fill="none" stroke="var(--page)" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
@@ -112,7 +112,7 @@ export function TabBar({ route }: { route: Route }) {
   return (
     <nav
       aria-label="Views"
-      className="fixed inset-x-0 bottom-0 z-40 grid h-[var(--tabbar-h)] grid-cols-5 bg-inset pb-[env(safe-area-inset-bottom)]"
+      className="fixed inset-x-0 bottom-0 z-40 grid h-[var(--tabbar-h)] grid-cols-5 bg-panel pb-[env(safe-area-inset-bottom)]"
     >
       {VIEWS.map((v) => {
         const on = v.id === current;
@@ -159,7 +159,7 @@ export function SearchButton({ onClick, compact }: { onClick: () => void; compac
       <button
         type="button"
         onClick={onClick}
-        className="hidden h-9 w-60 items-center gap-2 rounded-md bg-inset px-3 text-small text-ink-3 transition-colors hover:bg-hover hover:text-ink-2 lg:flex"
+        className="hidden h-9 w-60 items-center gap-2 rounded-md bg-inset px-3 text-small text-ink-3 transition-colors hover:bg-inset-2 hover:text-ink-2 lg:flex"
       >
         <Search className="size-3.5" aria-hidden />
         Search
@@ -187,7 +187,7 @@ export function ConnectionDot() {
     <Tooltip>
       <TooltipTrigger asChild>
         <span tabIndex={0} className="grid size-10 place-items-center rounded-md outline-accent focus-visible:outline-2">
-          <span aria-hidden className={cn("size-2 rounded-full", live ? "bg-state-live" : "bg-orange")} />
+          <span aria-hidden className={cn("size-2 rounded-full", live ? "bg-state-live" : "bg-red")} />
           <span className="sr-only">{live ? "Connected" : "Reconnecting"}</span>
         </span>
       </TooltipTrigger>

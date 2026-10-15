@@ -1,104 +1,102 @@
 /*
- * Switchboard's design system (ADR 0016). Every colour, size, radius and
- * elevation the Dashboard uses is a token here, and the canvas (docs/canvas-design-spec.md)
- * inherits the same tokens: an Agent node is a surface, a Task frame is an inset field,
- * an edge is an ink line, and a node's state is one of the status tokens below.
+ * Switchboard's design system, v2 (ADR 0023, which supersedes ADR 0016 in part). Every
+ * colour, size, radius and elevation the Dashboard uses is a token here, and the canvas
+ * and the terminal take the same tokens: an Agent node is a surface, a Task frame is a
+ * frame, an edge is an ink line, and a state is one of the status tokens below.
  *
- * Direction: "the quiet instrument" (tasteskill v2). Navy ink on white, one tangerine
- * action per screen, one typeface, surfaces separated by a tone step instead of a rule,
- * and no shadow on anything at rest. (taste-skill-ignore: prose)
+ * Direction: the control room. Navy ink on white, flat surfaces separated by a tone step,
+ * one typeface, solid ink on the primary control, and one warm colour that always means
+ * "a Person is needed" and nothing else. (taste-skill-ignore: prose)
  *
  * Layers, in order:
  *   1. primitives    raw colours; nothing outside this file names them
- *   2. roles         page, surface, ink, line, accent, action
- *   3. status        agent states, Task columns, meters (shared by board and canvas)
+ *   2. roles         page, panel, inset, ink, link, action
+ *   3. status        attention and the Agent states (shared by every view)
  *   4. identity      one hue per agent CLI
- *   5. canvas        node, frame and edge roles for the coming canvas
- *   6. scales        type, radius, elevation, motion, layout, z-index
+ *   5. canvas        node, frame, edge, and the terminal
+ *   6. scales        type, radius, density, elevation, motion, layout
+ *   7. ADR 0016      the earlier names, pointed at v2 roles until each view is rebuilt
  */
 
 :root {
   /* ── 1. primitives ───────────────────────────────────────── */
-  --navy-950: #141c33;
-  --navy-900: #1f2b4d;
-  --navy-800: #2e3a5c;
-  --navy-700: #3d4868;
-  --navy-600: #545d79;
-  --navy-500: #6a7186;
-  --navy-400: #8b91a3;
-  --navy-signal: #2f4c8c;
+  --navy-950: #10172b;
+  --navy-900: #1b2440;
+  --navy-800: #2b3556;
+  --navy-700: #3e4766;
+  --navy-600: #4e5673;
+  --navy-500: #6a7390;
+  --navy-400: #8d93a8;
+  --navy-300: #b4b9c9;
   --stone-0: #ffffff;
-  --stone-50: #f7f7f5;
-  --stone-100: #f1f1ee;
-  --stone-200: #e8e7e3;
-  --stone-300: #dddcd6;
-  --tangerine: #f7941d;
-  --tangerine-hover: #ec8710;
-  --tangerine-deep: #a85406;
+  --stone-50: #f4f5f7;
+  --stone-100: #eceef1;
+  --stone-200: #e1e4e9;
+  --stone-300: #d3d7de;
+  --tangerine: #e8891a;
+  --tangerine-deep: #9a5306;
+  --signal: #2a56c6;
 
   /* ── 2. roles ───────────────────────────────────────────── */
-  /* surfaces: white ground, one warm tone step for panels, white again on a panel */
+  /* grounds: white, then one cool tone step per level */
   --page: var(--stone-0);
-  --canvas: var(--stone-50);
-  --surface: var(--stone-0);
-  --inset: var(--stone-50);
+  --panel: var(--stone-50); /* rail, inspector, toolbars, sections, striped rows */
+  --inset: var(--stone-100); /* a field in a panel, secondary buttons */
+  --inset-2: var(--stone-200); /* a field in an inset, a selected row */
+  --surface: var(--page); /* a box set on a panel: a card, a node, a dialog */
+  --field: var(--page); /* a text field; the one box that keeps a line */
   --hover: var(--stone-100);
-  --hover-2: var(--stone-200);
-  --field: var(--stone-0);
 
   /* ink: navy, never black; grey is for secondary notes only */
   --ink: var(--navy-900);
   --ink-2: var(--navy-700);
-  --ink-3: var(--navy-600);
-  --ink-4: var(--navy-400);
+  --ink-3: var(--navy-600); /* 7.3:1 on white, 6.6:1 on the panel */
+  --ink-4: var(--navy-400); /* disabled; never for text that must be read */
 
-  /* the empty part of a meter or progress bar: a full step darker than a panel */
-  --track: var(--stone-300);
+  /* links, focus rings and selection: a blue signal, never a second accent */
+  --link: var(--signal);
+  --link-tint: #e8eefb;
+  --focus: var(--signal);
 
-  /* lines: only real tables and form fields draw one */
+  /* action: the primary control is solid ink */
+  --action: var(--navy-900);
+  --action-hover: var(--navy-800);
+  --on-action: #ffffff;
+
+  /* lines: only form fields and real tables draw one */
   --line: var(--stone-200);
   --line-strong: var(--stone-300);
-  --line-soft: var(--stone-100);
-  --stripe: transparent;
-  --stripe-bg: var(--page);
 
-  /* signal: selection, focus, links and "queued" - a stronger shade of the ink, not a second accent */
-  --accent: var(--navy-signal);
-  --accent-ink: var(--navy-signal);
-  --accent-tint: #eceff5;
-  --on-accent: #ffffff;
-
-  /* action: tangerine, on the one primary control of a screen and nowhere else */
-  --action: var(--tangerine);
-  --action-hover: var(--tangerine-hover);
-  --on-action: var(--navy-950);
+  /* the empty part of a meter */
+  --track: var(--stone-300);
 
   /* ── 3. status ──────────────────────────────────────────── */
-  /* text-safe (4.5:1 on page, inset and their tint) */
-  --green: #1c6e45;
-  --green-tint: #e8f3ec;
-  --orange: #8f5a06;
-  --orange-tint: #fbf2e0;
-  --red: #b0281f;
-  --red-tint: #fcebe9;
-  --on-red: #ffffff;
+  /* Attention is the one warm colour, and it always means "a Person is needed". */
+  --attention: var(--tangerine); /* the queue, the badge, the glyph */
+  --attention-ink: var(--tangerine-deep); /* attention as text, 4.5:1 on its tint */
+  --attention-tint: #fdf0dd;
 
-  /* Agent states (CONTEXT.md Presence, and the canvas spec's lifecycle). The dot carries the state. */
-  --state-live: var(--green);
-  --state-needs: var(--tangerine-deep);
-  --state-needs-dot: var(--tangerine);
-  --state-idle: var(--ink-4);
-  --state-gone: var(--ink-4);
-  --state-queued: var(--accent);
-  --state-errored: var(--red);
-  --state-stale: var(--red);
-  --state-done: var(--green);
-  --state-review: var(--orange);
+  /* One state per Agent (ADR 0023), read in this order: needs, stale, errored, running, idle, gone. */
+  --live: #157040;
+  --live-tint: #e3f3e9;
+  --idle: var(--navy-400);
+  --gone: var(--navy-300);
+  --stale: #c43a2f; /* Stale Claim, errored, conflict */
+  --stale-tint: #fbe8e6;
+  --on-stale: #ffffff;
+  --review: var(--signal);
+  --review-tint: var(--link-tint);
+  --done: #1d8a4e;
+  --queued: var(--navy-500);
 
-  /* Verdicts */
-  --verdict-drop: var(--navy-400);
-  --verdict-queue: var(--accent);
-  --verdict-interrupt: var(--tangerine);
+  /* State shapes: a state never rides on colour alone (stale red and review blue are read
+     apart by shape too). Each is a clip-path for a square glyph; a ring (Gone, Queued) is
+     an outline, not a shape. */
+  --shape-circle: circle(50% at 50% 50%);
+  --shape-stale: polygon(50% 0%, 100% 100%, 0% 100%);
+  --shape-review: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  --shape-needs: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+  --shape-errored: polygon(20% 0%, 80% 0%, 100% 20%, 100% 80%, 80% 100%, 20% 100%, 0% 80%, 0% 20%);
 
   /* ── 4. identity: one hue per agent CLI ─────────────────── */
   --cli-claude: #b9572f;
@@ -106,42 +104,95 @@
   --cli-gemini: #3767c9;
   --cli-other: var(--ink-3);
 
-  /* ── 5. canvas roles ────────────────────────────────────── */
-  --canvas-bg: var(--canvas);
-  --canvas-grid: var(--stone-300);
-  --node-bg: var(--surface);
+  /* ── 5. canvas and terminal ─────────────────────────────── */
+  --canvas-bg: var(--stone-50);
+  --canvas-dot: var(--stone-300);
+  --node-bg: var(--stone-0);
   --node-hover: var(--hover);
-  --node-selected: var(--accent);
-  --frame-bg: color-mix(in srgb, var(--hover) 70%, transparent);
-  --frame-label: var(--ink-3);
-  --edge: var(--ink-4);
-  --edge-active: var(--accent);
-  --edge-conflict: var(--red);
-
-  /* State shapes: a node's state never rides on colour alone (stale red and review
-     amber collide for deuteranopia). Each shape is a clip-path for a square dot;
-     a ring (Open, Gone) is a border, not a shape. */
-  --shape-circle: circle(50% at 50% 50%);
-  --shape-stale: polygon(50% 0%, 100% 100%, 0% 100%);
-  --shape-review: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
-  --shape-needs: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
-  --shape-errored: polygon(20% 0%, 80% 0%, 100% 20%, 100% 80%, 80% 100%, 20% 100%, 0% 80%, 0% 20%);
+  --node-selected: var(--signal);
+  --frame-bg: #e9ebef;
+  --frame-ink: var(--ink-3);
+  --edge: var(--navy-400);
+  --edge-lead: var(--navy-700);
+  /* The terminal is dark in both themes. */
+  --term-bg: #0f1420;
+  --term-head: #171d2c;
+  --term-fg: #d6dbe7;
+  --term-dim: #7d87a3;
+  --term-cursor: #f5a03a;
 
   /* tooltips sit on navy in both themes */
   --tooltip-bg: var(--navy-900);
   --tooltip-fg: #f4f5f8;
   --tooltip-muted: #b9bfcd;
-  --tooltip-border: var(--navy-900);
 
   /* ── 6. scales ──────────────────────────────────────────── */
-  /* elevation: flat at rest; only what floats (menus, dialogs, toasts, a dragged card) casts a shadow (taste-skill-ignore: prose) */
-  --shadow-float: 0 1px 2px rgb(20 28 51 / 0.06), 0 12px 32px rgb(20 28 51 / 0.14);
-  --shadow-hairline: none;
-  --shadow-btn: none;
-  --shadow-card: none;
-  --shadow-raised: none;
-  --shadow-overlay: var(--shadow-float);
-  --shadow-inset-field: none;
+  /* type: Geist for all but literal code, which takes the mono face below (taste-skill-ignore: prose) */
+  --font-sans-face: "Geist Variable";
+  --font-mono-face: "Geist Mono Variable"; /* taste-skill-ignore: the face for literal code only */
+
+  /* radius: 4 on controls, 6 on panels and the terminal; dots and avatars are round */
+  --r-control: 4px;
+  --r-panel: 6px;
+
+  /* density: rows are 40px, or 32px compact (data-density on the root) */
+  --row: 40px;
+  --cell-x: 10px;
+
+  /* elevation: flat at rest; only what floats (menus, dialogs, toasts, a dragged card) casts one (taste-skill-ignore: prose) */
+  --shadow-float: 0 1px 2px rgb(16 23 43 / 0.08), 0 12px 32px rgb(16 23 43 / 0.16);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur-base: 160ms;
+  --dur-slow: 320ms;
+
+  /* layout: the shell's sizes (ADR 0023) */
+  --toolbar-h: 48px;
+  --rail-w: 232px;
+  --rail-w-collapsed: 56px;
+  --inspector-w: 352px;
+  --header-h: 56px;
+  --tabbar-h: calc(60px + env(safe-area-inset-bottom));
+  --gutter: 16px;
+  --column: 46rem;
+
+  /* ── 7. ADR 0016 names, on v2 roles ─────────────────────── */
+  /* Kept so every view renders unchanged in layout; each goes as the view that uses it is rebuilt. */
+  --canvas: var(--panel);
+  --hover-2: var(--inset-2);
+  --accent: var(--link);
+  --accent-ink: var(--link);
+  --accent-tint: var(--link-tint);
+  --on-accent: var(--on-action);
+  --green: var(--live);
+  --green-tint: var(--live-tint);
+  --orange: var(--attention-ink);
+  --orange-tint: var(--attention-tint);
+  --red: var(--stale);
+  --red-tint: var(--stale-tint);
+  --on-red: var(--on-stale);
+  --state-live: var(--live);
+  --state-needs: var(--attention-ink);
+  --state-needs-dot: var(--attention);
+  --state-idle: var(--idle);
+  --state-gone: var(--gone);
+  --state-queued: var(--queued);
+  --state-errored: var(--stale);
+  --state-stale: var(--stale);
+  --state-done: var(--done);
+  --state-review: var(--review);
+  --verdict-drop: var(--ink-4);
+  --verdict-queue: var(--link);
+  --verdict-interrupt: var(--attention);
+  --canvas-grid: var(--canvas-dot);
+  --frame-label: var(--frame-ink);
+  --edge-active: var(--link);
+  --edge-conflict: var(--stale);
+  --tooltip-border: var(--tooltip-bg);
 
   /* shadcn/ui variable names, pointed at ours */
   --background: var(--page);
@@ -154,33 +205,20 @@
   --primary-foreground: var(--on-action);
   --secondary: var(--inset);
   --secondary-foreground: var(--ink);
-  --muted: var(--inset);
+  --muted: var(--panel);
   --muted-foreground: var(--ink-3);
-  --destructive: var(--red);
+  --destructive: var(--stale);
   --border: var(--line);
   --input: var(--line-strong);
-  --ring: var(--accent);
-  --radius: 4px;
-
-  /* type: one family; a monospace face only inside real code */
-  --font-sans-face: "Albert Sans Variable";
-  --font-mono-face: "Geist Mono Variable"; /* taste-skill-ignore: the face for literal code only */
-
-  /* motion */
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  --dur-fast: 120ms;
-  --dur-base: 200ms;
-  --dur-slow: 320ms;
-
-  /* layout */
-  --header-h: 56px;
-  --tabbar-h: calc(60px + env(safe-area-inset-bottom));
-  --gutter: 16px;
-  --column: 46rem;
+  --ring: var(--focus);
+  --radius: var(--r-control);
 
   color-scheme: light;
+}
+
+:root[data-density="compact"] {
+  --row: 32px;
+  --cell-x: 8px;
 }
 
 @media (min-width: 640px) {
@@ -190,57 +228,64 @@
 }
 
 .dark {
-  --page: #0c0f16;
-  --canvas: #10141c;
-  --surface: #161b26;
-  --inset: #131823;
-  --hover: #1b2130;
-  --hover-2: #242b3b;
-  --field: #10141c;
+  --page: #0e1118;
+  --panel: #141823;
+  --inset: #1b2030;
+  --inset-2: #232a3c;
+  --surface: var(--inset);
+  --field: var(--page);
+  --hover: #1a2030;
 
-  --ink: #e8ebf2;
-  --ink-2: #c3c8d5;
-  --ink-3: #98a0b3;
+  --ink: #e7eaf1;
+  --ink-2: #c0c6d5;
+  --ink-3: #98a0b6;
   --ink-4: #697189;
+
+  --link: #8fb0f5;
+  --link-tint: rgb(143 176 245 / 0.14);
+  --focus: #8fb0f5;
+
+  --action: #e7eaf1;
+  --action-hover: #ffffff;
+  --on-action: #0e1118;
 
   --line: #262d3c;
   --line-strong: #323a4c;
-  --line-soft: #1c2230;
+  --track: #2b3245;
 
-  --accent: #93abe6;
-  --accent-ink: #a9bdf0;
-  --accent-tint: rgb(147 171 230 / 0.14);
-  --on-accent: #0c0f16;
-
-  --action: var(--tangerine);
-  --action-hover: #ffa53a;
-  --on-action: #1a1206;
-
-  --green: #67c792;
-  --green-tint: rgb(103 199 146 / 0.13);
-  --orange: #e5b45f;
-  --orange-tint: rgb(229 180 95 / 0.13);
-  --red: #f4808c;
-  --red-tint: rgb(244 128 140 / 0.13);
-  --on-red: #1a0b0d;
-
-  --state-needs: #ffad4d;
-  --verdict-drop: #5d6680;
-  --track: #343c4f;
+  --attention: #f29a2e;
+  --attention-ink: #ffb860;
+  --attention-tint: rgb(242 154 46 / 0.14);
+  --live: #5fcf8f;
+  --live-tint: rgb(95 207 143 / 0.14);
+  --idle: #6f788f;
+  --gone: #4a5268;
+  --stale: #f38b84;
+  --stale-tint: rgb(243 139 132 / 0.14);
+  --on-stale: #1a0b0d;
+  --review: var(--link);
+  --review-tint: var(--link-tint);
+  --done: #5fcf8f;
+  --queued: #98a0b6;
 
   --cli-claude: #e08a64;
   --cli-codex: #4cc39d;
   --cli-gemini: #7da2f0;
 
-  --canvas-grid: #262d3c;
-  /* A node sits a step above its Task frame, which sits a step above the ground. */
-  --node-bg: var(--hover-2);
-  --node-hover: color-mix(in srgb, var(--hover-2) 88%, var(--ink));
+  --canvas-bg: #0b0e15;
+  --canvas-dot: #232a3c;
+  --node-bg: #1b2030;
+  --node-hover: color-mix(in srgb, #1b2030 88%, var(--ink));
+  --node-selected: #8fb0f5;
+  --frame-bg: #121724;
+  --edge: #4a5268;
+  --edge-lead: #98a0b6;
+  --term-bg: #0a0d14;
+  --term-head: #10141d;
 
-  --tooltip-bg: #e8ebf2;
-  --tooltip-fg: #141c33;
+  --tooltip-bg: #e7eaf1;
+  --tooltip-fg: #10172b;
   --tooltip-muted: #4b5470;
-  --tooltip-border: #e8ebf2;
 
   --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.06), 0 16px 40px rgb(0 0 0 / 0.5);
 
@@ -249,26 +294,64 @@
 
 @theme inline {
   --color-page: var(--page);
-  --color-canvas: var(--canvas);
-  --color-surface: var(--surface);
+  --color-panel: var(--panel);
   --color-inset: var(--inset);
+  --color-inset-2: var(--inset-2);
+  --color-surface: var(--surface);
+  --color-field: var(--field);
+  --color-hover: var(--hover);
   --color-ink: var(--ink);
   --color-ink-2: var(--ink-2);
   --color-ink-3: var(--ink-3);
   --color-ink-4: var(--ink-4);
-  --color-hover: var(--hover);
-  --color-hover-2: var(--hover-2);
-  --color-field: var(--field);
+  --color-link: var(--link);
+  --color-link-tint: var(--link-tint);
+  --color-focus: var(--focus);
+  --color-action: var(--action);
+  --color-action-hover: var(--action-hover);
+  --color-on-action: var(--on-action);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
-  --color-line-soft: var(--line-soft);
+  --color-track: var(--track);
+  --color-attention: var(--attention);
+  --color-attention-ink: var(--attention-ink);
+  --color-attention-tint: var(--attention-tint);
+  --color-live: var(--live);
+  --color-live-tint: var(--live-tint);
+  --color-idle: var(--idle);
+  --color-gone: var(--gone);
+  --color-stale: var(--stale);
+  --color-stale-tint: var(--stale-tint);
+  --color-on-stale: var(--on-stale);
+  --color-review: var(--review);
+  --color-review-tint: var(--review-tint);
+  --color-done: var(--done);
+  --color-queued: var(--queued);
+  --color-cli-claude: var(--cli-claude);
+  --color-cli-codex: var(--cli-codex);
+  --color-cli-gemini: var(--cli-gemini);
+  --color-cli-other: var(--cli-other);
+  --color-canvas-bg: var(--canvas-bg);
+  --color-canvas-dot: var(--canvas-dot);
+  --color-node-bg: var(--node-bg);
+  --color-node-hover: var(--node-hover);
+  --color-node-selected: var(--node-selected);
+  --color-frame-bg: var(--frame-bg);
+  --color-frame-ink: var(--frame-ink);
+  --color-edge: var(--edge);
+  --color-edge-lead: var(--edge-lead);
+  --color-term-bg: var(--term-bg);
+  --color-term-head: var(--term-head);
+  --color-term-fg: var(--term-fg);
+  --color-term-dim: var(--term-dim);
+
+  /* ADR 0016 names (layer 7) */
+  --color-canvas: var(--canvas);
+  --color-hover-2: var(--hover-2);
   --color-accent: var(--accent);
   --color-accent-ink: var(--accent-ink);
   --color-accent-tint: var(--accent-tint);
   --color-on-accent: var(--on-accent);
-  --color-action: var(--action);
-  --color-action-hover: var(--action-hover);
-  --color-on-action: var(--on-action);
   --color-green: var(--green);
   --color-green-tint: var(--green-tint);
   --color-orange: var(--orange);
@@ -286,24 +369,13 @@
   --color-state-stale: var(--state-stale);
   --color-state-done: var(--state-done);
   --color-state-review: var(--state-review);
-  --color-canvas-bg: var(--canvas-bg);
-  --color-canvas-grid: var(--canvas-grid);
-  --color-node-bg: var(--node-bg);
-  --color-node-hover: var(--node-hover);
-  --color-node-selected: var(--node-selected);
-  --color-frame-bg: var(--frame-bg);
-  --color-frame-label: var(--frame-label);
-  --color-edge: var(--edge);
-  --color-edge-active: var(--edge-active);
-  --color-edge-conflict: var(--edge-conflict);
   --color-verdict-drop: var(--verdict-drop);
-  --color-track: var(--track);
   --color-verdict-queue: var(--verdict-queue);
   --color-verdict-interrupt: var(--verdict-interrupt);
-  --color-cli-claude: var(--cli-claude);
-  --color-cli-codex: var(--cli-codex);
-  --color-cli-gemini: var(--cli-gemini);
-  --color-cli-other: var(--cli-other);
+  --color-canvas-grid: var(--canvas-grid);
+  --color-frame-label: var(--frame-label);
+  --color-edge-active: var(--edge-active);
+  --color-edge-conflict: var(--edge-conflict);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -325,39 +397,40 @@
   --font-sans: var(--font-sans-face), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-mono-face), ui-monospace, "SF Mono", monospace; /* taste-skill-ignore: the face for literal code only */
 
-  /* five type steps: small, body, lead, title, display */
+  /* six type steps: meta 13, row 14 (the default), body 15 (prose), lead 17, title 22, figure 30 */
   --text-small: 0.8125rem;
   --text-small--line-height: 1.45;
+  --text-row: 0.875rem;
+  --text-row--line-height: 1.45;
   --text-body: 0.9375rem;
-  --text-body--line-height: 1.5;
+  --text-body--line-height: 1.45;
   --text-lead: 1.0625rem;
   --text-lead--line-height: 1.4;
-  --text-title: 1.5rem;
+  --text-title: 1.375rem;
   --text-title--line-height: 1.2;
-  --text-title--letter-spacing: -0.02em;
-  --text-display: 2rem;
+  --text-title--letter-spacing: -0.01em;
+  --text-figure: 1.875rem;
+  --text-figure--line-height: 1.1;
+  --text-figure--letter-spacing: -0.02em;
+  /* ADR 0016's display step is the figure step now */
+  --text-display: 1.875rem;
   --text-display--line-height: 1.1;
-  --text-display--letter-spacing: -0.035em;
+  --text-display--letter-spacing: -0.02em;
   /* the vendored shadcn parts speak in xs/sm/base; map them onto the same steps */
   --text-xs: 0.8125rem;
-  --text-sm: 0.9375rem;
+  --text-sm: 0.875rem;
   --text-base: 0.9375rem;
 
-  /* one corner radius for every box and control; dots and avatars are round */
-  --radius-xs: 4px;
-  --radius-sm: 4px;
-  --radius-md: 4px;
-  --radius-lg: 4px;
-  --radius-xl: 4px;
-  --radius-2xl: 4px;
+  /* radius: controls 4, panels 6 */
+  --radius-xs: var(--r-control);
+  --radius-sm: var(--r-control);
+  --radius-md: var(--r-control);
+  --radius-lg: var(--r-panel);
+  --radius-xl: var(--r-panel);
+  --radius-2xl: var(--r-panel);
 
-  --shadow-hairline: var(--shadow-hairline);
-  --shadow-btn: var(--shadow-btn);
-  --shadow-card: var(--shadow-card);
-  --shadow-raised: var(--shadow-raised);
-  --shadow-overlay: var(--shadow-overlay);
-  --shadow-inset-field: var(--shadow-inset-field);
   --shadow-float: var(--shadow-float);
   --shadow-md: var(--shadow-float);
   --shadow-lg: var(--shadow-float);
+  --shadow-overlay: var(--shadow-float);
 }

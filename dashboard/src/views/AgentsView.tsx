@@ -154,7 +154,7 @@ function AgentRow({ agent: a, held }: { agent: Agent; held: Task[] }) {
         onClick={() => go({ view: "agent", id: a.id })}
         onKeyDown={(e) => e.key === "Enter" && go({ view: "agent", id: a.id })}
         className={cn(
-          "grid cursor-pointer gap-x-6 gap-y-4 rounded-md px-3 py-4 transition-colors duration-150 hover:bg-inset focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent lg:grid-cols-[minmax(0,1fr)_12rem_16rem]",
+          "grid cursor-pointer gap-x-6 gap-y-4 rounded-md px-3 py-4 transition-colors duration-150 hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent lg:grid-cols-[minmax(0,1fr)_12rem_16rem]",
           a.presence === "gone" && "opacity-75",
         )}
       >

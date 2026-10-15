@@ -50,7 +50,7 @@ export function SignInScreen({
             <p className="text-body break-all text-ink-3">{repo}</p>
           </div>
         </header>
-        <div className="flex flex-col gap-4 rounded-md bg-inset p-6">
+        <div className="flex flex-col gap-4 rounded-md bg-panel p-6">
           <p className="text-center text-body leading-relaxed text-ink-2">
             Use a GitHub account with write access to this repo.
           </p>

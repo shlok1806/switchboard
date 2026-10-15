@@ -28,7 +28,7 @@ function ViewFallback() {
   return (
     <div className="flex flex-col gap-2 p-4" aria-busy="true">
       {[0, 1, 2, 3, 4].map((i) => (
-        <Skeleton key={i} className="h-11 bg-inset" />
+        <Skeleton key={i} className="h-11 bg-panel" />
       ))}
     </div>
   );
@@ -131,7 +131,7 @@ export default function App() {
   if (state.status === "error")
     return (
       <Center>
-        <div className="flex w-full max-w-sm flex-col gap-5 rounded-md bg-inset p-6">
+        <div className="flex w-full max-w-sm flex-col gap-5 rounded-md bg-panel p-6">
           <div className="flex gap-3">
             <AlertTriangle className="mt-0.5 size-5 shrink-0 text-red" aria-hidden />
             <div className="flex min-w-0 flex-col gap-1">

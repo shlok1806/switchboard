@@ -105,7 +105,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-inset text-ink-2"
+              "bg-panel text-ink-2"
             )}
           >
             Pending
@@ -127,7 +127,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-md bg-inset",
+        "overflow-hidden rounded-md bg-panel",
         className
       )}
     >
@@ -135,7 +135,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
         <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            className="h-auto w-full justify-between rounded-b-none bg-inset px-3 py-2 font-normal hover:bg-hover"
+            className="h-auto w-full justify-between rounded-b-none bg-panel px-3 py-2 font-normal hover:bg-hover"
           >
             <div className="flex items-center gap-2">
               {getStateIcon()}
@@ -152,7 +152,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
                         "data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
           )}
         >
-          <div className="space-y-3 bg-inset p-3 pt-0">
+          <div className="space-y-3 bg-panel p-3 pt-0">
             {input && Object.keys(input).length > 0 && (
               <div>
                 <h4 className="text-muted-foreground mb-2 text-sm font-medium">

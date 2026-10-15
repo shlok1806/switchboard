@@ -50,5 +50,5 @@ export function IssueBody({ text }: { text: string }) {
   }
   flush();
   if (!blocks.length) return null;
-  return <div className="flex max-w-[66ch] flex-col gap-2 text-body leading-relaxed text-ink-2">{blocks}</div>;
+  return <div className="flex max-w-[60ch] flex-col gap-2 text-body leading-relaxed text-ink-2">{blocks}</div>;
 }

@@ -132,14 +132,14 @@ function Used({ session }: { session?: SessionUsage }) {
   );
 }
 
-const SHARE_COLOURS = ["bg-ink", "bg-ink-4", "bg-accent", "bg-green", "bg-orange"];
+const SHARE_COLOURS = ["bg-ink", "bg-ink-4", "bg-accent", "bg-green", "bg-ink-2"];
 
 export function AccountCardView({ card, now }: { card: AccountCard; now: number }) {
   const stale = card.limits !== undefined && isStale(card.limits.readAt, now);
   const history = sessionHistory(card, now);
   const shared = card.agents.filter((a) => a.share > 0);
   return (
-    <article className="@container flex min-w-0 flex-col gap-5 rounded-md bg-inset p-4" aria-label={`Account ${card.email}`}>
+    <article className="@container flex min-w-0 flex-col gap-5 rounded-md bg-panel p-4" aria-label={`Account ${card.email}`}>
       <header className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="truncate text-body font-medium text-ink" title={card.email}>{card.email}</span>
@@ -238,7 +238,7 @@ export function AccountsPanel({ className }: { className?: string }) {
         type="button"
         onClick={toggle}
         aria-expanded={!collapsed}
-        className="group flex min-h-10 w-full min-w-0 items-center gap-3 rounded-md bg-inset px-3 text-left text-small transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
+        className="group flex min-h-10 w-full min-w-0 items-center gap-3 rounded-md bg-panel px-3 text-left text-small transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
       >
         <span className="shrink-0 font-medium text-ink">Accounts</span>
         {/* a phone has room for the busiest account only */}

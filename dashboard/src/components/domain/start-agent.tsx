@@ -220,7 +220,7 @@ export function StartAgentForm({
           </DialogDescription>
         </DialogHeader>
         <p className="text-body text-ink-2">Install one on the machine, naming the folders its Agents may work in:</p>
-        <code className="block rounded-md bg-inset px-3 py-2 font-mono text-small text-ink [overflow-wrap:anywhere]">
+        <code className="block rounded-md bg-panel px-3 py-2 font-mono text-small text-ink [overflow-wrap:anywhere]">
           switchboard host install --root ~/code/your-repo
         </code>
         <DialogFooter>

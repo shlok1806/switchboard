@@ -120,7 +120,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
       bodyClassName="flex flex-col gap-3"
     >
       {!watching ? (
-        <p className="text-small text-ink-3">
+        <p className="max-w-[60ch] text-small text-ink-3">
           {agent.presence === "gone"
             ? "Gone. Its terminal shows again when it resumes."
             : `The screen ${agent.person}'s wrapper shows, with secrets masked before it leaves their machine.`}
