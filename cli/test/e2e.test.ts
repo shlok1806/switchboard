@@ -853,7 +853,10 @@ describe("the Proxy Capture", () => {
     upstream?.close();
   });
 
-  const proxyEvents = async (id: string) => (await agentEvents(id)).filter((e) => e.capture === "proxy");
+  // Proxy Events only: a model the Proxy Capture saw is also an `agent.model` Event
+  // with the proxy Capture (ADR 0010), reported apart from the Digest and in no set order.
+  const proxyEvents = async (id: string) =>
+    (await agentEvents(id)).filter((e) => e.type === "proxy.digest" || e.type === "proxy.raw");
 
   it("shows the model each Agent runs on: configured at start, then what its requests ask for", async () => {
     // Started with --model: that is all the Channel knows until the first request.
@@ -2598,7 +2601,10 @@ describe("switchboard run codex and gemini", () => {
     const SSE_SHA = createHash("sha256").update(RESPONSES_SSE).digest("hex");
     const GEMINI_SHA = createHash("sha256").update(GEMINI_SSE).digest("hex");
     const CODE_ASSIST_SHA = createHash("sha256").update(CODE_ASSIST_SSE).digest("hex");
-    const proxyEvents = async (id: string) => (await agentEvents(id)).filter((e) => e.capture === "proxy");
+    // Proxy Events only: a model the Proxy Capture saw is also an `agent.model` Event
+    // with the proxy Capture (ADR 0010), reported apart from the Digest and in no set order.
+    const proxyEvents = async (id: string) =>
+      (await agentEvents(id)).filter((e) => e.type === "proxy.digest" || e.type === "proxy.raw");
 
     beforeAll(async () => {
       wsSha = createHash("sha256")
