@@ -306,15 +306,20 @@ does, from a list on your machine. To type from a browser:
    switchboard attach allow K7QX-2MRD-PA4L-7TZE-WCBN --person maya --repo shlok/app --agent shlok/claude/7f3a
    ```
 
-3. Click the screen and type. Every keystroke is signed by the browser's key, and your
+3. Choose **Take the keyboard**, click the screen and type. Every keystroke is signed by the browser's key, and your
    wrapper types it only if the signature checks out. What is typed counts as your own
    typing: an Interrupt waits for it, and Enter submits a prompt. A paste goes in as one
    paste, as it would at your keyboard.
 
 When someone starts watching or typing, your terminal shows a notification (in iTerm2,
 WezTerm, kitty and Ghostty; the wrapper's log has it everywhere), and when the CLI exits
-the wrapper says who watched and typed. Typing is not exclusive: you and everyone you
-allowed type into the same session at once. Watching sends up to eight screen frames a
+the wrapper says who watched and typed.
+
+One typist holds the keyboard at a time, so two people never type into one prompt at
+once. While someone holds it from the Dashboard, your own keys are held back and your
+terminal says who has it: press **Ctrl+]** to take it back. A hold ends after a minute
+without a keystroke, when its holder releases it or stops watching, or when your wrapper
+loses the Channel. Anyone else asking for it is told who holds it. Watching sends up to eight screen frames a
 second through your Channel, each a billed message on Cloudflare.
 
 `switchboard attach list` shows the allowed keys and `switchboard attach revoke <fingerprint>`

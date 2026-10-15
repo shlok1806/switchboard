@@ -11,6 +11,8 @@ export const TERMINAL_FRAME_MS = 125;
 export const TERMINAL_INPUT_MAX = 1024;
 /** The most input frames one Person's socket may send a second. */
 export const TERMINAL_INPUTS_PER_SECOND = 50;
+/** A typist holds the keyboard until this long without a keystroke from them. */
+export const TERMINAL_HOLD_IDLE_MS = 60_000;
 /** A key counts as attached while it typed this recently. */
 export const TERMINAL_ATTACHED_MS = 120_000;
 
@@ -33,6 +35,11 @@ export interface TerminalScreenFrame {
   prompt: boolean;
   /** The CLI asked for bracketed paste: a paste goes in between ESC [200~ and ESC [201~. */
   paste: boolean;
+  /**
+   * Who holds the keyboard: a key's label and fingerprint, or the owner at the terminal
+   * itself (`key` null); null when no one does.
+   */
+  holder: { person: string; key: string | null } | null;
 }
 
 /** A Person's socket to the Channel: start or stop watching Agent `agent`. */
@@ -62,11 +69,15 @@ export interface TerminalInputFrame {
   /** The attach key's public key, SPKI, base64. */
   key: string;
   seq: number;
+  /** Absent to type `text`; `take` or `release` the keyboard, with `text` empty. */
+  op?: TerminalInputOp;
   text: string;
   /** ECDSA P-256 with SHA-256 over {@link signedInput}, IEEE P1363 (r || s), base64. */
   sig: string;
   from?: string;
 }
+
+export type TerminalInputOp = "take" | "release";
 
 /** Wrapper to watchers: why a frame was not typed. */
 export interface TerminalRefusedFrame {
@@ -90,8 +101,15 @@ export interface TerminalAttachedFrame {
  * The exact text an input frame's signature covers, one field per line. The Channel's
  * repo is in it, so a frame signed for an Agent in one Channel is no good in another.
  */
-export function signedInput(repo: string, agent: string, nonce: string, seq: number, text: string): string {
-  return `switchboard-terminal-input\n${repo}\n${agent}\n${nonce}\n${seq}\n${text}`;
+export function signedInput(
+  repo: string,
+  agent: string,
+  nonce: string,
+  seq: number,
+  op: TerminalInputOp | undefined,
+  text: string,
+): string {
+  return `switchboard-terminal-input\n${repo}\n${agent}\n${nonce}\n${seq}\n${op ?? "type"}\n${text}`;
 }
 
 const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

@@ -11,11 +11,12 @@ import {
   TERMINAL_INPUT_MAX,
   TERMINAL_INPUTS_PER_SECOND,
   type TerminalInputFrame,
+  type TerminalInputOp,
 } from "../../../shared/src/index";
 import type { AttachList } from "./attach-keys";
 
 export type GateResult =
-  | { ok: true; text: string; person: string; fingerprint: string }
+  | { ok: true; op?: TerminalInputOp; text: string; person: string; fingerprint: string }
   /** `limited`: dropped for coming too fast, before any check; not worth an answer each. */
   | { ok: false; fingerprint: string; reason: string; limited?: true };
 
@@ -75,7 +76,13 @@ export class AttachGate {
     const agent = this.options.agent();
     if (agent === null || frame.agent !== agent) return refuse("this wrapper does not run that Agent");
     if (spki === null) return refuse("the key is not base64");
-    if (typeof frame.text !== "string" || frame.text.length === 0 || frame.text.length > TERMINAL_INPUT_MAX)
+    const op = frame.op;
+    if (op !== undefined && op !== "take" && op !== "release") return refuse("not an input, a take or a release");
+    if (op !== undefined && frame.text !== "") return refuse(`a ${op} carries no text`);
+    if (
+      op === undefined &&
+      (typeof frame.text !== "string" || frame.text.length === 0 || frame.text.length > TERMINAL_INPUT_MAX)
+    )
       return refuse(`input is 1 to ${TERMINAL_INPUT_MAX} characters`);
     if (!Number.isSafeInteger(frame.seq) || frame.seq < 0) return refuse("bad sequence number");
 
@@ -96,7 +103,11 @@ export class AttachGate {
     const signature = typeof frame.sig === "string" ? fromBase64(frame.sig) : null;
     if (
       signature === null ||
-      !(await verify(spki, signature, signedInput(this.options.repo, agent, this.options.nonce, frame.seq, frame.text)))
+      !(await verify(
+        spki,
+        signature,
+        signedInput(this.options.repo, agent, this.options.nonce, frame.seq, op, frame.text),
+      ))
     )
       return refuse("the signature does not match");
 
@@ -104,11 +115,12 @@ export class AttachGate {
     if (frame.seq <= last) return refuse("a sequence number already used");
 
     const owner = allowed.person === this.options.owner;
-    const dialog = !owner && !list.attachersAnswerPrompts ? this.options.dialog() : null;
+    // Taking or releasing the keyboard answers nothing.
+    const dialog = op === undefined && !owner && !list.attachersAnswerPrompts ? this.options.dialog() : null;
     if (dialog !== null) return refuse(`a dialog may be open (${dialog}), and only the owner answers dialogs here`);
 
     this.seqs.set(fingerprint, frame.seq);
-    return { ok: true, text: frame.text, person: allowed.person, fingerprint };
+    return { ok: true, ...(op === undefined ? {} : { op }), text: frame.text, person: allowed.person, fingerprint };
   }
 }
 

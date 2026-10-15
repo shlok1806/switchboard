@@ -107,6 +107,7 @@ const screen = (agent: AgentId, text: string): Frame => ({
   attached: [],
   prompt: false,
   paste: false,
+  holder: { person: "alice", key: null },
 });
 
 async function events(): Promise<ChannelEvent[]> {
@@ -217,6 +218,8 @@ describe("Watching an Agent's terminal", () => {
     agent.send({ ...screen(id, "x"), cols: 0 });
     agent.send({ ...screen(id, "x"), prompt: "yes" });
     agent.send({ ...screen(id, "x"), paste: "yes" });
+    agent.send({ ...screen(id, "x"), holder: { person: "bob", key: 7 } });
+    agent.send({ ...screen(id, "x"), holder: "bob" });
     agent.send({ ...screen(id, "x"), attached: [{ person: 3, key: "ABCD" }] });
     agent.send(screen(id, "fine"));
     await waitFor(() => (bob.of("terminal.screen").length > 0 ? true : undefined));
@@ -241,6 +244,22 @@ describe("Typing into an Agent's terminal", () => {
     bob.send({ ...input(id, 1), from: "alice" });
     await waitFor(() => (agent.of("terminal.input").length > 0 ? true : undefined));
     expect(agent.of("terminal.input")).toEqual([{ ...input(id, 1), from: "bob" }]);
+  });
+
+  it("carries a take or a release of the keyboard, without text, and nothing in between", async () => {
+    const { id, socket: agent } = await wrapper("alice");
+    const bob = await Socket.open("bob");
+    bob.send({ ...input(id, 1), op: "take", text: "y" });
+    bob.send({ ...input(id, 2), op: "grab", text: "" });
+    bob.send({ ...input(id, 3), text: "" });
+    bob.send({ ...input(id, 4), op: "take", text: "" });
+    bob.send({ ...input(id, 5), op: "release", text: "" });
+    await waitFor(() => (agent.of("terminal.input").length >= 2 ? true : undefined));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(agent.of("terminal.input")).toEqual([
+      { ...input(id, 4), op: "take", text: "", from: "bob" },
+      { ...input(id, 5), op: "release", text: "", from: "bob" },
+    ]);
   });
 
   it("carries input only from a Person's own socket, never a wrapper's", async () => {

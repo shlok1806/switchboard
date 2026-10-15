@@ -45,6 +45,7 @@ import {
   interruptNotice,
   modelPath,
   STANDING_RULE,
+  TERMINAL_HOLD_IDLE_MS,
 } from "../../shared/src/index";
 import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
@@ -67,6 +68,7 @@ import { SessionContextReader } from "./session-context";
 import { channelCheckout, GitError } from "./task-worktree";
 import { cachedAttachList } from "./terminal/attach-keys";
 import { AttachGate } from "./terminal/gate";
+import { holderOf, TerminalKeyboard } from "./terminal/keyboard";
 import { TerminalPresence, terminalNotification } from "./terminal/presence";
 import { ScreenStream, TerminalScreen } from "./terminal/screen";
 import { TranscriptReader } from "./transcript";
@@ -323,10 +325,24 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       attached: presence.attached(),
       prompt: typer.dialogOpen !== null,
       paste: typer.pasteMode,
+      holder: holderOf(keyboard.held, config.person),
     };
     stream.send(JSON.stringify(frame));
   };
   const screenStream = new ScreenStream(sendScreen);
+  // One typist at a time holds the keyboard: the Person here, or one Dashboard key.
+  const keyboard = new TerminalKeyboard({
+    idleMs: seconds(env.SWITCHBOARD_TERMINAL_HOLD_SECONDS, TERMINAL_HOLD_IDLE_MS),
+    onChange: (holder, was) => {
+      screenStream.changed();
+      if (holder?.kind === "key")
+        notify(
+          `${holder.person} holds the keyboard from the Dashboard (key ${holder.fingerprint}): your keys are held back until they let go. Ctrl+] takes it back.`,
+        );
+      else if (was?.kind === "key")
+        notify(holder === null ? `${was.person} let go of the keyboard` : "you hold the keyboard again");
+    },
+  });
   const gate = new AttachGate({
     owner: config.person,
     // As the Dashboard names it, from its address: the default repo in config.json may not be lowercase.
@@ -348,22 +364,35 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       }
       return;
     }
-    if (!result.ok) {
+    const refuse = (fingerprint: string, reason: string) => {
       log(
-        `refused terminal input from ${result.fingerprint || "a bad key"} (Channel says ${frame.from ?? "nobody"}): ${result.reason}`,
+        `refused terminal input from ${fingerprint || "a bad key"} (Channel says ${frame.from ?? "nobody"}): ${reason}`,
       );
       const refused: TerminalRefusedFrame = {
         type: "terminal.refused",
-        agent: agentId,
-        fingerprint: result.fingerprint,
+        agent: agentId as AgentId,
+        fingerprint,
         seq: typeof frame.seq === "number" ? frame.seq : -1,
-        reason: result.reason,
+        reason,
       };
       stream.send(JSON.stringify(refused));
+    };
+    if (!result.ok) {
+      refuse(result.fingerprint, result.reason);
+      return;
+    }
+    if (result.op === "release") {
+      keyboard.release(result.fingerprint);
+      return;
+    }
+    const busy =
+      result.op === "take" ? keyboard.take(result.fingerprint, result.person) : keyboard.typed(result.fingerprint);
+    if (busy !== null) {
+      refuse(result.fingerprint, busy);
       return;
     }
     // Typed as the Person's own keys are: Interrupts wait for it, and Enter is the Person's prompt.
-    typer.personTyped(result.text);
+    if (result.op === undefined) typer.personTyped(result.text);
     const attaching = presence.keyTyped(result.fingerprint, result.person);
     screenStream.changed();
     if (attaching) {
@@ -520,6 +549,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         // An older Channel sends only the count.
         for (const person of presence.watchers(Array.isArray(message.persons) ? message.persons : []))
           notify(`${person} is watching this terminal from the Dashboard`);
+        // A Dashboard holder who stopped watching closed the page or lost their connection.
+        if (Array.isArray(message.persons)) keyboard.watching(message.persons);
       }
       if (message.type === "terminal.input" && message.agent === agentId) void typedFromChannel(message);
       if (message.type === "directives" && message.agent === agentId) {
@@ -553,6 +584,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       if (connected) hooks?.connected();
       if (connected) proxy?.connected();
       if (connected) attach();
+      else keyboard.disconnected();
     },
   );
 
@@ -826,9 +858,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     typer.output(data);
   });
 
+  let remindedAt = 0;
   const onInput = (data: Buffer) => {
-    const text = data.toString("utf8");
-    typer.personTyped(text);
+    const { pass, heldBack } = keyboard.local(data.toString("utf8"));
+    if (pass !== "") typer.personTyped(pass);
+    const holder = keyboard.held;
+    if (heldBack && holder?.kind === "key" && Date.now() - remindedAt >= 5000) {
+      remindedAt = Date.now();
+      notify(`${holder.person} holds the keyboard from the Dashboard: Ctrl+] takes it back`);
+    }
   };
   if (stdin.isTTY) stdin.setRawMode(true);
   stdin.on("data", onInput);
@@ -895,6 +933,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   clearTimeout(trustTimer);
   screenStream.stop();
+  keyboard.dispose();
   screen?.dispose();
   waker?.stop();
   discovering.abort();

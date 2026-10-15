@@ -4,7 +4,7 @@
  * carries the keystrokes; the wrapper takes them once the Agent's Person has allowed the
  * key, so this panel shows the command that allows it.
  */
-import type { Agent, TerminalScreenFrame } from "@shared/index";
+import type { Agent, TerminalInputOp, TerminalScreenFrame } from "@shared/index";
 import { TERMINAL_INPUT_MAX } from "@shared/index";
 import { Keyboard, Monitor } from "lucide-react";
 import { type ClipboardEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
@@ -56,24 +56,29 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
     attachKey().then(setKey, (e: unknown) => setKeyError(e instanceof Error ? e.message : "This browser cannot keep a key."));
   }, [typing, key]);
 
-  const type = useCallback(
-    (text: string) => {
-      if (key === null || repo === undefined || text === "") return;
-      for (let at = 0; at < text.length; at += TERMINAL_INPUT_MAX) {
-        const chunk = text.slice(at, at + TERMINAL_INPUT_MAX);
-        // Signed one after another, so frames leave in the order they were typed.
-        queue.current = queue.current.then(async () => {
-          const n = nonce.current;
-          if (n === null || link.current === null) return;
-          const seq = nextSeq();
-          const sig = await key.sign(repo, agent.id, n, seq, chunk);
-          sent.current.add(seq);
-          if (link.current?.send({ agent: agent.id, key: key.spki, seq, text: chunk, sig })) setRefused(null);
-          else setRefused("Not connected to the Channel.");
-        });
-      }
+  /** Sends signed frames one after another, so they leave in the order they were made. */
+  const send = useCallback(
+    (op: TerminalInputOp | undefined, text: string) => {
+      if (key === null || repo === undefined) return;
+      queue.current = queue.current.then(async () => {
+        const n = nonce.current;
+        if (n === null || link.current === null) return;
+        const seq = nextSeq();
+        const sig = await key.sign(repo, agent.id, n, seq, op, text);
+        sent.current.add(seq);
+        const frame = { agent: agent.id, key: key.spki, seq, ...(op === undefined ? {} : { op }), text, sig };
+        if (link.current?.send(frame)) setRefused(null);
+        else setRefused("Not connected to the Channel.");
+      });
     },
     [key, repo, agent.id],
+  );
+  const type = useCallback(
+    (text: string) => {
+      for (let at = 0; at < text.length; at += TERMINAL_INPUT_MAX)
+        send(undefined, text.slice(at, at + TERMINAL_INPUT_MAX));
+    },
+    [send],
   );
 
   const onKeyDown = (e: KeyboardEvent<HTMLPreElement>) => {
@@ -89,7 +94,13 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
   };
 
   const owner = agent.person === me;
-  const canType = typing && key !== null && repo !== undefined && screen !== null;
+  const holder = screen?.holder ?? null;
+  const mine = key !== null && holder?.key === key.fingerprint;
+  const canType = typing && mine && repo !== undefined && screen !== null;
+  const stopTyping = () => {
+    if (mine) send("release", "");
+    setTyping(false);
+  };
   const command = key && `switchboard attach allow ${key.fingerprint}${owner ? "" : ` --person ${me} --repo ${repo} --agent ${agent.id}`}`;
 
   return (
@@ -122,11 +133,15 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
                 {screen.prompt && (
                   <span className="rounded-sm bg-orange-tint px-1.5 text-orange">Waiting on a dialog</span>
                 )}
-                {screen.attached.length > 0 && (
-                  <span>
-                    Typing: {screen.attached.map((a) => a.person).join(", ")}
-                  </span>
-                )}
+                <span>
+                  {holder === null
+                    ? "Keyboard free"
+                    : mine
+                      ? "You hold the keyboard"
+                      : holder.key === null
+                        ? `${holder.person} holds the keyboard, at the terminal`
+                        : `${holder.person} holds the keyboard`}
+                </span>
               </>
             )}
           </div>
@@ -160,8 +175,8 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
             <div className="flex flex-col gap-2">
               <p className="text-small text-ink-2">
                 {owner
-                  ? "Click the screen and type. The wrapper takes your keys once you allow this browser on the machine that runs it:"
-                  : `Click the screen and type. ${agent.person}'s wrapper takes your keys once they allow this browser on their machine:`}
+                  ? "Take the keyboard, then click the screen and type. The wrapper takes your keys once you allow this browser on the machine that runs it:"
+                  : `Take the keyboard, then click the screen and type. ${agent.person}'s wrapper takes your keys once they allow this browser on their machine:`}
               </p>
               <Snippet defaultValue="allow" className="bg-page">
                 <SnippetHeader>
@@ -171,9 +186,21 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
                 <SnippetTabsContent value="allow">{command}</SnippetTabsContent>
               </Snippet>
               {refused && <p className="text-small text-orange">Not typed: {refused}</p>}
-              <Button size="xs" variant="ghost" className="-ml-2.5 self-start" onClick={() => setTyping(false)}>
-                Stop typing
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {mine ? (
+                  <Button size="sm" variant="secondary" className="bg-page" onClick={() => send("release", "")}>
+                    Release the keyboard
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="primary" onClick={() => send("take", "")}>
+                    <Keyboard className="size-3.5" aria-hidden />
+                    Take the keyboard
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={stopTyping}>
+                  Stop typing
+                </Button>
+              </div>
             </div>
           )}
         </>
