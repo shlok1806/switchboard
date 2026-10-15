@@ -47,6 +47,8 @@ import { cn } from "@/lib/utils";
 interface View {
   positions: Record<string, Point>;
   camera?: Camera;
+  /** A phone's own camera: one saved on a desktop would show a phone a corner of the canvas. */
+  phoneCamera?: Camera;
 }
 
 const viewKey = (repo: string) => `switchboard.canvas.${repo}`;
@@ -55,7 +57,7 @@ function loadView(repo: string): View {
   try {
     const raw = window.localStorage.getItem(viewKey(repo));
     const parsed = raw ? (JSON.parse(raw) as Partial<View>) : {};
-    return { positions: parsed.positions ?? {}, camera: parsed.camera };
+    return { positions: parsed.positions ?? {}, camera: parsed.camera, phoneCamera: parsed.phoneCamera };
   } catch {
     return { positions: {} };
   }
@@ -90,7 +92,8 @@ function age(a: Agent, state: AgentState): string {
 export function shortTitle(title: string, max = 26): string {
   if (title.length <= max) return title;
   const words = title.split(/\s+/);
-  let out = words[0]!;
+  // A first word too long for the line is cut where the line ends.
+  let out = words[0]!.slice(0, max);
   for (const w of words.slice(1)) {
     if (out.length + 1 + w.length > max) break;
     out += ` ${w}`;
@@ -165,7 +168,7 @@ const Node = memo(function Node({
           <span className={cn("min-w-0 flex-1 truncate text-row font-semibold", state === "gone" ? "text-ink-3" : "text-ink")}>{shortName(agent)}</span>
           {agent.role === "lead" && <span className="shrink-0 rounded-[var(--r)] border border-rule-2 px-1.5 text-ink-3">lead</span>}
         </span>
-        <span className="min-w-0 whitespace-nowrap text-ink-3" title={task?.title}>
+        <span className="min-w-0 overflow-hidden whitespace-nowrap text-ink-3" title={task?.title}>
           {task ? `#${task.number} ${shortTitle(task.title)}` : "No Claim"}
         </span>
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums">
@@ -374,13 +377,15 @@ export function CanvasView({ selected }: { selected?: string }) {
     if (viewRepo === repo) saveView(repo, view);
   }, [repo, viewRepo, view]);
 
+  // The viewport is on the page only once there are Agents: measure it from then on.
+  const empty = agents.length === 0;
   useEffect(() => {
     const el = viewport.current;
     if (!el) return;
     const observer = new ResizeObserver(([entry]) => setSize({ w: entry.contentRect.width, h: entry.contentRect.height }));
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [empty]);
 
   // A phone sees every frame at once and zooms in from there; a desktop starts readable, at 100%.
   const firstView = useCallback(
@@ -388,19 +393,21 @@ export function CanvasView({ selected }: { selected?: string }) {
     [allRects, size, mobile],
   );
   // The first time there is room and nodes, frame them all. After that the camera moves only when the Person moves it.
-  const camera = view.camera ?? (size.w ? firstView() : { x: 0, y: 0, k: 1 });
+  const cameraField = mobile ? "phoneCamera" : "camera";
+  const saved = view[cameraField];
+  const camera = saved ?? (size.w ? firstView() : { x: 0, y: 0, k: 1 });
   const setCamera = useCallback(
     (next: Camera | ((c: Camera) => Camera)) => {
       setView((v) => {
-        const current = v.camera ?? camera;
-        return { ...v, camera: typeof next === "function" ? next(current) : next };
+        const current = v[cameraField] ?? camera;
+        return { ...v, [cameraField]: typeof next === "function" ? next(current) : next };
       });
     },
-    [camera],
+    [camera, cameraField],
   );
   useEffect(() => {
-    if (!view.camera && size.w && allRects.length) setView((v) => (v.camera ? v : { ...v, camera: firstView() }));
-  }, [view.camera, size, allRects, firstView]);
+    if (!saved && size.w && allRects.length) setView((v) => (v[cameraField] ? v : { ...v, [cameraField]: firstView() }));
+  }, [saved, cameraField, size, allRects, firstView]);
   const fitAll = () => setCamera(fit(bounds(allRects), size.w, size.h));
   const zoomBy = (factor: number) => setCamera((c) => zoomAt(c, factor, { x: size.w / 2, y: size.h / 2 }));
   const centerOn = (p: Point) => setCamera((c) => ({ ...c, x: size.w / 2 - p.x * c.k, y: size.h / 2 - p.y * c.k }));

@@ -7,6 +7,8 @@ import type {
   ClaimRefusal,
   CreateTaskRequest,
   HostsResponse,
+  MemoryQuery,
+  MemoryResponse,
   PersonAction,
   PersonName,
   SpawnAgentRequest,
@@ -130,6 +132,8 @@ export interface ChannelSource {
   release(task: TaskNumber): Promise<ClaimResult>;
   /** `GET /api/hosts`: the Channel's Hosts (ADR 0015), or null when its Worker has none. */
   hosts(): Promise<HostsResponse | null>;
+  /** `GET /api/memory`: the notes Agents left for each other (ADR 0019), latest or matching `q`; null when the Worker has none. */
+  memory(query: MemoryQuery): Promise<MemoryResponse | null>;
   /** `POST /api/agents/spawn`: start an Agent on one of this Person's own Hosts. */
   spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult>;
   /** `POST /api/agents/:id/stop`: ask the Host that runs one of this Person's Agents to stop it. */

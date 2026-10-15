@@ -22,6 +22,12 @@ describe("the route", () => {
     expect(parse("#/feed")).toEqual({ view: "feed", event: undefined });
     expect(parse(href({ view: "now" }))).toEqual({ view: "now" });
   });
+
+  it("reaches Memory, and a Host by its ID, which has a slash in it", () => {
+    expect(parse(href({ view: "memory" }))).toEqual({ view: "memory" });
+    expect(parse(href({ view: "hosts" }))).toEqual({ view: "hosts", host: undefined });
+    expect(parse(href({ view: "hosts", host: "maya/maya-mbp" }))).toEqual({ view: "hosts", host: "maya/maya-mbp" });
+  });
 });
 
 afterEach(() => {

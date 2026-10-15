@@ -21,6 +21,8 @@ const TaskDetail = lazy(() => import("@/views/TaskDetail").then((m) => ({ defaul
 const AgentsView = lazy(() => import("@/views/AgentsView").then((m) => ({ default: m.AgentsView })));
 const AgentDetail = lazy(() => import("@/views/AgentDetail").then((m) => ({ default: m.AgentDetail })));
 const CanvasView = lazy(() => import("@/views/CanvasView").then((m) => ({ default: m.CanvasView })));
+const MemoryView = lazy(() => import("@/views/MemoryView").then((m) => ({ default: m.MemoryView })));
+const HostsView = lazy(() => import("@/views/HostsView").then((m) => ({ default: m.HostsView })));
 const CompareView = lazy(() => import("@/views/CompareView").then((m) => ({ default: m.CompareView })));
 
 function ViewFallback() {
@@ -146,6 +148,8 @@ export default function App() {
             {route.view === "agents" && <AgentsView />}
             {route.view === "agent" && <AgentDetail id={route.id} />}
             {route.view === "canvas" && <CanvasView selected={route.agent} />}
+            {route.view === "memory" && <MemoryView />}
+            {route.view === "hosts" && <HostsView selected={route.host} />}
             {route.view === "compare" && <CompareView turn={route.turn} />}
           </Suspense>
         </main>

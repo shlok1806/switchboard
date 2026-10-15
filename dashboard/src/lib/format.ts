@@ -6,6 +6,7 @@ import type {
   DowngradeReason,
   EventType,
   Holder,
+  MemoryTag,
   Presence,
   TaskField,
   TaskSyncVia,
@@ -18,6 +19,9 @@ export const CLI_LABEL: Record<Cli, string> = {
   codex: "Codex",
   gemini: "Gemini",
 };
+
+/** A memory note's tag, as a word. */
+export const TAG_LABEL: Record<MemoryTag, string> = { decision: "Decision", fact: "Fact", "dead-end": "Dead end", question: "Question", files: "Files" };
 
 export const PRESENCE_LABEL: Record<Presence, string> = { live: "Live", idle: "Idle", gone: "Gone" };
 

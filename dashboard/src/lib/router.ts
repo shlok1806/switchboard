@@ -9,7 +9,9 @@ export type Route =
   | { view: "agents" }
   | { view: "agent"; id: string }
   | { view: "canvas"; agent?: string }
-  | { view: "compare"; turn?: string };
+  | { view: "compare"; turn?: string }
+  | { view: "memory" }
+  | { view: "hosts"; host?: string };
 
 export function parse(hash: string): Route {
   const [, view = "now", arg] = hash.replace(/^#/, "").split("/");
@@ -25,6 +27,10 @@ export function parse(hash: string): Route {
       return { view: "canvas", agent: a };
     case "feed":
       return { view: "feed", event: a };
+    case "memory":
+      return { view: "memory" };
+    case "hosts":
+      return { view: "hosts", host: a };
     default:
       return { view: "now" };
   }
@@ -48,6 +54,10 @@ export function href(route: Route): string {
       return route.agent ? `#/canvas/${encodeURIComponent(route.agent)}` : "#/canvas";
     case "compare":
       return route.turn ? `#/compare/${encodeURIComponent(route.turn)}` : "#/compare";
+    case "memory":
+      return "#/memory";
+    case "hosts":
+      return route.host ? `#/hosts/${encodeURIComponent(route.host)}` : "#/hosts";
   }
 }
 

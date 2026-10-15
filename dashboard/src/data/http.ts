@@ -28,6 +28,8 @@ import type {
   TaskListResponse,
   TaskNumber,
   ClaimRefusal,
+  MemoryQuery,
+  MemoryResponse,
   TerminalInputFrame,
   TerminalWatchFrame,
   Verdict,
@@ -42,6 +44,7 @@ import {
   nicknamePath,
   releasePath,
   rolePath,
+  memoryQueryString,
 } from "@shared/index";
 import type {
   Capabilities,
@@ -389,6 +392,14 @@ export class HttpChannelSource implements ChannelSource {
     if (status === 404) return null;
     if (status >= 400) throw new Error(reasonOf(body, status));
     return body as HostsResponse;
+  }
+
+  async memory(query: MemoryQuery): Promise<MemoryResponse | null> {
+    const { status, body } = await this.call<MemoryResponse>(memoryQueryString(query));
+    // A Worker from before shared memory (ADR 0019): the Dashboard leaves it out.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as MemoryResponse;
   }
 
   async spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult> {
