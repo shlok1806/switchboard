@@ -1,6 +1,6 @@
 import { PendingApproval } from "@/components/domain/approval";
 import { AgentBrief, ContextWindow } from "@/components/domain/context";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import type { Agent, AgentId, ChannelEvent, ProxyMode } from "@shared/index";
 import { MAX_NICKNAME_LENGTH } from "@shared/index";
@@ -10,6 +10,8 @@ import { IssueLink } from "@/components/domain/pending";
 import { SegmentedControl } from "@/components/atoms/SegmentedControl";
 import { RelativeTime, RelativeTimeZone, RelativeTimeZoneDate, RelativeTimeZoneDisplay, RelativeTimeZoneLabel } from "@/components/kibo-ui/relative-time";
 import { EventRow } from "@/components/domain/event";
+import { OlderRow } from "@/components/domain/older";
+import { useScopedHistory } from "@/data/history";
 import { RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { Composer } from "@/components/domain/composer";
 import { PresenceStatus, useClaimsOf } from "./AgentsView";
@@ -34,27 +36,33 @@ function sameSender(prev: ChannelEvent, e: ChannelEvent) {
 export function AgentDetail({ id }: { id: string }) {
   const store = useStore();
   const me = useMe();
-  const { events, verdictsByEvent, snapshot, fresh } = useChannel();
+  const { verdictsByEvent, snapshot, fresh } = useChannel();
   const { agentById, taskByNumber } = useIndex();
   const claimsOf = useClaimsOf();
   const can = useCapabilities();
   const agent = agentById.get(id as AgentId);
   const [capture, setCapture] = useState<(typeof CAPTURES)[number]>("All");
 
+  const aboutAgent = useCallback(
+    (e: ChannelEvent) =>
+      (e.actor.kind === "agent" && e.actor.agentId === id) ||
+      (e.type === "directive" && e.payload.to === id) ||
+      // Renamed by a Person, or its name taken while it was Gone (ADR 0009).
+      (e.type === "agent.rename" && e.payload.agent === id),
+    [id],
+  );
+  const scoped = useScopedHistory({ agent: id as AgentId }, aboutAgent);
   const history = useMemo(
     () =>
-      events
-        .filter(
-          (e) =>
-            ((e.actor.kind === "agent" && e.actor.agentId === id) ||
-              (e.type === "directive" && e.payload.to === id) ||
-              // Renamed by a Person, or its name taken while it was Gone (ADR 0009).
-              (e.type === "agent.rename" && e.payload.agent === id)) &&
-            (capture === "All" || (e.capture && CAPTURE_LABEL[e.capture] === capture)),
-        )
+      scoped.events
+        .filter((e) => capture === "All" || (e.capture && CAPTURE_LABEL[e.capture] === capture))
         .slice()
         .reverse(),
-    [events, id, capture],
+    [scoped.events, capture],
+  );
+  const own = useMemo(
+    () => scoped.events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === id).length,
+    [scoped.events, id],
   );
   const heard = useMemo(() => {
     let i = 0;
@@ -120,7 +128,16 @@ export function AgentDetail({ id }: { id: string }) {
 
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
-              { k: "Events", v: <NumberFlow value={events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === agent.id).length} /> },
+              {
+                k: "Events",
+                // Only the Events loaded so far: counting them all would read the whole history.
+                v: (
+                  <span title={scoped.more ? "The latest ones; it has older Events" : undefined}>
+                    <NumberFlow value={own} />
+                    {scoped.more && <span className="text-ink-3">+</span>}
+                  </span>
+                ),
+              },
               { k: "Interrupts", v: can.verdicts ? <NumberFlow value={heard.i} /> : <span className="text-[14px] text-ink-3">-</span> },
               { k: "Queued", v: can.verdicts ? <NumberFlow value={heard.q} /> : <span className="text-[14px] text-ink-3">-</span> },
               { k: "Started", v: <span className="text-[16px]">{ago(agent.startedAt)}</span> },
@@ -139,7 +156,9 @@ export function AgentDetail({ id }: { id: string }) {
             </div>
             <ul className="overflow-hidden rounded-xl border border-line bg-surface p-1.5">
               {history.length === 0 ? (
-                <li className="px-4 py-8 text-center text-[14px] text-ink-3">Nothing yet</li>
+                <li className="px-4 py-8 text-center text-[14px] text-ink-3">
+                  {scoped.loading ? "Loading" : "Nothing yet"}
+                </li>
               ) : (
                 history.map((e, i) => (
                   <EventRow
@@ -155,6 +174,7 @@ export function AgentDetail({ id }: { id: string }) {
                   />
                 ))
               )}
+              {scoped.more && <OlderRow loading={scoped.loading} onClick={scoped.loadOlder} />}
             </ul>
           </section>
         </div>

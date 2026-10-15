@@ -13,7 +13,7 @@ import type {
   VerdictProbabilities,
 } from "@shared/index";
 import { cleanNickname, holderName, sameNickname } from "@shared/index";
-import { ALL_CAPABILITIES, type ChannelSource, type ClaimResult, type ConnectionState } from "../source";
+import { ALL_CAPABILITIES, type ChannelSource, type ClaimResult, type ConnectionState, type EventPage } from "../source";
 import { accounts, ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
 import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
@@ -58,6 +58,19 @@ export class MockChannelSource implements ChannelSource {
   /** The simulated Channel's snapshot holds its whole history. */
   async olderEvents(): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">> {
     return { events: [], verdicts: [] };
+  }
+
+  // The simulated Channel's whole history is in its snapshot.
+  async scopedEvents(): Promise<EventPage> {
+    return { events: [] };
+  }
+
+  async eventsById(): Promise<ChannelEvent[]> {
+    return [];
+  }
+
+  async wakesAfter(): Promise<ChannelEvent[]> {
+    return [];
   }
 
   subscribe(_cursor: number, onMessage: (m: StreamMessage) => void, onState: (s: ConnectionState) => void) {

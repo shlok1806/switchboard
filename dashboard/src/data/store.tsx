@@ -121,8 +121,11 @@ export class ChannelStore {
       const page = await this.source.olderEvents(before);
       const s = this.state;
       const known = new Set(s.events.map((e) => e.id));
+      // The page's Verdicts are older than the loaded ones: they go first, in their own order.
+      const older = new Map<string, Verdict[]>();
+      for (const v of page.verdicts) older.set(v.event, [...(older.get(v.event) ?? []), v]);
       const byEvent = new Map(s.verdictsByEvent);
-      for (const v of page.verdicts) byEvent.set(v.event, [v, ...(byEvent.get(v.event) ?? [])]);
+      for (const [event, vs] of older) byEvent.set(event, [...vs, ...(byEvent.get(event) ?? [])]);
       this.set({
         events: [...page.events.filter((e) => !known.has(e.id)), ...s.events],
         verdictsByEvent: byEvent,

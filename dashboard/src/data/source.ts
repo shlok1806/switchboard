@@ -1,6 +1,7 @@
 import type {
   ActionResult,
   AgentId,
+  ChannelEvent,
   ChannelSnapshot,
   ClaimRefusal,
   CreateTaskRequest,
@@ -15,6 +16,15 @@ import type {
 export type ClaimResult = { ok: true; task: Task } | ClaimRefusal;
 
 export type ConnectionState = "connecting" | "live" | "reconnecting";
+
+/** The Events about one Agent, or on one Task. */
+export type HistoryScope = { agent: AgentId } | { task: TaskNumber };
+
+/** A page of Events, oldest first, with `olderBefore` set when there are older ones still. */
+export interface EventPage {
+  events: ChannelEvent[];
+  olderBefore?: number;
+}
 
 /**
  * What the Channel behind a source can do today. Views hide or explain the
@@ -76,6 +86,12 @@ export interface ChannelSource {
   snapshot(): Promise<ChannelSnapshot>;
   /** The page of Events before `seq`, oldest first, with `olderBefore` set when there are older ones still. */
   olderEvents(before: number): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">>;
+  /** The latest page of `scope`'s Events, or the page before `seq` `before`. Never Verdicts. */
+  scopedEvents(scope: HistoryScope, before?: number): Promise<EventPage>;
+  /** The Events with these IDs, oldest first; IDs the Channel does not know are left out. */
+  eventsById(ids: readonly string[]): Promise<ChannelEvent[]>;
+  /** The first Wakes after `seq` `after`, oldest first. */
+  wakesAfter(after: number): Promise<ChannelEvent[]>;
   /** Follow the stream after `cursor`. Returns an unsubscribe function. */
   subscribe(
     cursor: number,

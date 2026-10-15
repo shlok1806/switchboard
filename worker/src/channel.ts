@@ -122,6 +122,11 @@ export function createEventsTable(sql: SqlStorage): void {
     CREATE INDEX IF NOT EXISTS events_updates_by_task ON events (task, seq) WHERE type = 'update';
     CREATE INDEX IF NOT EXISTS events_updates_by_actor ON events (actor_kind, actor_id, seq) WHERE type = 'update';
     CREATE INDEX IF NOT EXISTS events_updates_by_actor_task ON events (actor_kind, actor_id, task, seq) WHERE type = 'update';
+    CREATE INDEX IF NOT EXISTS events_by_agent ON events (actor_id, seq) WHERE actor_kind = 'agent';
+    CREATE INDEX IF NOT EXISTS events_directives_to ON events (json_extract(payload, '$.to'), seq) WHERE type = 'directive';
+    CREATE INDEX IF NOT EXISTS events_renames_of ON events (json_extract(payload, '$.agent'), seq) WHERE type = 'agent.rename';
+    CREATE INDEX IF NOT EXISTS events_by_task ON events (task, seq) WHERE task IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS events_wakes ON events (seq) WHERE type = 'wake';
   `);
 }
 
@@ -636,6 +641,79 @@ export class Channel extends DurableObject<Env> {
       .exec<EventRow>("SELECT * FROM events WHERE seq < ? ORDER BY seq DESC LIMIT ?", before, count)
       .toArray()
       .reverse()
+      .map(rowToEvent);
+  }
+
+  /**
+   * The latest `count` Events about Agent `agent` with `seq` below `before`, oldest
+   * first: what it did, the Directives to it and its renames by others.
+   */
+  latestEventsOfAgent(agent: AgentId, count: number, before = Number.MAX_SAFE_INTEGER): ChannelEvent[] {
+    const sql = this.ctx.storage.sql;
+    const rows = [
+      ...sql.exec<EventRow>(
+        `SELECT * FROM events INDEXED BY events_by_agent
+         WHERE actor_kind = 'agent' AND actor_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`,
+        agent,
+        before,
+        count,
+      ),
+      ...sql.exec<EventRow>(
+        `SELECT * FROM events INDEXED BY events_directives_to
+         WHERE type = 'directive' AND json_extract(payload, '$.to') = ? AND seq < ? ORDER BY seq DESC LIMIT ?`,
+        agent,
+        before,
+        count,
+      ),
+      ...sql.exec<EventRow>(
+        `SELECT * FROM events INDEXED BY events_renames_of
+         WHERE type = 'agent.rename' AND json_extract(payload, '$.agent') = ? AND seq < ? ORDER BY seq DESC LIMIT ?`,
+        agent,
+        before,
+        count,
+      ),
+    ];
+    // An Agent that renamed itself is in two of the reads.
+    const bySeq = new Map(rows.map((row) => [row.seq, row]));
+    return [...bySeq.values()]
+      .sort((a, b) => b.seq - a.seq)
+      .slice(0, count)
+      .reverse()
+      .map(rowToEvent);
+  }
+
+  /** The latest `count` Events on Task `task` with `seq` below `before`, oldest first. */
+  latestEventsOfTask(task: TaskNumber, count: number, before = Number.MAX_SAFE_INTEGER): ChannelEvent[] {
+    return this.ctx.storage.sql
+      .exec<EventRow>(
+        "SELECT * FROM events INDEXED BY events_by_task WHERE task = ? AND seq < ? ORDER BY seq DESC LIMIT ?",
+        task,
+        before,
+        count,
+      )
+      .toArray()
+      .reverse()
+      .map(rowToEvent);
+  }
+
+  /** The Events with these IDs, oldest first; IDs the Channel does not know are left out. */
+  eventsById(ids: readonly string[]): ChannelEvent[] {
+    if (ids.length === 0) return [];
+    return this.ctx.storage.sql
+      .exec<EventRow>(`SELECT * FROM events WHERE id IN (${ids.map(() => "?").join(", ")}) ORDER BY seq`, ...ids)
+      .toArray()
+      .map(rowToEvent);
+  }
+
+  /** The first `count` Wakes with `seq` above `after`, oldest first. */
+  wakesAfter(after: number, count: number): ChannelEvent[] {
+    return this.ctx.storage.sql
+      .exec<EventRow>(
+        "SELECT * FROM events INDEXED BY events_wakes WHERE type = 'wake' AND seq > ? ORDER BY seq LIMIT ?",
+        after,
+        count,
+      )
+      .toArray()
       .map(rowToEvent);
   }
 

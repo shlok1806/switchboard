@@ -46,18 +46,23 @@ async function meterChannel(): Promise<void> {
   });
 }
 
+/** Waits until `check` holds. */
+async function settled(check: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 4000;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("Timed out");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 /** Rows read by everything `work` makes the Channel do, its background work included once `until` holds. */
 async function rowsRead(work: () => Promise<unknown>, until?: () => Promise<boolean>): Promise<number> {
   meter.cursors = [];
   meter.paused = false;
   await work();
   if (until !== undefined) {
-    const deadline = Date.now() + 4000;
     meter.paused = true;
-    while (!(await until())) {
-      if (Date.now() > deadline) throw new Error("Timed out");
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    await settled(until);
   }
   meter.paused = true;
   return meter.cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0);
@@ -239,13 +244,8 @@ it("a heartbeat that changes Presence reads a bounded number of rows", async () 
 it("an edit the Relay considers for every live Agent reads a bounded number of rows", async () => {
   // The first Event the Relay considers after the Channel wakes reads each Agent's touched files once.
   const first = hook("file.edit", { path: "src/app.ts", additions: 1, deletions: 0 });
-  await rowsRead(
-    async () => {
-      meter.paused = true;
-      await sendHooks(measured, [first]);
-    },
-    () => verdictsAbout(first.id),
-  );
+  await sendHooks(measured, [first]);
+  await settled(() => verdictsAbout(first.id));
   // Another Agent edits meanwhile, as they do.
   await sendHooks(live[1] as AgentId, [hook("file.edit", { path: "src/other.ts", additions: 1, deletions: 0 })]);
   const edit = hook("file.edit", { path: "src/app.ts", additions: 3, deletions: 1 });
@@ -296,4 +296,33 @@ it("paging back through older Events reads only that page", async () => {
     expect(events.map((e) => e.seq)).toEqual(Array.from({ length: 100 }, (_, i) => 4901 + i));
   });
   expect(read).toBeLessThan(BUDGET);
+});
+
+it("an Agent's or a Task's latest Events read only that page", async () => {
+  const auth = { Authorization: await bearer("shlok") };
+  const read = await rowsRead(async () => {
+    const mine = await call(`/api/events?tail=100&agent=${encodeURIComponent(measured)}`, { headers: auth });
+    const { events } = (await mine.json()) as { events: ChannelEvent[] };
+    expect(events).toHaveLength(100);
+    expect(events.every((e) => e.actor.kind === "agent" && e.actor.agentId === measured)).toBe(true);
+  });
+  expect(read).toBeLessThan(BUDGET * 2);
+  const onTask = await rowsRead(async () => {
+    const response = await call("/api/events?tail=20&task=7", { headers: auth });
+    const { events } = (await response.json()) as { events: ChannelEvent[] };
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((e) => e.task === 7)).toBe(true);
+  });
+  expect(onTask).toBeLessThan(BUDGET);
+});
+
+it("Events by ID and the Wakes after an Event read only what they return", async () => {
+  const auth = { Authorization: await bearer("shlok") };
+  const byId = await rowsRead(async () => {
+    const response = await call("/api/events?ids=seed-10,seed-20,seed-30", { headers: auth });
+    expect(((await response.json()) as { events: ChannelEvent[] }).events).toHaveLength(3);
+  });
+  expect(byId).toBeLessThan(20);
+  const wakes = await rowsRead(() => call("/api/events?type=wake&after=100&limit=100", { headers: auth }));
+  expect(wakes).toBeLessThan(20);
 });

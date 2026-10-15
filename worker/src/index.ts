@@ -13,14 +13,16 @@
 // in shared/src/.
 
 import type {
+  AgentId,
   HistoryResponse,
   JoinRequest,
   JoinResponse,
   PersonsResponse,
   PostUpdateResponse,
   RelayResponse,
+  TaskNumber,
 } from "../../shared/src/index";
-import { MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
+import { MAX_EVENT_IDS, MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
 import { type AgentRoute, handleAgentRoute, matchAgentRoute } from "./agents-api";
 import { channelRepo, devMode, readCredential } from "./auth";
 import { handleAuthRoute, isAuthRoute } from "./auth-api";
@@ -61,6 +63,15 @@ async function handleJoin(request: Request, channel: ChannelStub, caller: Caller
 }
 
 async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> {
+  const ids = url.searchParams.get("ids");
+  if (ids !== null) {
+    const list = ids.split(",").filter((id) => id !== "");
+    if (list.length === 0 || list.length > MAX_EVENT_IDS) {
+      return fail(400, `"ids" must name 1 to ${MAX_EVENT_IDS} Events.`);
+    }
+    const events = await channel.eventsById(list);
+    return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? 0 });
+  }
   if (url.searchParams.has("tail")) {
     const tail = intParam(url, "tail", 0);
     if (tail === null || tail < 1 || tail > MAX_HISTORY_LIMIT) {
@@ -68,7 +79,16 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
     }
     const before = intParam(url, "before", Number.MAX_SAFE_INTEGER);
     if (before === null) return fail(400, '"before" must be a non-negative integer.');
-    const events = await channel.latestEvents(tail, before);
+    const agent = url.searchParams.get("agent");
+    const task = intParam(url, "task", 0);
+    if (task === null) return fail(400, '"task" must be a Task number.');
+    if (agent !== null && task > 0) return fail(400, "Ask for an Agent's or a Task's Events, not both.");
+    const events =
+      agent !== null
+        ? await channel.latestEventsOfAgent(agent as AgentId, tail, before)
+        : task > 0
+          ? await channel.latestEventsOfTask(task as TaskNumber, tail, before)
+          : await channel.latestEvents(tail, before);
     return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? 0 });
   }
   const after = intParam(url, "after", 0);
@@ -76,7 +96,9 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
   if (after === null || limit === null || limit < 1 || limit > MAX_HISTORY_LIMIT) {
     return fail(400, `"after" must be a non-negative integer and "limit" between 1 and ${MAX_HISTORY_LIMIT}.`);
   }
-  const events = await channel.history(after, limit);
+  const type = url.searchParams.get("type");
+  if (type !== null && type !== "wake") return fail(400, '"type" can only be "wake".');
+  const events = type === "wake" ? await channel.wakesAfter(after, limit) : await channel.history(after, limit);
   return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? after });
 }
 

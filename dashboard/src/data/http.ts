@@ -24,8 +24,8 @@ import type {
   ClaimRefusal,
   Verdict,
 } from "@shared/index";
-import { LIVE_PING, MAX_HISTORY_LIMIT, claimPath, nicknamePath, releasePath } from "@shared/index";
-import type { Capabilities, ChannelSource, ClaimResult, ConnectionState } from "./source";
+import { LIVE_PING, MAX_EVENT_IDS, MAX_HISTORY_LIMIT, claimPath, nicknamePath, releasePath } from "@shared/index";
+import type { Capabilities, ChannelSource, ClaimResult, ConnectionState, EventPage, HistoryScope } from "./source";
 
 /**
  * What the Worker on main can do today: join, Events, Updates, the stream (#5),
@@ -197,6 +197,29 @@ export class HttpChannelSource implements ChannelSource {
     return { ...splitVerdicts(page.events), ...olderThan(page.events) };
   }
 
+  async scopedEvents(scope: HistoryScope, before?: number): Promise<EventPage> {
+    const of = "agent" in scope ? `agent=${encodeURIComponent(scope.agent)}` : `task=${scope.task}`;
+    const page = await this.get<HistoryResponse>(
+      `/api/events?tail=${SCOPED_PAGE}&${of}${before === undefined ? "" : `&before=${before}`}`,
+    );
+    const oldest = page.events[0]?.seq;
+    const events = page.events.filter((e) => e.type !== "verdict");
+    return page.events.length === SCOPED_PAGE && oldest !== undefined ? { events, olderBefore: oldest } : { events };
+  }
+
+  async eventsById(ids: readonly string[]): Promise<ChannelEvent[]> {
+    const pages = [];
+    for (let i = 0; i < ids.length; i += MAX_EVENT_IDS) {
+      const some = ids.slice(i, i + MAX_EVENT_IDS).map(encodeURIComponent).join(",");
+      pages.push(this.get<HistoryResponse>(`/api/events?ids=${some}`).then((r) => r.events));
+    }
+    return (await Promise.all(pages)).flat().sort((a, b) => a.seq - b.seq);
+  }
+
+  async wakesAfter(after: number): Promise<ChannelEvent[]> {
+    return (await this.get<HistoryResponse>(`/api/events?type=wake&after=${after}&limit=${WAKES_PAGE}`)).events;
+  }
+
   subscribe(
     cursor: number,
     onMessage: (message: StreamMessage) => void,
@@ -333,6 +356,11 @@ function splitVerdicts(all: ChannelEvent[]): { events: ChannelEvent[]; verdicts:
 
 
 /** A full page of history means there may be older Events: page back from its oldest. */
+/** How many of an Agent's or a Task's Events one read loads. */
+const SCOPED_PAGE = 200;
+/** How many Wakes after an Event one read loads: they come soon after it. */
+const WAKES_PAGE = 200;
+
 function olderThan(page: ChannelEvent[]): { olderBefore?: number } {
   const oldest = page[0]?.seq;
   return page.length === MAX_HISTORY_LIMIT && oldest !== undefined && oldest > 1 ? { olderBefore: oldest } : {};

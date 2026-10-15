@@ -89,9 +89,13 @@ export interface RelayResponse {
 }
 
 /**
- * `GET /api/events?after=<seq>&limit=<n>`: Events with `seq` above `after`, oldest first.
+ * `GET /api/events?after=<seq>&limit=<n>`: Events with `seq` above `after`, oldest first;
+ * with `&type=wake`, only Wakes.
  * `GET /api/events?tail=<n>`: the latest `n` Events, oldest first; with `&before=<seq>`,
- * the latest `n` below that `seq`, to page back through older Events.
+ * the latest `n` below that `seq`, to page back through older Events. With `&agent=<id>`,
+ * only the Events about that Agent (what it did, Directives to it, its renames); with
+ * `&task=<n>`, only the Events on that Task.
+ * `GET /api/events?ids=<id>,<id>`: the Events with those IDs, at most `MAX_EVENT_IDS`.
  */
 export interface HistoryResponse {
   events: ChannelEvent[];
@@ -106,6 +110,9 @@ export interface PersonsResponse {
 
 /** Largest `limit` a history read accepts, and the default. */
 export const MAX_HISTORY_LIMIT = 1000;
+
+/** Most Event IDs one `GET /api/events?ids=` names. */
+export const MAX_EVENT_IDS = 100;
 
 /** The longest Update text the Channel accepts, in characters. */
 export const MAX_UPDATE_LENGTH = 4000;
