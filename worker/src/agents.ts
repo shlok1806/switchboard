@@ -21,6 +21,7 @@ import type {
   ChannelEvent,
   Cli,
   Delivery,
+  DenyApprovalRequest,
   DirectiveDelivery,
   EventPayloads,
   EventType,
@@ -351,6 +352,46 @@ export class AgentRoster {
       const { openedAt: _, ...payload } = approval;
       this.host.append({ type: "approval.pending", actor: { kind: "agent", agentId: id }, capture: "hook", payload });
     }
+    const agent = this.agent(id);
+    this.host.broadcast({ type: "agent", agent });
+    return { ok: true, agent };
+  }
+
+  /**
+   * The Agent's own Person denies its open prompt `request.id` from the Channel (ADR 0014):
+   * only a deniable one, only once, and only while `deliver` reaches the Agent's wrapper.
+   */
+  denyApproval(person: PersonName, id: AgentId, request: DenyApprovalRequest, deliver: () => boolean): RosterResult {
+    const found = this.owned(person, id);
+    if (!found.ok) return found;
+    const held = found.row.approval == null ? null : (JSON.parse(found.row.approval) as PendingApproval);
+    if (held === null || held.id !== request.id) {
+      return { ok: false, status: 409, reason: `Agent ${id} is not waiting on that prompt any more.` };
+    }
+    if (held.deniable !== true) {
+      return { ok: false, status: 409, reason: "That prompt can be answered only at the Agent's terminal." };
+    }
+    if (held.deniedBy !== undefined) {
+      return { ok: false, status: 409, reason: `${held.deniedBy} already denied that prompt.` };
+    }
+    if (!deliver()) {
+      return {
+        ok: false,
+        status: 409,
+        reason: `Agent ${id}'s wrapper is not connected to the Channel. Answer the prompt at its terminal.`,
+      };
+    }
+    this.host.sql.exec(
+      "UPDATE agents SET approval = ? WHERE id = ?",
+      JSON.stringify({ ...held, deniedBy: person }),
+      id,
+    );
+    this.host.append({
+      type: "approval.denied",
+      actor: { kind: "person", person },
+      capture: null,
+      payload: { agent: id, id: held.id, ...(request.message === undefined ? {} : { message: request.message }) },
+    });
     const agent = this.agent(id);
     this.host.broadcast({ type: "agent", agent });
     return { ok: true, agent };

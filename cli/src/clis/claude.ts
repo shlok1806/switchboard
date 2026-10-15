@@ -24,6 +24,7 @@ export const claude: CliAdapter = {
   interrupts: true,
   idleClears: true,
   wakes: true,
+  remoteDeny: true,
   proxy: true,
   // Claude Code's picker: its first hooks may run before the Person picks a session.
   sessionFromHooks: false,

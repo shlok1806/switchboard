@@ -9,6 +9,7 @@
 //   POST /api/agents/:id/nickname    rename the Agent; itself, or any Person (ADR 0009)
 //   POST /api/agents/:id/model       the model it runs on; itself or its Person (ADR 0010)
 //   POST /api/agents/:id/approval    the permission prompt its CLI shows; itself or its Person (ADR 0013)
+//   POST /api/agents/:id/approval/deny  deny that prompt from the Channel; its own Person only (ADR 0014)
 //   GET  /api/accounts               every account's usage readings (ADR 0011)
 //
 // `:id` is the URL-encoded Agent ID, since Agent IDs contain "/".
@@ -28,10 +29,12 @@ import {
   cleanAccountLabel,
   cleanApproval,
   cleanContext,
+  cleanDeny,
   cleanModelField,
   cleanNickname,
   cleanUsage,
   MAX_ACCOUNT_LABEL_LENGTH,
+  MAX_DENY_MESSAGE_LENGTH,
   MAX_EFFORT_LENGTH,
   MAX_MODEL_LENGTH,
   MAX_NICKNAME_LENGTH,
@@ -53,9 +56,11 @@ export type AgentRoute =
   | { kind: "proxy-mode"; id: AgentId }
   | { kind: "nickname"; id: AgentId }
   | { kind: "model"; id: AgentId }
-  | { kind: "approval"; id: AgentId };
+  | { kind: "approval"; id: AgentId }
+  | { kind: "approval-deny"; id: AgentId };
 
-const AGENT_ACTION = /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|proxy-mode|nickname|model|approval)$/;
+const AGENT_ACTION =
+  /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|proxy-mode|nickname|model|approval|approval\/deny)$/;
 const METHODS = {
   heartbeat: "POST",
   end: "POST",
@@ -64,6 +69,7 @@ const METHODS = {
   nickname: "POST",
   model: "POST",
   approval: "POST",
+  "approval/deny": "POST",
 } as const;
 
 function isProxyMode(value: unknown): value is ProxyMode {
@@ -107,7 +113,7 @@ export function matchAgentRoute(method: string, pathname: string): AgentRoute | 
     return null;
   }
   if (id.split("/").length !== 3) return null;
-  return { kind, id: id as AgentId };
+  return { kind: kind === "approval/deny" ? "approval-deny" : kind, id: id as AgentId };
 }
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -260,6 +266,16 @@ export async function handleAgentRoute(
         );
       }
       return answer(await channel.setAgentApproval(caller, route.id, approval));
+    }
+    case "approval-deny": {
+      const deny = cleanDeny(await readJson(request));
+      if (deny === undefined) {
+        return fail(
+          400,
+          `"id" must name the prompt; "message" is optional text of at most ${MAX_DENY_MESSAGE_LENGTH} characters.`,
+        );
+      }
+      return answer(await channel.denyAgentApproval(caller, route.id, deny));
     }
   }
 }

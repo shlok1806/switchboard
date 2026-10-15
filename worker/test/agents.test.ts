@@ -19,7 +19,7 @@ import type {
   StreamMessage,
   TaskListResponse,
 } from "../../shared/src/index";
-import { agentPath, approvalPath, modelPath, nicknamePath } from "../../shared/src/index";
+import { agentPath, approvalDenyPath, approvalPath, modelPath, nicknamePath } from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
 import { type As, bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
@@ -732,5 +732,100 @@ describe("A pending approval: the permission prompt an Agent's CLI shows (ADR 00
     const kept = (await long.json<AgentResponse>()).agent.approval;
     expect(kept?.detail).toHaveLength(2000);
     expect(kept?.detail).not.toContain("\u001b");
+  });
+});
+
+describe("Denying a pending approval from the Channel (ADR 0014)", () => {
+  const PROMPT = {
+    id: "a1",
+    tool: "Bash",
+    detail: "rm -rf build",
+    openedAt: "2026-10-15T03:08:00.000Z",
+    deniable: true,
+  };
+
+  async function report(as: As, id: AgentId, approval: unknown): Promise<void> {
+    const response = await call(approvalPath(id), {
+      method: "POST",
+      headers: { Authorization: await bearer(as) },
+      body: JSON.stringify({ approval }),
+    });
+    expect(response.status).toBe(200);
+  }
+
+  async function deny(as: As | string, id: AgentId, body: unknown): Promise<Response> {
+    return call(approvalDenyPath(id), {
+      method: "POST",
+      headers: { Authorization: await bearer(as) },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** The Agent's wrapper, attached on its stream: the frames the Channel sends it. */
+  async function wrapper(as: { person: string; agent: AgentId }): Promise<{ frames: { type: string }[] }> {
+    const response = await exports.default.fetch(
+      new Request(url(`/api/stream?${await streamQuery(as)}`), { headers: { Upgrade: "websocket" } }),
+    );
+    const socket = response.webSocket;
+    if (!socket) throw new Error("No WebSocket");
+    socket.accept();
+    const frames: { type: string }[] = [];
+    socket.addEventListener("message", (message) => frames.push(JSON.parse(message.data as string)));
+    socket.send(JSON.stringify({ type: "interrupt.attach", agent: as.agent }));
+    await waitUntil(() => frames.find((f) => f.type === "interrupt.attached"));
+    return { frames };
+  }
+
+  it("lets the Agent's own Person deny it once, and only the Agent's wrapper hears it", async () => {
+    const shlok = person("shlok");
+    const agent = await shlok.registered("aaaa0000-0000-4000-8000-000000000017");
+    const me = { person: "shlok", agent: agent.id };
+    const { frames } = await wrapper(me);
+    await report(me, agent.id, PROMPT);
+
+    const denied = await deny("shlok", agent.id, { id: "a1", message: "Not now, use the cached build." });
+    expect(denied.status).toBe(200);
+    expect((await denied.json<AgentResponse>()).agent.approval).toEqual({ ...PROMPT, deniedBy: "shlok" });
+    expect(await waitUntil(() => frames.find((f) => f.type === "approval.deny"))).toEqual({
+      type: "approval.deny",
+      agent: agent.id,
+      id: "a1",
+      person: "shlok",
+      message: "Not now, use the cached build.",
+    });
+    const again = await deny("shlok", agent.id, { id: "a1" });
+    expect(again.status).toBe(409);
+    expect((await again.json<ErrorResponse>()).reason).toBe("shlok already denied that prompt.");
+
+    const events = await call("/api/events", { headers: { Authorization: await bearer("shlok") } });
+    const recorded = (await events.json<HistoryResponse>()).events.filter((e) => e.type === "approval.denied");
+    expect(recorded.map((e) => [e.actor, e.payload])).toEqual([
+      [
+        { kind: "person", person: "shlok" },
+        { agent: agent.id, id: "a1", message: "Not now, use the cached build." },
+      ],
+    ]);
+  });
+
+  it("refuses anyone else, a prompt it cannot deny or no longer shows, and an Agent no wrapper hears for", async () => {
+    const shlok = person("shlok");
+    const agent = await shlok.registered("aaaa0000-0000-4000-8000-000000000018");
+    const me = { person: "shlok", agent: agent.id };
+    // The wrapper cannot say who denied it.
+    await report(me, agent.id, { ...PROMPT, deniedBy: "ana" });
+    expect((await shlok.agents())[0]?.approval).toEqual(PROMPT);
+    // No wrapper attached: nothing would answer the hook.
+    expect((await deny("shlok", agent.id, { id: "a1" })).status).toBe(409);
+
+    await wrapper(me);
+    expect((await deny(me, agent.id, { id: "a1" })).status).toBe(403);
+    expect((await deny("ana", agent.id, { id: "a1" })).status).toBe(403);
+    expect((await deny("shlok", agent.id, { id: "a0" })).status).toBe(409);
+    for (const bad of [{}, { id: "" }, { id: "a1", message: 5 }]) {
+      expect((await deny("shlok", agent.id, bad)).status).toBe(400);
+    }
+    await report(me, agent.id, { ...PROMPT, id: "a2", deniable: false });
+    expect((await deny("shlok", agent.id, { id: "a2" })).status).toBe(409);
+    expect((await shlok.agents())[0]?.approval?.deniedBy).toBeUndefined();
   });
 });

@@ -320,6 +320,8 @@ export const codex: CliAdapter = {
   idleClears: false,
   // Not yet (#63).
   wakes: false,
+  // Codex may hide its dialog while a hook waits: not verified (ADR 0014).
+  remoteDeny: false,
   proxy: true,
   sessionFromHooks: true,
 

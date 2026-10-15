@@ -24,7 +24,7 @@ import type {
   ClaimRefusal,
   Verdict,
 } from "@shared/index";
-import { LIVE_PING, MAX_HISTORY_LIMIT, claimPath, nicknamePath, releasePath } from "@shared/index";
+import { LIVE_PING, MAX_HISTORY_LIMIT, approvalDenyPath, claimPath, nicknamePath, releasePath } from "@shared/index";
 import type { Capabilities, ChannelSource, ClaimResult, ConnectionState } from "./source";
 
 /**
@@ -53,6 +53,7 @@ const ACTION_NAME: Record<PersonAction["type"], string> = {
   takeover: "Takeover",
   "proxy-mode": "changing Proxy mode",
   rename: "renaming Agents",
+  "deny-approval": "denying permission prompts",
 };
 
 /**
@@ -306,6 +307,8 @@ export class HttpChannelSource implements ChannelSource {
           return { path: `/api/agents/${encodeURIComponent(action.agent)}/proxy-mode`, body: { mode: action.mode } };
         case "rename":
           return { path: nicknamePath(action.agent), body: { nickname: action.nickname } };
+        case "deny-approval":
+          return { path: approvalDenyPath(action.agent), body: { id: action.id, message: action.message } };
       }
     })();
     try {

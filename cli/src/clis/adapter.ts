@@ -87,6 +87,13 @@ export interface CliAdapter {
    * prompt at its idle prompt was seen to start a turn with the real CLI.
    */
   wakes: boolean;
+  /**
+   * Whether the wrapper holds this CLI's PermissionRequest hook, so the Agent's own
+   * Person may deny its permission prompt from the Channel (ADR 0014): true only
+   * where the CLI's own dialog stays answerable while the hook waits, as Claude
+   * Code's was seen to.
+   */
+  remoteDeny: boolean;
   /** Whether the Proxy Capture can read this CLI's model traffic. */
   proxy: boolean;
   /**

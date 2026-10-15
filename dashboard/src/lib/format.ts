@@ -183,6 +183,10 @@ export function summarize(e: ChannelEvent): string {
       return `Waiting for approval to run ${e.payload.tool}${e.payload.detail ? `: ${e.payload.detail}` : ""}`;
     case "approval.closed":
       return "Approval prompt closed";
+    case "approval.denied":
+      return e.payload.message
+        ? `Denied ${e.payload.agent}'s approval prompt: ${e.payload.message}`
+        : `Denied ${e.payload.agent}'s approval prompt`;
     case "agent.rename": {
       const { agent, from, to } = e.payload;
       const who = e.actor.kind === "agent" && e.actor.agentId === agent ? "Renamed itself" : `Renamed ${agent}`;
@@ -215,6 +219,7 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "agent.model": "Model",
   "approval.pending": "Approval",
   "approval.closed": "Approval",
+  "approval.denied": "Approval",
   "tool.call": "Tool call",
   "file.edit": "File edit",
   command: "Command",
