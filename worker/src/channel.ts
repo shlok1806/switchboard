@@ -125,16 +125,22 @@ export function createEventsTable(sql: SqlStorage): void {
       actor_id TEXT
     );
   `);
+  // What one-off work on the whole table writes, per UTC day (`buildHistoryIndexes`).
+  // `sizes` is what the missing history indexes would cover, once that day has counted them.
+  sql.exec("CREATE TABLE IF NOT EXISTS index_builds (day TEXT PRIMARY KEY, rows INTEGER NOT NULL, sizes TEXT)");
   const columns = sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('events')").toArray();
   if (!columns.some((c) => c.name === "actor_kind")) {
-    // A table made before the actor columns: add them and fill them in, once.
+    // A table made before the actor columns: add them and fill them in, once. That
+    // writes a row per Event, so it spends the same day's budget as building indexes.
     sql.exec("ALTER TABLE events ADD COLUMN actor_kind TEXT");
     sql.exec("ALTER TABLE events ADD COLUMN actor_id TEXT");
-    sql.exec(`
+    const filled = sql.exec(`
       UPDATE events SET
         actor_kind = json_extract(actor, '$.kind'),
         actor_id = coalesce(json_extract(actor, '$.agentId'), json_extract(actor, '$.person'))
     `);
+    filled.toArray();
+    chargeIndexBuilds(sql, utcDay(), filled.rowsWritten);
   }
   sql.exec(`
     CREATE INDEX IF NOT EXISTS events_code ON events (seq) WHERE type IN ('push', 'merge');
@@ -143,6 +149,128 @@ export function createEventsTable(sql: SqlStorage): void {
     CREATE INDEX IF NOT EXISTS events_updates_by_actor_task ON events (actor_kind, actor_id, task, seq) WHERE type = 'update';
   `);
 }
+
+/**
+ * The indexes the scoped history reads need (an Agent's, a Task's, Events by Wake).
+ * Each is partial, so it writes a row only for the Events its `where` holds.
+ */
+export const HISTORY_INDEXES = [
+  { name: "events_by_agent", on: "(actor_id, seq)", where: "actor_kind = 'agent'" },
+  { name: "events_directives_to", on: "(json_extract(payload, '$.to'), seq)", where: "type = 'directive'" },
+  // Renames of an Agent, and its stops by its Person (ADR 0009, ADR 0015).
+  {
+    name: "events_about_agent",
+    on: "(json_extract(payload, '$.agent'), seq)",
+    where: "type IN ('agent.rename', 'agent.stop')",
+  },
+  { name: "events_by_task", on: "(task, seq)", where: "task IS NOT NULL AND type <> 'verdict'" },
+  { name: "events_wakes", on: "(seq)", where: "type = 'wake'" },
+] as const;
+
+export type HistoryIndex = (typeof HISTORY_INDEXES)[number]["name"];
+
+/**
+ * Rows a Channel may spend building history indexes in one UTC day. Building an
+ * index writes one row per Event it covers. The free plan allows 100,000 written rows
+ * a day, which may be the account's rather than one Durable Object's, and a Channel's
+ * own traffic used up to 51,000 on its busiest day: so a quarter of it.
+ */
+export const INDEX_BUILD_BUDGET = 25_000;
+
+/**
+ * The largest index a Channel builds, on a day it has spent nothing else. Bigger than
+ * that, the index is never built and its history reads say so (`IndexTooLarge`).
+ */
+export const INDEX_BUILD_CEILING = 80_000;
+
+export function utcDay(now = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/** Adds `rows` written by one-off work to `day`'s spend. */
+function chargeIndexBuilds(sql: SqlStorage, day: string, rows: number): void {
+  sql.exec(
+    "INSERT INTO index_builds (day, rows) VALUES (?, ?) ON CONFLICT (day) DO UPDATE SET rows = rows + excluded.rows",
+    day,
+    rows,
+  );
+}
+
+/** Which history indexes exist, and which never will: they cover more than `INDEX_BUILD_CEILING` Events. */
+export interface HistoryIndexes {
+  built: Set<HistoryIndex>;
+  tooLarge: Set<HistoryIndex>;
+}
+
+/**
+ * Builds the history indexes that fit today's budget, and says which exist. A day that
+ * has spent nothing may build one index past the budget, up to the ceiling, so no index
+ * waits forever. Counting what the missing indexes would cover reads every Event, so it
+ * is done once a day at most: a later start that day reuses the count.
+ */
+export function buildHistoryIndexes(
+  sql: SqlStorage,
+  today = utcDay(),
+  budget = INDEX_BUILD_BUDGET,
+  ceiling = INDEX_BUILD_CEILING,
+): HistoryIndexes {
+  const existing = new Set(
+    sql
+      .exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events'")
+      .toArray()
+      .map((row) => row.name),
+  );
+  const missing = HISTORY_INDEXES.filter((index) => !existing.has(index.name));
+  const tooLarge = new Set<HistoryIndex>();
+  if (missing.length > 0) {
+    const day = sql
+      .exec<{ rows: number; sizes: string | null }>("SELECT rows, sizes FROM index_builds WHERE day = ?", today)
+      .toArray()[0];
+    let sizes: Partial<Record<HistoryIndex, number>>;
+    if (day?.sizes != null) {
+      // Counted today already: what is left is built on a later day.
+      sizes = JSON.parse(day.sizes) as Partial<Record<HistoryIndex, number>>;
+      for (const index of missing) if ((sizes[index.name] ?? 0) > ceiling) tooLarge.add(index.name);
+    } else {
+      const counted = sql
+        .exec<Record<string, number>>(
+          `SELECT ${missing.map((index, i) => `coalesce(sum(CASE WHEN ${index.where} THEN 1 ELSE 0 END), 0) AS n${i}`).join(", ")} FROM events`,
+        )
+        .one();
+      sizes = Object.fromEntries(missing.map((index, i) => [index.name, Number(counted[`n${i}`] ?? 0)]));
+      let spent = day?.rows ?? 0;
+      for (const index of missing) {
+        const rows = sizes[index.name] ?? 0;
+        if (rows > ceiling) {
+          tooLarge.add(index.name);
+          continue;
+        }
+        if (spent + rows > budget && spent > 0) continue;
+        const cursor = sql.exec(`CREATE INDEX IF NOT EXISTS ${index.name} ON events ${index.on} WHERE ${index.where}`);
+        cursor.toArray();
+        // What the build wrote, or what the count said it would if SQLite reports less.
+        spent += Math.max(rows, cursor.rowsWritten);
+        existing.add(index.name);
+      }
+      sql.exec(
+        "INSERT INTO index_builds (day, rows, sizes) VALUES (?, ?, ?) ON CONFLICT (day) DO UPDATE SET rows = excluded.rows, sizes = excluded.sizes",
+        today,
+        spent,
+        JSON.stringify(sizes),
+      );
+    }
+  }
+  return {
+    built: new Set(HISTORY_INDEXES.map((index) => index.name).filter((name) => existing.has(name))),
+    tooLarge,
+  };
+}
+
+/** The answer to a scoped history read whose index is not built yet: it is built on a later day. */
+export type IndexPending = { pending: HistoryIndex };
+
+/** The answer to a scoped history read whose index covers too many Events to build. */
+export type IndexTooLarge = { tooLarge: HistoryIndex };
 
 /** The actor's kind and its Agent ID or Person name, as `actor_kind` and `actor_id` keep them. */
 function actorColumns(actor: Actor): [string, string | null] {
@@ -212,10 +340,14 @@ export class Channel extends DurableObject<Env> {
   private readonly access: Access;
   /** Each Issue's one status comment (issue #2). */
   private readonly status: StatusComments;
+  /** The history indexes built so far (`buildHistoryIndexes`), and the UTC day they were last tried. */
+  private historyIndexes: HistoryIndexes;
+  private historyIndexesDay = utcDay();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     createEventsTable(ctx.storage.sql);
+    this.historyIndexes = buildHistoryIndexes(ctx.storage.sql);
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS persons (
         name TEXT PRIMARY KEY,
@@ -741,6 +873,112 @@ export class Channel extends DurableObject<Env> {
       .exec<EventRow>("SELECT * FROM events WHERE seq < ? ORDER BY seq DESC LIMIT ?", before, count)
       .toArray()
       .reverse()
+      .map(rowToEvent);
+  }
+
+  /**
+   * The latest `count` Events about Agent `agent` with `seq` below `before`, oldest
+   * first: what it did, the Directives to it and its renames by others.
+   */
+  latestEventsOfAgent(
+    agent: AgentId,
+    count: number,
+    before = Number.MAX_SAFE_INTEGER,
+  ): ChannelEvent[] | IndexPending | IndexTooLarge {
+    const pending = this.pendingIndex("events_by_agent", "events_directives_to", "events_about_agent");
+    if (pending) return pending;
+    const sql = this.ctx.storage.sql;
+    const rows = [
+      ...sql.exec<EventRow>(
+        `SELECT * FROM events INDEXED BY events_by_agent
+         WHERE actor_kind = 'agent' AND actor_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`,
+        agent,
+        before,
+        count,
+      ),
+      ...sql.exec<EventRow>(
+        `SELECT * FROM events INDEXED BY events_directives_to
+         WHERE type = 'directive' AND json_extract(payload, '$.to') = ? AND seq < ? ORDER BY seq DESC LIMIT ?`,
+        agent,
+        before,
+        count,
+      ),
+      ...sql.exec<EventRow>(
+        `SELECT * FROM events INDEXED BY events_about_agent
+         WHERE type IN ('agent.rename', 'agent.stop') AND json_extract(payload, '$.agent') = ? AND seq < ?
+         ORDER BY seq DESC LIMIT ?`,
+        agent,
+        before,
+        count,
+      ),
+    ];
+    // An Agent that renamed itself is in two of the reads.
+    const bySeq = new Map(rows.map((row) => [row.seq, row]));
+    return [...bySeq.values()]
+      .sort((a, b) => b.seq - a.seq)
+      .slice(0, count)
+      .reverse()
+      .map(rowToEvent);
+  }
+
+  /**
+   * The latest `count` Events on Task `task` with `seq` below `before`, oldest first.
+   * Verdicts are left out, as from the index: there are many per Event, and the
+   * Dashboard reads them with the Events they judge.
+   */
+  latestEventsOfTask(
+    task: TaskNumber,
+    count: number,
+    before = Number.MAX_SAFE_INTEGER,
+  ): ChannelEvent[] | IndexPending | IndexTooLarge {
+    const pending = this.pendingIndex("events_by_task");
+    if (pending) return pending;
+    return this.ctx.storage.sql
+      .exec<EventRow>(
+        `SELECT * FROM events INDEXED BY events_by_task
+         WHERE task = ? AND type <> 'verdict' AND seq < ? ORDER BY seq DESC LIMIT ?`,
+        task,
+        before,
+        count,
+      )
+      .toArray()
+      .reverse()
+      .map(rowToEvent);
+  }
+
+  /** The first named index not built, after trying once more if a new day's budget has begun. */
+  private pendingIndex(...names: HistoryIndex[]): IndexPending | IndexTooLarge | undefined {
+    const today = utcDay();
+    if (today !== this.historyIndexesDay && names.some((name) => !this.historyIndexes.built.has(name))) {
+      this.historyIndexesDay = today;
+      this.historyIndexes = buildHistoryIndexes(this.ctx.storage.sql, today);
+    }
+    const tooLarge = names.find((name) => this.historyIndexes.tooLarge.has(name));
+    if (tooLarge !== undefined) return { tooLarge };
+    const pending = names.find((name) => !this.historyIndexes.built.has(name));
+    return pending === undefined ? undefined : { pending };
+  }
+
+  /** The Events with these IDs, oldest first; IDs the Channel does not know are left out. */
+  eventsById(ids: readonly string[]): ChannelEvent[] {
+    if (ids.length === 0) return [];
+    return this.ctx.storage.sql
+      .exec<EventRow>(`SELECT * FROM events WHERE id IN (${ids.map(() => "?").join(", ")}) ORDER BY seq`, ...ids)
+      .toArray()
+      .map(rowToEvent);
+  }
+
+  /** The first `count` Wakes with `seq` above `after`, oldest first. */
+  wakesAfter(after: number, count: number): ChannelEvent[] | IndexPending | IndexTooLarge {
+    const pending = this.pendingIndex("events_wakes");
+    if (pending) return pending;
+    return this.ctx.storage.sql
+      .exec<EventRow>(
+        "SELECT * FROM events INDEXED BY events_wakes WHERE type = 'wake' AND seq > ? ORDER BY seq LIMIT ?",
+        after,
+        count,
+      )
+      .toArray()
       .map(rowToEvent);
   }
 

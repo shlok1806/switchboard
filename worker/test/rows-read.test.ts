@@ -5,18 +5,25 @@
 // decision must read a bounded number of rows however big the Channel gets. A
 // query that scans one of those tables shows up here as thousands of rows.
 
-import { reset, runInDurableObject } from "cloudflare:test";
+import { env, reset, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { AgentId, AgentResponse, ChannelEvent, HookEvent, Task } from "../../shared/src/index";
 import { agentPath } from "../../shared/src/index";
+import { Channel } from "../src/channel";
 import { installJev } from "../src/relay/jev";
 import { lastUpdate } from "../src/status-comment";
 import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeJev } from "./fake-jev";
 
-/** The history the Channel is given before anything is measured. */
-const EVENTS = 20_000;
+/**
+ * The history the Channel is given before anything is measured: Events from Agents
+ * and People, each followed by the Relay's Verdicts about it for the other live
+ * Agents, as on a real Channel, where most rows are Verdicts.
+ */
+const SOURCES = 10_000;
+const VERDICTS_PER_EVENT = 2;
+const EVENTS = SOURCES * (1 + VERDICTS_PER_EVENT);
 const GONE_AGENTS = 300;
 const TASKS = 200;
 /** Files each live Agent has edited. */
@@ -46,18 +53,23 @@ async function meterChannel(): Promise<void> {
   });
 }
 
+/** Waits until `check` holds. */
+async function settled(check: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 4000;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("Timed out");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 /** Rows read by everything `work` makes the Channel do, its background work included once `until` holds. */
 async function rowsRead(work: () => Promise<unknown>, until?: () => Promise<boolean>): Promise<number> {
   meter.cursors = [];
   meter.paused = false;
   await work();
   if (until !== undefined) {
-    const deadline = Date.now() + 4000;
     meter.paused = true;
-    while (!(await until())) {
-      if (Date.now() > deadline) throw new Error("Timed out");
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    await settled(until);
   }
   meter.paused = true;
   return meter.cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0);
@@ -124,23 +136,50 @@ async function seed(live: AgentId[]): Promise<void> {
   await runInDurableObject(channelStub(), (channel, state) => {
     const sql = state.storage.sql;
     const types = ["tool.call", "command", "file.edit", "turn.end", "presence", "proxy.digest", "update"];
-    for (let i = 0; i < EVENTS; i++) {
-      const agent = i % 2 === 0 ? `shlok/claude/g${i % GONE_AGENTS}` : live[i % live.length];
-      // A few pushes, spread thin, as a busy Channel has.
-      const type = i % 500 === 0 ? "push" : types[i % types.length];
+    let row = 0;
+    const insert = (
+      type: string,
+      actor: { kind: string; agentId?: string; person?: string },
+      task: number | null,
+      payload: unknown,
+    ) => {
       sql.exec(
         `INSERT INTO events (id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent', ?)`,
-        `seed-${i}`,
-        new Date(Date.now() - (EVENTS - i) * 1000).toISOString(),
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `seed-${row}`,
+        new Date(Date.now() - (EVENTS - row) * 1000).toISOString(),
         type,
-        JSON.stringify({ kind: "agent", agentId: agent }),
-        type === "push" ? null : "hook",
-        type === "update" ? (i % TASKS) + 1 : null,
+        JSON.stringify(actor),
+        actor.kind === "agent" && type !== "push" ? "hook" : null,
+        task,
         null,
-        JSON.stringify({ text: "progress", files: [{ path: "src/app.ts", additions: 1, deletions: 0, hunks: [] }] }),
-        agent,
+        JSON.stringify(payload),
+        actor.kind,
+        actor.agentId ?? actor.person ?? null,
       );
+      row += 1;
+    };
+    for (let i = 0; i < SOURCES; i++) {
+      const id = `seed-${row}`;
+      const agent = (i % 2 === 0 ? `shlok/claude/g${i % GONE_AGENTS}` : live[i % live.length]) as string;
+      // An Agent holding a Task tags its Events with it, as a third of them do here.
+      const task = i % 3 === 0 ? (i % TASKS) + 1 : null;
+      if (i % 200 === 0)
+        insert("directive", { kind: "person", person: "shlok" }, task, { to: measured, text: "Rebase." });
+      else if (i % 1000 === 1)
+        insert("agent.rename", { kind: "person", person: "shlok" }, null, { agent: measured, nickname: `n${i}` });
+      else if (i % 300 === 2) insert("wake", { kind: "relay" }, task, { agent, events: [] });
+      else {
+        // A few pushes, spread thin, as a busy Channel has.
+        const type = i % 500 === 3 ? "push" : (types[i % types.length] as string);
+        insert(type, { kind: "agent", agentId: agent }, type === "update" ? (i % TASKS) + 1 : task, {
+          text: "progress",
+          files: [{ path: "src/app.ts", additions: 1, deletions: 0, hunks: [] }],
+        });
+      }
+      for (let v = 0; v < VERDICTS_PER_EVENT; v++) {
+        insert("verdict", { kind: "relay" }, task, { event: id, agent: live[v], delivered: "drop", overlap: [] });
+      }
     }
     const template = sql.exec<Record<string, SqlStorageValue>>("SELECT * FROM agents LIMIT 1").one();
     for (let k = 0; k < GONE_AGENTS; k++) {
@@ -239,13 +278,8 @@ it("a heartbeat that changes Presence reads a bounded number of rows", async () 
 it("an edit the Relay considers for every live Agent reads a bounded number of rows", async () => {
   // The first Event the Relay considers after the Channel wakes reads each Agent's touched files once.
   const first = hook("file.edit", { path: "src/app.ts", additions: 1, deletions: 0 });
-  await rowsRead(
-    async () => {
-      meter.paused = true;
-      await sendHooks(measured, [first]);
-    },
-    () => verdictsAbout(first.id),
-  );
+  await sendHooks(measured, [first]);
+  await settled(() => verdictsAbout(first.id));
   // Another Agent edits meanwhile, as they do.
   await sendHooks(live[1] as AgentId, [hook("file.edit", { path: "src/other.ts", additions: 1, deletions: 0 })]);
   const edit = hook("file.edit", { path: "src/app.ts", additions: 3, deletions: 1 });
@@ -296,4 +330,74 @@ it("paging back through older Events reads only that page", async () => {
     expect(events.map((e) => e.seq)).toEqual(Array.from({ length: 100 }, (_, i) => 4901 + i));
   });
   expect(read).toBeLessThan(BUDGET);
+});
+
+it("an Agent's or a Task's latest Events read only that page", async () => {
+  const auth = { Authorization: await bearer("shlok") };
+  const read = await rowsRead(async () => {
+    const mine = await call(`/api/events?tail=100&agent=${encodeURIComponent(measured)}`, { headers: auth });
+    const { events } = (await mine.json()) as { events: ChannelEvent[] };
+    expect(events).toHaveLength(100);
+    // Its own Events, the Directives to it and its renames by others; none of the Relay's Verdicts.
+    expect(
+      events.every(
+        (e) =>
+          (e.actor.kind === "agent" && e.actor.agentId === measured) ||
+          (e.type === "directive" && (e.payload as { to: string }).to === measured) ||
+          (e.type === "agent.rename" && (e.payload as { agent: string }).agent === measured),
+      ),
+    ).toBe(true);
+    expect(events.some((e) => e.type === "directive")).toBe(true);
+  });
+  // Three index reads of at most a page each.
+  expect(read).toBeLessThan(3 * 100 + 10);
+  const onTask = await rowsRead(async () => {
+    const response = await call("/api/events?tail=20&task=7", { headers: auth });
+    const { events } = (await response.json()) as { events: ChannelEvent[] };
+    expect(events).toHaveLength(20);
+    expect(events.every((e) => e.task === 7 && e.type !== "verdict")).toBe(true);
+  });
+  // Only the page: the index skips the Task's Verdicts, two for each of its Events.
+  expect(onTask).toBeLessThan(30);
+});
+
+it("Events by ID and the Wakes after an Event read only what they return", async () => {
+  const auth = { Authorization: await bearer("shlok") };
+  const byId = await rowsRead(async () => {
+    const response = await call("/api/events?ids=seed-10,seed-20,seed-30", { headers: auth });
+    expect(((await response.json()) as { events: ChannelEvent[] }).events).toHaveLength(3);
+  });
+  expect(byId).toBeLessThan(20);
+  const wakes = await rowsRead(async () => {
+    const response = await call("/api/events?type=wake&after=100&limit=20", { headers: auth });
+    const { events } = (await response.json()) as { events: ChannelEvent[] };
+    expect(events).toHaveLength(20);
+    expect(events.every((e) => e.type === "wake")).toBe(true);
+  });
+  expect(wakes).toBeLessThan(25);
+});
+
+/** What starting the Channel's Durable Object again reads, as after an eviction or a deploy. */
+function restart(): Promise<number> {
+  return rowsRead(() =>
+    runInDurableObject(channelStub(), (_channel, state) => {
+      new Channel(state, env);
+    }),
+  );
+}
+
+it("a Durable Object that starts again reads a bounded number of rows, its history indexes built or not", async () => {
+  expect(await restart()).toBeLessThan(BUDGET);
+  // An index still missing is counted once a day, by the first start: not by every start.
+  await runInDurableObject(channelStub(), (_channel, state) => {
+    state.storage.sql.exec("DROP INDEX events_by_agent");
+    state.storage.sql.exec("DELETE FROM index_builds");
+    state.storage.sql.exec(
+      "INSERT INTO index_builds (day, rows) VALUES (?, ?)",
+      new Date().toISOString().slice(0, 10),
+      25_000,
+    );
+  });
+  expect(await restart()).toBeGreaterThan(EVENTS);
+  expect(await restart()).toBeLessThan(BUDGET);
 });

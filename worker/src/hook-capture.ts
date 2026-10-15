@@ -168,6 +168,8 @@ export class HookCapture {
    * Each Agent's touched files once read, kept in step by `touch`, the table's only
    * writer. The Relay reads every live Agent's files for nearly every Event it
    * considers, so they come from memory, not from `touched_files`, while this object lives.
+   * Anything else that writes or deletes an Agent's rows must update this too: pruning
+   * Gone Agents (#114) must `touched.delete(id)` with their rows.
    */
   private readonly touched = new Map<AgentId, TouchedFile[]>();
 

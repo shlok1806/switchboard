@@ -8,6 +8,7 @@ import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ErrorResponse,
+  HistoryResponse,
   HostResponse,
   HostStopMessage,
   SpawnAgentResponse,
@@ -321,6 +322,9 @@ describe("stopping an Agent", () => {
       actor: { kind: "person", person: "shlok" },
       payload: { agent: id, host: "shlok/studio" },
     });
+    // The Agent's own history has its stop, though the Person made it.
+    const scoped = await call(`/api/events?tail=50&agent=${encodeURIComponent(id)}`, "shlok");
+    expect((await scoped.json<HistoryResponse>()).events.map((e) => e.type)).toContain("agent.stop");
   });
 
   it("refuses an Agent started in a terminal, and one whose Host is Offline", async () => {
