@@ -5,12 +5,18 @@ import type {
   ChannelSnapshot,
   ClaimRefusal,
   CreateTaskRequest,
+  HostsResponse,
   PersonAction,
   PersonName,
+  SpawnAgentRequest,
+  SpawnAgentResponse,
   StreamMessage,
   Task,
   TaskNumber,
 } from "@shared/index";
+
+/** A spawn answers with the Agent once it is on the Channel, or with the Host still starting it (ADR 0015). */
+export type SpawnResult = { ok: true; answer: SpawnAgentResponse } | { ok: false; reason: string };
 
 /** A Claim or release answers with the Task as it is now, or a refusal naming the holder. */
 export type ClaimResult = { ok: true; task: Task } | ClaimRefusal;
@@ -108,4 +114,10 @@ export interface ChannelSource {
   claim(task: TaskNumber, forAgent?: AgentId): Promise<ClaimResult>;
   /** `POST /api/tasks/:number/release`: release a Claim this Person holds (#9). */
   release(task: TaskNumber): Promise<ClaimResult>;
+  /** `GET /api/hosts`: the Channel's Hosts (ADR 0015), or null when its Worker has none. */
+  hosts(): Promise<HostsResponse | null>;
+  /** `POST /api/agents/spawn`: start an Agent on one of this Person's own Hosts. */
+  spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult>;
+  /** `POST /api/agents/:id/stop`: ask the Host that runs one of this Person's Agents to stop it. */
+  stopAgent(agent: AgentId): Promise<ActionResult>;
 }

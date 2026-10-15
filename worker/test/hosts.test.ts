@@ -311,16 +311,16 @@ describe("starting an Agent", () => {
       return [response.status, (await response.json<ErrorResponse>()).reason];
     };
     expect(await refusal("shlok", {})).toEqual([409, expect.stringContaining("None of your Hosts is Live")]);
-    expect(await refusal("shlok", { host: "studio" })).toEqual([409, "shlok/studio is Offline."]);
+    expect(await refusal("shlok", { host: "studio" })).toEqual([409, "studio is Offline."]);
     await studio.connect();
     expect(await refusal("shlok", { cwd: "/etc" })).toEqual([
       403,
-      expect.stringContaining("is not under shlok/studio's folders"),
+      expect.stringContaining("is not under studio's folders"),
     ]);
     expect(await refusal("shlok", { cwd: "/workshop" })).toEqual([403, expect.stringContaining("is not under")]);
     expect(await refusal("shlok", { permissionMode: "bypassPermissions" })).toEqual([
       403,
-      'shlok/studio starts Agents in at most the "default" permission mode.',
+      'studio starts Agents in at most the "default" permission mode.',
     ]);
     expect(await refusal("nate", { host: "studio" })).toEqual([404, expect.stringContaining("no Host named studio")]);
     expect((await refusal("shlok", { cli: "codex" }))[0]).toBe(400);
@@ -361,7 +361,7 @@ describe("starting an Agent", () => {
     const response = await spawning;
     expect(response.status).toBe(502);
     expect((await response.json<ErrorResponse>()).reason).toBe(
-      "shlok/studio could not start the Agent: the folder is not trusted: run claude there once",
+      "studio could not start the Agent: the folder is not trusted: run claude there once",
     );
     expect((await events()).filter((e) => e.type === "agent.spawn.failed")).toEqual([
       expect.objectContaining({
@@ -446,6 +446,9 @@ describe("stopping an Agent", () => {
       actor: { kind: "person", person: "shlok" },
       payload: { agent: id, host: "shlok/studio" },
     });
+    // The Agent's own history has its stop, though the Person made it.
+    const scoped = await call(`/api/events?tail=50&agent=${encodeURIComponent(id)}`, "shlok");
+    expect((await scoped.json<HistoryResponse>()).events.map((e) => e.type)).toContain("agent.stop");
   });
 
   it("refuses an Agent started in a terminal, and one whose Host is Offline", async () => {

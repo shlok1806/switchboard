@@ -237,18 +237,20 @@ export class Hosts {
     if (!host.ok) return host;
     const { row } = host;
     const id = hostIdFor(person, row.name);
+    // Only a Host's own Person starts Agents on it, so its refusals call it by its name.
+    const name = row.name;
     const roots = JSON.parse(row.roots) as string[];
     if (!underRoots(request.cwd, roots)) {
       return {
         ok: false,
         status: 403,
-        reason: `${request.cwd} is not under ${id}'s folders (${roots.join(", ") || "none"}). Add it with \`switchboard host install --root\`.`,
+        reason: `${request.cwd} is not under ${name}'s folders (${roots.join(", ") || "none"}). Add it with \`switchboard host install --root\`.`,
       };
     }
     const mode: PermissionMode = request.permissionMode ?? DEFAULT_PERMISSION_MODE;
     const max = isPermissionMode(row.max_mode) ? row.max_mode : DEFAULT_PERMISSION_MODE;
     if (!permissionModeWithin(mode, max)) {
-      return { ok: false, status: 403, reason: `${id} starts Agents in at most the "${max}" permission mode.` };
+      return { ok: false, status: 403, reason: `${name} starts Agents in at most the "${max}" permission mode.` };
     }
     if (this.running() >= this.deps.cap) {
       return {
@@ -292,7 +294,7 @@ export class Hosts {
       permissionMode: mode,
       by: person,
     });
-    if (!sent) this.failed(spawn, `${id} went Offline before the request reached it.`);
+    if (!sent) this.failed(spawn, `${name} went Offline before the request reached it.`);
     await this.reschedule();
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -305,7 +307,7 @@ export class Hosts {
     clearTimeout(timer);
     this.waiting.delete(spawn);
     if (end === null) return { ok: true, spawn, host: id };
-    if ("reason" in end) return { ok: false, status: 502, reason: `${id} could not start the Agent: ${end.reason}` };
+    if ("reason" in end) return { ok: false, status: 502, reason: `${name} could not start the Agent: ${end.reason}` };
     return { ok: true, spawn, host: id, agent: end.agent };
   }
 
@@ -354,8 +356,9 @@ export class Hosts {
     }
     if (agent.presence === "gone") return { ok: false, status: 409, reason: `${agentId} is Gone already.` };
     const host = agent.host;
+    const name = host.slice(host.indexOf("/") + 1);
     if (!this.deps.attached(host)) {
-      return { ok: false, status: 409, reason: `${host} is Offline, so it cannot stop ${agentId} now.` };
+      return { ok: false, status: 409, reason: `${name} is Offline, so it cannot stop ${agentId} now.` };
     }
     this.deps.append({
       type: "agent.stop",
@@ -364,7 +367,7 @@ export class Hosts {
       payload: { agent: agentId, host },
     });
     if (!this.deps.sendTo(host, { type: "host.stop", agent: agentId })) {
-      return { ok: false, status: 409, reason: `${host} went Offline before the request reached it.` };
+      return { ok: false, status: 409, reason: `${name} went Offline before the request reached it.` };
     }
     return { ok: true, host };
   }
@@ -422,7 +425,7 @@ export class Hosts {
         };
       }
       if (!this.deps.attached(hostIdFor(person, name))) {
-        return { ok: false, status: 409, reason: `${hostIdFor(person, name)} is Offline.` };
+        return { ok: false, status: 409, reason: `${name} is Offline.` };
       }
       return { ok: true, row };
     }

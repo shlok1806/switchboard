@@ -300,7 +300,7 @@ Agents start only in a `--root` folder or under one, and in at most the
 `--max-permission-mode` (`plan`, `dontAsk`, `default`, `acceptEdits`, `auto`,
 `bypassPermissions`, strictest first; `default` if you leave it out).
 
-Then start an Agent from any terminal:
+Then start an Agent from any terminal, or with **Start an Agent** on the Dashboard's Agents page:
 
 ```sh
 switchboard spawn --cwd ~/code/my-repo --nickname builder "Fix the login redirect."
@@ -318,6 +318,8 @@ and Hosts on a Channel run at most `HOST_AGENTS_LIVE_CAP` Agents at once (20).
   minutes. Agents the Host runs are resumed after a reboot too.
 - `switchboard host status` shows the Host, its Agents and its files under
   `~/.config/switchboard/host/`: each Agent's terminal output is in `logs/<agent>.log`.
+- An Agent on a Host shows the Host's name on its row, and its page has a **Stop** button
+  for its own Person.
 - `switchboard host uninstall` unloads the LaunchAgent and removes the Host.
 
 ### Codex hooks and trust

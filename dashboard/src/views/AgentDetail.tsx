@@ -14,7 +14,8 @@ import { OlderRow } from "@/components/domain/older";
 import { useScopedHistory } from "@/data/history";
 import { RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { Composer } from "@/components/domain/composer";
-import { CliSwatch, PresenceStatus, useClaimsOf } from "./AgentsView";
+import { CliSwatch, HostLabel, PresenceStatus, useClaimsOf } from "./AgentsView";
+import { StopAgentButton } from "@/components/domain/start-agent";
 import { CAPTURE_LABEL, CLI_LABEL, ago } from "@/lib/format";
 import { go, href } from "@/lib/router";
 
@@ -50,7 +51,9 @@ export function AgentDetail({ id }: { id: string }) {
       (e.actor.kind === "agent" && e.actor.agentId === id) ||
       (e.type === "directive" && e.payload.to === id) ||
       // Renamed by a Person, or its name taken while it was Gone (ADR 0009).
-      (e.type === "agent.rename" && e.payload.agent === id),
+      (e.type === "agent.rename" && e.payload.agent === id) ||
+      // Stopped by its Person, on the Host that runs it (ADR 0015).
+      (e.type === "agent.stop" && e.payload.agent === id),
     [id],
   );
   const scoped = useScopedHistory({ agent: id as AgentId }, aboutAgent);
@@ -103,7 +106,7 @@ export function AgentDetail({ id }: { id: string }) {
         <div className="flex min-w-0 flex-col gap-8">
           <header className="rise flex items-start gap-4">
             <ActorAvatar actor={{ kind: "agent", agentId: agent.id }} />
-            <div className="flex min-w-0 flex-col gap-1.5">
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
               <h1 className="flex min-w-0 items-center gap-2.5 text-title font-semibold text-ink tabular-nums [overflow-wrap:anywhere]">
                 <CliSwatch agent={agent} className="size-2.5" />
                 {agent.id}
@@ -115,11 +118,13 @@ export function AgentDetail({ id }: { id: string }) {
                 {agent.nickname && <span className="text-ink-2">{agent.nickname}</span>}
                 <span>{CLI_LABEL[agent.cli]}</span>
                 <span>{agent.person}</span>
+                {agent.host && <HostLabel host={agent.host} />}
                 {agent.account && !agent.usage?.email && <AccountLabel account={agent.account} />}
                 {agent.model && <ModelLabel model={agent.model} effort={agent.effort} />}
                 {agent.proxyMode === "raw" && <RawBadge />}
               </div>
             </div>
+            <StopAgentButton agent={agent} />
           </header>
           <PendingApproval agent={agent} className="rise [--i:1]" />
 

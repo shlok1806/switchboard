@@ -155,7 +155,12 @@ export function createEventsTable(sql: SqlStorage): void {
 export const HISTORY_INDEXES = [
   { name: "events_by_agent", on: "(actor_id, seq)", where: "actor_kind = 'agent'" },
   { name: "events_directives_to", on: "(json_extract(payload, '$.to'), seq)", where: "type = 'directive'" },
-  { name: "events_renames_of", on: "(json_extract(payload, '$.agent'), seq)", where: "type = 'agent.rename'" },
+  // Renames of an Agent, and its stops by its Person (ADR 0009, ADR 0015).
+  {
+    name: "events_about_agent",
+    on: "(json_extract(payload, '$.agent'), seq)",
+    where: "type IN ('agent.rename', 'agent.stop')",
+  },
   { name: "events_by_task", on: "(task, seq)", where: "task IS NOT NULL AND type <> 'verdict'" },
   { name: "events_wakes", on: "(seq)", where: "type = 'wake'" },
 ] as const;
@@ -831,7 +836,7 @@ export class Channel extends DurableObject<Env> {
     count: number,
     before = Number.MAX_SAFE_INTEGER,
   ): ChannelEvent[] | IndexPending | IndexTooLarge {
-    const pending = this.pendingIndex("events_by_agent", "events_directives_to", "events_renames_of");
+    const pending = this.pendingIndex("events_by_agent", "events_directives_to", "events_about_agent");
     if (pending) return pending;
     const sql = this.ctx.storage.sql;
     const rows = [
@@ -850,8 +855,9 @@ export class Channel extends DurableObject<Env> {
         count,
       ),
       ...sql.exec<EventRow>(
-        `SELECT * FROM events INDEXED BY events_renames_of
-         WHERE type = 'agent.rename' AND json_extract(payload, '$.agent') = ? AND seq < ? ORDER BY seq DESC LIMIT ?`,
+        `SELECT * FROM events INDEXED BY events_about_agent
+         WHERE type IN ('agent.rename', 'agent.stop') AND json_extract(payload, '$.agent') = ? AND seq < ?
+         ORDER BY seq DESC LIMIT ?`,
         agent,
         before,
         count,

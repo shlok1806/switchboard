@@ -1,6 +1,7 @@
 import { PendingApproval } from "@/components/domain/approval";
 import { AgentBrief, ContextWindow } from "@/components/domain/context";
 import { useMemo } from "react";
+import { Server } from "lucide-react";
 import type { Agent, Cli, Presence, Task } from "@shared/index";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCapabilities, useChannel } from "@/data/store";
@@ -8,7 +9,8 @@ import { IssueLink, Pending } from "@/components/domain/pending";
 import { AccountLabel, ModelLabel, PresenceDot, RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { AgentUsage, AccountsPanel } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
-import { CLI_LABEL, PRESENCE_LABEL, ago } from "@/lib/format";
+import { StartAgentButton, useHostsSupported } from "@/components/domain/start-agent";
+import { CLI_LABEL, PRESENCE_LABEL, ago, hostName } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +41,16 @@ export function useClaimsOf() {
   }, [tasks]);
 }
 
+/** Where a Host runs the Agent (ADR 0015): no terminal, so this is where to look for it. */
+export function HostLabel({ host }: { host: string }) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1" title={`Started by a Host, with no terminal: ${host}`}>
+      <Server className="size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">{hostName(host)}</span>
+    </span>
+  );
+}
+
 const CLI_TONE: Record<Cli, string> = { "claude-code": "bg-cli-claude", codex: "bg-cli-codex", gemini: "bg-cli-gemini" };
 
 /** The colour of an Agent's CLI (the canvas spec's colour per CLI), as a small square beside its name. */
@@ -53,14 +65,24 @@ export function AgentsView() {
     (a, b) => ORDER[a.presence] - ORDER[b.presence] || a.person.localeCompare(b.person) || a.id.localeCompare(b.id),
   );
   const can = useCapabilities();
+  const hosts = useHostsSupported();
 
   if (agents.length === 0) {
     return (
       <Pending title={can.agents ? "No Agents yet" : "Agents are not on this Channel yet"} className="h-full">
         {can.agents ? (
-          <>
-            Run <code className="font-mono text-ink-2">switchboard run claude</code> to add one. {/* taste-skill-ignore: a command */}
-          </>
+          // Shown once the Channel says whether it has Hosts, so the text never changes under the reader.
+          hosts !== null && (
+            <>
+              Run <code className="font-mono text-ink-2">switchboard run claude</code> to add one
+              {hosts ? <>, or start one on a&nbsp;Host.</> : "."}
+              {hosts && (
+                <span className="mt-4 flex justify-center">
+                  <StartAgentButton />
+                </span>
+              )}
+            </>
+          )
         ) : (
           <>
             Agents appear once <IssueLink capability="agents" /> lands.
@@ -78,6 +100,7 @@ export function AgentsView() {
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-[var(--gutter)] pt-6 pb-12 sm:pt-8">
         <PageHead
           title="Agents"
+          actions={<StartAgentButton />}
           summary={
             <span className="inline-flex flex-wrap items-center gap-x-4 gap-y-1 tabular-nums" aria-label="Presence counts">
               {(["live", "idle", "gone"] as const).map((p) => (
@@ -150,6 +173,7 @@ function AgentRow({ agent: a, held }: { agent: Agent; held: Task[] }) {
           <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-small text-ink-3" title={`Last seen ${ago(a.lastSeenAt)}`}>
             <span>{CLI_LABEL[a.cli]}</span>
             <span>{a.person}</span>
+            {a.host && <HostLabel host={a.host} />}
             {a.account && !a.usage?.email && <AccountLabel account={a.account} className="flex min-w-0 shrink items-center gap-1" />}
             {a.model && <ModelLabel model={a.model} effort={a.effort} className="flex min-w-0 shrink items-center gap-1" />}
           </span>
