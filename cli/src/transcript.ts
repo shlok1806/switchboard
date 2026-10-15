@@ -5,7 +5,7 @@
 
 import { readFile, stat } from "node:fs/promises";
 import type { Cli, TranscriptEntry, TranscriptKind, TranscriptResponse } from "../../shared/src/index";
-import { cleanTranscriptText, TRANSCRIPT_PAGE_BYTES } from "../../shared/src/index";
+import { cleanTranscriptText, ESCAPE_SEQUENCE, TRANSCRIPT_PAGE_BYTES } from "../../shared/src/index";
 import { MASK, maskSecrets } from "./proxy/mask";
 
 /** The longest an entry of each kind runs, after redaction. */
@@ -204,11 +204,23 @@ export function condense(cli: Cli, file: string): Raw[] {
   return cli === "codex" ? codexEntries(lines) : claudeEntries(lines);
 }
 
-/** Redacted and cut to its kind's length; redacted first, as cutting a secret can hide it. */
+const SPLIT_TAIL = new RegExp(`${MASK.replace(/\*/g, "\\*")}(?:(?:${ESCAPE_SEQUENCE})+[A-Za-z0-9_-]+)+`, "g");
+
+/**
+ * Redacted and cut to its kind's length; redacted first, as cutting a secret can hide it.
+ * Redacted twice, around removing escape sequences: before, a colour code is the break
+ * that shows where a key glued to a word starts (`OK\e[32mghp_...`); after, a key that
+ * colour codes split (`sk-ant-\e[1m...`) is whole again.
+ */
 function shown(raw: Raw): { text: string; count: number } {
-  const { text, count } = redactTranscript(cleanTranscriptText(raw.text).trim());
+  const first = redactTranscript(raw.text);
+  // A mask, then a colour code, then more of a token: the rest of a key both glued and
+  // split (`OK\e[32mghp_abc\e[1mdef`). It goes with the mask.
+  const joined = first.text.replace(SPLIT_TAIL, MASK);
+  const second = redactTranscript(cleanTranscriptText(joined).trim());
   const max = MAX_CHARS[raw.kind];
-  return { text: text.length > max ? `${text.slice(0, max - 1)}…` : text, count };
+  const text = second.text;
+  return { text: text.length > max ? `${text.slice(0, max - 1)}…` : text, count: first.count + second.count };
 }
 
 /** The page of `entries` from entry `from`, at most TRANSCRIPT_PAGE_BYTES of text. */

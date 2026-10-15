@@ -125,6 +125,30 @@ describe("transcriptPage", () => {
   it("masks a key that colour codes split, once they are gone", () => {
     const page = transcriptPage([{ kind: "result", text: `sk-ant-api03-\u001b[1mABCDEFGH\u001b[22mIJKLMNOP` }], 0);
     expect(page.entries[0]?.text).toBe("sk-ant-****");
+    expect(page.redacted).toBe(1);
+  });
+
+  it("masks a key a colour code glues to the word before it", () => {
+    const page = transcriptPage(
+      [
+        {
+          kind: "result",
+          text: "OK\u001b[32mghp_abcdefghijklmnopqrstuvwxyz0123\u001b[0m and x\u001b[1msk-ant-api03-abcdefghijklmnop",
+        },
+      ],
+      0,
+    );
+    expect(page.entries[0]?.text).toBe("OKghp_**** and xsk-ant-****");
+    expect(page.redacted).toBe(2);
+  });
+
+  it("masks all of a key that colour codes both glue to a word and split", () => {
+    const page = transcriptPage(
+      [{ kind: "result", text: "OK\u001b[32mghp_abcdefghijklmnopqrstuvwxyz\u001b[1m0123\u001b[22m4567\u001b[0m done" }],
+      0,
+    );
+    expect(page.entries[0]?.text).toBe("OKghp_**** done");
+    expect(page.redacted).toBe(1);
   });
 
   it("numbers entries from where it is asked, pages under the cap, and says where to go on", () => {
