@@ -29,6 +29,7 @@ import {
   agentIdFor,
   approvalPath,
   DEFAULT_IDLE_AFTER_MS,
+  denyReason,
   directivesNotice,
   HEARTBEAT_INTERVAL_MS,
   interruptNotice,
@@ -37,7 +38,7 @@ import {
 } from "../../shared/src/index";
 import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
-import { ApprovalReporter } from "./approvals";
+import { ApprovalReporter, DenyGate } from "./approvals";
 import { type ChannelChoice, ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ChannelClient, ChannelError, targetOf } from "./channel-client";
 import { claudeConfigDir, projectDir } from "./claude-session";
@@ -247,10 +248,16 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     idleClears: adapter.idleClears,
     log,
     onPersonPrompt: () => waker?.reset("the Person sent a prompt"),
-    onApproval: (request) => approvals.changed(request),
+    onApproval: (request) => {
+      approvals.changed(request);
+      if (request === null) denyGate?.release();
+    },
   });
-  // Shows the permission prompt the CLI waits on to the Channel, read-only (ADR 0013).
+  // Holds the prompt's hook, so the Agent's own Person can deny it from the Channel (ADR 0014).
+  const denyGate = adapter.remoteDeny ? new DenyGate() : null;
+  // Shows the permission prompt the CLI waits on to the Channel (ADR 0013).
   const approvals = new ApprovalReporter({
+    deniable: denyGate !== null,
     send: async (approval) => {
       if (agentId === null) return false;
       try {
@@ -387,6 +394,14 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         stream.send(JSON.stringify(ack));
       }
       if (message.type === "directive.interrupt" && message.agent === agentId) void directed(message);
+      if (message.type === "approval.deny" && message.agent === agentId) {
+        if (denyGate?.deny(message.id, denyReason(message.person, message.message))) {
+          log(`permission prompt denied from the Channel by ${message.person}`);
+          typer.permissionAnswered();
+        } else {
+          log(`a deny from ${message.person} came after its permission prompt closed`);
+        }
+      }
     },
     (connected) => {
       log(connected ? "stream connected" : "stream disconnected");
@@ -416,6 +431,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const stopHooks = async () => {
     models.close();
     approvals.close();
+    // A held hook keeps its connection open: let it go, or the socket never closes.
+    denyGate?.release();
     stream.close();
     await hooks?.close();
     await proxy?.close();
@@ -549,6 +566,16 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         ...(discovering === null ? {} : { onSessionId: (sessionId: string) => linkTo(sessionId, discovering.resumed) }),
         ...(adapter.translateHook ? { translate: adapter.translateHook } : {}),
         ...(adapter.hookAnswer ? { answer: adapter.hookAnswer } : {}),
+        ...(denyGate === null
+          ? {}
+          : {
+              hold: (input) => {
+                const open = approvals.open;
+                return input.hook_event_name === "PermissionRequest" && open !== null
+                  ? denyGate.hold(open.id)
+                  : undefined;
+              },
+            }),
       });
       // Switchboard's MCP tools for this session only (the Tool Capture).
       tools = prepareSessionTools(cwd, repo, env);

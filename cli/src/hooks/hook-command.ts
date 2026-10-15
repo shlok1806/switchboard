@@ -3,6 +3,7 @@
 //
 //   node switchboard-hook.js <wrapper socket>
 //   node switchboard-hook.js            (the socket in $SWITCHBOARD_HOOK_SOCKET)
+//   node switchboard-hook.js <wrapper socket> --hold
 //
 // Claude Code writes the hook's input as JSON on stdin. This hands it, unchanged,
 // to the running wrapper over its local socket, prints the wrapper's answer and
@@ -12,20 +13,29 @@
 // the Agent has something to be told, such as a Claim it lost while it was away.
 // It never fails the hook: if the wrapper is gone, the event is dropped.
 //
+// `--hold` is for Claude Code's PermissionRequest only (ADR 0014): the wrapper holds
+// that answer until the prompt is denied from the Channel or closes, so the hook
+// waits for it, up to HOLD_MS. Giving up prints nothing: no decision, and Claude
+// Code's own dialog, which it shows meanwhile, stays in charge.
+//
 // It is its own small bundle with no dependencies, so it starts fast.
 
 import { connect } from "node:net";
 
 /** The most a hook waits for stdin and the local socket together. */
 const GIVE_UP_MS = 2000;
+/** The most a held hook waits: under the 600 s timeout its settings give it, so it ends first. */
+const HOLD_MS = 590_000;
 
 function done(): never {
   process.exit(0);
 }
 
-setTimeout(done, GIVE_UP_MS).unref();
+const args = process.argv.slice(2);
+const hold = args.includes("--hold");
+setTimeout(done, hold ? HOLD_MS : GIVE_UP_MS).unref();
 
-const socketPath = process.argv[2] || process.env.SWITCHBOARD_HOOK_SOCKET;
+const socketPath = args.find((arg) => arg !== "--hold") || process.env.SWITCHBOARD_HOOK_SOCKET;
 if (!socketPath) done();
 
 const chunks: Buffer[] = [];

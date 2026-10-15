@@ -114,6 +114,7 @@ export const gemini: CliAdapter = {
   idleClears: false,
   // Interrupts cannot be typed into it, so neither can a Wake (#63).
   wakes: false,
+  remoteDeny: false,
   proxy: true,
   sessionFromHooks: true,
 

@@ -11,6 +11,7 @@ import type {
   AgentContext,
   AgentId,
   AgentResponse,
+  ApprovalDenyMessage,
   DeliveryMessage,
   DirectiveInterruptMessage,
   DirectiveMessage,
@@ -53,7 +54,8 @@ export type ChannelMessage =
   | InterruptAttached
   | InterruptMessage
   | DirectiveMessage
-  | DirectiveInterruptMessage;
+  | DirectiveInterruptMessage
+  | ApprovalDenyMessage;
 
 export class ChannelError extends Error {
   constructor(

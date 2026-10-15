@@ -7,6 +7,10 @@
 // What leaves the laptop is masked first, with the Proxy's secret masking. The
 // reporter sends the latest state only: a prompt that opened and closed while the
 // Channel could not be reached is never sent, and a failed report is tried again.
+//
+// For Claude Code the wrapper also holds the prompt's PermissionRequest hook (the
+// DenyGate), so the Agent's own Person can deny it from the Channel (ADR 0014). It
+// never approves: the hook's only answers are a deny and no decision.
 
 import { randomUUID } from "node:crypto";
 import { MAX_APPROVAL_DETAIL_LENGTH, MAX_APPROVAL_REASON_LENGTH, type PendingApproval } from "../../shared/src/index";
@@ -24,7 +28,12 @@ function masked(text: string, max: number): string {
 }
 
 /** What a PermissionRequest asks, as the Channel shows it: masked and cut short. */
-export function pendingApproval(request: ClaudeHookInput, openedAt: Date, id: string = randomUUID()): PendingApproval {
+export function pendingApproval(
+  request: ClaudeHookInput,
+  openedAt: Date,
+  id: string = randomUUID(),
+  deniable = false,
+): PendingApproval {
   const input = request.tool_input ?? {};
   const field = DETAIL_FIELDS.find((key) => typeof input[key] === "string" && input[key] !== "");
   // A tool with none of those, such as an MCP tool, shows its input in short.
@@ -37,6 +46,7 @@ export function pendingApproval(request: ClaudeHookInput, openedAt: Date, id: st
     ...(raw === "" ? {} : { detail: masked(raw, MAX_APPROVAL_DETAIL_LENGTH) }),
     ...(reason === "" ? {} : { reason: masked(reason, MAX_APPROVAL_REASON_LENGTH) }),
     openedAt: openedAt.toISOString(),
+    ...(deniable ? { deniable: true } : {}),
   };
 }
 
@@ -46,6 +56,8 @@ export interface ApprovalReporterOptions {
   log: (line: string) => void;
   now?: () => Date;
   retryMs?: number;
+  /** Whether the wrapper holds the prompt's hook, so the Channel may deny it (ADR 0014). */
+  deniable?: boolean;
 }
 
 /** Keeps the Channel's view of the Agent's permission prompt in step with the CLI's. */
@@ -65,9 +77,15 @@ export class ApprovalReporter {
     this.retryMs = options.retryMs ?? RETRY_MS;
   }
 
+  /** The prompt the CLI shows now, as the Channel is told of it. */
+  get open(): PendingApproval | null {
+    return this.wanted;
+  }
+
   /** The CLI opened a permission prompt (`request`), or closed it (null). */
   changed(request: ClaudeHookInput | null): void {
-    this.wanted = request === null ? null : pendingApproval(request, this.now());
+    this.wanted =
+      request === null ? null : pendingApproval(request, this.now(), randomUUID(), this.options.deniable === true);
     if (this.wanted) this.options.log(`waiting for approval: ${this.wanted.tool}`);
     void this.flush();
   }
@@ -102,5 +120,44 @@ export class ApprovalReporter {
   close(): void {
     this.closed = true;
     clearTimeout(this.timer);
+  }
+}
+
+/**
+ * Holds Claude Code's PermissionRequest hook while its prompt is open, so the Agent's
+ * own Person can deny it from the Channel (ADR 0014). The hook is answered with a deny
+ * for that prompt, or with nothing (no decision) when the prompt closes, another takes
+ * its place, or the wrapper stops. Every way out but a deny leaves Claude Code's own
+ * dialog in charge, and nothing here can answer allow.
+ */
+export class DenyGate {
+  private held: { id: string; answer: (text: string) => void } | null = null;
+
+  /** Holds the hook of prompt `id`; resolves to what the hook prints. */
+  hold(id: string): Promise<string> {
+    this.release();
+    return new Promise((answer) => {
+      this.held = { id, answer };
+    });
+  }
+
+  /** Denies prompt `id` with `reason`, which the model reads. False when that prompt is not held. */
+  deny(id: string, reason: string): boolean {
+    const held = this.held;
+    if (held?.id !== id) return false;
+    this.held = null;
+    held.answer(
+      JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "deny", message: reason } },
+      }),
+    );
+    return true;
+  }
+
+  /** The prompt closed, or the wrapper stops: the hook ends with no decision. */
+  release(): void {
+    const held = this.held;
+    this.held = null;
+    held?.answer("");
   }
 }

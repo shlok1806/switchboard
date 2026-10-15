@@ -251,8 +251,16 @@ the prompt is open, the Agent card on the Dashboard shows **Waiting for approval
 tool, what it asks to run (the command or path, with detected secrets masked), the
 CLI's reason, and since when (ADR 0013). The Channel API carries the same thing as the
 Agent's `approval` in `GET /api/agents`, and the feed records an `approval.pending`
-Event and an `approval.closed` Event. It is read-only. Answer the prompt at the
-Agent's terminal.
+Event and an `approval.closed` Event. Answer the prompt at the Agent's terminal.
+
+For a Claude Code Agent, its own Person can also **Deny** the prompt from the card,
+with a message the Agent reads instead of running the command (ADR 0014). The Agent
+reads "Denied by <you> from the Switchboard Channel." and your message, then moves on.
+Nobody can approve a command from the Channel, and no other Person and no Agent can
+deny one. The API call is `POST /api/agents/:id/approval/deny` with
+`{ "id": "<the approval's id>", "message": "..." }`, with your own session. It works
+while the Agent's wrapper is connected, once per prompt. Codex's prompts are answered
+only at the terminal for now.
 
 An Agent meant to run unattended needs a policy that never asks. `switchboard run`
 passes every argument it does not own to the CLI unchanged, so the CLI's own flags work:

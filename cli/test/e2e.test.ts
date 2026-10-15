@@ -26,7 +26,7 @@ import type {
   TouchedFilesResponse,
   Verdict,
 } from "../../shared/src/index";
-import { agentPath, nicknamePath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
+import { agentPath, approvalDenyPath, nicknamePath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
 import { CODE_ASSIST_SSE, GEMINI_SSE, RESPONSES_SSE, RESPONSES_TURN } from "./fixtures/api-shapes";
 import { GitHubApi } from "./fixtures/github-api";
 import { JevApi } from "./fixtures/jev-api";
@@ -1953,6 +1953,74 @@ describe("Directives (ADR 0005)", () => {
 // Idle wake (#62): an idle Claude Code Agent is woken for what is Queued for it and
 // deserves it, as one prompt once its Person is quiet; the rest waits for its next turn;
 // two Agents answering each other stop at the cap, and the Channel says why.
+describe("Permission prompts on the Channel (ADR 0013, ADR 0014)", () => {
+  let term: Terminal;
+  let id = "";
+
+  beforeAll(async () => {
+    term = new Terminal(["run", "claude"], INTERRUPT_ENV);
+    id = (await term.started()).agentEnv;
+    await waitForPresence(id, "live");
+    // A deny reaches the wrapper only once it has attached.
+    await term.attached(id);
+  }, 30_000);
+
+  afterAll(async () => {
+    term?.type("quit\r");
+    await term?.exited;
+  });
+
+  const pending = (deniable: boolean) =>
+    waitFor("the pending approval", async () => {
+      const approval = (await agents()).find((a) => a.id === id)?.approval;
+      return approval?.deniable === deniable ? approval : undefined;
+    });
+  const closed = () =>
+    waitFor("the prompt to close", async () =>
+      (await agents()).find((a) => a.id === id)?.approval === undefined ? true : undefined,
+    );
+
+  it("lets the Agent's own Person deny a prompt from the Channel, long after a hook would give up", async () => {
+    term.type("permission Bash\r");
+    await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash/);
+    const approval = await pending(true);
+    // Past the 2 s every other hook waits at most.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const deny = (person: string) =>
+      asPerson(person, approvalDenyPath(id as AgentId), {
+        method: "POST",
+        body: JSON.stringify({ id: approval.id, message: "Use the cached build." }),
+      });
+    expect((await deny("dashboard")).status).toBe(403);
+    expect((await deny("e2e")).status).toBe(200);
+    await term.waitForOutput(
+      /FAKE-CLAUDE permission deny by hook message="Denied by e2e from the Switchboard Channel\. Use the cached build\."/,
+    );
+    await closed();
+    const { events } = await api<HistoryResponse>("/api/events");
+    const mine = events.filter(
+      (e) =>
+        (e.actor.kind === "agent" && e.actor.agentId === id && e.type.startsWith("approval.")) ||
+        (e.type === "approval.denied" && (e.payload as { agent: string }).agent === id),
+    );
+    expect(mine.map((e) => e.type)).toEqual(["approval.pending", "approval.denied", "approval.closed"]);
+  }, 60_000);
+
+  it("ends the held hook with no decision when the Person answers at the terminal", async () => {
+    term.type("permission Bash\r");
+    await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash/);
+    await pending(true);
+    const seen = term.output.length;
+    term.type("1\r");
+    await term.waitForOutput(/FAKE-CLAUDE permission answered "1"/);
+    await closed();
+    // The hook ended too, printing nothing: the dialog decided.
+    await waitFor("the hook to end", async () =>
+      /FAKE-CLAUDE hook PermissionRequest exit=0 ms=\d+\r*\n/.test(term.output.slice(seen)) ? true : undefined,
+    );
+  }, 60_000);
+});
+
 describe("Idle wake", () => {
   let a: Terminal;
   let b: Terminal;

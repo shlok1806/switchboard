@@ -8,7 +8,9 @@
 // The socket answers each hook at once, from what the wrapper already holds: for
 // the hooks whose output Claude Code adds to the model's context (SessionStart,
 // UserPromptSubmit), that is what the Agent must be told at its next turn, such as
-// a Claim it lost while it was away. Every other hook gets an empty answer.
+// a Claim it lost while it was away. Every other hook gets an empty answer. One
+// exception waits: Claude Code's PermissionRequest is held until its prompt is denied
+// from the Channel or closes (`hold`, ADR 0014), and never waits on the network either.
 // Events wait while the WebSocket is down or the Agent is not registered yet, and
 // every message is sent again on reconnect until the Channel acknowledges it.
 // Event IDs make that safe: the Channel records each Event once.
@@ -29,6 +31,9 @@ import { CAPTURED_HOOKS, type ClaudeHookInput, type HookEventDraft, HookSummariz
 const MAX_PENDING = 1000;
 /** The largest hook input read from a hook, in bytes. A Write's input holds the whole file. */
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
+
+/** How long Claude Code lets the held PermissionRequest hook run, in seconds (ADR 0014). */
+export const HELD_HOOK_TIMEOUT_SECONDS = 600;
 
 /** Where a hook finds the wrapper's socket when its command does not name it. */
 export const HOOK_SOCKET_ENV = "SWITCHBOARD_HOOK_SOCKET";
@@ -64,6 +69,12 @@ export interface HookCaptureOptions {
    * fields), so everything after it reads one shape. Claude Code's needs none.
    */
   translate?: (raw: Record<string, unknown>) => ClaudeHookInput | ClaudeHookInput[];
+  /**
+   * Holds a hook's answer: when it returns a promise, the hook is answered with what
+   * that resolves to, whenever that is. Claude Code's PermissionRequest, which the
+   * wrapper answers with a deny from the Channel or with nothing (ADR 0014).
+   */
+  hold?: (input: ClaudeHookInput) => Promise<string> | undefined;
   /** Wraps the text for a hook's answer the way the agent CLI reads it. Plain text by default. */
   answer?: (hook: string | undefined, text: string) => string;
   /** The hook command's program and script. Defaults to this Node and the built hook script. */
@@ -147,6 +158,12 @@ export class HookCapture {
   /** The Claude Code settings that install the hooks for this session. */
   settings(): SessionSettings {
     const hook = { type: "command" as const, command: this.command(), timeout: 10 };
+    // Claude Code shows its dialog while this one runs: it waits for the wrapper's answer (ADR 0014).
+    const held = {
+      type: "command" as const,
+      command: `${this.command()} --hold`,
+      timeout: HELD_HOOK_TIMEOUT_SECONDS,
+    };
     const names = [...new Set<string>([...CAPTURED_HOOKS, ...CONTEXT_HOOKS, ...DIALOG_HOOKS])];
     // PreToolUse: the dialog tools, and the shell, whose changes are worked out around it.
     const matchers: Record<string, string> = { PostToolUse: "*", PreToolUse: [...DIALOG_TOOLS, "Bash"].join("|") };
@@ -154,7 +171,8 @@ export class HookCapture {
       hooks: Object.fromEntries(
         names.map((name) => {
           const matcher = matchers[name];
-          return [name, [matcher === undefined ? { hooks: [hook] } : { matcher, hooks: [hook] }]];
+          const hooks = [name === "PermissionRequest" ? held : hook];
+          return [name, [matcher === undefined ? { hooks } : { matcher, hooks }]];
         }),
       ),
     };
@@ -232,6 +250,8 @@ export class HookCapture {
       if (each.hook_event_name === "PreToolUse") await this.shellEdits.start(key, dir);
       if (each.hook_event_name === "PostToolUse") await this.shellChanges(key);
     }
+    const held = this.options.hold?.(input);
+    if (held !== undefined) return held;
     const context = this.options.context?.(input.hook_event_name) ?? "";
     return this.options.answer ? this.options.answer(input.hook_event_name, context) : context;
   }

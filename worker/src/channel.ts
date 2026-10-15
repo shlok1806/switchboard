@@ -11,9 +11,11 @@ import type {
   Agent,
   AgentContext,
   AgentId,
+  ApprovalDenyMessage,
   Capture,
   ChannelEvent,
   DeliveryMessage,
+  DenyApprovalRequest,
   DirectiveInterruptMessage,
   DirectiveMessage,
   EventPayloads,
@@ -518,6 +520,22 @@ export class Channel extends DurableObject<Env> {
     return this.agents.setApproval(caller.person, id, approval);
   }
 
+  /** The Agent's own Person denies its open prompt from the Channel; its wrapper answers the hook (ADR 0014). */
+  denyAgentApproval(caller: Caller, id: AgentId, deny: DenyApprovalRequest): RosterResult {
+    if (caller.agent !== undefined) {
+      return { ok: false, status: 403, reason: "Only the Agent's own Person can deny its prompt, never an Agent." };
+    }
+    return this.agents.denyApproval(caller.person, id, deny, () =>
+      this.interruptTo(id, {
+        type: "approval.deny",
+        agent: id,
+        id: deny.id,
+        person: caller.person,
+        ...(deny.message === undefined ? {} : { message: deny.message }),
+      }),
+    );
+  }
+
   /** Sets an Agent's Proxy mode; only its own Person may. Its wrapper hears on the stream. */
   setProxyMode(person: PersonName, id: AgentId, mode: ProxyMode): RosterResult {
     return this.agents.setProxyMode(person, id, mode);
@@ -704,7 +722,10 @@ export class Channel extends DurableObject<Env> {
    * Sends an Interrupt to the wrapper of Agent `id`: the socket that most recently
    * said it belongs to that wrapper. False when there is none.
    */
-  private interruptTo(id: AgentId, message: InterruptMessage | DirectiveInterruptMessage): boolean {
+  private interruptTo(
+    id: AgentId,
+    message: InterruptMessage | DirectiveInterruptMessage | ApprovalDenyMessage,
+  ): boolean {
     const person = this.agents.find(id)?.person;
     if (person === undefined) return false;
     let target: { ws: WebSocket; at: number } | null = null;
@@ -816,7 +837,8 @@ function send(
     | InterruptAttached
     | InterruptMessage
     | DirectiveMessage
-    | DirectiveInterruptMessage,
+    | DirectiveInterruptMessage
+    | ApprovalDenyMessage,
 ): boolean {
   try {
     ws.send(JSON.stringify(message));

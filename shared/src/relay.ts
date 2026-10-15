@@ -37,6 +37,7 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   // A permission prompt waits for the Agent's own Person, not for other Agents (ADR 0013).
   "approval.pending",
   "approval.closed",
+  "approval.denied",
   "session.start",
   "session.end",
   "claim.refused",

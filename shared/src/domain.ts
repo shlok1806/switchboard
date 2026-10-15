@@ -247,9 +247,11 @@ export interface EventPayloads {
    * The Agent's CLI opened a permission prompt and waits for its Person to answer it at
    * the terminal (ADR 0013). What it asks for, masked on the laptop. Hook Capture.
    */
-  "approval.pending": Omit<PendingApproval, "openedAt">;
+  "approval.pending": Omit<PendingApproval, "openedAt" | "deniedBy">;
   /** That prompt closed: answered at the terminal, or gone with its turn or session. `id` names it. */
   "approval.closed": { id: string };
+  /** The Agent's own Person denied prompt `id` of Agent `agent` from the Channel (ADR 0014). */
+  "approval.denied": { agent: AgentId; id: string; message?: string };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */

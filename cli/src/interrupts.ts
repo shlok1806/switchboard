@@ -615,6 +615,11 @@ export class InterruptTyper {
     }
   }
 
+  /** The open permission prompt was answered from the Channel (a deny, ADR 0014): it closes. */
+  permissionAnswered(): void {
+    if (this.permission !== null) this.closeDialog();
+  }
+
   /** The open dialog was answered, or went with its turn or session. */
   private closeDialog(): void {
     this.dialog = null;

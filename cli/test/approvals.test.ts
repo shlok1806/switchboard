@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { PendingApproval } from "../../shared/src/index";
-import { ApprovalReporter, pendingApproval } from "../src/approvals";
+import { ApprovalReporter, DenyGate, pendingApproval } from "../src/approvals";
 import type { ClaudeHookInput } from "../src/hooks/summarize";
 import { InterruptTyper } from "../src/interrupts";
 
@@ -91,6 +91,33 @@ describe("ApprovalReporter", () => {
     await settle();
     expect(state.told).toEqual(["Bash", "Bash", null]);
     reporter.close();
+  });
+});
+
+describe("DenyGate", () => {
+  const denied = (message: string) =>
+    JSON.stringify({
+      hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "deny", message } },
+    });
+
+  it("answers the held hook with a deny for its own prompt only", async () => {
+    const gate = new DenyGate();
+    const hook = gate.hold("p1");
+    expect(gate.deny("p0", "no")).toBe(false);
+    expect(gate.deny("p1", "Not now.")).toBe(true);
+    expect(await hook).toBe(denied("Not now."));
+    // Once: the prompt is no longer held.
+    expect(gate.deny("p1", "Not now.")).toBe(false);
+  });
+
+  it("ends a hook with no decision when its prompt closes or another takes its place", async () => {
+    const gate = new DenyGate();
+    const first = gate.hold("p1");
+    const second = gate.hold("p2");
+    expect(await first).toBe("");
+    gate.release();
+    expect(await second).toBe("");
+    expect(gate.deny("p2", "late")).toBe(false);
   });
 });
 
