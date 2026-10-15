@@ -27,6 +27,7 @@ import type {
   Verdict,
 } from "../../shared/src/index";
 import { agentPath, approvalDenyPath, nicknamePath, REVIEW_LABEL, STANDING_RULE } from "../../shared/src/index";
+import { EDIT_NUDGE } from "../src/memory";
 import { CODE_ASSIST_SSE, GEMINI_SSE, RESPONSES_SSE, RESPONSES_TURN } from "./fixtures/api-shapes";
 import { GitHubApi } from "./fixtures/github-api";
 import { JevApi } from "./fixtures/jev-api";
@@ -661,6 +662,9 @@ describe("the Hook Capture", () => {
       expect(run[2]).toBe("0");
       expect(Number(run[3])).toBeLessThan(1000);
       if (run[1] === "SessionStart") expect(run[4]?.replace(/\r/g, "")).toBe(` out=${STANDING_RULE}`);
+      // The turn edited files and wrote no note: the Stop hook asks for one, once (ADR 0019).
+      else if (run[1] === "Stop")
+        expect(JSON.parse(run[4]?.replace(/^ out=/, "") ?? "")).toEqual({ decision: "block", reason: EDIT_NUDGE });
       else expect(run[4]).toBeUndefined();
     }
 
