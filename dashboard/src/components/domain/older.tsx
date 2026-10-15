@@ -10,7 +10,7 @@ export function OlderRow({ loading, onClick, className }: { loading: boolean; on
       {loading ? (
         "Loading older Events"
       ) : (
-        <button type="button" onClick={onClick} className="text-accent-ink underline-offset-4 hover:underline">
+        <button type="button" onClick={onClick} className="text-ink underline-offset-4 hover:underline">
           Show older Events
         </button>
       )}

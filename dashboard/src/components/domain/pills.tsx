@@ -1,77 +1,34 @@
 import type { Actor, Agent, Capture, ChannelEvent, Presence, Verdict, VerdictOption } from "@shared/index";
 import { modelLabel } from "@shared/index";
-import { Bot, GitMerge, Radio, Sparkles, User, UserRound, Webhook, Wrench, Cpu, type LucideIcon } from "lucide-react";
-import { StatusPill } from "@/components/atoms/StatusPill";
+import { GitMerge, Radio, User, Webhook, Wrench, Cpu, type LucideIcon } from "lucide-react";
+import { Tag } from "@/components/atoms/Tag";
+import { State } from "@/components/domain/state";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { initials } from "@/components/shell/nav";
-import { CAPTURE_LABEL, CLI_LABEL, PRESENCE_LABEL, VERDICT_LABEL, captureOrOrigin } from "@/lib/format";
+import { CAPTURE_LABEL, CLI_LABEL, VERDICT_LABEL, captureOrOrigin } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
-const SMALL = "h-6 gap-1.5 px-2 text-small";
+const PRESENCE_STATE = { live: "running", idle: "idle", gone: "gone" } as const;
 
-// Idle is grey everywhere: the pill and the dot read the same state the same way.
-const PRESENCE_TONE = { live: "green", idle: "neutral", gone: "neutral" } as const;
-
-const PRESENCE_HINT: Record<Presence, string> = {
-  live: "Live: working now",
-  idle: "Idle: connected, between turns",
-  gone: "Gone: silent for about ten minutes",
-};
-
+/** An Agent's presence alone, as the state vocabulary draws it. */
 export function PresencePill({ presence, className }: { presence: Presence; className?: string }) {
-  return (
-    <StatusPill tone={PRESENCE_TONE[presence]} className={cn(SMALL, className)}>
-      {PRESENCE_LABEL[presence]}
-    </StatusPill>
-  );
+  return <State state={PRESENCE_STATE[presence]} className={cn("text-small", className)} />;
 }
-
-/** Presence as one coloured dot, named on hover. */
-export function PresenceDot({ presence, className }: { presence: Presence; className?: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className={cn("inline-grid size-3 shrink-0 place-items-center", className)}>
-          <span
-            className={cn(
-              "size-2 rounded-full",
-              presence === "live" && "breathe bg-state-live",
-              presence === "idle" && "bg-state-idle",
-              presence === "gone" && "border-[1.5px] border-state-gone",
-            )}
-          />
-          <span className="sr-only">{PRESENCE_LABEL[presence]}</span>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>{PRESENCE_HINT[presence]}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-const VERDICT_TONE = { drop: "neutral", queue: "accent", interrupt: "orange" } as const;
 
 export function VerdictPill({ option, className }: { option: VerdictOption; className?: string }) {
-  return (
-    <StatusPill tone={VERDICT_TONE[option]} className={cn(SMALL, className)}>
-      {VERDICT_LABEL[option]}
-    </StatusPill>
-  );
+  return <Tag className={className}>{VERDICT_LABEL[option]}</Tag>;
 }
 
 export function StalePill({ className }: { className?: string }) {
-  return (
-    <StatusPill tone="red" className={cn(SMALL, className)}>
-      Stale
-    </StatusPill>
-  );
+  return <State state="stale" className={cn("text-small", className)} />;
 }
 
 export function RawBadge() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex h-6 items-center rounded-sm bg-hover px-2 text-small font-medium text-ink-2">Raw</span>
+        <Tag>Raw</Tag>
       </TooltipTrigger>
       <TooltipContent>Raw proxy mode: full model turns, context included, are shared.</TooltipContent>
     </Tooltip>
@@ -99,9 +56,7 @@ export function CaptureIcon({ event, className }: { event: ChannelEvent; classNa
 /** Where an Event came from, as a quiet text chip (detail views). */
 export function CaptureChip({ event }: { event: ChannelEvent }) {
   return (
-    <span className={cn("inline-flex h-6 items-center rounded-sm px-2 text-small", event.capture === "proxy" ? "bg-accent-tint text-accent-ink" : "bg-hover text-ink-3")}>
-      {captureOrOrigin(event)}
-    </span>
+    <Tag>{captureOrOrigin(event)}</Tag>
   );
 }
 
@@ -109,29 +64,29 @@ export function CaptureName({ capture }: { capture: Capture }) {
   return <>{CAPTURE_LABEL[capture]}</>;
 }
 
-/** A round avatar for whoever did something: initials for a Person, a robot for an Agent, the mark for GitHub. */
+/**
+ * A square mark for whoever did something: initials for a Person, a robot for an Agent, the
+ * mark for GitHub. Square at radius 3, so it never reads as a state disc.
+ */
 export function ActorAvatar({ actor, size = "md" }: { actor: Actor; size?: "sm" | "md" }) {
   const box = size === "sm" ? "size-6 text-small" : "size-8 text-small";
   if (actor.kind === "github" || actor.kind === "relay") {
     const Icon = actor.kind === "github" ? GitMerge : Radio;
     return (
-      <span className={cn("grid shrink-0 place-items-center rounded-full bg-hover-2 text-ink-2", box)} aria-hidden>
+      <span className={cn("grid shrink-0 place-items-center rounded-[var(--r)] bg-paper-3 text-ink-2", box)} aria-hidden>
         <Icon className="size-[55%]" strokeWidth={1.75} />
       </span>
     );
   }
-  // An Agent wears its Person's initials, with a small robot badge.
+  // An Agent wears its Person's initials on paper-3; a Person's own are ink.
   if (actor.kind === "agent")
     return (
-      <span className={cn("relative grid shrink-0 place-items-center rounded-full bg-hover-2 font-semibold text-ink-2", box)} aria-hidden>
+      <span className={cn("grid shrink-0 place-items-center rounded-[var(--r)] bg-paper-3 font-semibold text-ink-2", box)} aria-hidden>
         {initials(actor.agentId.split("/")[0])}
-        <span className="absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full bg-hover-2 text-ink-2 ring-2 ring-page">
-          <Bot className="size-2.5" strokeWidth={2} />
-        </span>
       </span>
     );
   return (
-    <span className={cn("grid shrink-0 place-items-center rounded-full bg-ink font-semibold text-page", box)} aria-hidden>
+    <span className={cn("grid shrink-0 place-items-center rounded-[var(--r)] bg-ink font-semibold text-paper", box)} aria-hidden>
       {initials(actor.person)}
     </span>
   );
@@ -158,7 +113,7 @@ export function AgentLink({
       onClick={(e) => e.stopPropagation()}
     >
       <span className="min-w-0 text-body font-medium [overflow-wrap:anywhere] text-ink tabular-nums underline-offset-4 group-hover/agent:underline">{id}</span>
-      {showNickname && agent?.nickname && <span className={cn("truncate text-body text-ink-3", nicknameClassName)}>{agent.nickname}</span>}
+      {showNickname && agent?.nickname && <span className={cn("min-w-0 [overflow-wrap:anywhere] text-body text-ink-3", nicknameClassName)}>{agent.nickname}</span>}
     </a>
   );
 }
@@ -167,8 +122,7 @@ export function AgentLink({
 export function AccountLabel({ account, className }: { account: string; className?: string }) {
   return (
     <span className={className ?? "inline-flex min-w-0 items-center gap-1"} title="The login of its CLI this Agent runs under">
-      <UserRound className="size-3.5 shrink-0" aria-hidden />
-      <span className="truncate">{account}</span>
+      <span className="[overflow-wrap:anywhere]">{account}</span>
     </span>
   );
 }
@@ -181,8 +135,7 @@ export function ModelLabel({ model, effort, className }: { model: string; effort
   const label = modelLabel(model);
   return (
     <span className={className ?? "inline-flex min-w-0 items-center gap-1"} title={effort ? `${model}, effort ${effort}` : model}>
-      <Sparkles className="size-3.5 shrink-0" aria-hidden />
-      <span className="truncate">
+      <span className="[overflow-wrap:anywhere]">
         {label}
         {effort ? ` · ${effort}` : ""}
       </span>
@@ -202,42 +155,21 @@ export function TaskLink({ number, title, className }: { number: number; title?:
       className={cn("group/task inline-flex min-w-0 items-baseline gap-1.5 transition-colors hover:text-ink", className)}
     >
       <span className="text-ink-3 tabular-nums">#{number}</span>
-      {title && <span className="truncate underline-offset-4 group-hover/task:underline" title={title}>{title}</span>}
+      {title && <span className="min-w-0 [overflow-wrap:anywhere] underline-offset-4 group-hover/task:underline">{title}</span>}
     </a>
   );
 }
 
-/** What one Event did to each Agent, as dots. All-Drop is the common case and shows nothing. */
+/** What one Event did to each Agent, in words. All-Drop is the common case and shows nothing. */
 export function VerdictTally({ verdicts }: { verdicts: Verdict[] }) {
   const n = (o: VerdictOption) => verdicts.filter((v) => v.option === o).length;
   const i = n("interrupt");
   const q = n("queue");
   const d = n("drop");
   if (!verdicts.length || i + q === 0) return null;
-  const label = `${i} Interrupt, ${q} Queue, ${d} Drop`;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex items-center gap-2 text-small font-medium tabular-nums text-ink-3" role="img" aria-label={label}>
-          {i > 0 && (
-            <span className="inline-flex items-center gap-1 text-state-needs">
-              <Dot className="bg-verdict-interrupt" />
-              {i}
-            </span>
-          )}
-          {q > 0 && (
-            <span className="inline-flex items-center gap-1 text-accent-ink">
-              <Dot className="bg-verdict-queue" />
-              {q}
-            </span>
-          )}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
+    <span className="inline-flex items-center gap-2 text-small tabular-nums text-ink-3" title={`${i} Interrupt, ${q} Queue, ${d} Drop`}>
+      {[i > 0 && `${i} Interrupt`, q > 0 && `${q} Queue`].filter(Boolean).join(" · ")}
+    </span>
   );
-}
-
-function Dot({ className }: { className: string }) {
-  return <span aria-hidden className={cn("size-1.5 rounded-full", className)} />;
 }

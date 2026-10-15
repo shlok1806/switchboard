@@ -3,30 +3,28 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 /*
- * One button shape on the whole Dashboard: the one radius, flat fills, no shadow.
- * `action` is the screen's main control, solid ink (ADR 0023: tangerine is kept for
- * "a Person is needed"), and appears once per screen at most; `primary` is the same
- * ink for a strong control that is not the main action; `secondary` is a tone step;
- * `ghost` shows only on hover. A disabled `action` or
- * `primary` falls back to the secondary tone step, not a faded slab of colour.
+ * The Dashboard's one button voice (design.md): 30px, 13/500, radius 3, one verb, a label
+ * that never wraps. `primary` is ink, one per region (`action` is the same, kept for the
+ * views that name it); `secondary` is a 1px outline; `ghost` is text only. A press moves
+ * it down 1px. The signal colour is never a button.
  */
 export const buttonVariants = cva(
-  `inline-flex items-center justify-center rounded-md font-medium select-none whitespace-nowrap
-   transition-[transform,background-color,color,opacity] duration-150 ease-out
-   active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none
+  `inline-flex items-center justify-center rounded-[var(--r)] border font-medium select-none whitespace-nowrap
+   transition-[background-color,border-color,color] duration-[var(--dur)] ease-[var(--ease-out)]
+   active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none
    focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus`,
   {
     variants: {
       variant: {
-        action: "bg-action text-on-action hover:bg-action-hover disabled:bg-inset-2 disabled:text-ink-3 disabled:opacity-100",
-        primary: "bg-action text-on-action hover:bg-action-hover disabled:bg-inset-2 disabled:text-ink-3 disabled:opacity-100",
-        secondary: "bg-inset text-ink hover:bg-inset-2 aria-expanded:bg-inset-2",
-        ghost: "text-ink-2 hover:bg-hover hover:text-ink",
+        action: "border-ink bg-ink text-paper hover:border-ink-2 hover:bg-ink-2",
+        primary: "border-ink bg-ink text-paper hover:border-ink-2 hover:bg-ink-2",
+        secondary: "border-rule-2 bg-transparent text-ink hover:border-ink-3 hover:bg-paper-2 active:bg-paper-3 aria-expanded:bg-paper-3",
+        ghost: "border-transparent text-ink hover:bg-paper-2",
       },
       size: {
-        xs: "h-7 px-2.5 text-small gap-1",
-        sm: "h-8 px-3 text-small gap-1.5",
-        md: "h-10 px-4 text-body gap-2",
+        xs: "h-[26px] px-2 text-label gap-1.5",
+        sm: "h-7 px-2.5 text-small gap-2",
+        md: "h-[30px] px-3 text-small gap-2",
       },
     },
     defaultVariants: { variant: "secondary", size: "md" },

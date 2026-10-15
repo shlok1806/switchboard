@@ -4,51 +4,63 @@ import { cn } from "@/lib/utils";
 import { useNow } from "./usage";
 
 /**
- * How full the Agent's context window is (ADR 0012): the percent as a figure, the
- * tokens behind it and a bar, green under 50%, amber to 80%, red over. `compact`
- * is the Agents list's version: the same figure and bar, fewer words.
+ * How full the Agent's context window is (ADR 0012), as design.md's figure block: the
+ * percent at the figure step, the tokens behind it, and an ink meter. A high reading is a
+ * number, not a colour. `compact` is a table cell: the figure and a 56px meter.
  */
 export function ContextWindow({ agent, compact = false }: { agent: Agent; compact?: boolean }) {
   const now = useNow();
   const c = agent.context;
-  const percent = c?.tokens !== undefined && c.window ? c.tokens / c.window * 100 : undefined;
-  const tone = percent === undefined ? "text-ink-3" : percent > 80 ? "text-red" : percent >= 50 ? "text-orange" : "text-green";
-  const bar = percent !== undefined && percent > 80 ? "bg-red" : percent !== undefined && percent >= 50 ? "bg-orange" : "bg-green";
+  const percent = c?.tokens !== undefined && c.window ? (c.tokens / c.window) * 100 : undefined;
   const stale = c !== undefined && isStale(c.readAt, now);
+  const meter = (className: string) =>
+    percent !== undefined && (
+      <span
+        role="meter"
+        aria-label="Context window fullness"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.min(100, percent)}
+        aria-valuetext={`${Math.round(percent)}%`}
+        className={cn("block h-1 bg-rule", className)}
+      >
+        <span className="block h-full bg-ink-2" style={{ width: `${Math.min(100, percent)}%` }} />
+      </span>
+    );
+  if (compact)
+    return (
+      <span className="inline-flex items-center gap-2 tabular-nums">
+        {percent === undefined ? <span className="text-ink-3">-</span> : `${Math.round(percent)}%`}
+        {meter("w-14 max-[900px]:hidden")}
+      </span>
+    );
   return (
-    <section aria-label="Context window" className={cn("flex min-w-0 flex-col", compact ? "gap-1.5" : "gap-2")}>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-small">
-        <span className={cn("text-ink-3", compact && "lg:sr-only")}>Context window</span>
-        {percent !== undefined && percent > 80 && <span className="rounded-sm bg-red-tint px-2 py-0.5 font-medium text-red">Over 80%</span>}
-      </div>
-      <span className={cn("font-medium tabular-nums", compact ? "text-lead" : "text-title", percent === undefined ? "text-body font-normal text-ink-3" : tone)}>
-        {percent === undefined ? "Unavailable" : `${percent.toFixed(1)}%`}
-      </span>
-      {percent !== undefined && (
-        <div
-          role="meter"
-          aria-label="Context window fullness"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.min(100, percent)}
-          aria-valuetext={`${percent.toFixed(1)}%`}
-          className="h-1.5 overflow-hidden rounded-full bg-track"
-        >
-          <div className={`h-full rounded-full ${bar}`} style={{ width: `${Math.min(100, percent)}%` }} />
-        </div>
-      )}
-      <span className="text-small text-ink-3 tabular-nums">
-        {c?.tokens === undefined ? "No context reading yet" : `${c.tokens.toLocaleString()} / ${c.window?.toLocaleString() ?? "unknown"} tokens`}
+    <section aria-label="Context window" className="flex min-w-0 flex-col gap-1">
+      <span className={cn("tabular-nums", percent === undefined ? "text-row text-ink-3" : "text-figure font-semibold text-ink")}>
+        {percent === undefined ? "Unavailable" : `${Math.round(percent)}%`}
       </span>
       <span className="text-small text-ink-3 tabular-nums">
-        {c?.autoCompactions === undefined ? "Auto-compactions unavailable" : `${c.autoCompactions} auto-compaction${c.autoCompactions === 1 ? "" : "s"}`}
-        {stale ? " · Stale" : ""}
+        {[
+          c?.tokens !== undefined && `${compactTokens(c.tokens)} of ${c.window ? compactTokens(c.window) : "unknown"} tokens`,
+          c?.autoCompactions !== undefined && `${c.autoCompactions} auto-compaction${c.autoCompactions === 1 ? "" : "s"}`,
+          percent !== undefined && percent > 80 && "Over 80%, compaction is near",
+          stale && "Stale",
+        ]
+          .filter(Boolean)
+          .join(" · ")}
       </span>
+      {meter("mt-2 w-full")}
     </section>
   );
 }
 
-/** What the Agent is working on, from its session: the task, its brief, its latest activity and where it runs. */
+/** 420000 as 420k, 1000000 as 1M. */
+function compactTokens(n: number): string {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  return String(n);
+}
+
 export function AgentBrief({ agent, compact = false }: { agent: Agent; compact?: boolean }) {
   const now = useNow();
   const c = agent.context;
@@ -60,7 +72,7 @@ export function AgentBrief({ agent, compact = false }: { agent: Agent; compact?:
       </p>
       {c?.brief && (
         <details onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-          <summary className="w-fit cursor-pointer text-accent-ink underline-offset-4 hover:underline">Show brief</summary>
+          <summary className="w-fit cursor-pointer text-ink underline-offset-4 hover:underline">Show brief</summary>
           <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-hover p-3 font-sans text-small whitespace-pre-wrap break-words text-ink-2">{c.brief}</pre>
         </details>
       )}

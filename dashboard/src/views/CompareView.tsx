@@ -87,16 +87,16 @@ export function CompareView({ turn }: { turn?: string }) {
               aria-current={on ? "true" : undefined}
               className={cn(
                 "flex shrink-0 flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors lg:shrink",
-                on ? "bg-accent-tint" : "bg-hover hover:bg-hover-2 lg:bg-transparent lg:hover:bg-hover",
+                on ? "bg-paper-3" : "bg-hover hover:bg-hover-2 lg:bg-transparent lg:hover:bg-hover",
               )}
             >
-              <span className={cn("truncate text-body font-medium", on ? "text-accent-ink" : "text-ink")}>{m.agent}</span>
+              <span className={cn("truncate text-body font-medium", on ? "text-ink" : "text-ink")}>{m.agent}</span>
               <span className="flex items-center gap-2 text-small text-ink-3">
                 <span className="tabular-nums">{clock(m.at)}</span>
                 {m.task && <span className="tabular-nums">#{m.task}</span>}
                 <span className="ml-auto flex gap-1" aria-label={`Captures: ${CAPTURES.filter((c) => caps.has(c)).map((c) => CAPTURE_LABEL[c]).join(", ")}`}>
                   {CAPTURES.map((c) => (
-                    <span key={c} title={CAPTURE_LABEL[c]} className={cn("size-1.5 rounded-full", caps.has(c) ? "bg-accent" : "bg-hover-2")} />
+                    <span key={c} title={CAPTURE_LABEL[c]} className={cn("size-1.5 rounded-full", caps.has(c) ? "bg-ink" : "bg-hover-2")} />
                   ))}
                 </span>
               </span>
@@ -110,7 +110,7 @@ export function CompareView({ turn }: { turn?: string }) {
           <Pending title="No such model turn" className="h-full">
             <code className="font-mono text-small break-all text-ink-2">{turn}</code>{/* taste-skill-ignore: an id */} is not on this Channel.{" "}
             {moments.length > 0 && (
-              <a href={href({ view: "compare" })} className="text-accent-ink hover:underline">
+              <a href={href({ view: "compare" })} className="text-ink hover:underline">
                 Show the latest turn
               </a>
             )}
@@ -123,16 +123,16 @@ export function CompareView({ turn }: { turn?: string }) {
           <div className="flex flex-col gap-6 px-[var(--gutter)] pt-6 pb-12 sm:pt-8">
             <PageHead
               title="Compare"
-              summary="One model turn, as each Capture recorded it."
+              facts={["One model turn, as each Capture recorded it"]}
             />
-            <header className="rise flex flex-wrap items-center gap-x-3 gap-y-1 [--i:1]">
+            <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <AgentLink id={moment.agent} agent={agentById.get(moment.agent as never)} />
               {moment.task && <TaskLink number={moment.task} className="text-small" />}
               <span className="text-small text-ink-3 tabular-nums">
                 {clock(moment.at)} · {ago(moment.at)}
               </span>
             </header>
-            <div className="rise grid gap-4 [--i:2] md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-3">
               {CAPTURES.map((c) => (
                 <CaptureColumn key={c} capture={c} events={moment.events.filter((e) => e.capture === c)} />
               ))}

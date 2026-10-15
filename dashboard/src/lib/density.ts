@@ -1,4 +1,4 @@
-// Row density (ADR 0023): comfortable rows are 40px, compact rows 32px. The choice is
+// Row density (ADR 0023): comfortable rows are 36px, compact rows 30px. The choice is
 // saved per browser and set as `data-density` on the root, where tokens.css reads it.
 
 export type Density = "comfortable" | "compact";

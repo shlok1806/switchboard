@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { CircleCheck, Circle, ExternalLink, GitBranch, GitPullRequest } from "lucide-react";
+import { ExternalLink, GitBranch, GitPullRequest } from "lucide-react";
 import type { ChannelEvent, EventType } from "@shared/index";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
 import { IssueLink } from "@/components/domain/pending";
@@ -13,7 +13,7 @@ import {
   SnippetTabsContent,
 } from "@/components/kibo-ui/snippet";
 import { AgentLink, CaptureIcon, PresencePill, TaskLink, VerdictTally } from "@/components/domain/pills";
-import { COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from "@/components/domain/task";
+import { COLUMN_GLYPH, COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from "@/components/domain/task";
 import { ClaimAction } from "@/components/domain/claim";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { EventBody } from "@/components/domain/event";
@@ -25,7 +25,7 @@ import { EVENT_TYPE_LABEL, ago, clock, summarize } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Section } from "@/components/shell/section";
-import { StatusPill } from "@/components/atoms/StatusPill";
+import { State, Glyph } from "@/components/domain/state";
 
 const WORK: EventType[] = [
   "claim",
@@ -50,18 +50,8 @@ const WORK: EventType[] = [
 
 const SCOPES = ["Work", "All"] as const;
 
-const DOT: Partial<Record<EventType, string>> = {
-  claim: "bg-accent",
-  takeover: "bg-red",
-  push: "bg-green",
-  merge: "bg-green",
-  "task.review": "bg-green",
-  update: "bg-ink-2",
-  "step.complete": "bg-accent",
-  "claim.refused": "bg-red",
-};
-
-const COLUMN_TONE = { stale: "red", open: "neutral", claimed: "accent", review: "accent", done: "green" } as const;
+/* Work that moved the Task is an ink disc on the timeline; everything else is a ring. */
+const WORK_MARK = new Set<EventType>(["claim", "takeover", "push", "merge", "task.review", "update", "step.complete", "claim.refused"]);
 
 export function TaskDetail({ number }: { number: number }) {
   const { snapshot } = useChannel();
@@ -85,7 +75,7 @@ export function TaskDetail({ number }: { number: number }) {
   if (!task) {
     return (
       <div className="p-6 text-body text-ink-2">
-        No Task #{number}. <a href={href({ view: "tasks" })} className="text-accent-ink hover:underline">Back to the Board</a>
+        No Task #{number}. <a href={href({ view: "tasks" })} className="text-ink underline-offset-4 hover:underline">Back to the Board</a>
       </div>
     );
   }
@@ -102,19 +92,17 @@ export function TaskDetail({ number }: { number: number }) {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto grid max-w-6xl gap-8 px-[var(--gutter)] pt-6 pb-12 sm:pt-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-12">
         <div className="flex min-w-0 flex-col gap-8">
-          <header className="rise flex flex-col gap-4">
+          <header className="flex flex-col gap-4">
             <h1 className="max-w-[var(--column)] text-title font-semibold text-ink [overflow-wrap:anywhere] sm:text-display">{task.title}</h1>
             <div className="flex flex-wrap items-center gap-2 text-small text-ink-3">
-              <StatusPill tone={COLUMN_TONE[col]} className="h-6 text-small">
-                {COLUMN_LABEL[col]}
-              </StatusPill>
+              <State state={COLUMN_GLYPH[col]} word={COLUMN_LABEL[col]} className="text-small" />
               <span className="tabular-nums">#{task.number}</span>
               {task.parent && (
                 <span className="inline-flex min-w-0 items-center gap-1">
                   in <TaskLink number={task.parent} title={taskByNumber.get(task.parent)?.title} className="min-w-0 text-ink-2" />
                 </span>
               )}
-              <a href={task.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-ink-3 hover:text-accent-ink">
+              <a href={task.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-ink-3 hover:text-ink underline-offset-4">
                 GitHub <ExternalLink className="size-3.5" aria-hidden />
               </a>
             </div>
@@ -122,7 +110,7 @@ export function TaskDetail({ number }: { number: number }) {
             {labels.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {labels.map((l) => (
-                  <span key={l} className="rounded-sm bg-hover px-2 text-small leading-6 text-ink-2">
+                  <span key={l} className="rounded-[var(--r)] border border-rule px-2 text-label leading-[22px] text-ink-2">
                     {l}
                   </span>
                 ))}
@@ -135,12 +123,9 @@ export function TaskDetail({ number }: { number: number }) {
               <ul className="flex flex-col gap-2">
                 {task.steps.map((s) => (
                   <li key={s.index} className="flex items-start gap-2.5 text-body">
-                    {s.done ? (
-                      <CircleCheck className="mt-0.5 size-4 shrink-0 text-green" aria-label="Done" />
-                    ) : (
-                      <Circle className="mt-0.5 size-4 shrink-0 text-ink-3" aria-label="Not done" />
-                    )}
-                    <span className={s.done ? "text-ink-3 line-through" : "text-ink"}>{s.text}</span>
+                    <Glyph state={s.done ? "done" : "idle"} className="mt-1" />
+                    <span className="sr-only">{s.done ? "Done:" : "Not done:"}</span>
+                    <span className={s.done ? "text-ink-2" : "text-ink"}>{s.text}</span>
                   </li>
                 ))}
               </ul>
@@ -160,13 +145,11 @@ export function TaskDetail({ number }: { number: number }) {
                         href={href({ view: "task", number: n })}
                         className="flex min-h-10 items-center gap-3 rounded-md px-2.5 hover:bg-hover"
                       >
-                        <span className="min-w-0 flex-1 truncate text-body text-ink">
+                        <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere] text-ink">
                           <span className="text-small text-ink-3 tabular-nums">#{n}</span> {s.title}
                         </span>
                         {sp.total > 0 && <Progress done={sp.done} total={sp.total} noun="" />}
-                        <StatusPill tone={COLUMN_TONE[columnOf(s)]} className="h-5 px-2 text-small">
-                          {COLUMN_LABEL[columnOf(s)]}
-                        </StatusPill>
+                        <State state={COLUMN_GLYPH[columnOf(s)]} word={COLUMN_LABEL[columnOf(s)]} className="text-small" />
                       </a>
                     </li>
                   );
@@ -175,7 +158,7 @@ export function TaskDetail({ number }: { number: number }) {
             </Section>
           )}
 
-          <section className="rise flex flex-col gap-3 [--i:2]">
+          <section className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-lead font-semibold text-ink">Timeline</h2>
               <SegmentedControl options={SCOPES} value={scope} onChange={setScope} />
@@ -184,7 +167,7 @@ export function TaskDetail({ number }: { number: number }) {
               <p className="text-body text-ink-3">{scoped.loading ? "Loading" : "Nothing yet"}</p>
             ) : (
               <ol className="relative flex flex-col">
-                <span aria-hidden className="absolute top-3 bottom-3 left-[3px] w-[3px] rounded-full bg-hover-2" />
+                <span aria-hidden className="absolute top-3 bottom-3 left-[4px] w-px bg-rule" />
                 {timeline.map((e) => (
                   <TimelineItem key={e.id} event={e} threshold={threshold} />
                 ))}
@@ -197,10 +180,9 @@ export function TaskDetail({ number }: { number: number }) {
 
         {/* On a phone the aside's parts join the page's column, so the Claim card alone
             leads when a Stale Claim needs a Takeover; the rest stays after the Task. */}
-        <aside className="rise flex min-w-0 flex-col gap-4 [--i:1] max-lg:contents lg:sticky lg:top-8 lg:self-start">
+        <aside className="flex min-w-0 flex-col gap-4 max-lg:contents lg:sticky lg:top-8 lg:self-start">
           <Section
             title={task.claim?.stale ? "Stale Claim" : "Claim"}
-            tone={task.claim?.stale ? "alert" : undefined}
             className={cn(task.claim?.stale && "max-lg:order-first")}
             bodyClassName="flex flex-col gap-3"
           >
@@ -234,7 +216,7 @@ export function TaskDetail({ number }: { number: number }) {
           </Section>
 
           {blocked.length > 0 && (
-            <Section title="Blocked by" tone="alert" bodyClassName="flex flex-col gap-2">
+            <Section title="Blocked by" bodyClassName="flex flex-col gap-2">
               {blocked.map((b) => (
                 <TaskLink key={b!.number} number={b!.number} title={b!.title} className="text-body text-ink" />
               ))}
@@ -278,7 +260,10 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
   const asked = verdicts.filter((v) => v.source === "jev");
   return (
     <li className="relative grid grid-cols-[9px_minmax(0,1fr)] gap-3 py-2">
-      <span aria-hidden className={cn("relative z-10 mt-1.5 size-[9px] rounded-full ring-4 ring-page", DOT[e.type] ?? "bg-ink-4")} />
+      <span
+        aria-hidden
+        className={cn("relative z-10 mt-1.5 size-[9px] rounded-full ring-4 ring-paper", WORK_MARK.has(e.type) ? "bg-ink" : "border-[1.5px] border-ink-3 bg-paper")}
+      />
       <div className="flex min-w-0 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-body font-medium text-ink">{EVENT_TYPE_LABEL[e.type]}</span>

@@ -7,7 +7,7 @@ import { extendTailwindMerge } from "tailwind-merge";
  * drops the button's own text colour (`bg-ink text-page` + `text-small` lost `text-page`).
  */
 const twMerge = extendTailwindMerge({
-  extend: { theme: { text: ["small", "row", "body", "lead", "title", "figure", "display"] } },
+  extend: { theme: { text: ["label", "small", "row", "body", "lead", "title", "head", "figure", "display"] } },
 });
 
 /** Merge class names, letting later Tailwind classes win over conflicting earlier ones. */

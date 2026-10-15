@@ -76,7 +76,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               <CommandItem key={t.number} value={`#${t.number} ${t.title}`} onSelect={() => run({ view: "task", number: t.number })}>
                 <span className="text-small text-ink-3 tabular-nums">#{t.number}</span>
                 <span className="truncate">{t.title}</span>
-                {t.claim?.stale && <CommandShortcut className="text-red">Stale</CommandShortcut>}
+                {t.claim?.stale && <CommandShortcut className="text-ink">Stale</CommandShortcut>}
               </CommandItem>
             ))}
         </CommandGroup>

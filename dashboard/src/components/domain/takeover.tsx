@@ -73,16 +73,16 @@ export function TakeoverAction({ task, compact = false }: { task: Task; compact?
               <label
                 key={i}
                 className={cn(
-                  "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md px-3 text-body transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent",
-                  pick === i ? "bg-accent-tint text-ink" : "bg-inset hover:bg-inset-2",
+                  "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md px-3 text-body transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-focus",
+                  pick === i ? "bg-paper-3 text-ink" : "bg-inset hover:bg-inset-2",
                 )}
               >
                 <input type="radio" name="takeover-to" checked={pick === i} onChange={() => setPick(i)} className="sr-only" />
                 <span
                   aria-hidden
-                  className={cn("grid size-4 place-items-center rounded-full border", pick === i ? "border-accent" : "border-line-strong")}
+                  className={cn("grid size-4 place-items-center rounded-full border", pick === i ? "border-ink" : "border-line-strong")}
                 >
-                  {pick === i && <span className="size-2 rounded-full bg-accent" />}
+                  {pick === i && <span className="size-2 rounded-full bg-ink" />}
                 </span>
                 <span className="tabular-nums">{labelFor(h)}</span>
               </label>

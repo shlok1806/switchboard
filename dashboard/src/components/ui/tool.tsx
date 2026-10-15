@@ -41,13 +41,13 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   const getStateIcon = () => {
     switch (state) {
       case "input-streaming":
-        return <Loader2 className="h-4 w-4 animate-spin text-accent" />
+        return <Loader2 className="h-4 w-4 animate-spin text-ink" />
       case "input-available":
-        return <Settings className="h-4 w-4 text-orange" />
+        return <Settings className="h-4 w-4 text-ink" />
       case "output-available":
-        return <CheckCircle className="h-4 w-4 text-green" />
+        return <CheckCircle className="h-4 w-4 text-ink" />
       case "output-error":
-        return <XCircle className="h-4 w-4 text-red" />
+        return <XCircle className="h-4 w-4 text-ink" />
       default:
         return <Settings className="text-muted-foreground h-4 w-4" />
     }
@@ -61,7 +61,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-accent-tint text-accent-ink"
+              "bg-paper-3 text-ink"
             )}
           >
             Processing
@@ -72,7 +72,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-orange-tint text-orange"
+              "bg-paper-2 text-ink"
             )}
           >
             Ready
@@ -83,7 +83,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-green-tint text-green"
+              "bg-paper-2 text-ink"
             )}
           >
             Completed
@@ -94,7 +94,7 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
           <span
             className={cn(
               baseClasses,
-              "bg-red-tint text-red"
+              "bg-paper-2 text-ink"
             )}
           >
             Error
@@ -184,8 +184,8 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
 
             {state === "output-error" && toolPart.errorText && (
               <div>
-                <h4 className="mb-2 text-sm font-medium text-red">Error</h4>
-                <div className="rounded-md bg-red-tint p-2 text-sm text-red">
+                <h4 className="mb-2 text-sm font-medium text-ink">Error</h4>
+                <div className="rounded-md bg-paper-2 p-2 text-sm text-ink">
                   {toolPart.errorText}
                 </div>
               </div>

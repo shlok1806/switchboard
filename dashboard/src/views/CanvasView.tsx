@@ -25,46 +25,26 @@ import {
   claimsByAgent,
   fit,
   lanes as laneOrder,
-  nodeState,
   place,
   slotRect,
   zoomAt,
   type Camera,
-  type NodeState,
   type Point,
 } from "@/lib/canvas-layout";
 import { CLI_LABEL } from "@/lib/format";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
-import { CliSwatch } from "./AgentsView";
+import { Glyph, State, useAgentStates } from "@/components/domain/state";
+import { countStates, needsPerson, stateWord, type AgentState } from "@/lib/state";
 
-const STATE_LABEL: Record<NodeState, string> = {
-  needs: "Needs you",
-  stale: "Stale Claim",
-  live: "Running",
-  idle: "Idle",
-  gone: "Gone",
-};
-
-const STATE_HINT: Record<NodeState, string> = {
-  needs: "A permission prompt is waiting for its Person",
+const STATE_HINT: Record<AgentState, string> = {
+  needs: "A permission prompt is waiting for you",
+  "needs-other": "A permission prompt is waiting for its Person",
   stale: "Gone while holding a Claim; a Person can take it over",
-  live: "Live: working now",
+  running: "Live: working now",
   idle: "Idle: connected, between turns",
   gone: "Gone: silent for about ten minutes",
 };
-
-/** A state as its dot: a colour and a shape (ADR 0016), so it never rides on colour alone. */
-function StateDot({ state, className }: { state: NodeState; className?: string }) {
-  if (state === "gone") return <span aria-hidden className={cn("size-2.5 shrink-0 rounded-full border-[1.5px] border-state-gone", className)} />;
-  const look: Record<Exclude<NodeState, "gone">, string> = {
-    needs: "bg-state-needs-dot [clip-path:var(--shape-needs)]",
-    stale: "bg-state-stale [clip-path:var(--shape-stale)]",
-    live: "breathe bg-state-live rounded-full",
-    idle: "bg-state-idle rounded-full",
-  };
-  return <span aria-hidden className={cn("size-2.5 shrink-0", look[state], className)} />;
-}
 
 interface View {
   positions: Record<string, Point>;
@@ -103,16 +83,16 @@ function percentOf(a: Agent): number | undefined {
   return c?.tokens !== undefined && c.window ? (c.tokens / c.window) * 100 : undefined;
 }
 
+/** The context meter (design.md): a 56x4 track, an ink fill, and the figure. A high reading is a number, not a colour. */
 function Meter({ agent }: { agent: Agent }) {
   const p = percentOf(agent);
   if (p === undefined) return <span className="text-small text-ink-3">No context reading</span>;
-  const tone = p > 80 ? "bg-red" : p >= 50 ? "bg-orange" : "bg-green";
   return (
-    <span className="flex min-w-0 items-center gap-2 text-small text-ink-3 tabular-nums">
-      <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-track">
-        <span className={cn("block h-full rounded-full", tone)} style={{ width: `${Math.min(100, p)}%` }} />
-      </span>
+    <span className="inline-flex items-center gap-2 text-small text-ink-2 tabular-nums">
       {Math.round(p)}% context
+      <span aria-hidden className="h-1 w-14 bg-rule">
+        <span className="block h-full bg-ink-2" style={{ width: `${Math.min(100, p)}%` }} />
+      </span>
     </span>
   );
 }
@@ -132,7 +112,7 @@ const Node = memo(function Node({
   onFocus,
 }: {
   agent: Agent;
-  state: NodeState;
+  state: AgentState;
   at: Point;
   selected: boolean;
   faded: boolean;
@@ -146,28 +126,26 @@ const Node = memo(function Node({
       type="button"
       data-node={agent.id}
       aria-pressed={selected}
-      aria-label={`${name(agent)}, ${agent.person}'s ${CLI_LABEL[agent.cli]} Agent, ${STATE_LABEL[state]}`}
+      aria-label={`${name(agent)}, ${agent.person}'s ${CLI_LABEL[agent.cli]} Agent, ${stateWord(state, agent.person)}`}
       onPointerDown={(e) => onPointerDown(e, agent.id)}
       onClick={() => onSelect(agent.id)}
       onFocus={(e) => onFocus(e, agent.id)}
       style={{ left: at.x, top: at.y, width: NODE_W, height: NODE_H }}
       className={cn(
-        "absolute flex cursor-grab flex-col gap-1.5 rounded-md bg-node-bg p-3 text-left transition-[opacity,background-color] duration-150 select-none active:cursor-grabbing",
-        "hover:bg-node-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-        selected && "outline-2 outline-offset-2 outline-node-selected",
+        "absolute flex cursor-grab flex-col gap-1.5 rounded-[var(--r)] border border-rule-2 bg-paper p-3 text-left transition-[opacity,background-color] duration-[var(--dur)] select-none active:cursor-grabbing",
+        "hover:bg-paper-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+        state === "needs" && "border-2 border-signal p-[11px]",
+        selected && "border-2 border-ink p-[11px]",
         faded && "opacity-55",
       )}
     >
       <span className="flex min-w-0 items-center gap-2">
-        <CliSwatch agent={agent} />
-        <span className="min-w-0 flex-1 truncate text-body font-medium text-ink">{name(agent)}</span>
+        <Glyph state={state} />
+        <span className="min-w-0 flex-1 truncate text-row font-semibold text-ink">{name(agent)}</span>
         {agent.role === "lead" && <LeadLabel />}
       </span>
       <span className="flex min-w-0 items-center gap-2 text-small">
-        <StateDot state={state} />
-        <span className={cn("shrink-0 font-medium", state === "needs" ? "text-state-needs" : state === "stale" ? "text-red" : "text-ink-2")}>
-          {STATE_LABEL[state]}
-        </span>
+        <span className={cn("shrink-0", needsPerson(state) ? "font-semibold text-signal" : "font-medium text-ink")}>{stateWord(state, agent.person)}</span>
         {agent.model && <ModelLabel model={agent.model} effort={agent.effort} className="inline-flex min-w-0 items-center gap-1 text-ink-3" />}
       </span>
       <span className={cn("min-w-0 truncate text-small", activity ? "text-ink-2" : "text-ink-3")}>{activity ?? "No activity yet"}</span>
@@ -186,18 +164,18 @@ function Frame({ tasks, at }: { tasks: Task[]; at: Point }) {
       aria-hidden
       data-ground
       style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
-      className="absolute rounded-md bg-frame-bg"
+      className="absolute rounded-[var(--r)] border border-rule bg-paper"
     >
       <span className="flex h-[var(--frame-top)] flex-col justify-center px-3 text-small text-frame-label" style={{ ["--frame-top" as string]: `${FRAME_TOP - 4}px` }}>
-        <span className="flex min-w-0 items-center gap-1.5">
+        <span className="flex min-w-0 items-baseline gap-1.5 leading-[1.3]">
           <span className="font-medium text-ink-2 tabular-nums">#{first.number}</span>
-          <span className="min-w-0 truncate">{first.title}</span>
+          <span className="min-w-0 [overflow-wrap:anywhere]">{first.title}</span>
           {more.length > 0 && <span className="shrink-0 tabular-nums">+{more.length}</span>}
         </span>
         {first.branch ? (
-          <code className="min-w-0 truncate font-mono">{first.branch}</code> /* taste-skill-ignore: a branch name is code */
+          <code className="min-w-0 [overflow-wrap:anywhere] font-mono">{first.branch}</code> /* taste-skill-ignore: a branch name is code */
         ) : (
-          <span className="min-w-0 truncate">No branch yet</span>
+          <span className="min-w-0 [overflow-wrap:anywhere]">No branch yet</span>
         )}
       </span>
     </div>
@@ -212,7 +190,7 @@ function edgePath(from: Point, to: Point): string {
   return `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`;
 }
 
-function Panel({ agent, state, tasks, onClose, sheet }: { agent: Agent; state: NodeState; tasks: Task[]; onClose: () => void; sheet: boolean }) {
+function Panel({ agent, state, tasks, onClose, sheet }: { agent: Agent; state: AgentState; tasks: Task[]; onClose: () => void; sheet: boolean }) {
   const { agentById } = useIndex();
   const parent = agent.parent ? agentById.get(agent.parent) : undefined;
   return (
@@ -226,13 +204,12 @@ function Panel({ agent, state, tasks, onClose, sheet }: { agent: Agent; state: N
       <div className="flex items-start gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <h2 className="flex min-w-0 items-center gap-2 text-lead font-semibold text-ink">
-            <CliSwatch agent={agent} />
+            <Glyph state={state} />
             <span className="truncate">{name(agent)}</span>
           </h2>
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-small text-ink-3">
-            <span className="inline-flex items-center gap-1.5 font-medium text-ink-2" title={STATE_HINT[state]}>
-              <StateDot state={state} />
-              {STATE_LABEL[state]}
+            <span title={STATE_HINT[state]}>
+              <State state={state} person={agent.person} />
             </span>
             <span>
               {agent.person}'s {CLI_LABEL[agent.cli]}
@@ -255,7 +232,7 @@ function Panel({ agent, state, tasks, onClose, sheet }: { agent: Agent; state: N
           {parent && (
             <span>
               Started by{" "}
-              <a href={href({ view: "canvas", agent: parent.id })} className="text-accent-ink hover:underline">
+              <a href={href({ view: "canvas", agent: parent.id })} className="text-ink hover:underline">
                 {name(parent)}
               </a>
             </span>
@@ -308,6 +285,7 @@ export function CanvasView({ selected }: { selected?: string }) {
   const viewport = useRef<HTMLDivElement>(null);
 
   const claims = useMemo(() => claimsByAgent(tasks), [tasks]);
+  const states = useAgentStates();
   const laneList = useMemo(() => laneOrder(agents, tasks, me), [agents, tasks, me]);
   const at = useMemo(() => place(laneList, view.positions), [laneList, view.positions]);
   const allRects = useMemo(() => [...at.values()].map(slotRect), [at]);
@@ -478,8 +456,7 @@ export function CanvasView({ selected }: { selected?: string }) {
   }, []);
 
   const chosen = selected ? agents.find((a) => a.id === selected) : undefined;
-  const live = agents.filter((a) => a.presence === "live").length;
-  const needs = agents.filter((a) => a.approval).length;
+  const n = countStates(states.values());
   const held = agents.filter((a) => claims.has(a.id)).length;
 
   if (agents.length === 0) {
@@ -514,17 +491,13 @@ export function CanvasView({ selected }: { selected?: string }) {
               </IconButton>
             </span>
           }
-          summary={
-            <span className="tabular-nums">
-              <span className="text-ink">{agents.length}</span> {agents.length === 1 ? "Agent" : "Agents"}, <span className="text-ink">{live}</span> running
-              {needs > 0 && (
-                <>
-                  , <span className="font-medium text-state-needs">{needs} {needs === 1 ? "needs" : "need"} you</span>
-                </>
-              )}
-              , <span className="text-ink">{held}</span> holding a Task
-            </span>
-          }
+          facts={[
+            `${agents.length} ${agents.length === 1 ? "Agent" : "Agents"}`,
+            `${n.running} running`,
+            n.needs > 0 && <span className="font-semibold text-signal">{n.needs} {n.needs === 1 ? "needs" : "need"} you</span>,
+            `${held} holding a Task`,
+            "a line is who started whom",
+          ]}
         />
       </div>
       <div className="relative flex min-h-0 flex-1">
@@ -546,7 +519,7 @@ export function CanvasView({ selected }: { selected?: string }) {
             if (suppressClick.current) suppressClick.current = false;
             else select();
           }}
-          className="relative min-w-0 flex-1 cursor-default touch-none overflow-clip bg-canvas-bg focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+          className="relative min-w-0 flex-1 cursor-default touch-none overflow-clip bg-canvas-bg focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus"
         >
           <div
             data-ground
@@ -596,7 +569,7 @@ export function CanvasView({ selected }: { selected?: string }) {
             </svg>
             {/* In lane order, so Tab moves through the canvas the way it reads. */}
             {laneList.flatMap((lane) => lane.agents).map((a) => {
-              const state = nodeState(a, claims.get(a.id) ?? []);
+              const state = states.get(a.id) ?? "gone";
               return (
                 <Node
                   key={a.id}
@@ -616,7 +589,7 @@ export function CanvasView({ selected }: { selected?: string }) {
         {chosen && (
           <Panel
             agent={chosen}
-            state={nodeState(chosen, claims.get(chosen.id) ?? [])}
+            state={states.get(chosen.id) ?? "gone"}
             tasks={claims.get(chosen.id) ?? []}
             onClose={() => select()}
             sheet={mobile}

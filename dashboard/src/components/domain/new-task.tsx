@@ -60,7 +60,7 @@ export function NewTaskButton() {
                 maxLength={MAX_TASK_TITLE_LENGTH}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none focus-visible:border-accent max-md:text-[16px]"
+                className="h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none focus-visible:border-ink max-md:text-[16px]"
               />
             </label>
             <label className="flex flex-col gap-1.5">
@@ -71,11 +71,11 @@ export function NewTaskButton() {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="- [ ] Steps as a checklist"
-                className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]"
+                className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-ink max-md:text-[16px]"
               />
             </label>
             {problem && (
-              <p role="alert" className="text-small text-red">
+              <p role="alert" className="text-small text-ink">
                 {problem}
               </p>
             )}

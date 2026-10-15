@@ -1,4 +1,5 @@
 import type { Task } from "@shared/index";
+import type { GlyphState } from "@/lib/state";
 
 export type Column = "stale" | "open" | "claimed" | "review" | "done";
 
@@ -9,6 +10,9 @@ export const COLUMN_LABEL: Record<Column, string> = {
   review: "In review",
   done: "Done",
 };
+
+/** A column's glyph in the one state vocabulary: a Stale Claim is a triangle, In review a diamond. */
+export const COLUMN_GLYPH: Record<Column, GlyphState> = { stale: "stale", open: "idle", claimed: "running", review: "review", done: "done" };
 
 /** Where a Task sits on the board. A finished Task with its PR open is In review (#10). */
 export function columnOf(t: Task): Column {

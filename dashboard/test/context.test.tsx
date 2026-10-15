@@ -9,12 +9,10 @@ const agent: Agent = { id: "ana/codex/abcd", person: "ana", cli: "codex", presen
 describe("Agent context", () => {
   it("shows tokens, percent and compactions with exact warning thresholds", () => {
     const render = (tokens: number) => renderToStaticMarkup(<ContextWindow agent={{ ...agent, context: { readAt: new Date().toISOString(), tokens, window: 200000, autoCompactions: 2 } }} />);
-    expect(render(90000)).toContain("bg-green");
-    expect(render(100000)).toContain("bg-orange");
     expect(render(160000)).not.toContain("Over 80%");
     const html = render(170000);
-    expect(html).toContain("85.0%"); expect(html).toContain("170,000 / 200,000 tokens");
-    expect(html).toContain("Over 80%"); expect(html).toContain("bg-red"); expect(html).toContain("2 auto-compactions");
+    expect(html).toContain("85%"); expect(html).toContain("170k of 200k tokens");
+    expect(html).toContain("Over 80%"); expect(html).toContain("2 auto-compactions");
   });
   it("shows unavailable and stale readings honestly, with an expandable brief and working location", () => {
     expect(renderToStaticMarkup(<ContextWindow agent={agent} />)).toContain("Unavailable");

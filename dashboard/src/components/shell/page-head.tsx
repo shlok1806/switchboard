@@ -1,29 +1,38 @@
 /*
- * The head of a view: its name at the title step, one quiet line about the Channel's
- * state, and the view's own controls at the right. Every view opens with one, on the
- * same left edge as its content, so a Person always reads where they are first.
+ * The head of a view (design.md): one line, a 20/600 sentence of state or the view's name,
+ * then its facts in ink-3 on the same baseline, separated by middle dots. Never a row of
+ * figure tiles. The view's own controls sit at the right.
  */
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export function PageHead({
   title,
-  summary,
+  facts = [],
   actions,
   className,
 }: {
   title: ReactNode;
-  summary?: ReactNode;
+  /** Short facts, each a phrase; empty ones are left out. */
+  facts?: ReactNode[];
   actions?: ReactNode;
   className?: string;
 }) {
-  // Title and actions share the first row at every width, so a phone never strands the action
-  // on a line of its own; the summary runs under both.
+  const shown = facts.filter((f) => f !== null && f !== undefined && f !== false && f !== "");
   return (
-    <header className={cn("rise grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1", className)}>
-      <h1 className="min-w-0 text-title font-semibold text-ink">{title}</h1>
-      {actions ? <div className="flex items-center gap-2">{actions}</div> : <span />}
-      {summary && <p className="col-span-2 text-body text-ink-3">{summary}</p>}
+    <header className={cn("flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-2", className)}>
+      <h1 className="text-head font-semibold text-ink">{title}</h1>
+      {shown.length > 0 && (
+        <p className="min-w-0 flex-[1_1_20rem] text-small text-ink-3">
+          {shown.map((f, i) => (
+            <Fragment key={i}>
+              {i > 0 && <span aria-hidden> · </span>}
+              {f}
+            </Fragment>
+          ))}
+        </p>
+      )}
+      {actions && <div className="ml-auto flex items-center gap-2 self-center">{actions}</div>}
     </header>
   );
 }

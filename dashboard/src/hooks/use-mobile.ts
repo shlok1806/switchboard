@@ -1,6 +1,7 @@
 import * as React from "react"
 
-const MOBILE_BREAKPOINT = 768
+// The Dashboard's one breakpoint (design.md): below it, every page uses the phone pattern.
+const MOBILE_BREAKPOINT = 640
 
 export function useIsMobile() {
   const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)

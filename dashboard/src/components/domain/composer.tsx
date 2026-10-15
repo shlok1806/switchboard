@@ -77,7 +77,7 @@ export function Composer({ defaultAgent, task, className }: { defaultAgent?: Age
       footer={
         <Tooltip>
           <TooltipTrigger asChild>
-            <span tabIndex={0} className="inline-grid size-8 place-items-center rounded-md text-ink-3 transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Who hears this">
+            <span tabIndex={0} className="inline-grid size-8 place-items-center rounded-md text-ink-3 transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-focus" aria-label="Who hears this">
               <Info className="size-4" aria-hidden />
             </span>
           </TooltipTrigger>

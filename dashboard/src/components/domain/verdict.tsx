@@ -7,9 +7,9 @@ import { AgentLink, VerdictPill } from "./pills";
 
 const ORDER: VerdictOption[] = ["interrupt", "queue", "drop"];
 const FILL: Record<VerdictOption, string> = {
-  interrupt: "bg-verdict-interrupt",
-  queue: "bg-verdict-queue",
-  drop: "bg-verdict-drop",
+  interrupt: "bg-ink",
+  queue: "bg-ink-3",
+  drop: "bg-rule-2",
 };
 
 /**
@@ -74,7 +74,7 @@ export function DowngradeNote({ verdict }: { verdict: Verdict }) {
   if (!verdict.downgraded) return null;
   const why = DOWNGRADE_LABEL[verdict.downgraded.reason];
   return (
-    <span className="inline-flex h-6 w-fit items-center gap-1.5 rounded-sm bg-orange-tint px-2 text-small text-orange">
+    <span className="inline-flex h-6 w-fit items-center gap-1.5 rounded-sm bg-paper-2 px-2 text-small text-ink">
       <ArrowDown className="size-3" aria-hidden />
       Downgraded: {why}
     </span>
@@ -84,7 +84,7 @@ export function DowngradeNote({ verdict }: { verdict: Verdict }) {
 /** A Queue that did not wait for the next turn: the Agent was idle, and its wrapper woke it with it. */
 function WokeNote() {
   return (
-    <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-accent-tint px-2 py-0.5 text-small text-accent-ink">
+    <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-paper-3 px-2 py-0.5 text-small text-ink">
       <AlarmClock className="size-3" aria-hidden />
       Delivered by a Wake: the Agent was idle
     </span>

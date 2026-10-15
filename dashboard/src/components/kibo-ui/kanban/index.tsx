@@ -107,7 +107,7 @@ export const KanbanBoard = ({ id, children, className }: KanbanBoardProps) => {
     <div
       className={cn(
         "relative flex size-full min-h-40 flex-col rounded-md bg-panel text-small transition-colors duration-150",
-        isOver && "bg-accent-tint",
+        isOver && "bg-paper-3",
         className,
       )}
       data-over={isOver || undefined}
@@ -163,7 +163,7 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
         }}
         aria-roledescription="Task card"
         ref={setNodeRef}
-        className="rounded-md outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className="rounded-md outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
       >
         <div
           className={cn(

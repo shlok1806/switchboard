@@ -44,13 +44,11 @@ const account: AccountUsage = {
 };
 
 describe("a meter", () => {
-  it("is green under 70%, amber from 70% to 90%, red over 90%", () => {
+  it("is green under 70%, amber from 70% to 90%, red over 90%, said as a number and not a colour", () => {
     expect([0, 69.9, 70, 90, 90.5, 100].map(meterTone)).toEqual(["green", "green", "amber", "amber", "red", "red"]);
     const html = (percent: number) => renderToStaticMarkup(<Meter label="Session" limit={{ percent }} now={NOW} />);
     expect(html(40)).toContain('data-tone="green"');
-    expect(html(40)).toContain("bg-green");
-    expect(html(80)).toContain("bg-orange");
-    expect(html(97)).toContain("bg-red");
+    expect(html(97)).toContain('data-tone="red"');
     expect(html(97)).toContain("97%");
   });
 

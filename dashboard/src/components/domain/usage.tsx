@@ -32,10 +32,11 @@ export function useNow(everyMs = 30_000): number {
   return now;
 }
 
-const BAR: Record<MeterTone, string> = { green: "bg-green", amber: "bg-orange", red: "bg-red" };
-const TEXT: Record<MeterTone, string> = { green: "text-green", amber: "text-orange", red: "text-red" };
+// A high reading is a number, not a colour (design.md): every tone fills in ink-2.
+const BAR: Record<MeterTone, string> = { green: "bg-ink-2", amber: "bg-ink-2", red: "bg-ink-2" };
+const TEXT: Record<MeterTone, string> = { green: "text-ink", amber: "text-ink", red: "text-ink" };
 
-/** One limit as a labelled bar: green under 70%, amber to 90%, red over. */
+/** One limit as a labelled bar, its tone (green under 70%, amber to 90%, red over) kept as data. */
 export function Meter({
   label,
   limit,
@@ -57,7 +58,7 @@ export function Meter({
   return (
     <div className={cn("flex min-w-0 flex-col gap-1", stale && "opacity-55")} data-tone={tone} data-stale={stale || undefined}>
       <div className="flex min-w-0 items-baseline justify-between gap-2">
-        <span className="truncate text-small text-ink-2">{label}</span>
+        <span className="min-w-0 [overflow-wrap:anywhere] text-small text-ink-2">{label}</span>
         <span className={cn("shrink-0 text-small font-medium tabular-nums", TEXT[tone])}>
           {Math.round(limit.percent)}%
         </span>
@@ -99,7 +100,7 @@ export function Sparkline({ points, className }: { points: { at: number; percent
 
 function StaleLabel({ readAt, now }: { readAt: string; now: number }) {
   return (
-    <span className="inline-flex h-6 items-center rounded-full bg-hover-2 px-2 text-small whitespace-nowrap text-ink-2">
+    <span className="text-small whitespace-nowrap text-ink-3">
       Stale · read {ago(readAt, now)}
     </span>
   );
@@ -132,7 +133,7 @@ function Used({ session }: { session?: SessionUsage }) {
   );
 }
 
-const SHARE_COLOURS = ["bg-ink", "bg-ink-4", "bg-accent", "bg-green", "bg-ink-2"];
+const SHARE_COLOURS = ["bg-ink", "bg-ink-4", "bg-ink", "bg-ink", "bg-ink-2"];
 
 export function AccountCardView({ card, now }: { card: AccountCard; now: number }) {
   const stale = card.limits !== undefined && isStale(card.limits.readAt, now);
@@ -142,7 +143,7 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
     <article className="@container flex min-w-0 flex-col gap-5 rounded-md bg-panel p-4" aria-label={`Account ${card.email}`}>
       <header className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="truncate text-body font-medium text-ink" title={card.email}>{card.email}</span>
+          <span className="min-w-0 [overflow-wrap:anywhere] text-body font-medium text-ink" title={card.email}>{card.email}</span>
           <span className="text-small text-ink-3">
             {card.plan ? `${card.plan[0].toUpperCase()}${card.plan.slice(1)} plan` : "Plan unknown"}
             {card.limits && ` · read ${ago(card.limits.readAt, now)}`}
@@ -185,7 +186,7 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
                 {shared.length > 1 && a.share > 0 && (
                   <span className={cn("size-2 shrink-0 rounded-full", SHARE_COLOURS[shared.indexOf(a) % SHARE_COLOURS.length])} aria-hidden />
                 )}
-                <a href={href({ view: "agent", id: a.agent.id })} className="truncate font-medium text-ink hover:underline" title={a.agent.id}>
+                <a href={href({ view: "agent", id: a.agent.id })} className="min-w-0 [overflow-wrap:anywhere] font-medium text-ink hover:underline" title={a.agent.id}>
                   {a.agent.nickname ?? a.agent.id}
                 </a>
                 <span className="shrink-0 text-ink-3">
@@ -194,7 +195,7 @@ export function AccountCardView({ card, now }: { card: AccountCard; now: number 
                   {card.agents.length > 1 && ` · ${Math.round(a.share * 100)}%`}
                 </span>
               </span>
-              <span className={cn("truncate text-ink-3", i === 0 && "")}>
+              <span className={cn("min-w-0 [overflow-wrap:anywhere] text-ink-3", i === 0 && "")}>
                 <Used session={a.session} />
               </span>
             </li>
@@ -238,7 +239,7 @@ export function AccountsPanel({ className }: { className?: string }) {
         type="button"
         onClick={toggle}
         aria-expanded={!collapsed}
-        className="group flex min-h-10 w-full min-w-0 items-center gap-3 rounded-md bg-panel px-3 text-left text-small transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
+        className="group flex min-h-10 w-full min-w-0 items-center gap-3 rounded-md bg-panel px-3 text-left text-small transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-focus"
       >
         <span className="shrink-0 font-medium text-ink">Accounts</span>
         {/* a phone has room for the busiest account only */}
@@ -256,7 +257,7 @@ export function AccountsPanel({ className }: { className?: string }) {
         <span className="flex min-w-0 items-center gap-4 overflow-hidden text-ink-3 max-sm:hidden">
           {cards.map((c) => (
             <span key={c.email} className="flex min-w-0 shrink items-baseline gap-1.5 whitespace-nowrap">
-              <span className="truncate">{c.email}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{c.email}</span>
               {c.limits?.session && (
                 <span className={cn("font-medium tabular-nums", TEXT[meterTone(c.limits.session.percent)])}>
                   {Math.round(c.limits.session.percent)}%
@@ -289,7 +290,7 @@ export function AgentUsage({ agent, compact: small = false }: { agent: Agent; co
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-small text-ink-3">
-        {(usage.email ?? usage.accountId) && <span className="truncate text-ink-2">{usage.email ?? usage.accountId}</span>}
+        {(usage.email ?? usage.accountId) && <span className="min-w-0 [overflow-wrap:anywhere] text-ink-2">{usage.email ?? usage.accountId}</span>}
         <Used session={usage.session} />
         {stale && limits && <StaleLabel readAt={limits.readAt} now={now} />}
       </span>
