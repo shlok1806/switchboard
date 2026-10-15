@@ -107,6 +107,7 @@ export const agents: Agent[] = [
     person: "shlok",
     cli: "claude-code",
     nickname: "api-client",
+    host: "shlok/studio",
     // A lead (ADR 0018): it started the Codex Agent below, so the canvas draws an edge between them.
     role: "lead",
     account: "sh…@illinois.edu",
@@ -150,6 +151,7 @@ export const agents: Agent[] = [
     person: "maya",
     cli: "claude-code",
     nickname: "users-page",
+    host: "maya/maya-mbp",
     account: "ma…@gmail.com",
     model: "claude-sonnet-5-5",
     usage: usageOf("maya@gmail.com", 88, 20_100, 990_000, 4.37),
@@ -176,6 +178,7 @@ export const agents: Agent[] = [
     person: "dev",
     cli: "claude-code",
     nickname: "retry",
+    host: "dev/devbox",
     usage: usageOf("shlok@illinois.edu", 40, 9_800, 410_000, 7.9),
     presence: "live",
     proxyMode: "raw",

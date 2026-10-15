@@ -101,7 +101,7 @@ export function PendingApproval({
 }
 
 /** Deny the prompt from the Channel, with a message the Agent reads (ADR 0014). */
-function DenyAction({ agent, id, tool }: { agent: Agent; id: string; tool: string }) {
+export function DenyAction({ agent, id, tool, size }: { agent: Agent; id: string; tool: string; size?: "sm" | "md" }) {
   const store = useStore();
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
@@ -130,6 +130,7 @@ function DenyAction({ agent, id, tool }: { agent: Agent; id: string; tool: strin
     <>
       <Button
         variant="secondary"
+        size={size}
         onClick={(e) => {
           e.stopPropagation();
           setMessage("");

@@ -3,7 +3,7 @@
 // Tasks and who started whom; a click opens an Agent; a dragged node stays where it
 // was put, across a reload and when another Agent joins.
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Agent, AgentId, ChannelSnapshot, StreamMessage, Task } from "@shared/index";
@@ -45,6 +45,8 @@ function channel(agents: Agent[]) {
     capabilities: {},
     snapshot: async (): Promise<ChannelSnapshot> =>
       ({ channel: { repo: "shlok1806/app" }, persons: [], agents, tasks: [login], events: [], verdicts: [], cursor: 0 }) as unknown as ChannelSnapshot,
+    // A Worker with no Hosts: the canvas offers no Start an Agent.
+    hosts: async () => null,
     subscribe: (_cursor: number, onMessage: (m: StreamMessage) => void) => {
       push = onMessage;
       return () => {};
@@ -59,7 +61,10 @@ function channel(agents: Agent[]) {
 }
 
 const node = (name: RegExp) => screen.findByRole("button", { name });
-const place = (el: HTMLElement) => ({ x: Number.parseFloat(el.style.left), y: Number.parseFloat(el.style.top) });
+const place = (el: HTMLElement) => {
+  const box = el.closest<HTMLElement>("[data-node]")!;
+  return { x: Number.parseFloat(box.style.left), y: Number.parseFloat(box.style.top) };
+};
 
 /** A browser's storage for this origin: happy-dom under this Node has none of its own. */
 function memoryStorage(): Storage {
@@ -83,20 +88,22 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the canvas", () => {
-  it("draws every Agent with its state, a frame for the Task it holds, and an edge from a lead", async () => {
+  it("draws every Agent with its state and Task, a frame for where it runs, and an edge from a lead", async () => {
     const { container } = render(<CanvasView />, { wrapper: channel([lead, child, maya]) });
     expect(await node(/^planner, shlok's Claude Code Agent, Running$/)).toBeTruthy();
     expect(await node(/^shlok\/codex\/bbbb, shlok's Codex Agent, Running$/)).toBeTruthy();
     expect(await node(/^maya\/claude\/cccc, maya's Claude Code Agent, Gone$/)).toBeTruthy();
-    expect(screen.getByText("Fix the login redirect")).toBeTruthy();
-    expect(screen.getByText("task/12-fix-the-login-redirect")).toBeTruthy();
-    expect([...container.querySelectorAll("path[data-edge]")].map((p) => p.getAttribute("data-edge"))).toEqual([`${lead.id} ${child.id}`]);
-    // shlok, the signed-in Person, comes first.
-    expect([...container.querySelectorAll("[data-lane] > span:first-child")].map((e) => e.textContent)).toEqual(["shlok (you)", "maya"]);
+    expect(screen.getByText("#12 Fix the login redirect")).toBeTruthy();
+    expect([...container.querySelectorAll("[data-edge]")].map((p) => p.getAttribute("data-edge"))).toEqual([`${lead.id} ${child.id}`]);
+    // One frame for each Person's hand-started Agents, the signed-in Person's first.
+    expect([...container.querySelectorAll("[data-frame]")].map((e) => e.textContent)).toEqual([
+      "terminalsshlok (you) · 2 Agents started by hand",
+      "terminalsmaya · 1 Agent started by hand",
+    ]);
   });
 
-  it("puts the nodes in lane order, so Tab moves through the canvas the way it reads", async () => {
-    // maya's Agent joined first, but the signed-in Person's lane comes first.
+  it("puts the nodes in frame order, so Tab moves through the canvas the way it reads", async () => {
+    // maya's Agent joined first, but the signed-in Person's frame comes first.
     const { container } = render(<CanvasView />, { wrapper: channel([maya, child, lead]) });
     await node(/^planner/);
     expect([...container.querySelectorAll("[data-node]")].map((e) => e.getAttribute("data-node"))).toEqual([lead.id, child.id, maya.id]);
@@ -109,8 +116,8 @@ describe("the canvas", () => {
     cleanup();
     render(<CanvasView selected={child.id} />, { wrapper: channel([lead, child]) });
     const panel = await screen.findByRole("complementary", { name: /shlok\/codex\/bbbb/ });
-    expect(panel.textContent).toContain("Started by planner");
-    expect(screen.getByRole("link", { name: "Open Agent page" }).getAttribute("href")).toBe(`#/agents/${encodeURIComponent(child.id)}`);
+    expect(panel.textContent).toContain("Started byplanner");
+    expect(within(panel).getByRole("link", { name: "Open the terminal" }).getAttribute("href")).toBe(`#/agents/${encodeURIComponent(child.id)}`);
   });
 
   it("closes the open Agent on Escape, from a node as well as from the canvas", async () => {
