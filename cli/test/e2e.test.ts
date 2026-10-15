@@ -2213,9 +2213,12 @@ describe("switchboard run codex and gemini", () => {
       SWITCHBOARD_CODEX_BIN: FAKE_CODEX,
       SWITCHBOARD_GEMINI_BIN: FAKE_GEMINI,
       CODEX_HOME: join(scratch, "codex-home"),
+      // Not the developer's ~/.gemini: a model configured there is an extra agent.model Event.
+      GEMINI_CLI_HOME: join(scratch, "gemini-home"),
       SWITCHBOARD_HOOK_TRUST_SECONDS: "3",
     };
     await mkdir(join(scratch, "codex-home"), { recursive: true });
+    await mkdir(join(scratch, "gemini-home"), { recursive: true });
   });
 
   /** What a fake started with, under its own tag. */
