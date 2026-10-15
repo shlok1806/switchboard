@@ -4,62 +4,32 @@
  * row. Below 640px the rows stack, the inspector is not on the page, and a row opens its
  * Agent instead.
  */
-import { useMemo, useState } from "react";
-import type { Agent, Person, Task } from "@shared/index";
+import { useState } from "react";
+import type { Person } from "@shared/index";
 import { buttonVariants } from "@/components/atoms/Button";
+import { Chip } from "@/components/atoms/Chip";
 import { PendingApproval } from "@/components/domain/approval";
 import { ContextWindow } from "@/components/domain/context";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { StartAgentButton, useHostsSupported } from "@/components/domain/start-agent";
-import { Glyph, State, useAgentStates } from "@/components/domain/state";
+import { GroupLine, Secondary, StackedRow, agentName, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
+import { Glyph, State } from "@/components/domain/state";
 import { AgentUsage } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { claimsByAgent } from "@/lib/canvas-layout";
-import { CLI_LABEL, ago, elapsed, hostName, localTime } from "@/lib/format";
+import { CLI_LABEL, ago, elapsed, hostName } from "@/lib/format";
 import { go, href } from "@/lib/router";
-import { byState, countStates, isNeedsYou, needsYou, type AgentState } from "@/lib/state";
+import { countStates, isNeedsYou, needsYou } from "@/lib/state";
 import { modelLabel } from "@shared/index";
 import { cn } from "@/lib/utils";
 
-/** Every Claim each Agent holds, oldest first. One Agent may hold several. */
-export function useClaimsOf() {
-  const { tasks } = useChannel();
-  return useMemo(() => claimsByAgent(tasks), [tasks]);
-}
-
-/** A Host an Agent was started on, by name. */
-export function HostLabel({ host }: { host: string }) {
-  return (
-    <span className="min-w-0 [overflow-wrap:anywhere]" title={`Started by a Host, with no terminal: ${host}`}>
-      on {hostName(host)}
-    </span>
-  );
-}
-
 type Filter = "all" | "needs" | "running" | "idle" | "gone" | "mine";
-
-const name = (a: Agent) => a.nickname ?? a.id;
-/** The CLI's short name, as the Agent ID spells it. */
-const cliShort = (a: Agent) => a.id.split("/")[1] ?? CLI_LABEL[a.cli];
-const place = (zone: string) => zone.split("/").pop()?.replaceAll("_", " ") ?? zone;
-
-/** How long the Agent has run; a waiting prompt's own age is in the Working on line. */
-const since = (a: Agent) => a.startedAt;
-
-interface Line {
-  agent: Agent;
-  state: AgentState;
-  claims: Task[];
-}
 
 export function AgentsView() {
   const { agents, snapshot } = useChannel();
   const me = useMe();
-  const states = useAgentStates();
-  const claimsOf = useClaimsOf();
   const can = useCapabilities();
   const hosts = useHostsSupported();
   const mobile = useIsMobile();
@@ -67,13 +37,7 @@ export function AgentsView() {
   const [find, setFind] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
 
-  const lines: Line[] = useMemo(
-    () =>
-      agents
-        .map((a) => ({ agent: a, state: states.get(a.id) ?? "gone", claims: claimsOf.get(a.id) ?? [] }))
-        .sort((x, y) => byState(x.state, y.state) || x.agent.id.localeCompare(y.agent.id)),
-    [agents, states, claimsOf],
-  );
+  const lines = useLines();
 
   if (agents.length === 0) {
     return (
@@ -139,19 +103,9 @@ export function AgentsView() {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
           <div role="group" aria-label="Show" className="flex flex-wrap gap-1.5">
             {chips.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                aria-pressed={filter === c.id}
-                onClick={() => setFilter(c.id)}
-                className={cn(
-                  "inline-flex h-[26px] items-center gap-1.5 rounded-[var(--r)] border px-2 text-label font-medium whitespace-nowrap transition-colors duration-[var(--dur)]",
-                  filter === c.id ? "border-ink text-ink" : "border-rule text-ink-2 hover:border-ink-3 hover:text-ink",
-                )}
-              >
+              <Chip key={c.id} on={filter === c.id} onClick={() => setFilter(c.id)} count={c.n}>
                 {c.label}
-                <span className="text-ink-3 tabular-nums">{c.n}</span>
-              </button>
+              </Chip>
             ))}
           </div>
           <span className="text-small font-medium text-ink max-sm:hidden">Grouped by Person</span>
@@ -215,38 +169,6 @@ export function AgentsView() {
   );
 }
 
-function groupByPerson(lines: Line[], me: string): [string, Line[]][] {
-  const m = new Map<string, Line[]>();
-  for (const l of lines) m.set(l.agent.person, [...(m.get(l.agent.person) ?? []), l]);
-  return [...m.entries()].sort(([a], [b]) => (a === me ? -1 : b === me ? 1 : a.localeCompare(b)));
-}
-
-/** A Person's group line: who, where and what time it is for them. */
-function GroupLine({ person, me, zone, count }: { person: string; me: string; zone?: string; count: number }) {
-  return (
-    <p className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
-      <span className="font-semibold text-ink">{person}</span>
-      {[person === me && "you", zone && `${place(zone)} ${localTime(Date.now(), zone)}`, `${count} ${count === 1 ? "Agent" : "Agents"}`]
-        .filter(Boolean)
-        .join(" · ")}
-    </p>
-  );
-}
-
-/** The Agent's second line: its CLI, model and its place among leads. */
-function Secondary({ agent }: { agent: Agent }) {
-  const { agents } = useChannel();
-  const led = agent.role === "lead" ? agents.filter((a) => a.parent === agent.id).length : 0;
-  const parent = agent.parent ? agents.find((a) => a.id === agent.parent) : undefined;
-  const parts = [
-    cliShort(agent),
-    agent.model && modelLabel(agent.model),
-    agent.role === "lead" && `lead of ${led}`,
-    parent && `started by ${name(parent)}`,
-  ].filter(Boolean);
-  return <span className="block text-small text-ink-3">{parts.join(" · ")}</span>;
-}
-
 /** What the Agent works on: its Claim, and a line on where that stands. */
 function WorkingOn({ line }: { line: Line }) {
   const { agent: a, state, claims } = line;
@@ -299,7 +221,7 @@ function Row({ line, selected, onSelect }: { line: Line; selected: boolean; onSe
           onClick={(e) => e.stopPropagation()}
           className={cn("text-row font-semibold [overflow-wrap:anywhere] hover:underline", state === "gone" ? "text-ink-2" : "text-ink")}
         >
-          {name(a)}
+          {shortName(a)}
         </a>
         <Secondary agent={a} />
       </td>
@@ -312,33 +234,6 @@ function Row({ line, selected, onSelect }: { line: Line; selected: boolean; onSe
       <td className="py-2 pr-3 text-row text-ink-2 max-[900px]:hidden">{a.host ? hostName(a.host) : "terminal"}</td>
       <td className="py-2 pr-3 text-right text-row text-ink-3 tabular-nums">{elapsed(since(a))}</td>
     </tr>
-  );
-}
-
-/** A row on a phone: state and age; the name and its context; the Task. It opens the Agent. */
-function StackedRow({ line }: { line: Line }) {
-  const { agent: a, state } = line;
-  const c = a.context;
-  const percent = c?.tokens !== undefined && c.window ? Math.round((c.tokens / c.window) * 100) : undefined;
-  return (
-    <li>
-      <a href={href({ view: "agent", id: a.id })} className="flex flex-col gap-1 border-b border-rule px-3 py-3 hover:bg-paper-2 hover:no-underline">
-        <span className="flex items-center justify-between gap-3 text-row">
-          <State state={state} person={a.person} />
-          <span className="text-ink-3 tabular-nums">{elapsed(since(a))}</span>
-        </span>
-        <span className="flex items-start justify-between gap-3">
-          <span className="min-w-0">
-            <span className="block text-row font-semibold [overflow-wrap:anywhere] text-ink">{name(a)}</span>
-            <Secondary agent={a} />
-          </span>
-          {percent !== undefined && <span className="shrink-0 text-row text-ink tabular-nums">{percent}%</span>}
-        </span>
-        <span className="text-row text-ink-2">
-          {line.claims[0] ? `#${line.claims[0].number} ${line.claims[0].title}` : <span className="text-ink-3">No Claim</span>}
-        </span>
-      </a>
-    </li>
   );
 }
 
@@ -355,16 +250,16 @@ function Inspector({ line }: { line: Line }) {
   const fact = [
     `${a.person === me ? "Your" : `${a.person}'s`} ${CLI_LABEL[a.cli]} ${a.host ? `on ${hostName(a.host)}` : "in a terminal"}.`,
     a.model && `${modelLabel(a.model)}${a.effort ? `, ${a.effort} effort` : ""}.`,
-    `Started ${ago(a.startedAt)}${led.length ? `, leads ${led.map(name).join(", ")}` : ""}${parent ? `, started by ${name(parent)}` : ""}.`,
+    `Started ${ago(a.startedAt)}${led.length ? `, leads ${led.map(agentName).join(", ")}` : ""}${parent ? `, started by ${agentName(parent)}` : ""}.`,
   ]
     .filter(Boolean)
     .join(" ");
   return (
-    <aside aria-label={`${name(a)}, in the inspector`} className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-6 overflow-y-auto border-l border-rule px-5 pt-5 pb-12">
+    <aside aria-label={`${agentName(a)}, in the inspector`} className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-6 overflow-y-auto border-l border-rule px-5 pt-5 pb-12">
       <div className="flex flex-col gap-2">
         <h2 className="flex flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
           <Glyph state={state} />
-          {name(a)}
+          {agentName(a)}
           <State state={state} person={a.person} glyph={false} />
         </h2>
         <p className="text-row text-ink-2">{fact}</p>
@@ -431,7 +326,7 @@ function Inspector({ line }: { line: Line }) {
           {led.length > 0 && (
             <>
               <dt className="text-ink-3">Leads</dt>
-              <dd>{led.map(name).join(", ")}</dd>
+              <dd>{led.map(agentName).join(", ")}</dd>
             </>
           )}
         </dl>

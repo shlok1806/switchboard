@@ -14,7 +14,7 @@ import { OlderRow } from "@/components/domain/older";
 import { useScopedHistory } from "@/data/history";
 import { RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { Composer } from "@/components/domain/composer";
-import { HostLabel, useClaimsOf } from "./AgentsView";
+import { HostLabel, useClaimsOf } from "@/components/domain/fleet";
 import { Glyph, State, useAgentState } from "@/components/domain/state";
 import { StopAgentButton } from "@/components/domain/start-agent";
 import { LeadButton, LeadLabel } from "@/components/domain/agent-role";

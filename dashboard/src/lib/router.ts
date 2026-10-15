@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 /** Hash routes, so the static build works from any path a Worker serves it on. */
 export type Route =
+  | { view: "now" }
   | { view: "feed"; event?: string }
   | { view: "tasks" }
   | { view: "task"; number: number }
@@ -11,7 +12,7 @@ export type Route =
   | { view: "compare"; turn?: string };
 
 export function parse(hash: string): Route {
-  const [, view = "feed", arg] = hash.replace(/^#/, "").split("/");
+  const [, view = "now", arg] = hash.replace(/^#/, "").split("/");
   const a = arg ? decodeURIComponent(arg) : undefined;
   switch (view) {
     case "tasks":
@@ -22,13 +23,17 @@ export function parse(hash: string): Route {
       return { view: "compare", turn: a };
     case "canvas":
       return { view: "canvas", agent: a };
-    default:
+    case "feed":
       return { view: "feed", event: a };
+    default:
+      return { view: "now" };
   }
 }
 
 export function href(route: Route): string {
   switch (route.view) {
+    case "now":
+      return "#/now";
     case "feed":
       return route.event ? `#/feed/${route.event}` : "#/feed";
     case "tasks":

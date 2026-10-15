@@ -3,10 +3,10 @@ import { MAX_DENY_MESSAGE_LENGTH } from "@shared/index";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Glyph } from "@/components/domain/state";
+import { Glyph, State } from "@/components/domain/state";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useChannel, useMe, useStore } from "@/data/store";
-import { ago, localTime } from "@/lib/format";
+import { elapsed, hostName, localTime } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { useNow } from "./usage";
@@ -18,31 +18,44 @@ import { useNow } from "./usage";
  * (ADR 0014), never approve it. The reason comes from the model, so it is shown as the
  * Agent's, not as a fact.
  */
-export function PendingApproval({ agent, className }: { agent: Agent; className?: string }) {
+export function PendingApproval({ agent, word = false, className }: { agent: Agent; /** Name the state before the line, as the Now queue does. */ word?: boolean; className?: string }) {
   const now = useNow();
   const me = useMe();
-  const { snapshot } = useChannel();
+  const { snapshot, tasks } = useChannel();
   const a = agent.approval;
   if (!a || agent.presence === "gone") return null;
   const mine = agent.person === me;
   const canDeny = a.deniable === true && a.deniedBy === undefined && mine;
   const zone = snapshot?.persons.find((p) => p.name === agent.person)?.timeZone;
   const theirTime = zone ? localTime(now, zone) || null : null;
+  const where = zone?.split("/").pop()?.replaceAll("_", " ");
+  const task = tasks.find((t) => t.claim?.holder.kind === "agent" && t.claim.holder.agentId === agent.id && t.status !== "done");
+  const meta = [
+    `${mine ? "Your Agent" : `${agent.person}'s Agent`} ${agent.host ? `on ${hostName(agent.host)}` : "in a terminal"}`,
+    task && `#${task.number} ${task.title}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <section aria-label={`${agent.nickname ?? agent.id} wants to run ${a.tool}`} className={cn("flex min-w-0 flex-col gap-2", className)}>
       <div className="flex min-w-0 items-baseline gap-2">
-        <Glyph state={mine ? "needs" : "needs-other"} className="self-center" />
         <h3 className="min-w-0 flex-1 text-row font-semibold [overflow-wrap:anywhere] text-ink">
+          {word ? (
+            <State state={mine ? "needs" : "needs-other"} person={agent.person} className="mr-2 align-[-1px]" />
+          ) : (
+            <Glyph state={mine ? "needs" : "needs-other"} className="mr-2 align-[-1px]" />
+          )}
           {agent.nickname ?? agent.id} wants to run <code>{a.tool}</code>
         </h3>
-        <span className="shrink-0 text-small text-ink-3 tabular-nums">{ago(a.openedAt, now)}</span>
+        <span className="shrink-0 text-small text-ink-3 tabular-nums">{elapsed(a.openedAt, now)}</span>
       </div>
       {a.detail && (
         <pre className="max-h-40 overflow-auto rounded-[var(--r)] bg-paper-2 px-3 py-2 text-small leading-normal whitespace-pre-wrap [overflow-wrap:anywhere] text-ink">
           {a.detail}
         </pre>
       )}
-      {a.reason && <p className="max-w-[60ch] text-row break-words text-ink">The Agent says: {a.reason}</p>}
+      {a.reason && <p className="max-w-[72ch] text-row break-words text-ink">The Agent says: {a.reason}</p>}
+      {mine && <p className="text-small text-ink-3">{meta}</p>}
       {a.deniedBy ? (
         <p className="text-small text-ink-3">Denied by {a.deniedBy}. Waiting for the Agent to move on.</p>
       ) : (
@@ -52,9 +65,9 @@ export function PendingApproval({ agent, className }: { agent: Agent; className?
               ? canDeny
                 ? "Answer it at the Agent's terminal, or deny it here."
                 : "Answer it at the Agent's terminal."
-              : `Only ${agent.person} can answer${theirTime ? `; it is ${theirTime} for them` : ""}. You can watch.`}
+              : `Only ${agent.person} can answer${theirTime ? `; it is ${theirTime}${where ? ` in ${where}` : " for them"}` : ""}. You can watch.`}
           </p>
-          <div className="flex flex-wrap items-center gap-2 pt-1">
+          <div data-acts className="flex flex-wrap items-center gap-2 pt-1">
             {canDeny && <DenyAction agent={agent} id={a.id} tool={a.tool} />}
             <a href={href({ view: "agent", id: agent.id })} onClick={(e) => e.stopPropagation()} className={buttonVariants({ variant: mine ? "ghost" : "secondary" })}>
               {mine ? "Open the terminal" : "Watch"}

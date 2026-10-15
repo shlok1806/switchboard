@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
  * holder (themselves or one of their own Live or Idle Agents) and confirms in a
  * dialog; the Channel's answer, or its refusal, comes back as a toast.
  */
-export function TakeoverAction({ task, compact = false }: { task: Task; compact?: boolean }) {
+export function TakeoverAction({ task, compact = false, line = false }: { task: Task; compact?: boolean; /** A queue line's primary action, naming the Task. */ line?: boolean }) {
   const store = useStore();
   const me = useMe();
   const { agents } = useChannel();
@@ -48,16 +48,16 @@ export function TakeoverAction({ task, compact = false }: { task: Task; compact?
   return (
     <>
       <Button
-        variant={compact ? "primary" : "action"}
-        size={compact ? "xs" : "sm"}
-        className={compact ? undefined : "w-full"}
+        variant={compact || line ? "primary" : "action"}
+        size={line ? "md" : compact ? "xs" : "sm"}
+        className={compact || line ? undefined : "w-full"}
         onClick={(e) => {
           e.stopPropagation();
           setPick(0);
           setOpen(true);
         }}
       >
-        Take over
+        {line ? `Take over #${task.number}` : "Take over"}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-sm" onClick={(e) => e.stopPropagation()}>
