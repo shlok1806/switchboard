@@ -50,7 +50,7 @@ export function FilterSelect({
   return (
     <label
       className={cn(
-        "relative inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md pr-7 pl-3 text-small transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent",
+        "relative inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md pr-7 pl-3 text-small max-sm:pr-6 max-sm:pl-2.5 transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent",
         on ? "bg-accent-tint font-medium text-accent-ink" : "bg-inset text-ink-2 hover:bg-hover hover:text-ink",
       )}
     >
@@ -68,7 +68,7 @@ export function FilterSelect({
         ))}
       </select>
       <span className="max-w-[11rem] truncate">{on ? (options.find((o) => o.value === value)?.label ?? value) : label}</span>
-      <ChevronDown className="pointer-events-none absolute right-2.5 size-3.5 opacity-60" aria-hidden />
+      <ChevronDown className="pointer-events-none absolute right-2.5 size-3.5 opacity-60 max-sm:right-2" aria-hidden />
     </label>
   );
 }

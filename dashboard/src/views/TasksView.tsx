@@ -185,7 +185,7 @@ export function TasksView() {
         </div>
       </div>
       {/* Quick filters, as on a Jira board */}
-      <div className="rise flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-[var(--gutter)] pb-3 [--i:2] md:flex-nowrap md:overflow-x-auto">
+      <div className="rise flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-[var(--gutter)] pb-3 [--i:2] max-sm:gap-1 md:flex-nowrap md:overflow-x-auto">
         <Toggle on={filters.mine} onClick={() => set("mine")(!filters.mine)} label="Mine">
           <UserRound className="size-3.5" aria-hidden />
         </Toggle>
@@ -294,7 +294,7 @@ function Toggle({ on, onClick, label, children }: { on: boolean; onClick: () => 
       onClick={onClick}
       title={label}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-small transition-colors focus-visible:outline-2 focus-visible:outline-accent max-md:px-2.5",
+        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-small transition-colors focus-visible:outline-2 focus-visible:outline-accent max-md:px-2.5 max-sm:px-2",
         on ? "bg-accent-tint font-medium text-accent-ink" : "bg-inset text-ink-2 hover:bg-hover hover:text-ink",
       )}
     >

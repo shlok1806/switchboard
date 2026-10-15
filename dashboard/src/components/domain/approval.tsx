@@ -25,24 +25,27 @@ export function PendingApproval({ agent, className }: { agent: Agent; className?
   return (
     <section
       aria-label="Waiting for approval"
-      className={cn("flex min-w-0 flex-col gap-1.5 rounded-lg border border-orange/30 bg-orange-tint p-3 text-[12px]", className)}
+      className={cn("flex min-w-0 flex-col gap-2 rounded-md bg-orange-tint p-4 text-small", className)}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <ShieldAlert aria-hidden className="size-3.5 shrink-0 text-orange" />
-        <span className="min-w-0 truncate font-medium text-orange">Waiting for approval</span>
-        <span className="ml-auto shrink-0 text-ink-3">{ago(a.openedAt, now)}</span>
+        <ShieldAlert aria-hidden className="size-4 shrink-0 text-orange" />
+        <span className="min-w-0 truncate text-body font-medium text-orange">Waiting for approval</span>
+        <span className="ml-auto shrink-0 text-ink-3 tabular-nums">{ago(a.openedAt, now)}</span>
       </div>
-      <span className="break-all font-mono text-ink-2">{a.tool}</span>
+      <code className="break-all font-mono text-ink">{a.tool}</code>{/* taste-skill-ignore: a tool name is code */}
       {a.detail && (
-        <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface/70 px-2 py-1.5 font-mono text-[12px] text-ink">
+        <pre className="max-h-32 overflow-auto rounded-md bg-surface px-3 py-2 font-mono text-small whitespace-pre-wrap break-all text-ink">
           {a.detail}
         </pre>
       )}
-      {a.reason && <p className="break-words text-ink-2">The Agent says: {a.reason}</p>}
+      {a.reason && <p className="max-w-[68ch] text-body break-words text-ink-2">The Agent says: {a.reason}</p>}
       {a.deniedBy ? (
-        <p className="text-ink-2">Denied by {a.deniedBy}. Waiting for the Agent to move on.</p>
+        <p className="inline-flex items-center gap-2 text-body text-ink-2">
+          <span aria-hidden className="breathe size-1.5 shrink-0 rounded-full bg-state-idle" />
+          Denied by {a.deniedBy}. Waiting for the Agent to move on.
+        </p>
       ) : (
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-1">
           <p className="text-ink-3">
             {canDeny ? "Answer it at the Agent's terminal, or deny it here." : "Answer it at the Agent's terminal."}
           </p>
@@ -82,7 +85,8 @@ function DenyAction({ agent, id, tool }: { agent: Agent; id: string; tool: strin
   return (
     <>
       <Button
-        size="xs"
+        variant="primary"
+        size="sm"
         onClick={(e) => {
           e.stopPropagation();
           setMessage("");
@@ -97,12 +101,12 @@ function DenyAction({ agent, id, tool }: { agent: Agent; id: string; tool: strin
             <DialogHeader>
               <DialogTitle>Deny {tool}</DialogTitle>
               <DialogDescription>
-                <span className="font-mono">{agent.nickname ?? agent.id}</span> does not run it, and reads your message
+                <span className="font-medium text-ink">{agent.nickname ?? agent.id}</span> does not run it, and reads your message
                 instead. Nothing can be approved from here.
               </DialogDescription>
             </DialogHeader>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium">
+              <span className="text-small font-medium text-ink">
                 Message <span className="font-normal text-ink-3">optional</span>
               </span>
               <textarea
@@ -113,14 +117,14 @@ function DenyAction({ agent, id, tool }: { agent: Agent; id: string; tool: strin
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder="Not now. Use the cached build instead."
-                className="resize-none rounded-lg border border-line-strong bg-field px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-4 focus-visible:border-accent max-md:text-[16px]"
+                className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink outline-none placeholder:text-ink-3 focus-visible:border-accent max-md:text-[16px]"
               />
             </label>
             <DialogFooter>
-              <Button type="button" size="sm" onClick={() => setOpen(false)}>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" variant="accent" size="sm" disabled={busy}>
+              <Button type="submit" variant="primary" size="sm" disabled={busy}>
                 {busy ? "Denying" : "Deny"}
               </Button>
             </DialogFooter>

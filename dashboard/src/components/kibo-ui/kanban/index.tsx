@@ -49,7 +49,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { createContext, type HTMLAttributes, type ReactNode, useContext, useMemo, useRef, useState } from "react";
+import { createContext, type HTMLAttributes, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import tunnel from "tunnel-rat";
 import { cn } from "@/lib/utils";
@@ -256,6 +256,9 @@ const collision: CollisionDetection = (args) => {
   return hits.length ? hits : closestCorners(args);
 };
 
+// A mask, not a fill: the last 3rem of the visible lanes fade to show there is more to scroll.
+const FADE = "linear-gradient(to right, #000 calc(100% - 3rem), transparent)"; // taste-skill-ignore: a scroll-edge mask, not a coloured fill
+
 export const KanbanProvider = <
   T extends KanbanItemProps = KanbanItemProps,
   C extends KanbanColumnProps = KanbanColumnProps,
@@ -274,6 +277,23 @@ export const KanbanProvider = <
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const droppedAt = useRef(0);
   const [overColumn, setOverColumn] = useState<string | null>(null);
+  // Switchboard: when columns run past the right edge (a tablet), that edge fades, so the
+  // sideways scroll shows itself; at the end of the scroll the fade goes.
+  const lanes = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = lanes.current;
+    if (!el) return;
+    const measure = () => setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    el.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      observer.disconnect();
+      el.removeEventListener("scroll", measure);
+    };
+  }, []);
 
   const mouse = useSensor(MouseSensor, { activationConstraint: { distance: 5 } });
   const touch = useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } });
@@ -355,7 +375,11 @@ export const KanbanProvider = <
         {...props}
       >
         {lane}
-        <div className={cn("relative grid size-full auto-cols-fr grid-flow-col gap-3", className)}>
+        <div
+          ref={lanes}
+          className={cn("relative grid size-full auto-cols-fr grid-flow-col gap-3", className)}
+          style={more ? { maskImage: FADE, WebkitMaskImage: FADE } : undefined}
+        >
           {columns.map((column) => children(column))}
         </div>
         {typeof window !== "undefined" &&
