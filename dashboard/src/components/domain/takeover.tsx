@@ -48,7 +48,7 @@ export function TakeoverAction({ task, compact = false }: { task: Task; compact?
   return (
     <>
       <Button
-        variant="accent"
+        variant={compact ? "primary" : "action"}
         size={compact ? "xs" : "sm"}
         className={compact ? undefined : "w-full"}
         onClick={(e) => {
@@ -64,17 +64,17 @@ export function TakeoverAction({ task, compact = false }: { task: Task; compact?
           <DialogHeader>
             <DialogTitle>Take over #{task.number}</DialogTitle>
             <DialogDescription>
-              <span className="font-mono">{holderName(from)}</span> is Gone. Its Steps and last Update go to the new holder.
+              <span className="font-medium text-ink">{holderName(from)}</span> is Gone. Its Steps and last Update go to the new holder.
             </DialogDescription>
           </DialogHeader>
           <fieldset className="flex flex-col gap-1">
-            <legend className="mb-1.5 text-[13px] text-ink-3">Give it to</legend>
+            <legend className="mb-1.5 text-small text-ink-3">Give it to</legend>
             {options.map((h, i) => (
               <label
                 key={i}
                 className={cn(
-                  "flex min-h-10 cursor-pointer items-center gap-2.5 rounded-lg border px-3 text-[13.5px] transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent",
-                  pick === i ? "border-accent bg-accent-tint" : "border-line hover:bg-hover",
+                  "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md px-3 text-body transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent",
+                  pick === i ? "bg-accent-tint text-ink" : "bg-inset hover:bg-hover",
                 )}
               >
                 <input type="radio" name="takeover-to" checked={pick === i} onChange={() => setPick(i)} className="sr-only" />
@@ -84,7 +84,7 @@ export function TakeoverAction({ task, compact = false }: { task: Task; compact?
                 >
                   {pick === i && <span className="size-2 rounded-full bg-accent" />}
                 </span>
-                <span className={h.kind === "agent" ? "font-mono text-[12.5px]" : undefined}>{labelFor(h)}</span>
+                <span className="tabular-nums">{labelFor(h)}</span>
               </label>
             ))}
           </fieldset>
@@ -92,7 +92,7 @@ export function TakeoverAction({ task, compact = false }: { task: Task; compact?
             <Button type="button" size="sm" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="button" variant="accent" size="sm" disabled={busy} onClick={() => void confirm()}>
+            <Button type="button" variant="action" size="sm" disabled={busy} onClick={() => void confirm()}>
               {busy ? "Taking over" : "Take over"}
             </Button>
           </DialogFooter>

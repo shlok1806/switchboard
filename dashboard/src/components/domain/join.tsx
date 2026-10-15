@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
-import { AlertTriangle, Radio } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
+import { Mark } from "@/components/shell/nav";
 import { Button } from "@/components/atoms/Button";
 
 /** GitHub's mark, from Octicons (MIT): `mark-github`, 16px. */
@@ -43,20 +44,18 @@ export function SignInScreen({
     <main className="flex min-h-dvh items-center justify-center bg-page px-4 py-10">
       <div className="flex w-full max-w-sm flex-col gap-6">
         <header className="flex flex-col items-center gap-3 text-center">
-          <span className="grid size-10 place-items-center rounded-xl bg-accent text-on-accent">
-            <Radio className="size-5" aria-hidden />
-          </span>
+          <Mark className="size-10" />
           <div className="flex min-w-0 flex-col gap-1">
-            <h1 className="text-[20px] font-semibold tracking-tight">Sign in to Switchboard</h1>
-            <p className="font-mono text-[13px] break-all text-ink-3">{repo}</p>
+            <h1 className="text-title font-semibold text-ink">Sign in to Switchboard</h1>
+            <p className="text-body break-all text-ink-3">{repo}</p>
           </div>
         </header>
-        <div className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 shadow-card">
-          <p className="text-center text-[13.5px] leading-relaxed text-ink-2">
+        <div className="flex flex-col gap-4 rounded-md bg-inset p-6">
+          <p className="text-center text-body leading-relaxed text-ink-2">
             Use a GitHub account with write access to this repo.
           </p>
           {notConfigured ? (
-            <p role="status" className="flex items-start gap-2 text-[13px] text-ink-2">
+            <p role="status" className="flex items-start gap-2 text-small text-ink-2">
               <AlertTriangle className="mt-0.5 size-4 shrink-0 text-orange" aria-hidden />
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="font-medium text-ink">GitHub App not configured</span>
@@ -65,7 +64,7 @@ export function SignInScreen({
             </p>
           ) : (
             problem && (
-              <p role="alert" className="flex items-start gap-2 text-[13px] text-red">
+              <p role="alert" className="flex items-start gap-2 text-small text-red">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
                 {problem}
               </p>
@@ -73,7 +72,7 @@ export function SignInScreen({
           )}
           <Button
             type="button"
-            variant="primary"
+            variant="action"
             size="md"
             disabled={busy || Boolean(notConfigured)}
             className="w-full"
@@ -89,10 +88,10 @@ export function SignInScreen({
         {onDevSignIn && (
           <form
             onSubmit={devSubmit}
-            className="flex flex-col gap-2.5 rounded-xl border border-dashed border-line-strong p-4"
+            className="flex flex-col gap-3 rounded-md bg-orange-tint p-4"
             aria-label="Dev sign-in"
           >
-            <span className="text-[12px] font-medium tracking-wide text-ink-3 uppercase">Dev sign-in, local only</span>
+            <span className="text-small font-medium text-orange">Dev sign-in, local only</span>
             <div className="flex gap-2">
               <input
                 name="login"
@@ -103,7 +102,7 @@ export function SignInScreen({
                 value={login}
                 onChange={(e) => setLogin(e.target.value)}
                 placeholder="github-login"
-                className="h-9 min-w-0 flex-1 rounded-lg border border-line-strong bg-field px-3 font-mono text-[13px] text-ink outline-none transition-colors placeholder:text-ink-4 focus-visible:border-accent max-md:text-[16px]"
+                className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink outline-none transition-colors placeholder:text-ink-4 focus-visible:border-accent max-md:text-[16px]"
               />
               <Button type="submit" variant="secondary" size="md" disabled={!login.trim()}>
                 Sign in
@@ -121,12 +120,10 @@ export function NoChannelScreen() {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-page px-4 py-10">
       <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center">
-        <span className="grid size-10 place-items-center rounded-xl bg-accent text-on-accent">
-          <Radio className="size-5" aria-hidden />
-        </span>
-        <h1 className="text-[20px] font-semibold tracking-tight">Switchboard</h1>
-        <p className="text-[13.5px] leading-relaxed text-ink-3">
-          Each repo has its own Channel. Open it at <span className="font-mono text-ink-2">/owner/repo</span>.
+        <Mark className="size-10" />
+        <h1 className="text-title font-semibold text-ink">Switchboard</h1>
+        <p className="text-body leading-relaxed text-ink-3">
+          Each repo has its own Channel. Open it at <code className="font-mono text-ink-2">/owner/repo</code>{/* taste-skill-ignore: a path */}.
         </p>
       </div>
     </main>

@@ -10,6 +10,7 @@ import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PageHead } from "@/components/shell/page-head";
 
 const CAPTURES: Capture[] = ["proxy", "hook", "tool"];
 
@@ -63,13 +64,13 @@ export function CompareView({ turn }: { turn?: string }) {
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <nav
         aria-label="Model turns"
-        className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-line px-3 py-2.5 lg:w-72 lg:flex-col lg:gap-0.5 lg:overflow-y-auto lg:border-r lg:border-b-0 lg:p-2"
+        className="flex shrink-0 gap-1.5 overflow-x-auto bg-inset px-[var(--gutter)] py-3 lg:w-72 lg:flex-col lg:gap-0.5 lg:overflow-y-auto lg:px-3 lg:py-4"
       >
-        <h2 className="hidden items-center gap-1.5 px-2.5 pt-1 pb-2 text-[12.5px] text-ink-3 lg:flex">
+        <h2 className="hidden items-center gap-1.5 px-2.5 pb-2 text-body font-medium text-ink lg:flex">
           Model turns
           <Tooltip>
             <TooltipTrigger asChild>
-              <button type="button" aria-label="About model turns" className="grid size-5 place-items-center rounded text-ink-4 hover:text-ink-2">
+              <button type="button" aria-label="About model turns" className="grid size-8 place-items-center rounded-md text-ink-3 transition-colors hover:bg-hover hover:text-ink">
                 <Info className="size-3.5" aria-hidden />
               </button>
             </TooltipTrigger>
@@ -85,14 +86,14 @@ export function CompareView({ turn }: { turn?: string }) {
               href={href({ view: "compare", turn: m.turn })}
               aria-current={on ? "true" : undefined}
               className={cn(
-                "flex shrink-0 flex-col gap-1 rounded-lg px-2.5 py-2 text-left transition-colors lg:shrink",
-                on ? "bg-accent-tint" : "border border-line hover:bg-hover lg:border-transparent",
+                "flex shrink-0 flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors lg:shrink",
+                on ? "bg-accent-tint" : "bg-hover hover:bg-hover-2 lg:bg-transparent lg:hover:bg-hover",
               )}
             >
-              <span className={cn("truncate font-mono text-[12.5px]", on ? "text-accent-ink" : "text-ink")}>{m.agent}</span>
-              <span className="flex items-center gap-2 text-[12px] text-ink-3">
-                <span className="font-mono tabular-nums">{clock(m.at)}</span>
-                {m.task && <span className="font-mono">#{m.task}</span>}
+              <span className={cn("truncate text-body font-medium", on ? "text-accent-ink" : "text-ink")}>{m.agent}</span>
+              <span className="flex items-center gap-2 text-small text-ink-3">
+                <span className="tabular-nums">{clock(m.at)}</span>
+                {m.task && <span className="tabular-nums">#{m.task}</span>}
                 <span className="ml-auto flex gap-1" aria-label={`Captures: ${CAPTURES.filter((c) => caps.has(c)).map((c) => CAPTURE_LABEL[c]).join(", ")}`}>
                   {CAPTURES.map((c) => (
                     <span key={c} title={CAPTURE_LABEL[c]} className={cn("size-1.5 rounded-full", caps.has(c) ? "bg-accent" : "bg-hover-2")} />
@@ -107,7 +108,7 @@ export function CompareView({ turn }: { turn?: string }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!moment && turn !== undefined ? (
           <Pending title="No such model turn" className="h-full">
-            <span className="font-mono text-[12px] break-all text-ink-2">{turn}</span> is not on this Channel.{" "}
+            <code className="font-mono text-small break-all text-ink-2">{turn}</code>{/* taste-skill-ignore: an id */} is not on this Channel.{" "}
             {moments.length > 0 && (
               <a href={href({ view: "compare" })} className="text-accent-ink hover:underline">
                 Show the latest turn
@@ -116,18 +117,22 @@ export function CompareView({ turn }: { turn?: string }) {
           </Pending>
         ) : !moment ? (
           <div className="flex h-full items-center justify-center p-6">
-            <p className="text-[14px] text-ink-3">Waiting for the first model turn</p>
+            <p className="text-body text-ink-3">Waiting for the first model turn</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-4 px-4 py-5 sm:px-6">
-            <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex flex-col gap-6 px-[var(--gutter)] pt-6 pb-12 sm:pt-8">
+            <PageHead
+              title="Compare"
+              summary="One model turn, as each Capture recorded it."
+            />
+            <header className="rise flex flex-wrap items-center gap-x-3 gap-y-1 [--i:1]">
               <AgentLink id={moment.agent} agent={agentById.get(moment.agent as never)} />
-              {moment.task && <TaskLink number={moment.task} className="text-[13px]" />}
-              <span className="font-mono text-[12px] text-ink-3">
+              {moment.task && <TaskLink number={moment.task} className="text-small" />}
+              <span className="text-small text-ink-3 tabular-nums">
                 {clock(moment.at)} · {ago(moment.at)}
               </span>
             </header>
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="rise grid gap-4 [--i:2] md:grid-cols-3">
               {CAPTURES.map((c) => (
                 <CaptureColumn key={c} capture={c} events={moment.events.filter((e) => e.capture === c)} />
               ))}
@@ -141,14 +146,14 @@ export function CompareView({ turn }: { turn?: string }) {
 
 function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelEvent[] }) {
   return (
-    <section className="flex min-w-0 flex-col rounded-xl border border-line bg-surface">
-      <header className="flex items-center gap-2 border-b border-line-soft px-4 py-2.5">
-        <h2 className="text-[13.5px] font-medium text-ink">{CAPTURE_LABEL[capture]}</h2>
-        <span className="rounded-full bg-hover px-1.5 font-mono text-[11.5px] text-ink-3 tabular-nums">{events.length}</span>
+    <section className="flex min-w-0 flex-col rounded-md bg-inset">
+      <header className="flex items-center gap-2 px-4 pt-3 pb-1">
+        <h2 className="text-body font-medium text-ink">{CAPTURE_LABEL[capture]}</h2>
+        <span className="text-body text-ink-3 tabular-nums">{events.length}</span>
         {events.some((e) => e.type === "proxy.raw") && <RawBadge />}
         <Tooltip>
           <TooltipTrigger asChild>
-            <button type="button" aria-label={`About ${CAPTURE_LABEL[capture]} Capture`} className="ml-auto grid size-6 place-items-center rounded text-ink-4 hover:text-ink-2">
+            <button type="button" aria-label={`About ${CAPTURE_LABEL[capture]} Capture`} className="ml-auto grid size-8 place-items-center rounded-md text-ink-3 transition-colors hover:bg-hover hover:text-ink">
               <Info className="size-3.5" aria-hidden />
             </button>
           </TooltipTrigger>
@@ -157,7 +162,7 @@ function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelE
       </header>
       <div className="flex flex-1 flex-col gap-3 p-4">
         {events.length === 0 ? (
-          <p className="text-[13px] text-ink-3">Nothing</p>
+          <p className="text-small text-ink-3">Nothing</p>
         ) : capture === "proxy" ? (
           events.map((e) => <ProxyCard key={e.id} event={e} />)
         ) : capture === "hook" ? (
@@ -177,10 +182,10 @@ function CaptureColumn({ capture, events }: { capture: Capture; events: ChannelE
                 <button
                   type="button"
                   onClick={() => go({ view: "feed", event: e.id })}
-                  className="flex w-full flex-col gap-0.5 rounded-lg bg-inset px-3 py-2 text-left transition-colors hover:bg-hover"
+                  className="flex w-full flex-col gap-0.5 rounded-md bg-surface px-3 py-2.5 text-left transition-colors hover:bg-hover"
                 >
-                  <span className="text-[12px] text-ink-3">{EVENT_TYPE_LABEL[e.type]}</span>
-                  <span className="text-[13px] leading-snug text-ink">{summarize(e)}</span>
+                  <span className="text-small text-ink-3">{EVENT_TYPE_LABEL[e.type]}</span>
+                  <span className="text-body leading-snug text-ink">{summarize(e)}</span>
                 </button>
               </li>
             ))}
@@ -211,7 +216,7 @@ function hookStep(e: ChannelEvent): ToolStep {
       label: "File edit",
       chip: e.payload.path,
       mono: true,
-      detailMono: true,
+      detailMono: false,
       detail: [{ text: `+${e.payload.additions} -${e.payload.deletions}`, tone: "add" }],
     };
   if (e.type === "command")
@@ -221,7 +226,7 @@ function hookStep(e: ChannelEvent): ToolStep {
       label: "Command",
       chip: e.payload.command,
       mono: true,
-      detailMono: true,
+      detailMono: false,
       detail: e.payload.exitCode === undefined ? [] : [{ text: `exit ${e.payload.exitCode}` }],
     };
   // The chip already says it all: the row does not open (a cut chip shows its full text itself).
@@ -233,13 +238,13 @@ function ProxyCard({ event }: { event: ChannelEvent }) {
   const p = event.payload;
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11.5px] text-ink-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-small text-ink-3">
         <span>{p.model}</span>
         <span className="tabular-nums">
           {compact(p.inputTokens)} in · {compact(p.outputTokens)} out
         </span>
       </div>
-      <p className="text-[13px] leading-relaxed text-ink">{p.reply}</p>
+      <p className="text-body leading-relaxed text-ink">{p.reply}</p>
       {p.toolCalls.length > 0 && (
         <ToolChips
           animate={false}
@@ -249,11 +254,11 @@ function ProxyCard({ event }: { event: ChannelEvent }) {
         />
       )}
       {event.type === "proxy.raw" && (
-        <pre className="max-h-40 overflow-auto rounded-lg bg-inset p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-ink-2">
+        <pre className="max-h-40 overflow-auto rounded-md bg-surface p-3 font-mono text-small leading-relaxed whitespace-pre-wrap text-ink-2">
           {event.payload.context}
         </pre>
       )}
-      {p.maskedSecrets > 0 && <p className="text-[12px] text-ink-3">{p.maskedSecrets} secret masked</p>}
+      {p.maskedSecrets > 0 && <p className="text-small text-ink-3">{p.maskedSecrets} secret masked</p>}
     </div>
   );
 }

@@ -31,6 +31,8 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { holderName } from "@/lib/format";
 import { go } from "@/lib/router";
+import { PageHead } from "@/components/shell/page-head";
+import { AccountsPanel } from "@/components/domain/usage";
 import { cn } from "@/lib/utils";
 
 /* Left to right the way work flows. Stale Claims are a lane above the board. */
@@ -168,8 +170,22 @@ export function TasksView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 flex-col gap-5 px-[var(--gutter)] pt-6 pb-4 sm:pt-8">
+        <PageHead
+          title="Board"
+          summary={
+            <span className="tabular-nums">
+              {count("open")} open · {count("claimed")} claimed · {count("review")} in review · {count("done")} done
+            </span>
+          }
+          actions={<NewTaskButton />}
+        />
+        <div className="rise [--i:1]">
+          <AccountsPanel />
+        </div>
+      </div>
       {/* Quick filters, as on a Jira board */}
-      <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-2.5 sm:px-6 md:flex-nowrap md:gap-2 md:overflow-x-auto">
+      <div className="rise flex w-full min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-[var(--gutter)] pb-3 [--i:2] md:flex-nowrap md:overflow-x-auto">
         <Toggle on={filters.mine} onClick={() => set("mine")(!filters.mine)} label="Mine">
           <UserRound className="size-3.5" aria-hidden />
         </Toggle>
@@ -189,26 +205,23 @@ export function TasksView() {
         {active > 0 && (
           <button
             type="button"
-            className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] text-ink-3 hover:bg-hover hover:text-ink"
+            className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-2.5 text-small text-ink-3 transition-colors hover:bg-hover hover:text-ink"
             onClick={() => setFilters(NO_FILTERS)}
           >
             <X className="size-3.5" aria-hidden /> Clear
           </button>
         )}
-        <span className="ml-auto shrink-0 pl-2 text-[13px] whitespace-nowrap text-ink-3 tabular-nums max-md:hidden">
-          {shown.length === tasks.length ? tasks.length : `${shown.length} / ${tasks.length}`}
-        </span>
-        <span className="shrink-0 max-md:ml-auto">
-          <NewTaskButton />
+        <span className="ml-auto shrink-0 pl-2 text-small whitespace-nowrap text-ink-3 tabular-nums">
+          {shown.length === tasks.length ? `${tasks.length} Tasks` : `${shown.length} of ${tasks.length} Tasks`}
         </span>
       </div>
       {!can.claims && (
-        <p className="border-b border-line px-4 py-2 text-[13px] text-ink-3 sm:px-6">
+        <p className="px-[var(--gutter)] pb-3 text-small text-ink-3">
           Claims arrive with <IssueLink capability="claims" />.
         </p>
       )}
 
-      <div className="min-h-0 flex-1 overflow-hidden px-3 pt-3 sm:px-6 sm:pt-4">
+      <div className="min-h-0 flex-1 overflow-hidden px-[var(--gutter)]">
         <KanbanProvider<Card>
           columns={columns.map((c) => ({ id: c, name: COLUMN_LABEL[c] }))}
           data={cards}
@@ -217,14 +230,14 @@ export function TasksView() {
           className={cn(
             "min-h-0",
             // A phone shows one column at a time and scrolls sideways between them.
-            mobile ? "snap-x snap-mandatory auto-cols-[calc(100%-40px)] overflow-x-auto pb-3" : "auto-cols-[minmax(220px,1fr)] pb-4",
+            mobile ? "snap-x snap-mandatory auto-cols-[calc(100%-40px)] overflow-x-auto pb-3" : "auto-cols-[minmax(220px,1fr)] pb-6",
           )}
           lane={
             can.claims && stale.length > 0 ? (
               <StaleLane count={stale.length}>
                 <KanbanCards<Card> id="stale" className="flex-row flex-nowrap overflow-x-auto">
                   {(c) => (
-                    <div key={c.id} className="w-[min(300px,78vw)] shrink-0">
+                    <div key={c.id} className="w-[300px] max-w-full shrink-0">
                       {card(c)}
                     </div>
                   )}
@@ -237,11 +250,11 @@ export function TasksView() {
             <KanbanBoard key={column.id} id={column.id} className="min-h-0 snap-start">
               <KanbanHeader className="flex items-center gap-2">
                 <ColumnDot column={column.id as Column} />
-                <h2 className="text-[13px] font-medium text-ink">{column.name}</h2>
-                <span className="text-[13px] text-ink-3 tabular-nums">{count(column.id as Column)}</span>
+                <h2 className="text-body font-medium text-ink">{column.name}</h2>
+                <span className="text-body text-ink-3 tabular-nums">{count(column.id as Column)}</span>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <button type="button" aria-label={`About ${column.name}`} className="ml-auto grid size-6 place-items-center rounded text-ink-4 hover:text-ink-2">
+                    <button type="button" aria-label={`About ${column.name}`} className="ml-auto grid size-8 place-items-center rounded-md text-ink-3 transition-colors hover:bg-hover hover:text-ink">
                       <Info className="size-3.5" aria-hidden />
                     </button>
                   </TooltipTrigger>
@@ -261,7 +274,7 @@ export function TasksView() {
 
 const COLUMN_DOT: Record<Column, string> = {
   stale: "bg-red",
-  open: "border border-ink-4",
+  open: "border-[1.5px] border-ink-4",
   claimed: "bg-accent",
   review: "bg-orange",
   done: "bg-green",
@@ -280,8 +293,8 @@ function Toggle({ on, onClick, label, children }: { on: boolean; onClick: () => 
       onClick={onClick}
       title={label}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors max-md:h-7 max-md:px-2.5",
-        on ? "border-transparent bg-accent-tint text-accent-ink" : "border-line bg-surface text-ink-2 hover:border-line-strong",
+        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-small transition-colors focus-visible:outline-2 focus-visible:outline-accent max-md:px-2.5",
+        on ? "bg-accent-tint font-medium text-accent-ink" : "bg-inset text-ink-2 hover:bg-hover hover:text-ink",
       )}
     >
       {children}
@@ -292,14 +305,14 @@ function Toggle({ on, onClick, label, children }: { on: boolean; onClick: () => 
 
 function StaleLane({ count, children }: { count: number; children: ReactNode }) {
   return (
-    <section aria-label="Stale Claims" className="mb-3 flex flex-col rounded-xl bg-red-tint p-2">
-      <header className="flex items-center gap-2 px-1.5 pt-0.5 pb-2 text-[13px] font-medium text-red">
+    <section aria-label="Stale Claims" className="mb-3 flex flex-col rounded-md bg-red-tint p-2">
+      <header className="flex items-center gap-2 px-1.5 pb-1 text-body font-medium text-red">
         <AlertTriangle className="size-4" aria-hidden />
         Stale Claim
         <span className="tabular-nums opacity-80">{count}</span>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button type="button" aria-label="About Stale Claims" className="grid size-6 place-items-center rounded opacity-70 hover:opacity-100">
+            <button type="button" aria-label="About Stale Claims" className="grid size-8 place-items-center rounded-md opacity-70 transition-opacity hover:opacity-100">
               <Info className="size-3.5" aria-hidden />
             </button>
           </TooltipTrigger>
@@ -312,7 +325,7 @@ function StaleLane({ count, children }: { count: number; children: ReactNode }) 
 }
 
 function Empty({ column, filtered }: { column: Column; filtered: boolean }) {
-  return <p className="px-2 py-8 text-center text-[13px] text-ink-3">{filtered ? "No match" : column === "stale" ? "None" : "Empty"}</p>;
+  return <p className="px-2 py-8 text-center text-small text-ink-3">{filtered ? "Nothing matches" : column === "stale" ? "None" : "Nothing here"}</p>;
 }
 
 /** The "Move to" menu that replaces dragging on a phone. An Open card can also be claimed for one of your Agents. */
@@ -335,14 +348,14 @@ function MoveMenu({
         <button
           type="button"
           aria-label="Move to"
-          className="grid size-8 shrink-0 place-items-center rounded-md text-ink-3 hover:bg-hover"
+          className="grid size-8 shrink-0 place-items-center rounded-md text-ink-3 transition-colors hover:bg-hover hover:text-ink"
           onClick={(e) => e.stopPropagation()}
         >
           <MoveRight className="size-4" aria-hidden />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-w-[calc(100vw-2rem)] min-w-[180px]">
-        <DropdownMenuLabel className="text-[12px] font-normal text-ink-3">Move to</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-small font-normal text-ink-3">Move to</DropdownMenuLabel>
         {options
           .filter((c) => c !== column)
           .map((c) => (
@@ -371,7 +384,7 @@ function ClaimMenu({ me, agents, onPick }: { me: string; agents: Agent[]; onPick
         <button
           type="button"
           aria-label="Claim for"
-          className="grid size-6 shrink-0 place-items-center rounded-md text-ink-3 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-hover hover:text-ink focus-visible:opacity-100 data-[state=open]:bg-hover data-[state=open]:opacity-100"
+          className="grid size-7 shrink-0 place-items-center rounded-md text-ink-3 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-hover hover:text-ink focus-visible:opacity-100 data-[state=open]:bg-hover data-[state=open]:opacity-100"
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -415,8 +428,8 @@ function TaskCard({
   const labels = task.labels.filter((l) => !l.startsWith("status:"));
 
   return (
-    <article className="flex flex-col gap-2.5 text-[13.5px] leading-snug">
-      <p className={cn("line-clamp-3 break-words", done ? "text-ink-3" : "text-ink")}>{task.title}</p>
+    <article className="flex flex-col gap-3 text-body leading-snug">
+      <p className={cn("line-clamp-3 break-words font-medium", done ? "font-normal text-ink-3" : "text-ink")}>{task.title}</p>
 
       {(labels.length > 0 || blockers.length > 0 || blockedAfterClaim.length > 0) && (
         <ul className="flex flex-wrap gap-1" aria-label="Labels and flags">
@@ -437,15 +450,15 @@ function TaskCard({
             </li>
           )}
           {labels.map((l) => (
-            <li key={l} className="rounded-full bg-hover px-2 py-px text-[11.5px] text-ink-3">
+            <li key={l} className="rounded-sm bg-hover px-1.5 text-small leading-6 text-ink-3">
               {l}
             </li>
           ))}
         </ul>
       )}
 
-      <footer className="flex min-h-6 items-center gap-2.5 text-[12px] text-ink-3">
-        <span className={cn("font-mono tabular-nums", done && "line-through")}>#{task.number}</span>
+      <footer className="flex min-h-7 items-center gap-3 text-small text-ink-3">
+        <span className={cn("tabular-nums", done && "line-through")}>#{task.number}</span>
         {steps.total > 0 && <StepMeter done={steps.done} total={steps.total} />}
         {subs.total > 0 && (
           <Tooltip>
@@ -478,21 +491,21 @@ function TaskCard({
               <TooltipTrigger asChild>
                 <span
                   className={cn(
-                    "relative grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-semibold",
-                    task.claim?.stale ? "bg-red-tint text-red" : mine ? "bg-accent-tint text-accent-ink" : "bg-hover-2 text-ink-2",
+                    "relative grid size-7 shrink-0 place-items-center rounded-full text-small font-semibold",
+                    task.claim?.stale ? "bg-red-tint text-red" : mine ? "bg-ink text-page" : "bg-hover-2 text-ink-2",
                   )}
                   aria-label={`Held by ${holderName(h)}`}
                   role="img"
                 >
                   {initials(person ?? "?")}
                   {h.kind === "agent" && (
-                    <span className="absolute -right-0.5 -bottom-0.5 grid size-3 place-items-center rounded-full bg-surface ring-1 ring-line">
-                      <Bot className="size-2" strokeWidth={2.2} />
+                    <span className="absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full bg-hover-2 text-ink-2 ring-2 ring-surface">
+                      <Bot className="size-2.5" strokeWidth={2.2} />
                     </span>
                   )}
                 </span>
               </TooltipTrigger>
-              <TooltipContent className="font-mono">{holderName(h)}</TooltipContent>
+              <TooltipContent>{holderName(h)}</TooltipContent>
             </Tooltip>
           )}
           {menu}
@@ -508,7 +521,7 @@ function Flag({ tone, hint, children }: { tone: "red" | "orange"; hint: string; 
       <TooltipTrigger asChild>
         <span
           className={cn(
-            "inline-flex items-center gap-1 rounded-full px-2 py-px font-mono text-[11.5px]",
+            "inline-flex items-center gap-1 rounded-sm px-1.5 text-small leading-6 font-medium tabular-nums",
             tone === "red" ? "bg-red-tint text-red" : "bg-orange-tint text-orange",
           )}
         >
@@ -527,7 +540,7 @@ function StepMeter({ done, total }: { done: number; total: number }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex items-center gap-1.5 tabular-nums">
-          <span aria-hidden className="h-1 w-8 overflow-hidden rounded-full bg-hover-2">
+          <span aria-hidden className="h-1.5 w-8 overflow-hidden rounded-full bg-hover-2">
             <span className={cn("block h-full rounded-full", done === total ? "bg-green" : "bg-accent")} style={{ width: `${(done / total) * 100}%` }} />
           </span>
           {done}/{total}

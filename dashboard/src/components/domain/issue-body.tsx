@@ -33,7 +33,7 @@ export function IssueBody({ text }: { text: string }) {
     if (heading) {
       flush();
       blocks.push(
-        <h3 key={blocks.length} className="pt-1 text-[12.5px] font-semibold text-ink">
+        <h3 key={blocks.length} className="pt-1 text-small font-semibold text-ink">
           {heading[1]}
         </h3>,
       );
@@ -50,5 +50,5 @@ export function IssueBody({ text }: { text: string }) {
   }
   flush();
   if (!blocks.length) return null;
-  return <div className="flex max-w-2xl flex-col gap-2 text-[13.5px] leading-relaxed text-ink-2">{blocks}</div>;
+  return <div className="flex max-w-[66ch] flex-col gap-2 text-body leading-relaxed text-ink-2">{blocks}</div>;
 }

@@ -20,9 +20,10 @@
  *   the keyboard, for phones where a "Move to" menu replaces dragging.
  * - Keyboard: Space picks up and drops, Escape cancels, arrows move between
  *   columns (sortableKeyboardCoordinates). Enter and a click open the card.
- * - Re-skinned through the token layer: columns are quiet sunken lanes, cards
- *   are soft white tiles with a hairline ring, the drop target gets a dashed
- *   accent outline.
+ * - Re-skinned through the token layer (ADR 0015): columns are one tone step
+ *   from the page, cards are flat surfaces on them with no outline or shadow,
+ *   only the card being dragged floats, and the column under it takes the
+ *   selection tint.
  */
 
 import type {
@@ -105,8 +106,8 @@ export const KanbanBoard = ({ id, children, className }: KanbanBoardProps) => {
   return (
     <div
       className={cn(
-        "relative flex size-full min-h-40 flex-col rounded-xl bg-canvas text-xs",
-        isOver && "outline-2 outline-offset-[-2px] outline-accent outline-dashed",
+        "relative flex size-full min-h-40 flex-col rounded-md bg-canvas text-small transition-colors duration-150",
+        isOver && "bg-accent-tint",
         className,
       )}
       data-over={isOver || undefined}
@@ -162,11 +163,11 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
         }}
         aria-roledescription="Task card"
         ref={setNodeRef}
-        className="rounded-lg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className="rounded-md outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <div
           className={cn(
-            "cursor-grab rounded-lg bg-surface p-3 text-ink shadow-card transition-shadow hover:shadow-raised",
+            "cursor-grab rounded-md bg-surface p-3.5 text-ink transition-colors duration-150 hover:bg-hover",
             isDragging && "pointer-events-none cursor-grabbing opacity-40",
             className,
           )}
@@ -176,7 +177,7 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
       </div>
       {activeCardId === id && (
         <t.In>
-          <div className={cn("cursor-grabbing rounded-lg bg-surface p-3 text-ink shadow-overlay", className)}>
+          <div className={cn("cursor-grabbing rounded-md bg-surface p-3.5 text-ink shadow-float", className)}>
             {children ?? <p className="m-0 text-sm font-medium">{name}</p>}
           </div>
         </t.In>
@@ -219,7 +220,7 @@ export const KanbanCards = <T extends KanbanItemProps = KanbanItemProps>({
 export type KanbanHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 export const KanbanHeader = ({ className, ...props }: KanbanHeaderProps) => (
-  <div className={cn("m-0 px-3 pt-2.5 pb-2 text-[13px] font-medium", className)} {...props} />
+  <div className={cn("m-0 px-3.5 pt-2.5 pb-2 text-small font-medium", className)} {...props} />
 );
 
 export type KanbanMove<T> = { item: T; from: string; to: string };

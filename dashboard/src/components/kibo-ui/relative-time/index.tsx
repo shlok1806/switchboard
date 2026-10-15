@@ -173,7 +173,7 @@ export const RelativeTimeZoneLabel = ({
 }: RelativeTimeZoneLabelProps) => (
   <div
     className={cn(
-      "flex h-4 items-center justify-center rounded-xs bg-secondary px-1.5 font-mono",
+      "flex h-5 items-center justify-center rounded-sm bg-hover px-1.5 font-medium",
       className
     )}
     {...props}

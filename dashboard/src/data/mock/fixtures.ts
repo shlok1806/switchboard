@@ -171,6 +171,14 @@ export const agents: Agent[] = [
     canReceiveInterrupts: true,
     lastSeenAt: ago(2),
     startedAt: ago(60 * 31),
+    // A permission prompt waiting at dev's terminal (ADR 0013), so the Dashboard shows one.
+    approval: {
+      id: "prompt-1",
+      tool: "Bash",
+      detail: "npm test -- web/src/api/retry.test.ts",
+      reason: "Run the new retry tests",
+      openedAt: ago(40),
+    },
   },
   {
     id: A.shlokCodexOld,

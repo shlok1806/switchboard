@@ -6,16 +6,16 @@ a header comment where it was changed. No GPL or AGPL code is included.
 
 ## Design
 
-The look is Switchboard's own: a calm neutral token layer in
-`src/styles/tokens.css` (OKLCH, light and dark) that every vendored component
-reads. Vendored components are re-skinned through those tokens only.
+The look is Switchboard's own: the design system in `src/styles/tokens.css`
+(ADR 0015, light and dark) that every vendored component reads. Vendored
+components are re-skinned through those tokens only.
 
 ## Source code copied into this repo
 
 | Project | Licence | Copyright | Files |
 | --- | --- | --- | --- |
-| Kibo UI (github.com/shadcnblocks/kibo, registry item `kanban` at kibo-ui.com/r/kanban.json) | MIT | (c) 2023 - present shadcnblocks | `src/components/kibo-ui/kanban` (the Tasks board), `status`, `relative-time`, `snippet`, `banner` |
-| Beautiful UI (github.com/slev12397/beautiful-ui, registry beautifului.dev) | MIT | (c) 2026 Shane Levine | `src/app/beautifui/foundation.css`, `src/components/atoms/*` (Button, Chip, SegmentedControl, StatusPill), `src/components/primitives/*` (ChatComposer, CodeBlock, LoadingState, ToolChips) |
+| Kibo UI (github.com/shadcnblocks/kibo, registry item `kanban` at kibo-ui.com/r/kanban.json) | MIT | (c) 2023 - present shadcnblocks | `src/components/kibo-ui/kanban` (the Tasks board), `relative-time`, `snippet`, `banner` |
+| Beautiful UI (github.com/slev12397/beautiful-ui, registry beautifului.dev) | MIT | (c) 2026 Shane Levine | `src/components/atoms/*` (Button, SegmentedControl, StatusPill), `src/components/primitives/*` (ChatComposer, CodeBlock, LoadingState, ToolChips) |
 | shadcn/ui (github.com/shadcn-ui/ui) | MIT | (c) 2023 shadcn | `src/components/ui/*` except the prompt-kit files below, `src/hooks/use-mobile.ts` |
 | prompt-kit (github.com/ibelick/prompt-kit) | MIT | (c) 2025 Julien Thibeaut | `src/components/ui/tool.tsx`, `reasoning.tsx` |
 
@@ -31,11 +31,11 @@ Every file above is re-skinned and says so in a header comment where it changed.
 | cmdk | MIT | (c) 2022 Paco Coursey |
 | Sonner | MIT | (c) 2023 Emil Kowalski |
 | react-resizable-panels | MIT | (c) 2018 Brian Vaughn |
-| shadow-plugin | MIT | (c) 2026 Florian Kiem |
 | tw-animate-css | MIT | (c) 2025 Wombosvideo |
 | class-variance-authority, clsx, tailwind-merge | Apache-2.0 / MIT / MIT | their authors |
 | Tailwind CSS, Vite, React | MIT | their authors |
-| Geist and Geist Mono (`@fontsource-variable/geist`, `@fontsource-variable/geist-mono`) | SIL OFL 1.1 | (c) 2023 Vercel |
+| Albert Sans (`@fontsource-variable/albert-sans`) | SIL OFL 1.1 | (c) 2021 The Albert Sans Project Authors |
+| Geist Mono (`@fontsource-variable/geist-mono`) | SIL OFL 1.1 | (c) 2023 Vercel |
 | Lucide (`lucide-react`) | ISC | (c) Lucide Contributors 2022; portions (c) 2013-2022 Cole Bemis (Feather, MIT) |
 | NumberFlow (`@number-flow/react`) | MIT | (c) 2024 Maxwell Barvian |
 
