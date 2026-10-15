@@ -1,6 +1,6 @@
 import { PendingApproval } from "@/components/domain/approval";
 import { AgentBrief, ContextWindow } from "@/components/domain/context";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import type { Agent, AgentId, ChannelEvent, ProxyMode } from "@shared/index";
 import { MAX_NICKNAME_LENGTH } from "@shared/index";
@@ -10,6 +10,8 @@ import { IssueLink } from "@/components/domain/pending";
 import { SegmentedControl } from "@/components/atoms/SegmentedControl";
 import { RelativeTime, RelativeTimeZone, RelativeTimeZoneDate, RelativeTimeZoneDisplay, RelativeTimeZoneLabel } from "@/components/kibo-ui/relative-time";
 import { EventRow } from "@/components/domain/event";
+import { OlderRow } from "@/components/domain/older";
+import { useScopedHistory } from "@/data/history";
 import { RawBadge, StalePill, TaskLink } from "@/components/domain/pills";
 import { Composer } from "@/components/domain/composer";
 import { CliSwatch, HostLabel, PresenceStatus, useClaimsOf } from "./AgentsView";
@@ -36,29 +38,37 @@ function sameSender(prev: ChannelEvent, e: ChannelEvent) {
 export function AgentDetail({ id }: { id: string }) {
   const store = useStore();
   const me = useMe();
-  const { events, verdictsByEvent, snapshot, fresh } = useChannel();
+  const { verdictsByEvent, snapshot, fresh, olderBefore } = useChannel();
+  // Verdicts come with the Events they judge, so they too are only the loaded ones'.
+  const verdictsPartial = olderBefore !== undefined;
   const { agentById, taskByNumber } = useIndex();
   const claimsOf = useClaimsOf();
   const can = useCapabilities();
   const agent = agentById.get(id as AgentId);
   const [capture, setCapture] = useState<(typeof CAPTURES)[number]>("All");
 
+  const aboutAgent = useCallback(
+    (e: ChannelEvent) =>
+      (e.actor.kind === "agent" && e.actor.agentId === id) ||
+      (e.type === "directive" && e.payload.to === id) ||
+      // Renamed by a Person, or its name taken while it was Gone (ADR 0009).
+      (e.type === "agent.rename" && e.payload.agent === id) ||
+      // Stopped by its Person, on the Host that runs it (ADR 0015).
+      (e.type === "agent.stop" && e.payload.agent === id),
+    [id],
+  );
+  const scoped = useScopedHistory({ agent: id as AgentId }, aboutAgent);
   const history = useMemo(
     () =>
-      events
-        .filter(
-          (e) =>
-            ((e.actor.kind === "agent" && e.actor.agentId === id) ||
-              (e.type === "directive" && e.payload.to === id) ||
-              // Renamed by a Person, or its name taken while it was Gone (ADR 0009).
-              (e.type === "agent.rename" && e.payload.agent === id) ||
-              // Stopped by its Person, on the Host that runs it (ADR 0015).
-              (e.type === "agent.stop" && e.payload.agent === id)) &&
-            (capture === "All" || (e.capture && CAPTURE_LABEL[e.capture] === capture)),
-        )
+      scoped.events
+        .filter((e) => capture === "All" || (e.capture && CAPTURE_LABEL[e.capture] === capture))
         .slice()
         .reverse(),
-    [events, id, capture],
+    [scoped.events, capture],
+  );
+  const own = useMemo(
+    () => scoped.events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === id).length,
+    [scoped.events, id],
   );
   const heard = useMemo(() => {
     let i = 0;
@@ -141,9 +151,13 @@ export function AgentDetail({ id }: { id: string }) {
 
           <dl className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
             {[
-              { k: "Events", v: <NumberFlow value={events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === agent.id).length} /> },
-              { k: "Interrupts", v: can.verdicts ? <NumberFlow value={heard.i} /> : <span className="text-ink-3">-</span> },
-              { k: "Queued", v: can.verdicts ? <NumberFlow value={heard.q} /> : <span className="text-ink-3">-</span> },
+              {
+                k: "Events",
+                // Only the Events loaded so far: counting them all would read the whole history.
+                v: <LoadedCount value={own} partial={scoped.more} />,
+              },
+              { k: "Interrupts", v: can.verdicts ? <LoadedCount value={heard.i} partial={verdictsPartial} /> : <span className="text-ink-3">-</span> },
+              { k: "Queued", v: can.verdicts ? <LoadedCount value={heard.q} partial={verdictsPartial} /> : <span className="text-ink-3">-</span> },
               { k: "Started", v: ago(agent.startedAt) },
             ].map((s) => (
               <div key={s.k} className="flex flex-col-reverse gap-1">
@@ -160,7 +174,7 @@ export function AgentDetail({ id }: { id: string }) {
             </div>
             <ul className="-mx-3 flex flex-col">
               {history.length === 0 ? (
-                <li className="px-3 py-6 text-body text-ink-3">Nothing yet</li>
+                <li className="px-3 py-6 text-body text-ink-3">{scoped.loading ? "Loading" : "Nothing yet"}</li>
               ) : (
                 history.map((e, i) => (
                   <EventRow
@@ -176,6 +190,7 @@ export function AgentDetail({ id }: { id: string }) {
                   />
                 ))
               )}
+              {scoped.more && <OlderRow loading={scoped.loading} onClick={scoped.loadOlder} className="px-3" />}
             </ul>
           </section>
         </div>
@@ -327,5 +342,18 @@ function RenameSection({ agent }: { agent: Agent }) {
         </button>
       )}
     </Section>
+  );
+}
+
+/**
+ * A count over the Events loaded so far, with a "+" when the Channel has older ones:
+ * counting them all would read the whole history.
+ */
+function LoadedCount({ value, partial }: { value: number; partial: boolean }) {
+  return (
+    <span title={partial ? "Counted over the latest Events; there are older ones" : undefined}>
+      <NumberFlow value={value} />
+      {partial && <span className="text-ink-3">+</span>}
+    </span>
   );
 }

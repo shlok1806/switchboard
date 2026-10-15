@@ -1,7 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, X } from "lucide-react";
-import type { AgentId, ChannelEvent } from "@shared/index";
+import type { ChannelEvent } from "@shared/index";
 import { useCapabilities, useChannel, useIndex, useStore } from "@/data/store";
+import { useEventDetail } from "@/data/history";
 import { EventDetail, EventRow } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
 import { Composer } from "@/components/domain/composer";
@@ -79,7 +80,7 @@ export function FeedView({ selected }: { selected?: string }) {
     // On a phone the list remounts when the Person comes back from an Event.
   }, [filters, mobile, mobile && !!selected]);
 
-  const selectedEvent = selected ? events.find((e) => e.id === selected) : undefined;
+  const { event: selectedEvent, woken, loaded: selectedLoaded } = useEventDetail(selected);
   const set = (k: keyof FeedFilters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
   const n = activeCount(filters);
 
@@ -227,11 +228,12 @@ export function FeedView({ selected }: { selected?: string }) {
     <EventDetail
       event={selectedEvent}
       verdicts={verdictsByEvent.get(selectedEvent.id) ?? []}
-      woken={wokenFor(events, selectedEvent.id)}
+      woken={woken}
       agentById={agentById}
       taskByNumber={taskByNumber}
       threshold={threshold}
       verdictsLive={can.verdicts}
+      verdictsLoaded={selectedLoaded}
       onClose={mobile ? undefined : () => go({ view: "feed" })}
     />
   ) : null;
@@ -299,11 +301,3 @@ export function FeedView({ selected }: { selected?: string }) {
   );
 }
 
-/** The Agents a Wake delivered Event `id` to: their Queue on it did not wait for their next turn. */
-function wokenFor(events: readonly ChannelEvent[], id: string): Set<AgentId> {
-  const woken = new Set<AgentId>();
-  for (const e of events) {
-    if (e.type === "wake" && e.actor.kind === "agent" && e.payload.events.includes(id)) woken.add(e.actor.agentId);
-  }
-  return woken;
-}

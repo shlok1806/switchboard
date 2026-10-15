@@ -16,7 +16,7 @@ import type {
   TaskResponse,
   ToolCallResponse,
 } from "../../shared/src/index";
-import { CLAIMED_LABEL, claimPath, releasePath, stepPath } from "../../shared/src/index";
+import { CLAIMED_LABEL, claimPath, MAX_EVENT_IDS, nicknamePath, releasePath, stepPath } from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
 import { STATUS_MARKER } from "../src/status-comment";
 import { type As, bearer, channelStub, forgetTokens, remember, url } from "./client";
@@ -391,5 +391,57 @@ describe("reading the Channel", () => {
     expect(latest.map((e) => (e.type === "update" ? e.payload.text : e.type))).toEqual(["two", "three"]);
     expect(cursor).toBe(latest.at(-1)?.seq);
     expect((await call("/api/events?tail=0", { person: "shlok" })).status).toBe(400);
+  });
+
+  /** What `query` returns, each Event as its Update text or else its type. */
+  async function read(query: string): Promise<string[]> {
+    const response = await call(`/api/events?${query}`, { person: "shlok" });
+    expect(response.status).toBe(200);
+    const { events: page } = await response.json<HistoryResponse>();
+    return page.map((e) => (e.type === "update" ? e.payload.text : e.type));
+  }
+
+  it("returns an Agent's latest Events with ?agent=: its own, the Directives to it and its renames", async () => {
+    const mine = await agent("shlok");
+    const other = await agent("shlok");
+    await post("/api/updates", mine, { text: "mine 1" });
+    await post("/api/updates", other, { text: "other" });
+    await post("/api/directives", { person: "shlok" }, { to: mine.agent, text: "Rebase first." });
+    await post(nicknamePath(mine.agent), { person: "shlok" }, { nickname: "scout" });
+    await post(nicknamePath(other.agent), { person: "shlok" }, { nickname: "other" });
+    await post("/api/updates", mine, { text: "mine 2" });
+
+    const all = await read(`tail=100&agent=${encodeURIComponent(mine.agent)}`);
+    expect(all.filter((t) => t !== "session.start" && t !== "presence")).toEqual([
+      "mine 1",
+      "directive",
+      "directive.delivery",
+      "agent.rename",
+      "mine 2",
+    ]);
+    const { events: latest } = await (
+      await call(`/api/events?tail=2&agent=${encodeURIComponent(mine.agent)}`, { person: "shlok" })
+    ).json<HistoryResponse>();
+    expect(latest.map((e) => e.type)).toEqual(["agent.rename", "update"]);
+    const older = await read(`tail=1&agent=${encodeURIComponent(mine.agent)}&before=${latest[0]?.seq}`);
+    expect(older).toEqual(["directive.delivery"]);
+  });
+
+  it("returns a Task's latest Events with ?task=", async () => {
+    await post("/api/updates", { person: "shlok" }, { text: "on 9", task: 9 });
+    await post("/api/updates", { person: "shlok" }, { text: "on 8", task: 8 });
+    await post("/api/updates", { person: "shlok" }, { text: "on 9 again", task: 9 });
+    expect(await read("tail=100&task=9")).toEqual(["on 9", "on 9 again"]);
+    expect(await read("tail=1&task=9")).toEqual(["on 9 again"]);
+    expect((await call("/api/events?tail=1&task=9&agent=a", { person: "shlok" })).status).toBe(400);
+  });
+
+  it("returns Events by ID with ?ids=, leaving out IDs it does not know", async () => {
+    for (const text of ["one", "two", "three"]) await post("/api/updates", { person: "shlok" }, { text });
+    const { events: all } = await (await call("/api/events?tail=3", { person: "shlok" })).json<HistoryResponse>();
+    const [one, , three] = all;
+    expect(await read(`ids=${three?.id},nope,${one?.id}`)).toEqual(["one", "three"]);
+    const many = Array.from({ length: MAX_EVENT_IDS + 1 }, (_, i) => `e${i}`).join(",");
+    expect((await call(`/api/events?ids=${many}`, { person: "shlok" })).status).toBe(400);
   });
 });

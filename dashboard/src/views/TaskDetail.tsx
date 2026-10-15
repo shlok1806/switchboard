@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { CircleCheck, Circle, ExternalLink, GitBranch, GitPullRequest } from "lucide-react";
 import type { ChannelEvent, EventType } from "@shared/index";
 import { useCapabilities, useChannel, useIndex } from "@/data/store";
@@ -17,6 +17,8 @@ import { COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from 
 import { ClaimAction } from "@/components/domain/claim";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { EventBody } from "@/components/domain/event";
+import { OlderRow } from "@/components/domain/older";
+import { useScopedHistory } from "@/data/history";
 import { VerdictTable } from "@/components/domain/verdict";
 import { Composer } from "@/components/domain/composer";
 import { EVENT_TYPE_LABEL, ago, clock, summarize } from "@/lib/format";
@@ -62,20 +64,22 @@ const DOT: Partial<Record<EventType, string>> = {
 const COLUMN_TONE = { stale: "red", open: "neutral", claimed: "accent", review: "orange", done: "green" } as const;
 
 export function TaskDetail({ number }: { number: number }) {
-  const { events, snapshot } = useChannel();
+  const { snapshot } = useChannel();
   const can = useCapabilities();
   const { agentById, taskByNumber } = useIndex();
   const [scope, setScope] = useState<(typeof SCOPES)[number]>("Work");
   const task = taskByNumber.get(number);
   const threshold = snapshot?.relay.interruptThreshold ?? 0.6;
 
+  const onTask = useCallback((e: ChannelEvent) => e.task === number, [number]);
+  const scoped = useScopedHistory({ task: number }, onTask);
   const timeline = useMemo(
     () =>
-      events
-        .filter((e) => e.task === number && (scope === "All" || WORK.includes(e.type)))
+      scoped.events
+        .filter((e) => scope === "All" || WORK.includes(e.type))
         .slice()
         .reverse(),
-    [events, number, scope],
+    [scoped.events, scope],
   );
 
   if (!task) {
@@ -176,14 +180,16 @@ export function TaskDetail({ number }: { number: number }) {
               <h2 className="text-lead font-semibold text-ink">Timeline</h2>
               <SegmentedControl options={SCOPES} value={scope} onChange={setScope} />
             </div>
-            {timeline.length === 0 ? (
-              <p className="text-body text-ink-3">Nothing yet</p>
+            {timeline.length === 0 && !scoped.more ? (
+              <p className="text-body text-ink-3">{scoped.loading ? "Loading" : "Nothing yet"}</p>
             ) : (
               <ol className="relative flex flex-col">
                 <span aria-hidden className="absolute top-3 bottom-3 left-[3px] w-[3px] rounded-full bg-hover-2" />
                 {timeline.map((e) => (
                   <TimelineItem key={e.id} event={e} threshold={threshold} />
                 ))}
+                {/* At the line's end, under the items' text (the dot's 9px and the gap's 12px). */}
+                {scoped.more && <OlderRow loading={scoped.loading} onClick={scoped.loadOlder} className="pl-[21px]" />}
               </ol>
             )}
           </section>

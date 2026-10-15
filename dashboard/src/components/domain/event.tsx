@@ -10,7 +10,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { FileDiff } from "./diff";
 import { VerdictTable } from "./verdict";
 import { IssueLink } from "./pending";
-import { useChannel } from "@/data/store";
+import { useMemo } from "react";
+import { useEventsById } from "@/data/history";
 import { href } from "@/lib/router";
 
 const TONE: Partial<Record<ChannelEvent["type"], string>> = {
@@ -152,9 +153,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /** A Wake: why the Agent started a turn, and the Events and Directives it was woken with, each a link. */
 function WakeBody({ event }: { event: Extract<ChannelEvent, { type: "wake" }> }) {
-  const { events } = useChannel();
-  const byId = new Map(events.map((e) => [e.id, e]));
-  const delivered = [...event.payload.events, ...event.payload.directives];
+  const delivered = useMemo(
+    () => [...event.payload.events, ...event.payload.directives],
+    [event.payload.events, event.payload.directives],
+  );
+  // They can be older than the Events the Dashboard has loaded.
+  const byId = useEventsById(delivered);
   return (
     <div className="flex flex-col gap-2.5">
       <p className="max-w-[68ch] text-body leading-relaxed text-ink">
@@ -348,6 +352,7 @@ export function EventDetail({
   taskByNumber,
   threshold,
   verdictsLive = true,
+  verdictsLoaded = true,
   woken,
   onClose,
 }: {
@@ -357,6 +362,8 @@ export function EventDetail({
   taskByNumber: Map<number, Task>;
   threshold: number;
   verdictsLive?: boolean;
+  /** False for an Event older than those loaded: its Verdicts are not loaded with it. */
+  verdictsLoaded?: boolean;
   /** The Agents whose Queue Verdict on this Event a Wake delivered. */
   woken?: ReadonlySet<AgentId>;
   /** Shown as a close button in the header, where the Event opens beside the feed. */
@@ -415,6 +422,10 @@ export function EventDetail({
           </p>
         ) : unrelayed !== null ? (
           <p className="rounded-md bg-hover px-3.5 py-3 text-small text-ink-3">{unrelayed}</p>
+        ) : verdictsLive && !verdictsLoaded ? (
+          <p className="rounded-md bg-hover px-3.5 py-3 text-small text-ink-3">
+            This Event is older than the ones loaded, so its Verdicts are not shown.
+          </p>
         ) : verdictsLive ? (
           <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} woken={woken} />
         ) : (

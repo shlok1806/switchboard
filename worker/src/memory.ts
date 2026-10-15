@@ -9,6 +9,7 @@
 
 import type { ChannelEvent, MemoryNote, MemoryQuery } from "../../shared/src/index";
 import { MAX_MEMORY_LIMIT, noteFromEvent } from "../../shared/src/index";
+import { utcDay } from "./channel";
 
 export const MEMORY_SCHEMA = `
   CREATE TABLE IF NOT EXISTS memory_notes (
@@ -36,10 +37,6 @@ const MAX_SEARCH_TERMS = 12;
 
 export type NoteResult = { ok: true; note: MemoryNote } | { ok: false; status: 429; reason: string };
 export type MemoryReadResult = { ok: true; notes: MemoryNote[] } | { ok: false; status: 400; reason: string };
-
-export function utcDay(at = new Date()): string {
-  return at.toISOString().slice(0, 10);
-}
 
 /**
  * A search as FTS5 reads it: each word of `q` quoted, so nothing in it is syntax,
