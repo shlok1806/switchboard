@@ -18,7 +18,22 @@ import { useNow } from "./usage";
  * (ADR 0014), never approve it. The reason comes from the model, so it is shown as the
  * Agent's, not as a fact.
  */
-export function PendingApproval({ agent, word = false, className }: { agent: Agent; /** Name the state before the line, as the Now queue does. */ word?: boolean; className?: string }) {
+export function PendingApproval({
+  agent,
+  word = false,
+  heading: H = "h3",
+  onOpenTerminal,
+  className,
+}: {
+  agent: Agent;
+  /** Name the state before the line, as the Now queue does. */
+  word?: boolean;
+  /** The heading level, so the page's outline never skips one. */
+  heading?: "h2" | "h3";
+  /** On the Agent's own page the terminal is below the Ask: go to it rather than link to this page. */
+  onOpenTerminal?: () => void;
+  className?: string;
+}) {
   const now = useNow();
   const me = useMe();
   const { snapshot, tasks } = useChannel();
@@ -39,14 +54,14 @@ export function PendingApproval({ agent, word = false, className }: { agent: Age
   return (
     <section aria-label={`${agent.nickname ?? agent.id} wants to run ${a.tool}`} className={cn("flex min-w-0 flex-col gap-2", className)}>
       <div className="flex min-w-0 items-baseline gap-2">
-        <h3 className="min-w-0 flex-1 text-row font-semibold [overflow-wrap:anywhere] text-ink">
+        <H className="min-w-0 flex-1 text-row font-semibold [overflow-wrap:anywhere] text-ink">
           {word ? (
             <State state={mine ? "needs" : "needs-other"} person={agent.person} className="mr-2 align-[-1px]" />
           ) : (
             <Glyph state={mine ? "needs" : "needs-other"} className="mr-2 align-[-1px]" />
           )}
           {agent.nickname ?? agent.id} wants to run <code>{a.tool}</code>
-        </h3>
+        </H>
         <span className="shrink-0 text-small text-ink-3 tabular-nums">{elapsed(a.openedAt, now)}</span>
       </div>
       {a.detail && (
@@ -69,9 +84,15 @@ export function PendingApproval({ agent, word = false, className }: { agent: Age
           </p>
           <div data-acts className="flex flex-wrap items-center gap-2 pt-1">
             {canDeny && <DenyAction agent={agent} id={a.id} tool={a.tool} />}
-            <a href={href({ view: "agent", id: agent.id })} onClick={(e) => e.stopPropagation()} className={buttonVariants({ variant: mine ? "ghost" : "secondary" })}>
-              {mine ? "Open the terminal" : "Watch"}
-            </a>
+            {onOpenTerminal ? (
+              <button type="button" onClick={onOpenTerminal} className={buttonVariants({ variant: mine ? "ghost" : "secondary" })}>
+                {mine ? "Open the terminal" : "Watch"}
+              </button>
+            ) : (
+              <a href={href({ view: "agent", id: agent.id })} onClick={(e) => e.stopPropagation()} className={buttonVariants({ variant: mine ? "ghost" : "secondary" })}>
+                {mine ? "Open the terminal" : "Watch"}
+              </a>
+            )}
           </div>
         </>
       )}
