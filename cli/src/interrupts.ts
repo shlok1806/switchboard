@@ -92,8 +92,14 @@ type Key =
   | { kind: "move" }
   /** Puts text on the line the wrapper cannot see: a yank, recalled history, anything unknown. */
   | { kind: "unknown" }
-  /** Changes nothing the wrapper needs to know: focus reports, modifier keys, forward deletes. */
-  | { kind: "none" };
+  /** Changes nothing the wrapper needs to know: modifier keys, forward deletes, mouse moves. */
+  | { kind: "none" }
+  /**
+   * Not a key: the terminal answering a query the CLI made (its name and version, the
+   * modes it supports, its size, a colour, an image it drew) or reporting focus. It
+   * comes in on the same stdin as the Person's keys.
+   */
+  | { kind: "reply" };
 
 const TEXT_KEYS = new Map<string, Key>([
   ["\r", { kind: "enter" }],
@@ -128,6 +134,23 @@ const ALT_KEYS = new Map<string, Key>([
   ["y", { kind: "unknown" }],
   ["d", { kind: "none" }],
 ]);
+
+/**
+ * What starts a control string after Escape: DCS (P), OSC (]), SOS (X), PM (^) and APC (_).
+ * Terminals answer queries with them, such as WezTerm's name and version (`ESC P >| ...`),
+ * a colour (`ESC ] 11 ; ...`) or the kitty graphics protocol (`ESC _ G ...`). A key never
+ * sends one: these bytes alone are Alt+P, Alt+], and so on.
+ */
+const STRING_INTROS = new Set(["P", "]", "X", "^", "_"]);
+
+/** Where the control string at the start of `text` ends (after ST or BEL), or -1 when it does not end in `text`. */
+function stringEnd(text: string): number {
+  for (let i = 2; i < text.length; i++) {
+    if (text[i] === "\x07" || text[i] === "\x9c") return i + 1;
+    if (text[i] === "\x1b" && text[i + 1] === "\\") return i + 2;
+  }
+  return -1;
+}
 
 /** Kitty keyboard protocol modifier bits, after subtracting 1 from the field. */
 const SHIFT = 1;
@@ -196,7 +219,15 @@ export class InputLine {
   }
 
   get empty(): boolean {
-    return this.text === "" && !this.unknown && !this.pasting;
+    return this.text === "" && !this.unknown && !this.pasting && !this.heldString;
+  }
+
+  /**
+   * A control string held for its end, which may instead be a key such as Alt+P that
+   * the wrapper cannot follow. Not known to be empty until the next read says which.
+   */
+  private get heldString(): boolean {
+    return this.partial.startsWith("\x1b") && STRING_INTROS.has(this.partial[1] ?? "");
   }
 
   /** Whether the CLI is at its prompt with no turn running, as far as its hooks and the keys show. */
@@ -215,19 +246,25 @@ export class InputLine {
   }
 
   /**
-   * Reads keystrokes the Person typed. Returns whether they included Enter or Escape,
-   * and whether an Enter certainly submitted a prompt the Person wrote.
+   * Reads keystrokes the Person typed, and the terminal's replies that come in with
+   * them. Returns whether they held a key at all (not only replies), whether they
+   * included Enter or Escape, and whether an Enter certainly submitted a prompt the
+   * Person wrote.
    */
-  keys(data: string): { enter: boolean; cancel: boolean; submitted: boolean } {
+  keys(data: string): { typed: boolean; enter: boolean; cancel: boolean; submitted: boolean } {
+    let typed = false;
     let enter = false;
     let cancel = false;
     let submitted = false;
     for (const key of this.read(data)) {
+      if (key.kind !== "reply") typed = true;
       if (key.kind === "enter") enter = true;
       if (key.kind === "escape") cancel = true;
       if (this.press(key)) submitted = true;
     }
-    return { enter, cancel, submitted };
+    // Bytes held for the next read: a key split across reads counts already, a control string waiting for its end does not.
+    if (this.partial !== "" && !this.heldString) typed = true;
+    return { typed, enter, cancel, submitted };
   }
 
   private reset(): void {
@@ -238,6 +275,8 @@ export class InputLine {
 
   /** What one key does to the line. True when it submitted a prompt with text the wrapper saw typed. */
   private press(key: Key): boolean {
+    // A reply comes from the terminal, not the Person: it changes nothing, not even a double Escape in progress.
+    if (key.kind === "reply") return false;
     const escapeAt = this.escapeAt;
     this.escapeAt = null;
     switch (key.kind) {
@@ -307,6 +346,8 @@ export class InputLine {
   /** The keys in `data`, keeping a sequence split across reads for the next one. */
   private *read(data: string): Generator<Key> {
     const text = this.partial + data;
+    // Bytes held over from the last read, which a control string may have started in.
+    const carried = this.partial.length;
     this.partial = "";
     let i = 0;
     while (i < text.length) {
@@ -337,6 +378,21 @@ export class InputLine {
         i += 1;
         continue;
       }
+      if (STRING_INTROS.has(rest[1] ?? "")) {
+        const end = stringEnd(rest);
+        if (end !== -1) {
+          yield { kind: "reply" };
+          i += end;
+          continue;
+        }
+        // Unended at the end of this read: wait for the rest of a reply, once. Still
+        // unended after another read, it was a key (Alt+P, Alt+]...), and what follows
+        // is read as keys.
+        if (i >= carried) {
+          this.partial = rest;
+          return;
+        }
+      }
       if (rest[1] !== "[" && rest[1] !== "O") {
         yield ALT_KEYS.get(rest[1] ?? "") ?? { kind: "unknown" };
         i += 2;
@@ -354,23 +410,34 @@ export class InputLine {
         this.pasting = true;
         continue;
       }
-      const key = this.sequence(csi[1] ?? "", csi[2] ?? "", csi[4] ?? "");
+      const key = this.sequence(csi[1] ?? "", csi[2] ?? "", csi[3] ?? "", csi[4] ?? "");
       if (key !== null) yield key;
     }
   }
 
   /**
-   * One escape sequence: cursor and history keys, and keys sent as
-   * `CSI <code>[:<alternates>] ; <mods>[:<event>] u` (the kitty keyboard protocol).
-   * A key release is no key press, so it gives null.
+   * One escape sequence: cursor and history keys, keys sent as
+   * `CSI <code>[:<alternates>] ; <mods>[:<event>] u` (the kitty keyboard protocol),
+   * mouse reports, and the terminal's replies to queries. A key release is no key
+   * press, so it gives null.
    */
-  private sequence(intro: string, params: string, final: string): Key | null {
+  private sequence(intro: string, params: string, intermediates: string, final: string): Key | null {
+    if (intro === "[") {
+      // Replies: device attributes (`CSI ? 65;4 c`, `CSI > 1;10;0 c`), a mode's setting
+      // (`CSI ? 2026;2 $ y`), the kitty keyboard flags (`CSI ? 1 u`), the window's size
+      // (`CSI 4;600;800 t`), status and cursor position (`CSI 0 n`, `CSI 12;40 R`),
+      // and focus (`CSI I`, `CSI O`). Keys send none of these: F3's modified form,
+      // `CSI 1;2 R`, puts no text on the line either.
+      if (params.startsWith("?") || params.startsWith(">")) return { kind: "reply" };
+      if (intermediates === "$" && final === "y") return { kind: "reply" };
+      if (final === "t" || final === "n" || final === "R") return { kind: "reply" };
+      if (params === "" && (final === "I" || final === "O")) return { kind: "reply" };
+      if (params.startsWith("<") && (final === "M" || final === "m")) return mouse(params.slice(1), final);
+    }
     // Up and Down recall history (or move between the lines of a long prompt).
     if (final === "A" || final === "B") return { kind: "unknown" };
     // Left, Right, End and Home.
     if (final === "C" || final === "D" || final === "F" || final === "H") return { kind: "move" };
-    // Focus reports.
-    if (intro === "[" && params === "" && (final === "I" || final === "O")) return { kind: "none" };
     if (final === "~") {
       const code = params.split(";")[0];
       if (code === "1" || code === "4" || code === "7" || code === "8") return { kind: "move" };
@@ -404,6 +471,20 @@ export class InputLine {
     if (printable && !ctrl && !alt && !command) return { kind: "text", text: String.fromCodePoint(code) };
     return { kind: "unknown" };
   }
+}
+
+/**
+ * An SGR mouse report, `CSI < <button>;<column>;<row> M` (press or move) or `m`
+ * (release). A click may put the prompt's cursor anywhere, so deletes are no longer
+ * followed. A wheel may scroll, or recall history the way Up and Down do. Moving the
+ * mouse and letting go change nothing.
+ */
+function mouse(params: string, final: string): Key {
+  const button = Number(params.split(";")[0]);
+  if (!Number.isInteger(button)) return { kind: "unknown" };
+  if (final === "m" || (button & 32) !== 0) return { kind: "none" };
+  if ((button & 64) !== 0) return { kind: "unknown" };
+  return { kind: "move" };
 }
 
 /** How many characters at the end of `text` could start `marker`. */
@@ -453,10 +534,11 @@ export class InterruptTyper {
 
   /** The Person typed `data`: passes it to the agent CLI, or holds it while an Interrupt is being typed. */
   personTyped(data: string): void {
-    this.lastKey = this.now();
     // An open dialog takes the keys: Enter there answers it, it submits no prompt.
     const dialog = this.dialog !== null;
-    const { enter, cancel, submitted } = this.line.keys(data);
+    const { typed, enter, cancel, submitted } = this.line.keys(data);
+    // The terminal's replies to the CLI's queries come in on the same stdin: they are not the Person typing.
+    if (typed) this.lastKey = this.now();
     // Enter or Escape answers or cancels an open dialog.
     if (enter || cancel) this.dialog = null;
     if (this.held) this.held.push(data);
