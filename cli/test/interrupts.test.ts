@@ -731,3 +731,23 @@ describe("InterruptTyper's open dialog, which holds an attacher back (ADR 0021)"
     expect(t.dialogOpen).toBeNull();
   });
 });
+
+describe("InterruptTyper holding keys back while it types", () => {
+  it("lets held Dashboard keys go only if their key still holds the keyboard once it is done", async () => {
+    const written: string[] = [];
+    const t = new InterruptTyper({ write: (d) => written.push(d), quietMs: 0, waitMs: 300, log: () => {} });
+    t.hook({ hook_event_name: "SessionStart", source: "startup" });
+    t.output("\x1b[?2004h");
+    const typing = t.type("[Switchboard] Interrupt");
+    while (!written.some((d) => d.includes("Interrupt"))) await new Promise((resolve) => setTimeout(resolve, 5));
+    // While it types: Maya types from the Dashboard, then the owner takes the keyboard back and types.
+    let mayaHolds = true;
+    t.personTyped("maya's keys", () => mayaHolds);
+    t.personTyped("bob's keys", () => true);
+    mayaHolds = false;
+    t.personTyped("owner's keys");
+    expect(written.join("")).not.toMatch(/keys/);
+    await typing;
+    expect(written.filter((d) => d.includes("keys"))).toEqual(["bob's keys", "owner's keys"]);
+  });
+});

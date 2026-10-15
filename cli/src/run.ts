@@ -45,6 +45,7 @@ import {
   interruptNotice,
   modelPath,
   STANDING_RULE,
+  TERMINAL_HOLD_IDLE_MS,
 } from "../../shared/src/index";
 import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
@@ -67,6 +68,7 @@ import { SessionContextReader } from "./session-context";
 import { channelCheckout, GitError } from "./task-worktree";
 import { cachedAttachList } from "./terminal/attach-keys";
 import { AttachGate } from "./terminal/gate";
+import { holderOf, TerminalKeyboard } from "./terminal/keyboard";
 import { PasteGuard } from "./terminal/paste";
 import { TerminalPresence, terminalNotification } from "./terminal/presence";
 import { ScreenStream, TerminalScreen } from "./terminal/screen";
@@ -324,10 +326,28 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       attached: presence.attached(),
       prompt: typer.dialogOpen !== null,
       paste: typer.pasteMode,
+      holder: holderOf(keyboard.held, config.person),
     };
     stream.send(JSON.stringify(frame));
   };
   const screenStream = new ScreenStream(sendScreen);
+  // A paste a lost frame left open is ended here, or every key after it is pasted text.
+  const paste = new PasteGuard((end) => typer.personTyped(end));
+  // One typist at a time holds the keyboard: the Person here, or one Dashboard key.
+  const keyboard = new TerminalKeyboard({
+    idleMs: seconds(env.SWITCHBOARD_TERMINAL_HOLD_SECONDS, TERMINAL_HOLD_IDLE_MS),
+    onChange: (holder, was) => {
+      screenStream.changed();
+      // A key that lost the keyboard mid-paste leaves it to whoever types next: end it first.
+      if (was?.kind === "key") paste.lost(was.fingerprint);
+      if (holder?.kind === "key")
+        notify(
+          `${holder.person} holds the keyboard from the Dashboard (key ${holder.fingerprint}): your keys are held back until they let go. Ctrl+] takes it back.`,
+        );
+      else if (was?.kind === "key")
+        notify(holder === null ? `${was.person} let go of the keyboard` : "you hold the keyboard again");
+    },
+  });
   const gate = new AttachGate({
     owner: config.person,
     // As the Dashboard names it, from its address: the default repo in config.json may not be lowercase.
@@ -338,8 +358,6 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     dialog: () => typer.dialogOpen,
   });
   let floodLoggedAt = 0;
-  // A paste a lost frame left open is ended here, or every key after it is pasted text.
-  const paste = new PasteGuard((end) => typer.personTyped(end));
   const typedFromChannel = async (frame: TerminalInputFrame) => {
     const result = await gate.check(frame);
     if (agentId === null) return;
@@ -352,24 +370,44 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       }
       return;
     }
-    if (!result.ok) {
+    const refuse = (fingerprint: string, reason: string) => {
       log(
-        `refused terminal input from ${result.fingerprint || "a bad key"} (Channel says ${frame.from ?? "nobody"}): ${result.reason}`,
+        `refused terminal input from ${fingerprint || "a bad key"} (Channel says ${frame.from ?? "nobody"}): ${reason}`,
       );
       const refused: TerminalRefusedFrame = {
         type: "terminal.refused",
-        agent: agentId,
-        fingerprint: result.fingerprint,
+        agent: agentId as AgentId,
+        fingerprint,
         seq: typeof frame.seq === "number" ? frame.seq : -1,
-        reason: result.reason,
+        reason,
       };
       stream.send(JSON.stringify(refused));
+    };
+    if (!result.ok) {
+      refuse(result.fingerprint, result.reason);
       return;
     }
+    if (result.op === "release") {
+      keyboard.release(result.fingerprint);
+      return;
+    }
+    const busy =
+      result.op === "take"
+        ? keyboard.take(result.fingerprint, result.person, frame.from)
+        : keyboard.typed(result.fingerprint);
+    if (busy !== null) {
+      paste.lost(result.fingerprint);
+      refuse(result.fingerprint, busy);
+      return;
+    }
+    // A take is not typing: the hold's change is shown already.
+    if (result.op === "take") return;
     // Typed as the Person's own keys are: Interrupts wait for it, and Enter is the Person's prompt.
-    paste.before(result.fingerprint);
-    typer.personTyped(result.text);
-    paste.typed(result.fingerprint, result.text);
+    // Held back behind an Interrupt, they go only if this key still holds the keyboard then.
+    const { fingerprint } = result;
+    paste.before(fingerprint);
+    typer.personTyped(result.text, () => keyboard.holds(fingerprint));
+    paste.typed(fingerprint, result.text);
     const attaching = presence.keyTyped(result.fingerprint, result.person);
     screenStream.changed();
     if (attaching) {
@@ -526,6 +564,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         // An older Channel sends only the count.
         for (const person of presence.watchers(Array.isArray(message.persons) ? message.persons : []))
           notify(`${person} is watching this terminal from the Dashboard`);
+        // A Dashboard holder who stopped watching closed the page or lost their connection.
+        if (Array.isArray(message.persons)) keyboard.watching(message.persons);
       }
       if (message.type === "terminal.input" && message.agent === agentId) void typedFromChannel(message);
       if (message.type === "directives" && message.agent === agentId) {
@@ -559,6 +599,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       if (connected) hooks?.connected();
       if (connected) proxy?.connected();
       if (connected) attach();
+      else keyboard.disconnected();
     },
   );
 
@@ -832,9 +873,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     typer.output(data);
   });
 
+  let remindedAt = 0;
   const onInput = (data: Buffer) => {
-    const text = data.toString("utf8");
-    typer.personTyped(text);
+    const { pass, heldBack } = keyboard.local(data.toString("utf8"));
+    if (pass !== "") typer.personTyped(pass);
+    const holder = keyboard.held;
+    if (heldBack && holder?.kind === "key" && Date.now() - remindedAt >= 5000) {
+      remindedAt = Date.now();
+      notify(`${holder.person} holds the keyboard from the Dashboard: Ctrl+] takes it back`);
+    }
   };
   if (stdin.isTTY) stdin.setRawMode(true);
   stdin.on("data", onInput);
@@ -901,6 +948,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   clearTimeout(trustTimer);
   screenStream.stop();
+  keyboard.dispose();
   paste.dispose();
   screen?.dispose();
   waker?.stop();

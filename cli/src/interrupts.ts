@@ -526,8 +526,11 @@ export class InterruptTyper {
   private dialog: string | null = null;
   /** The PermissionRequest that opened the dialog, when a permission prompt is what is open. */
   private permission: ClaudeHookInput | null = null;
-  /** The Person's keystrokes held back while an Interrupt is typed; null when none is. */
-  private held: string[] | null = null;
+  /**
+   * The Person's keystrokes held back while an Interrupt is typed, each with whether it may
+   * still go when the Interrupt is done; null when none is being typed.
+   */
+  private held: { data: string; still?: () => boolean }[] | null = null;
   /** Interrupts are typed one at a time. */
   private turn: Promise<unknown> = Promise.resolve();
   private readonly quietMs: number;
@@ -541,8 +544,12 @@ export class InterruptTyper {
     this.line = new InputLine({ now: this.now, idleClears: options.idleClears ?? false });
   }
 
-  /** The Person typed `data`: passes it to the agent CLI, or holds it while an Interrupt is being typed. */
-  personTyped(data: string): void {
+  /**
+   * The Person typed `data`: passes it to the agent CLI, or holds it while an Interrupt is
+   * being typed. Held keys from the Dashboard go only if `still` says, once the Interrupt is
+   * done, that their key holds the keyboard yet: the owner may have taken it back meanwhile.
+   */
+  personTyped(data: string, still?: () => boolean): void {
     // An open dialog takes the keys: Enter there answers it, it submits no prompt.
     const dialog = this.dialog !== null;
     const { typed, enter, cancel, submitted } = this.line.keys(data);
@@ -550,7 +557,7 @@ export class InterruptTyper {
     if (typed) this.lastKey = this.now();
     // Enter or Escape answers or cancels an open dialog.
     if (enter || cancel) this.closeDialog();
-    if (this.held) this.held.push(data);
+    if (this.held) this.held.push({ data, still });
     else this.options.write(data);
     if (submitted && !dialog) this.options.onPersonPrompt?.();
     if (enter) this.options.onEnter?.();
@@ -710,7 +717,7 @@ export class InterruptTyper {
     } finally {
       const held = this.held;
       this.held = null;
-      for (const data of held) this.options.write(data);
+      for (const { data, still } of held) if (still?.() ?? true) this.options.write(data);
     }
   }
 }

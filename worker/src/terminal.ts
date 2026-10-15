@@ -37,17 +37,28 @@ const int = (value: unknown, min: number, max: number): value is number =>
 
 /** A Person's `terminal.input`, as the Channel forwards it, with `from` set to the sending Person; or null. */
 export function parseInput(body: Record<string, unknown>, from: string): TerminalInputFrame | null {
-  const { agent, key, seq, text, sig } = body;
+  const { agent, key, seq, op, text, sig } = body;
   if (!str(agent, MAX_LABEL) || agent === "") return null;
   if (!str(key, MAX_KEY) || key === "" || !str(sig, MAX_SIG) || sig === "") return null;
   if (!int(seq, 0, Number.MAX_SAFE_INTEGER)) return null;
-  if (!str(text, TERMINAL_INPUT_MAX) || text === "") return null;
-  return { type: "terminal.input", agent: agent as AgentId, key, seq, text, sig, from };
+  if (op !== undefined && op !== "take" && op !== "release") return null;
+  // Text to type, or a take or release of the keyboard, which carries none.
+  if (!str(text, TERMINAL_INPUT_MAX) || (op === undefined) !== (text !== "")) return null;
+  return {
+    type: "terminal.input",
+    agent: agent as AgentId,
+    key,
+    seq,
+    ...(op === undefined ? {} : { op }),
+    text,
+    sig,
+    from,
+  };
 }
 
 /** A wrapper's `terminal.screen` for `agent`, rebuilt from its known fields; or null. */
 export function parseScreen(body: Record<string, unknown>, agent: AgentId): TerminalScreenFrame | null {
-  const { nonce, cols, rows, lines, cursor, attached, prompt, paste } = body;
+  const { nonce, cols, rows, lines, cursor, attached, prompt, paste, holder } = body;
   if (!str(nonce, MAX_NONCE) || !int(cols, 1, MAX_COLS) || !int(rows, 1, MAX_ROWS)) return null;
   if (!Array.isArray(lines) || lines.length > rows || !lines.every((l) => str(l, MAX_LINE))) return null;
   const c = cursor as { x?: unknown; y?: unknown } | null;
@@ -61,6 +72,10 @@ export function parseScreen(body: Record<string, unknown>, agent: AgentId): Term
   if (typeof prompt !== "boolean") return null;
   // Absent from a wrapper older than bracketed paste: a plain paste, as before.
   if (paste !== undefined && typeof paste !== "boolean") return null;
+  // Absent from a wrapper older than the keyboard hold: no one holds it.
+  const h = (holder ?? null) as { person?: unknown; key?: unknown } | null;
+  if (h !== null && (typeof h !== "object" || !str(h.person, MAX_LABEL) || !(h.key === null || str(h.key, MAX_LABEL))))
+    return null;
   return {
     type: "terminal.screen",
     agent,
@@ -72,6 +87,7 @@ export function parseScreen(body: Record<string, unknown>, agent: AgentId): Term
     attached: who,
     prompt,
     paste: paste === true,
+    holder: h === null ? null : { person: h.person as string, key: h.key as string | null },
   };
 }
 

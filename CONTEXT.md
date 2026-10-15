@@ -149,7 +149,7 @@ A permission prompt an Agent's CLI is waiting on (Codex's approval dialog, Claud
 _Avoid_: Permission request, approval request
 
 **Attach**:
-Typing into an Agent's live terminal from the Dashboard, as its owner or as someone the owner allowed. What is typed is Person input, exactly as if typed at the Agent's own terminal. Anyone on the Channel may watch the terminal, redacted on the Person's machine; only an allowed Attach Key types (ADR 0021). Not Takeover, which moves a Stale Claim.
+Typing into an Agent's live terminal from the Dashboard, as its owner or as someone the owner allowed. What is typed is Person input, exactly as if typed at the Agent's own terminal. Anyone on the Channel may watch the terminal, redacted on the Person's machine; only an allowed Attach Key types (ADR 0021), and only while it holds the keyboard: one typist at a time, the owner at the terminal or one key, and the owner takes it back with Ctrl+] (ADR 0022). Not Takeover, which moves a Stale Claim.
 _Avoid_: Take over (the terminal), remote control, join
 
 **Attach Key**:

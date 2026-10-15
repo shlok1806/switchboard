@@ -2,6 +2,7 @@
 // what is typed into its prompt. It checks no signatures; the real wrapper does.
 
 import type { AgentId, TerminalInputFrame } from "@shared/index";
+import { attachKeyFingerprint, fromBase64, TERMINAL_HOLD_IDLE_MS } from "@shared/index";
 import type { TerminalFrame, TerminalLink } from "../source";
 
 const COLS = 72;
@@ -22,6 +23,19 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
   let input = "";
   let typed = false;
   let closed = false;
+  // Who holds the keyboard, as the wrapper keeps it: here, only the browser's own key.
+  let holder: string | null = null;
+  let idle: ReturnType<typeof setTimeout> | undefined;
+  let queue: Promise<void> = Promise.resolve();
+  const hold = (fingerprint: string | null) => {
+    holder = fingerprint;
+    clearTimeout(idle);
+    if (fingerprint !== null)
+      idle = setTimeout(() => {
+        holder = null;
+        send();
+      }, TERMINAL_HOLD_IDLE_MS);
+  };
   const send = () => {
     if (closed) return;
     const prompt = `> ${input}`;
@@ -38,30 +52,49 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
       attached: typed ? [{ person: me, key: "MOCK" }] : [],
       prompt: false,
       paste: true,
+      holder: holder === null ? null : { person: me, key: holder },
     });
   };
   const first = setTimeout(send, 300);
   return {
     send(frame: Omit<TerminalInputFrame, "type" | "from">) {
       if (closed) return false;
-      typed = true;
-      // A bracketed paste is one piece of text: its line breaks do not submit it.
-      const text = frame.text.replace(/\x1b\[200~([\s\S]*?)\x1b\[201~/g, (_m, pasted: string) =>
-        pasted.replace(/\r/g, " "),
-      );
-      for (const ch of text) {
-        if (ch === "\r") {
-          if (input.trim() !== "") history.push(`> ${input}`, "", "  Understood.", "");
-          input = "";
-        } else if (ch === "\x7f") input = input.slice(0, -1);
-        else if (ch >= " " && input.length < COLS - 4) input += ch;
-      }
-      setTimeout(send, 30);
+      // One after another, as the wrapper checks them.
+      queue = queue.then(() => typedIn(frame));
       return true;
     },
     close() {
       closed = true;
       clearTimeout(first);
+      clearTimeout(idle);
     },
   };
+
+  async function typedIn(frame: Omit<TerminalInputFrame, "type" | "from">) {
+    const spki = fromBase64(frame.key);
+    const fingerprint = spki === null ? "" : await attachKeyFingerprint(spki);
+    if (frame.op !== undefined) {
+      hold(frame.op === "take" ? fingerprint : null);
+      setTimeout(send, 30);
+      return;
+    }
+    if (holder !== fingerprint) {
+      onFrame({ type: "terminal.refused", agent, fingerprint, seq: frame.seq, reason: "take the keyboard first" });
+      return;
+    }
+    hold(fingerprint);
+    typed = true;
+    // A bracketed paste is one piece of text: its line breaks do not submit it.
+    const text = frame.text.replace(/\x1b\[200~([\s\S]*?)\x1b\[201~/g, (_m, pasted: string) =>
+      pasted.replace(/\r/g, " "),
+    );
+    for (const ch of text) {
+      if (ch === "\r") {
+        if (input.trim() !== "") history.push(`> ${input}`, "", "  Understood.", "");
+        input = "";
+      } else if (ch === "\x7f") input = input.slice(0, -1);
+      else if (ch >= " " && input.length < COLS - 4) input += ch;
+    }
+    setTimeout(send, 30);
+  }
 }

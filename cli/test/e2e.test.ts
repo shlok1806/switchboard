@@ -35,6 +35,7 @@ import {
   REVIEW_LABEL,
   STANDING_RULE,
   signedInput,
+  type TerminalInputOp,
   type TerminalRefusedFrame,
   type TerminalScreenFrame,
   toBase64,
@@ -2171,24 +2172,47 @@ describe("A live terminal (ADR 0021)", () => {
     }
 
     /** A signed input frame for the wrapper's current run, as the Dashboard sends it. */
-    async signed(text: string, change: { seq?: number; nonce?: string; signText?: string } = {}) {
+    async signed(text: string, change: { seq?: number; nonce?: string; signText?: string; op?: TerminalInputOp } = {}) {
       const nonce = change.nonce ?? (await waitFor("the session nonce", () => this.screens().at(-1)?.nonce));
       const seq = change.seq ?? ++this.seq;
-      const message = new TextEncoder().encode(signedInput(github.repo, id, nonce, seq, change.signText ?? text));
+      const message = new TextEncoder().encode(
+        signedInput(github.repo, id, nonce, seq, change.op, change.signText ?? text),
+      );
       const sig = new Uint8Array(
         await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, this.keys.privateKey, message),
       );
-      return { type: "terminal.input", agent: id, key: this.spki, seq, text, sig: toBase64(sig) };
+      const op = change.op === undefined ? {} : { op: change.op };
+      return { type: "terminal.input", agent: id, key: this.spki, seq, ...op, text, sig: toBase64(sig) };
     }
 
     send(frame: unknown): void {
       this.ws.send(JSON.stringify(frame));
     }
 
-    async type(text: string, change: { seq?: number; nonce?: string; signText?: string } = {}) {
+    async type(text: string, change: { seq?: number; nonce?: string; signText?: string; op?: TerminalInputOp } = {}) {
       const frame = await this.signed(text, change);
       this.send(frame);
       return frame;
+    }
+
+    /** Who holds the keyboard on the latest screen. */
+    holder(): TerminalScreenFrame["holder"] | undefined {
+      return this.screens().at(-1)?.holder;
+    }
+
+    /** Takes the keyboard, asking again while someone else's hold lasts, as a Person would. */
+    async take(): Promise<void> {
+      await waitFor(`${this.fingerprint} to hold the keyboard`, async () => {
+        if (this.holder()?.key === this.fingerprint) return true;
+        await this.type("", { op: "take" });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return this.holder()?.key === this.fingerprint ? true : undefined;
+      });
+    }
+
+    async release(): Promise<void> {
+      await this.type("", { op: "release" });
+      await waitFor("the keyboard let go", () => (this.holder()?.key !== this.fingerprint ? true : undefined));
     }
 
     /** The reason the wrapper gave for refusing frame `seq`. */
@@ -2210,8 +2234,14 @@ describe("A live terminal (ADR 0021)", () => {
   /** How often fake-claude has printed `text` so far. */
   const count = (text: string) => term.output.split(text).length - 1;
 
+  // A typist's hold lapses after 1.5 seconds without a keystroke here, not a minute.
+  const HOLD_SECONDS = 1.5;
+
   beforeAll(async () => {
-    term = new Terminal(["run", "claude"], INTERRUPT_ENV);
+    term = new Terminal(["run", "claude"], {
+      ...INTERRUPT_ENV,
+      SWITCHBOARD_TERMINAL_HOLD_SECONDS: String(HOLD_SECONDS),
+    });
     id = (await term.started()).agentEnv;
     await waitForPresence(id, "live");
     await term.attached(id);
@@ -2259,6 +2289,17 @@ describe("A live terminal (ADR 0021)", () => {
     );
     expect(stdout).toContain(`Allowed ${bob.fingerprint} as bob`);
     expect((await stat(join(scratch, "config", "attach.json"))).mode & 0o777).toBe(0o600);
+    // An allowed key types once it holds the keyboard, which it takes first.
+    const early = await bob.type("work\r");
+    expect(await bob.refused(early.seq)).toMatch(/take the keyboard first|holds the keyboard/);
+    await bob.take();
+    // Taking the keyboard is not typing: no one is attached yet.
+    expect(
+      bob
+        .screens()
+        .at(-1)
+        ?.attached.some((a) => a.person === "bob"),
+    ).toBe(false);
     await bob.type("work\r");
     await waitFor("bob's line in the session", () =>
       count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined,
@@ -2283,6 +2324,7 @@ describe("A live terminal (ADR 0021)", () => {
     const carol = await browser("carol");
     carol.watch();
     await run("attach", "allow", carol.fingerprint, "--person", "carol", "--agent", id);
+    await carol.take();
     const before = count("FAKE-CLAUDE working on it");
     const typed = await carol.type("work\r");
     await waitFor("carol's line", () => (count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined));
@@ -2313,9 +2355,12 @@ describe("A live terminal (ADR 0021)", () => {
 
   it("lets an attacher answer a permission prompt until the owner turns that off; the owner's own key still answers", async () => {
     const bob = browsers[1] as Browser;
+    const carol = browsers[2] as Browser;
+    await carol.release();
     term.type("permission Bash\r");
     await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash/);
     await waitFor("the open prompt on the screen", () => (bob.screens().at(-1)?.prompt ? true : undefined));
+    await bob.take();
     await bob.type("1\r");
     await term.waitForOutput(/FAKE-CLAUDE permission answered "1"/);
 
@@ -2324,20 +2369,74 @@ describe("A live terminal (ADR 0021)", () => {
     owner.watch();
     // Without --person the key is the signed-in Person's: the owner's.
     expect((await run("attach", "allow", owner.fingerprint)).stdout).toContain(`as e2e`);
+    await bob.release();
     term.type("permission Bash\r");
     await term.waitForOutput(/FAKE-CLAUDE asking permission for Bash[\s\S]*FAKE-CLAUDE asking permission for Bash/);
     await waitFor("the open prompt on the screen", () => (bob.screens().at(-1)?.prompt ? true : undefined));
+    await bob.take();
     const held = await bob.type("2\r");
     expect(await bob.refused(held.seq)).toMatch(/permission for .*only the owner answers dialogs/);
+    await owner.take();
     await owner.type("3\r");
     await term.waitForOutput(/FAKE-CLAUDE permission answered "3"/);
     expect(term.output).not.toContain('FAKE-CLAUDE permission answered "2"');
 
     // With the prompt closed, the attacher types again.
     const before = count("FAKE-CLAUDE working on it");
+    await bob.take();
     await bob.type("work\r");
     await waitFor("bob's line", () => (count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined));
     await run("attach", "prompts", "on");
+  }, 30_000);
+
+  it("lets one typist hold the keyboard: the owner takes it back with Ctrl+], and a hold lapses or ends with its watcher", async () => {
+    const carol = browsers[2] as Browser;
+    const owner = browsers[4] as Browser;
+    await carol.take();
+    expect(carol.holder()).toEqual({ person: "carol", key: carol.fingerprint });
+    // The owner's terminal says who holds it.
+    await term.waitForOutput(/carol holds the keyboard from the Dashboard/);
+
+    // Keys at the terminal never land inside carol's line: "wo" + "XX" + "rk" is not typed.
+    const before = count("FAKE-CLAUDE working on it");
+    await carol.type("wo");
+    term.type("XX");
+    await carol.type("rk\r");
+    await waitFor("carol's whole line", () => (count("FAKE-CLAUDE working on it") === before + 1 ? true : undefined));
+    // Nor at the terminal while she holds it.
+    term.type("work\r");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(count("FAKE-CLAUDE working on it")).toBe(before + 1);
+    // Another key is refused, naming who holds it.
+    const refused = await owner.type("", { op: "take" });
+    expect(await owner.refused(refused.seq)).toBe("carol holds the keyboard");
+
+    // Ctrl+] at the terminal takes it back; carol's keys are refused now, the owner's go in.
+    // A paste she left open ends first, so the owner's keys are not pasted into it.
+    await carol.type("\x1b[200~half a paste");
+    // The wrapper takes frames in the order they come: once it refuses a take sent after the paste, it has the paste.
+    const probe = await owner.type("", { op: "take" });
+    expect(await owner.refused(probe.seq)).toBe("carol holds the keyboard");
+    term.type("\x1d");
+    await waitFor("the owner holding it", () => (carol.holder()?.key === null ? true : undefined));
+    expect(carol.holder()).toEqual({ person: "e2e", key: null });
+    const late = await carol.type("work\r");
+    expect(await carol.refused(late.seq)).toBe("the owner is typing at the terminal, and holds the keyboard");
+    term.type("\r");
+    await term.waitForOutput(/FAKE-CLAUDE pasted prompt="half a paste" before="" after=""/);
+    term.type("work\r");
+    await waitFor("the owner's line", () => (count("FAKE-CLAUDE working on it") === before + 2 ? true : undefined));
+
+    // Without a keystroke for the hold's time, the keyboard is free again.
+    await waitFor(
+      "the owner's hold to lapse",
+      () => (carol.holder() === null ? true : undefined),
+      HOLD_SECONDS * 1000 + 5000,
+    );
+    // A Dashboard holder who stops watching lets go of it.
+    await carol.take();
+    carol.watch(false);
+    await waitFor("carol's hold to end with her watching", () => (owner.holder() === null ? true : undefined));
   }, 30_000);
 
   it("refuses a revoked key from its next keystroke", async () => {

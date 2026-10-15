@@ -12,10 +12,12 @@ import {
   signedInput,
   TERMINAL_ATTACHED_MS,
   type TerminalInputFrame,
+  type TerminalInputOp,
   toBase64,
 } from "../../shared/src/index";
 import { type AttachList, attachCommand, cachedAttachList, readAttachList } from "../src/terminal/attach-keys";
 import { AttachGate } from "../src/terminal/gate";
+import { holderOf, TAKE_BACK, TerminalKeyboard } from "../src/terminal/keyboard";
 import { PASTE_END, PASTE_START, PasteGuard } from "../src/terminal/paste";
 import { TerminalPresence, terminalNotification } from "../src/terminal/presence";
 import { redactLine, ScreenStream, TerminalScreen } from "../src/terminal/screen";
@@ -32,13 +34,15 @@ async function browserKey() {
   const frame = async (
     seq: number,
     text: string,
-    signed: { repo?: string; agent?: string; nonce?: string; text?: string } = {},
+    signed: { repo?: string; agent?: string; nonce?: string; text?: string; op?: TerminalInputOp } = {},
+    op?: TerminalInputOp,
   ): Promise<TerminalInputFrame> => {
     const message = signedInput(
       signed.repo ?? REPO,
       signed.agent ?? AGENT,
       signed.nonce ?? NONCE,
       seq,
+      "op" in signed ? signed.op : op,
       signed.text ?? text,
     );
     const sig = await crypto.subtle.sign(
@@ -46,7 +50,15 @@ async function browserKey() {
       keys.privateKey,
       new TextEncoder().encode(message),
     );
-    return { type: "terminal.input", agent: AGENT, key: toBase64(spki), seq, text, sig: toBase64(new Uint8Array(sig)) };
+    return {
+      type: "terminal.input",
+      agent: AGENT,
+      key: toBase64(spki),
+      seq,
+      ...(op === undefined ? {} : { op }),
+      text,
+      sig: toBase64(new Uint8Array(sig)),
+    };
   };
   return { fingerprint, spki: toBase64(spki), frame };
 }
@@ -221,6 +233,31 @@ describe("AttachGate", () => {
     expect(
       await gateFor({ attachersAnswerPrompts: true, keys }, prompt).check(await bob.frame(1, "1\r")),
     ).toMatchObject({ ok: true });
+  });
+
+  it("takes or releases the keyboard only as signed, with no text, and even while a dialog holds attachers back", async () => {
+    const bob = await browserKey();
+    const gate = gateFor(
+      { attachersAnswerPrompts: false, keys: [allow(bob.fingerprint, "bob")] },
+      { open: "permission for Bash" },
+    );
+    expect(await gate.check(await bob.frame(1, "", {}, "take"))).toEqual({
+      ok: true,
+      op: "take",
+      text: "",
+      person: "bob",
+      fingerprint: bob.fingerprint,
+    });
+    // The Channel turns a signed release into a take, or a take into typing: the signature fails.
+    const release = await bob.frame(2, "", {}, "release");
+    expect(await gate.check({ ...release, op: "take" })).toMatchObject({ reason: "the signature does not match" });
+    const { op: _, ...typed } = release;
+    expect(await gate.check({ ...typed, seq: 3 })).toMatchObject({ ok: false });
+    expect(await gate.check(await bob.frame(4, "y\r", {}, "take"))).toMatchObject({ reason: "a take carries no text" });
+    expect(await gate.check({ ...(await bob.frame(5, "", {}, "take")), op: "grab" as "take" })).toMatchObject({
+      reason: "not an input, a take or a release",
+    });
+    expect(await gate.check(release)).toMatchObject({ ok: true, op: "release" });
   });
 
   it("reads the list for each frame, so a revoke takes effect at the next keystroke", async () => {
@@ -734,5 +771,126 @@ describe("who is at the terminal", () => {
 
   it("notifies through the terminal without printing anything a person could be fooled by", () => {
     expect(terminalNotification("bob\x07\x1b[2J is ‮typing")).toBe("\x1b]9;bob  [2J is  typing\x07");
+  });
+});
+
+describe("who holds the keyboard", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function keyboard() {
+    const changes: (string | null)[] = [];
+    const k = new TerminalKeyboard({
+      idleMs: 60_000,
+      onChange: (h) => changes.push(h === null ? null : h.kind === "local" ? "local" : h.person),
+    });
+    // The Channel names watchers by their sign-in, not by the labels the owner gave their keys.
+    k.watching(["maya-gh", "bob-gh"]);
+    return { k, changes };
+  }
+  const MAYA = "MAYA-MAYA-MAYA-MAYA-MAYA";
+  const BOB = "BOBB-BOBB-BOBB-BOBB-BOBB";
+
+  it("lets one typist type at a time, so keystrokes from two never interleave", () => {
+    const { k, changes } = keyboard();
+    // The owner types at the terminal: they hold the keyboard, and Maya cannot take it.
+    expect(k.local("ls")).toEqual({ pass: "ls", heldBack: false });
+    expect(k.take(MAYA, "maya", "maya-gh")).toBe("the owner is typing at the terminal, and holds the keyboard");
+    expect(k.typed(MAYA)).toBe("the owner is typing at the terminal, and holds the keyboard");
+    // Once the owner's hold lapses, Maya takes it; now the owner's keys and Bob's are held back.
+    vi.advanceTimersByTime(60_000);
+    expect(k.take(MAYA, "maya", "maya-gh")).toBeNull();
+    // A second take, a click twice or a retried frame, keeps it.
+    expect(k.take(MAYA, "maya", "maya-gh")).toBeNull();
+    expect(k.typed(MAYA)).toBeNull();
+    expect(k.local(" -la\r")).toEqual({ pass: "", heldBack: true });
+    expect(k.take(BOB, "bob", "bob-gh")).toBe("maya holds the keyboard");
+    expect(k.typed(BOB)).toBe("maya holds the keyboard");
+    expect(changes).toEqual(["local", null, "maya"]);
+  });
+
+  it("lets only someone watching the terminal take the keyboard", () => {
+    const { k } = keyboard();
+    expect(k.take(MAYA, "maya", "carol-gh")).toBe("maya is not watching this terminal");
+    expect(k.take(MAYA, "maya", undefined)).toBe("maya is not watching this terminal");
+    expect(k.held).toBeNull();
+    expect(k.take(MAYA, "maya", "maya-gh")).toBeNull();
+    expect(k.holds(MAYA)).toBe(true);
+    expect(k.holds(BOB)).toBe(false);
+  });
+
+  it("asks a Dashboard key to take the keyboard before it types, even when it is free", () => {
+    const { k } = keyboard();
+    expect(k.typed(MAYA)).toBe("take the keyboard first");
+    expect(k.held).toBeNull();
+  });
+
+  it("gives the keyboard back to the owner at Ctrl+], which never reaches the CLI while it does", () => {
+    const { k, changes } = keyboard();
+    k.take(MAYA, "maya", "maya-gh");
+    expect(k.local(TAKE_BACK)).toEqual({ pass: "", heldBack: false });
+    expect(k.held).toEqual({ kind: "local" });
+    expect(k.typed(MAYA)).toBe("the owner is typing at the terminal, and holds the keyboard");
+    expect(k.local("y")).toEqual({ pass: "y", heldBack: false });
+    // With no Dashboard holder, Ctrl+] is the CLI's like any key.
+    expect(k.local(TAKE_BACK)).toEqual({ pass: TAKE_BACK, heldBack: false });
+    expect(changes).toEqual(["maya", "local"]);
+  });
+
+  it("lets go after a minute without a keystroke from the holder, and each keystroke starts the minute again", () => {
+    const { k, changes } = keyboard();
+    k.take(MAYA, "maya", "maya-gh");
+    vi.advanceTimersByTime(59_000);
+    expect(k.typed(MAYA)).toBeNull();
+    vi.advanceTimersByTime(59_000);
+    expect(k.held).toMatchObject({ person: "maya" });
+    vi.advanceTimersByTime(1_000);
+    expect(k.held).toBeNull();
+    expect(changes).toEqual(["maya", null]);
+  });
+
+  it("lets go when its holder releases it, stops watching, or the wrapper loses the Channel", () => {
+    const { k } = keyboard();
+    k.take(MAYA, "maya", "maya-gh");
+    k.release(BOB);
+    expect(k.held).toMatchObject({ person: "maya" });
+    k.release(MAYA);
+    expect(k.held).toBeNull();
+
+    k.take(MAYA, "maya", "maya-gh");
+    k.watching(["maya-gh", "bob-gh"]);
+    expect(k.held).toMatchObject({ person: "maya" });
+    // The key's label is not who watches: only the Channel's name for the sender counts.
+    k.watching(["maya", "bob-gh"]);
+    expect(k.held).toBeNull();
+
+    k.take(MAYA, "maya", "maya-gh");
+    k.disconnected();
+    expect(k.held).toBeNull();
+    // The owner's own hold does not depend on the Channel.
+    k.local("x");
+    k.disconnected();
+    k.watching([]);
+    expect(k.held).toEqual({ kind: "local" });
+  });
+
+  it("passes the terminal's replies to the CLI while a Dashboard key holds it, and replies alone take nothing", () => {
+    const { k } = keyboard();
+    // A focus report as the owner changes windows is not typing.
+    expect(k.local("\x1b[I")).toEqual({ pass: "\x1b[I", heldBack: false });
+    expect(k.held).toBeNull();
+    k.take(MAYA, "maya", "maya-gh");
+    const replies = "\x1b[12;40R\x1b[?65;4c\x1b]11;rgb:0000/0000/0000\x07";
+    expect(k.local(`${replies}abc`)).toEqual({ pass: replies, heldBack: true });
+    expect(k.local("\x1b[O")).toEqual({ pass: "\x1b[O", heldBack: false });
+  });
+
+  it("names the holder as the screen shows it: the owner at the terminal has no key", () => {
+    expect(holderOf(null, "shlok")).toBeNull();
+    expect(holderOf({ kind: "local" }, "shlok")).toEqual({ person: "shlok", key: null });
+    expect(holderOf({ kind: "key", fingerprint: MAYA, person: "maya", watcher: "maya-gh" }, "shlok")).toEqual({
+      person: "maya",
+      key: MAYA,
+    });
   });
 });
