@@ -121,7 +121,7 @@ The permanent name of an Agent, made of its Person, its CLI and a short form of 
 _Avoid_: Agent name, handle
 
 **Host**:
-A machine one Person lets the Channel start Agents on, such as `shlok1806/studio`. Its supervisor, `switchboard host run`, runs those Agents in terminals nobody sees and stops them when the Person asks on the Channel. It belongs to exactly one Person, and only that Person's requests run there (ADR 0015).
+A machine one Person lets the Channel start Agents on, such as `shlok1806/studio`. Its supervisor, `switchboard host run`, runs those Agents in terminals nobody sees and stops them when the Person asks on the Channel. It belongs to exactly one Person. Only that Person's requests run there, unless its machine's own file also allows others (`--allow`, `--allow-channel`, or a change signed in the Dashboard by a browser key that Person trusted there). The Agents it runs belong to its Person (ADR 0015, ADR 0028).
 _Avoid_: Worker, machine, runner, node
 
 **Lead**:
@@ -129,7 +129,7 @@ An Agent its own Person made a lead (ADR 0018). It may start Agents on that Pers
 _Avoid_: Manager, orchestrator, admin
 
 **Presence**:
-Whether an Agent is Live (recently active), Idle (session open, waiting on its Person) or Gone (silent for about ten minutes, or its session ended).
+Whether an Agent is Live (recently active), Idle (session open, waiting on its Person), Paused (its Host ended the process and kept the session, ADR 0028) or Gone (silent for about ten minutes, or its session ended).
 _Avoid_: Status, online/offline
 
 **Stale Claim**:

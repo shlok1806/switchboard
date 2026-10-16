@@ -12,7 +12,7 @@ import { ArrowLeftRight, ChevronRight, Eye, Monitor, Moon, Plus, Rows2, Rows3, S
 import type { Agent, Task } from "@shared/index";
 import { VIEWS } from "@/components/shell/nav";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
-import { canStop, openStartAgent } from "@/components/domain/start-agent";
+import { openStartAgent, useMayControl } from "@/components/domain/start-agent";
 import { ownedName } from "@/components/domain/fleet";
 import { useHostsSupported } from "@/data/hosts";
 import { useCapabilities, useChannel, useMe, useStore } from "@/data/store";
@@ -158,7 +158,8 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
     return [...list].sort((a, b) => rank(a) - rank(b));
   };
   const reachable = agents.filter((a) => a.presence !== "gone");
-  const stoppable = agents.filter((a) => canStop(a, me));
+  const mayControl = useMayControl();
+  const stoppable = agents.filter((a) => mayControl(a));
   const stale = tasks.filter((t) => t.claim?.stale).sort((a, b) => a.number - b.number);
   const forCommand: Record<AgentCommand, Agent[]> = { directive: reachable, stop: stoppable, watch: agents };
 

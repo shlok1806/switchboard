@@ -20,7 +20,7 @@ import { OlderRow } from "@/components/domain/older";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { IssueLink } from "@/components/domain/pending";
 import { RenameDialog } from "@/components/domain/rename";
-import { HandOffButton, StopAgentButton } from "@/components/domain/start-agent";
+import { HandOffButton, PauseResumeButton, StopAgentButton } from "@/components/domain/start-agent";
 import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
 import { Glyph, State, useAgentState, useAgentStates } from "@/components/domain/state";
 import { TerminalPanel } from "@/components/domain/terminal";
@@ -196,6 +196,7 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
             )}
             {!stopAsking && <Button onClick={() => setRenaming(true)}>Rename</Button>}
             {!stopAsking && <HandOffButton agent={agent} task={held[0]} />}
+            {!stopAsking && <PauseResumeButton agent={agent} />}
             <StopAgentButton agent={agent} onAsking={setStopAsking} onStopped={() => heading.current?.focus()} />
             {!stopAsking && <MoreActions agent={agent} onRename={() => setRenaming(true)} />}
           </div>

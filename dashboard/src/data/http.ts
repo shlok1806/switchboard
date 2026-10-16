@@ -24,6 +24,9 @@ import type {
   SpawnAgentRequest,
   SpawnAgentResponse,
   StopAgentResponse,
+  ControlAgentResponse,
+  SetHostAllowRequest,
+  SetHostAllowResponse,
   StreamMessage,
   TaskActionResponse,
   TaskListResponse,
@@ -425,6 +428,35 @@ export class HttpChannelSource implements ChannelSource {
   async stopAgent(agent: AgentId): Promise<ActionResult> {
     try {
       const { status, body } = await this.call<StopAgentResponse>(`${agentPath(agent)}/stop`, { method: "POST" });
+      return status < 400 ? { ok: true } : { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
+  async setHostAllow(name: string, request: SetHostAllowRequest): Promise<ActionResult> {
+    try {
+      const { status, body } = await this.call<SetHostAllowResponse>(`/api/hosts/${encodeURIComponent(name)}/allow`, {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      return status < 400 ? { ok: true } : { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
+  async pauseAgent(agent: AgentId): Promise<ActionResult> {
+    return this.control(agent, "pause");
+  }
+
+  async resumeAgent(agent: AgentId): Promise<ActionResult> {
+    return this.control(agent, "resume");
+  }
+
+  private async control(agent: AgentId, action: "pause" | "resume"): Promise<ActionResult> {
+    try {
+      const { status, body } = await this.call<ControlAgentResponse>(`${agentPath(agent)}/${action}`, { method: "POST" });
       return status < 400 ? { ok: true } : { ok: false, reason: reasonOf(body, status) };
     } catch (e) {
       return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };

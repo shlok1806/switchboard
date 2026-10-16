@@ -25,7 +25,7 @@ export const CLI_LABEL: Record<Cli, string> = {
 /** A memory note's tag, as a word. */
 export const TAG_LABEL: Record<MemoryTag, string> = { decision: "Decision", fact: "Fact", "dead-end": "Dead end", question: "Question", files: "Files" };
 
-export const PRESENCE_LABEL: Record<Presence, string> = { live: "Live", idle: "Idle", gone: "Gone" };
+export const PRESENCE_LABEL: Record<Presence, string> = { live: "Live", idle: "Idle", paused: "Paused", gone: "Gone" };
 
 export const CAPTURE_LABEL: Record<Capture, string> = { proxy: "Proxy", hook: "Hook", tool: "Tool" };
 
@@ -47,7 +47,14 @@ export const DOWNGRADE_LABEL: Record<DowngradeReason, string> = {
   "dialog-open": "a prompt was open in the session",
   "session-not-ready": "the session was still starting",
   "no-answer": "the wrapper did not answer in time",
+  paused: "the Agent is Paused; it gets this when it resumes",
 };
+
+/** " (alice's Agent)" when someone other than the Agent's Person asked for it (ADR 0028). */
+function ownerNote(e: ChannelEvent): string {
+  const owner = (e.payload as { owner?: string }).owner;
+  return owner !== undefined && e.actor.kind === "person" && e.actor.person !== owner ? ` (${owner}'s Agent)` : "";
+}
 
 /** A Host by the name its Person gave it: its id without the person part, which the row's actor says. */
 export function hostName(id: string): string {
@@ -240,7 +247,13 @@ export function summarize(e: ChannelEvent): string {
     case "agent.spawn.failed":
       return `${hostName(e.payload.host)} could not start an Agent: ${e.payload.reason}`;
     case "agent.stop":
-      return `Asked ${hostName(e.payload.host)} to stop ${e.payload.agent}`;
+      return `Asked ${hostName(e.payload.host)} to stop ${e.payload.agent}${ownerNote(e)}`;
+    case "agent.pause":
+      return `Asked ${hostName(e.payload.host)} to pause ${e.payload.agent}${ownerNote(e)}`;
+    case "agent.resume":
+      return `Asked ${hostName(e.payload.host)} to resume ${e.payload.agent}${ownerNote(e)}`;
+    case "agent.control.failed":
+      return `${hostName(e.payload.host)} refused to ${e.payload.action} ${e.payload.agent} for ${e.payload.by}: ${e.payload.reason}`;
     case "agent.role.granted":
       return `Made ${e.payload.agent} a ${e.payload.role}`;
     case "agent.role.revoked":
@@ -286,6 +299,9 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   "agent.spawned": "Started",
   "agent.spawn.failed": "Start failed",
   "agent.stop": "Stop",
+  "agent.pause": "Pause",
+  "agent.resume": "Resume",
+  "agent.control.failed": "Refused",
   "agent.role.granted": "Role",
   "agent.role.revoked": "Role",
   "host.online": "Host",

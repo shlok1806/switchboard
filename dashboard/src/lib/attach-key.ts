@@ -2,7 +2,7 @@
 // half cannot be exported and stays in IndexedDB. The Agent's owner allows its
 // fingerprint on their own machine; from then on the wrapper takes keystrokes signed by it.
 
-import { attachKeyFingerprint, signedInput, type TerminalInputOp, toBase64 } from "@shared/index";
+import { attachKeyFingerprint, signedAllowChange, signedInput, type TerminalInputOp, toBase64 } from "@shared/index";
 
 export interface AttachKey {
   /** The public key, SPKI, base64: sent with every input frame. */
@@ -16,6 +16,8 @@ export interface AttachKey {
     op: TerminalInputOp | undefined,
     text: string,
   ): Promise<string>;
+  /** Signs a change to who may use a Host (ADR 0028), for the Host to check against its attach.json. */
+  signAllow(repo: string, host: string, at: number, seq: number, allow: readonly string[], allowChannel: boolean): Promise<string>;
 }
 
 const DB = "switchboard";
@@ -63,6 +65,10 @@ async function load(): Promise<AttachKey> {
     async sign(repo, agent, nonce, seq, op, text) {
       const message = new TextEncoder().encode(signedInput(repo, agent, nonce, seq, op, text));
       // WebCrypto's ECDSA signature is already r || s, as the wrapper verifies it.
+      return toBase64(new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, message)));
+    },
+    async signAllow(repo, host, at, seq, allow, allowChannel) {
+      const message = new TextEncoder().encode(signedAllowChange(repo, host, at, seq, allow, allowChannel));
       return toBase64(new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, message)));
     },
   };

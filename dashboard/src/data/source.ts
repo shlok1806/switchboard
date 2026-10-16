@@ -12,6 +12,7 @@ import type {
   MemoryResponse,
   PersonAction,
   PersonName,
+  SetHostAllowRequest,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StreamMessage,
@@ -137,10 +138,16 @@ export interface ChannelSource {
   hosts(): Promise<HostsResponse | null>;
   /** `GET /api/memory`: the notes Agents left for each other (ADR 0019), latest or matching `q`; null when the Worker has none. */
   memory(query: MemoryQuery): Promise<MemoryResponse | null>;
-  /** `POST /api/agents/spawn`: start an Agent on one of this Person's own Hosts. */
+  /** `POST /api/agents/spawn`: start an Agent on one of this Person's own Hosts, or one that allows them (ADR 0028). */
   spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult>;
-  /** `POST /api/agents/:id/stop`: ask the Host that runs one of this Person's Agents to stop it. */
+  /** `POST /api/agents/:id/stop`: ask the Host that runs an Agent to stop it: this Person's, or on a Host that allows them. */
   stopAgent(agent: AgentId): Promise<ActionResult>;
+  /** `POST /api/agents/:id/pause`: ask the Host to end the Agent's process and keep its session (ADR 0028). */
+  pauseAgent(agent: AgentId): Promise<ActionResult>;
+  /** `POST /api/agents/:id/resume`: ask the Host to relaunch a Paused Agent from its session (ADR 0028). */
+  resumeAgent(agent: AgentId): Promise<ActionResult>;
+  /** `POST /api/hosts/:name/allow`: a signed change to who may use one of this Person's Hosts (ADR 0028). */
+  setHostAllow(name: string, request: SetHostAllowRequest): Promise<ActionResult>;
   /** `PUT` or `DELETE /api/agents/:id/role`: grant one of this Person's Agents a role, or take it back (ADR 0018). */
   setRole(agent: AgentId, role: AgentRole | null): Promise<ActionResult>;
   /** Watch Agent `agent`'s terminal over the stream's socket (ADR 0021). Needs `subscribe` to be open. */

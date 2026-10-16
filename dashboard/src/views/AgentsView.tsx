@@ -19,7 +19,7 @@ import { ContextWindow } from "@/components/domain/context";
 import { IssueButton } from "@/components/domain/pending";
 import { EmptyState, EmptyView } from "@/components/shell/states";
 import { RenameDialog } from "@/components/domain/rename";
-import { FirstAgentAction, StartAgentButton, StopAgentButton, canStop } from "@/components/domain/start-agent";
+import { FirstAgentAction, PauseResumeButton, StartAgentButton, StopAgentButton, useMayControl } from "@/components/domain/start-agent";
 import { GroupLine, Secondary, StackedRow, agentName, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
 import { Glyph, State, useNeedsYou } from "@/components/domain/state";
 import { AgentUsage } from "@/components/domain/usage";
@@ -27,7 +27,8 @@ import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
+import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
+import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { setDensity, useDensity } from "@/lib/density";
 import { CLI_LABEL, ago, elapsed, hostName } from "@/lib/format";
@@ -519,7 +520,8 @@ const Row = memo(function Row({
 /** The row's menu: what a Person does to one Agent without opening its page. */
 function RowMenu({ line, actions, compact }: { line: Line; actions: RowActions; compact: boolean }) {
   const { agent: a } = line;
-  const me = useMe();
+  const mayControl = useMayControl();
+  const store = useStore();
   const can = useCapabilities();
   const name = agentName(a);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -557,13 +559,23 @@ function RowMenu({ line, actions, compact }: { line: Line; actions: RowActions; 
         >
           Rename
         </DropdownMenuItem>
-        {canStop(a, me) && (
+        {mayControl(a) && (
           <DropdownMenuItem
             onSelect={() => {
               then.current = () => actions.stop(a.id, trigger.current);
             }}
           >
             Stop
+          </DropdownMenuItem>
+        )}
+        {mayControl(a) && a.presence !== "gone" && (
+          <DropdownMenuItem
+            onSelect={async () => {
+              const r = await (a.presence === "paused" ? store.source.resumeAgent(a.id) : store.source.pauseAgent(a.id));
+              if (!r.ok) toast.error(r.reason);
+            }}
+          >
+            {a.presence === "paused" ? "Resume" : "Pause"}
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>
@@ -625,6 +637,7 @@ function Inspector({
               )}
             </>
           )}
+          {!stopAsking && <PauseResumeButton agent={a} />}
           <StopAgentButton agent={a} ask={stopAsk?.n} returnFocusTo={stopAsk?.back} onAsking={setStopAsking} />
         </div>
       </div>
