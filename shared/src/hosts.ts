@@ -7,10 +7,13 @@
 //   POST   /api/hosts               register (or update) one of the caller's Hosts
 //   DELETE /api/hosts/:name         remove one of the caller's Hosts
 //   POST   /api/agents/spawn        start an Agent on one of the caller's Hosts
-//   POST   /api/agents/:id/stop     stop an Agent one of the caller's Hosts runs
+//   POST   /api/agents/:id/stop     stop an Agent a Host runs
+//   POST   /api/agents/:id/pause    end its process, keep its session (ADR 0028)
+//   POST   /api/agents/:id/resume   relaunch a Paused Agent from its session (ADR 0028)
 //
-// Every route takes a Person's session. An Agent token is refused until a Person
-// grants an Agent that authority (the roles ADR that supersedes ADR 0005).
+// Every route takes a Person's session, except that a lead's Agent token may spawn and
+// stop (ADR 0018). A Person may use another Person's Host only when that Host's own
+// install-time allow-list says so (ADR 0028).
 
 import type { Agent, AgentId, Cli, PersonName } from "./domain";
 
@@ -19,6 +22,9 @@ export type HostId = `${string}/${string}`;
 
 /** A Host's name: what `hostname -s` gives, lower-cased. */
 export const HOST_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** At most this many logins on one Host's allow-list. */
+export const MAX_HOST_ALLOW = 50;
 
 /** The Host ID of `person`'s Host `name`. */
 export function hostIdFor(person: PersonName, name: string): HostId {
@@ -64,11 +70,27 @@ export interface Host {
   roots: string[];
   /** The loosest permission mode the Host starts an Agent in. */
   maxPermissionMode: PermissionMode;
+  /**
+   * The other Persons `switchboard host install --allow` named (ADR 0028). The Channel's
+   * copy, for early refusals and the Host picker: the Host checks its own file.
+   */
+  allow: PersonName[];
+  /** `--allow-channel`: every Person with write access to the Channel's repo may use it (ADR 0028). */
+  allowChannel: boolean;
   /** Whether the Host's socket is attached now. Only a Live Host can start or stop Agents. */
   live: boolean;
   registeredAt: string;
   /** When its socket last attached. */
   lastSeenAt: string;
+}
+
+/**
+ * Whether `person` may start, stop, pause and resume Agents on `host`, by what the
+ * Channel knows: its owner always, others only when it allows them (ADR 0028). The Host
+ * asks the same question of its own file.
+ */
+export function hostAllows(host: Pick<Host, "person" | "allow" | "allowChannel">, person: PersonName): boolean {
+  return host.person === person || host.allowChannel || host.allow.includes(person);
 }
 
 /** True when `cwd` is one of `roots` or inside one. Paths are absolute, with no `..` or `.` segments. */
@@ -101,6 +123,9 @@ export interface RegisterHostRequest {
   name: string;
   roots: string[];
   maxPermissionMode?: PermissionMode;
+  /** Other Persons who may use the Host (ADR 0028). Omitted: none. */
+  allow?: PersonName[];
+  allowChannel?: boolean;
 }
 
 /** `POST /api/hosts` answers with the Host. */
@@ -119,7 +144,10 @@ export interface HostsResponse {
 
 /** `POST /api/agents/spawn`. */
 export interface SpawnAgentRequest {
-  /** The Host's name, one of the caller's own. Omitted: their most recently seen Live Host. */
+  /**
+   * One of the caller's own Hosts by name, or any Host that allows them as `<person>/<name>`
+   * (ADR 0028). Omitted: their own most recently seen Live Host.
+   */
   host?: string;
   cli: Cli;
   /** Where the Agent runs: under one of the Host's roots. */
@@ -184,10 +212,43 @@ export interface HostSpawnedMessage {
   agent: AgentId;
 }
 
-/** The Channel asks a Host to stop an Agent it runs. */
+/**
+ * The Channel asks a Host to stop, pause or resume an Agent it runs (ADR 0028). `by` is
+ * the Person who asked: the Host checks them against its own allow-list.
+ */
 export interface HostStopMessage {
   type: "host.stop";
   agent: AgentId;
+  by: PersonName;
+}
+
+export interface HostPauseMessage {
+  type: "host.pause";
+  agent: AgentId;
+  by: PersonName;
+}
+
+export interface HostResumeMessage {
+  type: "host.resume";
+  agent: AgentId;
+  by: PersonName;
+}
+
+/** What a Host refused, or could not do, for a stop, pause or resume. */
+export interface HostControlFailedFrame {
+  type: "host.control.failed";
+  action: "stop" | "pause" | "resume";
+  agent: AgentId;
+  by: PersonName;
+  reason: string;
+}
+
+/** `POST /api/agents/:id/pause` and `/resume` answer with the Agent as the Channel has it. */
+export interface ControlAgentResponse {
+  ok: true;
+  agent: AgentId;
+  host: HostId;
+  presence: Agent["presence"];
 }
 
 /**

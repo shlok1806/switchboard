@@ -76,11 +76,18 @@ export class FakeHost {
     return `${this.person}/${this.name}`;
   }
 
-  static async registered(person: string, name: string, roots = ["/work"], maxPermissionMode?: string) {
+  static async registered(
+    person: string,
+    name: string,
+    roots = ["/work"],
+    maxPermissionMode?: string,
+    options: { allow?: string[]; allowChannel?: boolean } = {},
+  ) {
     const response = await post("/api/hosts", person, {
       name,
       roots,
       ...(maxPermissionMode === undefined ? {} : { maxPermissionMode }),
+      ...options,
     });
     expect(response.status).toBe(200);
     return new FakeHost(person, name);
@@ -135,9 +142,17 @@ export async function wrapperRegisters(person: string, host?: string, spawn?: st
   return response.json<AgentResponse>();
 }
 
-/** Starts an Agent on `host` the way the Host does when the spawn reaches it. */
-export async function spawnAndStart(host: FakeHost, body: Record<string, unknown> = {}) {
-  const spawning = post("/api/agents/spawn", host.person, { cli: "claude-code", cwd: "/work/app", ...body });
+/**
+ * Starts an Agent on `host` the way the Host does when the spawn reaches it: for the
+ * Host's own Person, or for `by` when it is another Person the Host allows (name it `person/name`).
+ */
+export async function spawnAndStart(host: FakeHost, body: Record<string, unknown> = {}, by = host.person) {
+  const spawning = post("/api/agents/spawn", by, {
+    cli: "claude-code",
+    cwd: "/work/app",
+    ...(by === host.person ? {} : { host: host.id }),
+    ...body,
+  });
   const spawn = await host.nextSpawn();
   const registered = await wrapperRegisters(host.person, host.name, spawn.spawn);
   const response = await spawning;

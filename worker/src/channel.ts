@@ -26,6 +26,8 @@ import type {
   HookCaptureReply,
   Host,
   HostId,
+  HostPauseMessage,
+  HostResumeMessage,
   HostSpawnedMessage,
   HostSpawnMessage,
   HostStopMessage,
@@ -84,7 +86,7 @@ import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./clai
 import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
-import { DEFAULT_SPAWN_WAIT_MS, type HostRefusal, Hosts, type SpawnResult } from "./hosts";
+import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } from "./hosts";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
@@ -534,6 +536,17 @@ export class Channel extends DurableObject<Env> {
       },
       close: (id) => this.closeSockets(hostTag(id), 4004, "This Host was removed."),
       findAgent: (id) => this.agents.find(id),
+      pauseAgent: (id) => {
+        this.agents.pause(id);
+      },
+      unpauseAgent: (id) => this.ctx.waitUntil(this.agents.unpause(id)),
+      endPausedAgent: (id) => {
+        this.agents.endPaused(id);
+      },
+      revokeAgent: (id) => {
+        if (this.access.revokeAgent(id))
+          this.closeSockets(agentTag(id), 4001, "Agent token revoked: the Agent is Paused.");
+      },
       inSubtree: (lead, id) => this.agents.inSubtree(lead, id),
       liveInSubtree: (lead) => this.agents.liveInSubtree(lead),
       setParent: (id, parent) => this.agents.setParent(id, parent),
@@ -701,6 +714,18 @@ export class Channel extends DurableObject<Env> {
       }
       if (!this.agents.has(request.continues)) {
         return { ok: false, status: 404, reason: `No Agent ${request.continues} on this Channel to continue.` };
+      }
+    }
+    // A Paused Agent (ADR 0028) comes back only for a Resume its Host was asked for, from that Host.
+    const paused = this.agents.find(agentIdFor(person, request.cli, request.sessionId));
+    if (paused?.presence === "paused") {
+      const from = request.host === undefined ? null : hostIdFor(person, request.host);
+      if (from !== paused.host || !this.hosts.takeResume(paused.id)) {
+        return {
+          ok: false,
+          status: 409,
+          reason: `Agent ${paused.id} is Paused on ${paused.host ?? "a Host"}. Resume it from the Dashboard or with \`switchboard resume\`.`,
+        };
       }
     }
     this.join(person);
@@ -1403,6 +1428,8 @@ export class Channel extends DurableObject<Env> {
       type !== "transcript.page" &&
       type !== "terminal.text" &&
       type !== "host.spawn.failed" &&
+      type !== "host.control.failed" &&
+      type !== "host.paused" &&
       type !== "terminal.watch" &&
       type !== "terminal.input" &&
       type !== "terminal.screen" &&
@@ -1419,6 +1446,26 @@ export class Channel extends DurableObject<Env> {
       const { spawn, reason } = frame as { spawn?: unknown; reason?: unknown };
       if (host === null || typeof spawn !== "string" || typeof reason !== "string") return;
       this.hosts.hostFailed(person, host, spawn, reason.slice(0, MAX_SPAWN_FAILURE_LENGTH) || "no reason given");
+      return;
+    }
+    if (type === "host.control.failed" || type === "host.paused") {
+      // Only a Host's own socket answers for its Agents (ADR 0028).
+      const host = tag?.startsWith(HOST_TAG) ? tag.slice(HOST_TAG.length + person.length + 1) : null;
+      if (host === null) return;
+      const { action, agent, by, reason } = frame as Record<string, unknown>;
+      if (typeof agent !== "string" || agent.split("/").length !== 3) return;
+      if (type === "host.paused") {
+        this.hosts.hostPaused(person, host, agent as AgentId);
+        return;
+      }
+      if ((action !== "stop" && action !== "pause" && action !== "resume") || typeof by !== "string") return;
+      if (typeof reason !== "string") return;
+      this.hosts.controlFailed(person, host, {
+        action,
+        agent: agent as AgentId,
+        by,
+        reason: reason.slice(0, MAX_SPAWN_FAILURE_LENGTH) || "no reason given",
+      });
       return;
     }
     // The Agent whose token opened this socket; a Person's socket speaks for no Agent.
@@ -1669,12 +1716,24 @@ export class Channel extends DurableObject<Env> {
     return this.hosts.spawn({ person: caller.person, lead: caller.agent }, request);
   }
 
-  /** Stops an Agent one of the caller's Person's Hosts runs: for the Person, or their lead over it. */
-  stopAgent(caller: Caller, id: AgentId): { ok: true; host: HostId } | HostRefusal {
-    if (caller.agent === undefined) return this.hosts.stop({ person: caller.person }, id);
+  /**
+   * Stops an Agent a Host runs: for the Person (their own, or on a Host that allows them,
+   * ADR 0028), or their lead over it.
+   */
+  stopAgent(caller: Caller, id: AgentId): ControlResult {
+    if (caller.agent === undefined) {
+      this.join(caller.person);
+      return this.hosts.control({ person: caller.person }, id, "stop");
+    }
     const lead = this.lead(caller.agent, "stop Agents");
     if (!lead.ok) return lead;
-    return this.hosts.stop({ person: caller.person, lead: caller.agent }, id);
+    return this.hosts.control({ person: caller.person, lead: caller.agent }, id, "stop");
+  }
+
+  /** Pauses (ends the process of, keeping the session of) or resumes an Agent a Host runs: for a Person only (ADR 0028). */
+  controlAgent(person: PersonName, id: AgentId, action: "pause" | "resume"): ControlResult {
+    this.join(person);
+    return this.hosts.control({ person }, id, action);
   }
 
   /** Host `id`'s newest open socket, or null when it is Offline. */
@@ -1793,6 +1852,8 @@ function send(
     | HostSpawnMessage
     | HostSpawnedMessage
     | HostStopMessage
+    | HostPauseMessage
+    | HostResumeMessage
     | TerminalWatchersMessage
     | TerminalInputFrame
     | TerminalScreenFrame

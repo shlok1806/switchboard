@@ -52,6 +52,9 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   "agent.spawned",
   "agent.spawn.failed",
   "agent.stop",
+  "agent.pause",
+  "agent.resume",
+  "agent.control.failed",
   // A role is between an Agent and its own Person (ADR 0018).
   "agent.role.granted",
   "agent.role.revoked",

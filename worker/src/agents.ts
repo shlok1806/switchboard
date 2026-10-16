@@ -6,6 +6,9 @@
 // - The wrapper heartbeats with the Presence it observes (Live or Idle).
 // - The Channel alone decides Gone: when the session ends, or when an Agent has
 //   been silent for `goneAfterMs`. A Durable Object alarm checks for silence.
+// - A Host can Pause an Agent (ADR 0028): its process ends and its session is kept.
+//   A Paused Agent is not Gone: neither its wrapper's heartbeat or end of session nor
+//   the silence check change it. Registering again (a resume) brings it back.
 // - Every Presence change is an Event.
 // - A Nickname is unique on the Channel and can change while the Agent runs: by the
 //   Agent itself or by any Person on the Channel. A name held by a Gone Agent is free
@@ -615,6 +618,8 @@ export class AgentRoster {
   ): Promise<RosterResult> {
     const found = this.owned(person, id);
     if (!found.ok) return found;
+    // The wrapper of a Paused Agent is on its way out: its heartbeat does not bring the Agent back.
+    if (found.row.presence === "paused") return { ok: true, agent: rowToAgent(found.row) };
     const now = Date.now();
     if (usage === undefined) {
       this.host.sql.exec("UPDATE agents SET presence = ?, last_seen_at = ? WHERE id = ?", presence, now, id);
@@ -637,11 +642,16 @@ export class AgentRoster {
     return { ok: true, agent };
   }
 
-  /** The session ended: the Agent is Gone until it resumes. Ending a Gone Agent changes nothing. */
+  /**
+   * The session ended: the Agent is Gone until it resumes. Ending a Gone Agent changes
+   * nothing, and neither does ending a Paused one's: that is its process ending for the pause.
+   */
   async endSession(person: PersonName, id: AgentId, detail?: string): Promise<RosterResult> {
     const found = this.owned(person, id);
     if (!found.ok) return found;
-    if (found.row.presence === "gone") return { ok: true, agent: rowToAgent(found.row) };
+    if (found.row.presence === "gone" || found.row.presence === "paused") {
+      return { ok: true, agent: rowToAgent(found.row) };
+    }
     this.host.sql.exec("UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?", Date.now(), id);
     this.closeApproval(found.row);
     const agent = this.agent(id);
@@ -660,7 +670,7 @@ export class AgentRoster {
   async expireSilent(now = Date.now()): Promise<void> {
     const silent = this.host.sql
       .exec<AgentRow>(
-        "UPDATE agents SET presence = 'gone' WHERE presence != 'gone' AND last_seen_at <= ? RETURNING *",
+        "UPDATE agents SET presence = 'gone' WHERE presence != 'gone' AND presence != 'paused' AND last_seen_at <= ? RETURNING *",
         now - this.host.goneAfterMs,
       )
       .toArray();
@@ -703,10 +713,46 @@ export class AgentRoster {
     return { ok: true, agent };
   }
 
+  /**
+   * A Host pauses Agent `id` (ADR 0028): it is Paused from now, so its wrapper ending the
+   * session is not Gone. Its open prompt goes with its process. False when it is not running.
+   */
+  pause(id: AgentId): boolean {
+    const row = this.row(id);
+    if (row === undefined || row.presence === "gone" || row.presence === "paused") return false;
+    this.host.sql.exec("UPDATE agents SET presence = 'paused' WHERE id = ?", id);
+    this.closeApproval(row);
+    this.changed(id, "paused");
+    this.host.broadcast({ type: "agent", agent: this.agent(id) });
+    return true;
+  }
+
+  /** The Host refused a pause: Agent `id` is Idle again, and its next heartbeat says better. */
+  async unpause(id: AgentId): Promise<void> {
+    const row = this.row(id);
+    if (row === undefined || row.presence !== "paused") return;
+    this.host.sql.exec("UPDATE agents SET presence = 'idle', last_seen_at = ? WHERE id = ?", Date.now(), id);
+    this.changed(id, "idle");
+    this.host.broadcast({ type: "agent", agent: this.agent(id) });
+    await this.watch();
+  }
+
+  /** A Paused Agent was stopped: Gone, with a `session.end` since no process is left to end it. */
+  endPaused(id: AgentId): void {
+    const row = this.row(id);
+    if (row === undefined || row.presence !== "paused") return;
+    this.host.sql.exec("UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?", Date.now(), id);
+    this.record(id, "session.end", { reason: "exit", detail: "stopped while paused" });
+    this.changed(id, "gone");
+    this.host.broadcast({ type: "agent", agent: this.agent(id) });
+  }
+
   /** Schedules the silence check for when the quietest Agent that is not Gone would go Gone. */
   private async watch(): Promise<void> {
     const oldest = this.host.sql
-      .exec<{ oldest: number | null }>("SELECT MIN(last_seen_at) AS oldest FROM agents WHERE presence != 'gone'")
+      .exec<{ oldest: number | null }>(
+        "SELECT MIN(last_seen_at) AS oldest FROM agents WHERE presence != 'gone' AND presence != 'paused'",
+      )
       .one().oldest;
     await this.host.schedulePresenceCheck(oldest === null ? null : oldest + this.host.goneAfterMs);
   }
