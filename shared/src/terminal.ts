@@ -4,7 +4,7 @@
 // the owning wrapper checks every keystroke.
 
 import type { AgentId } from "./domain";
-import { cleanTranscriptText } from "./transcript";
+import { cleanTranscriptText, TRANSCRIPT_PAGE_BYTES } from "./transcript";
 
 /** The most often a wrapper sends its screen while watched. */
 export const TERMINAL_FRAME_MS = 125;
@@ -150,7 +150,10 @@ export interface TerminalReadResponse {
   agent: AgentId;
   cols: number;
   rows: number;
+  /** The screen's rows, its bottom ones when it is cut: at most `TRANSCRIPT_PAGE_BYTES` in all. */
   lines: string[];
+  /** Rows from the top of the screen left out to keep the read within its cap. */
+  cut?: number;
 }
 
 /** The path that reads an Agent's screen. */
@@ -186,11 +189,24 @@ export function cleanTerminalText(raw: Record<string, unknown>): Omit<TerminalRe
   }
   if (lines.length > TERMINAL_READ_MAX_ROWS || !lines.every((l) => typeof l === "string")) return null;
   const width = cols as number;
+  // Text only: no escape sequence or control character, one row a line, cut to its width.
+  const clean = (lines as string[]).map((l) => cleanTranscriptText(l).replace(/\n/g, " ").slice(0, width));
+  // At most a transcript page in all, as ADR 0024 promises: the bottom rows, where the
+  // latest output and the prompt are, and how many from the top were left out.
+  const encoder = new TextEncoder();
+  let bytes = 0;
+  let first = clean.length;
+  while (first > 0) {
+    const cost = encoder.encode(clean[first - 1] ?? "").length + 1;
+    if (bytes + cost > TRANSCRIPT_PAGE_BYTES) break;
+    bytes += cost;
+    first--;
+  }
   return {
     cols: width,
     rows: rows as number,
-    // Text only: no escape sequence or control character, one row a line, cut to its width.
-    lines: (lines as string[]).map((l) => cleanTranscriptText(l).replace(/\n/g, " ").slice(0, width)),
+    lines: clean.slice(first),
+    ...(first > 0 ? { cut: first } : {}),
   };
 }
 

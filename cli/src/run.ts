@@ -560,7 +560,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // rule at SessionStart.
   const nextTurn = new NextTurn(memory);
   if (predecessor !== null) {
-    nextTurn.handOff(handoffBrief(predecessor));
+    nextTurn.handOff((max) => handoffBrief(predecessor, max));
     // Notes on its predecessor's Tasks and files matter to it too.
     memory.focus({ tasks: predecessor.tasks.map((task) => task.number), files: predecessor.files });
   }

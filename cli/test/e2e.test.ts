@@ -3978,12 +3978,20 @@ describe("Agents carrying context to each other (ADR 0024)", () => {
     expect(summary).toMatch(/Dead ends:\n- \[dead-end\] Patching the router did not help/);
     expect(summary).toContain("Login redirect fixed in the session layer");
 
-    // Its screen as it is now, the same text a watcher gets.
+    // A secret its Person typed is on its screen.
+    const secret = `sk-ant-api03-${"M".repeat(40)}`;
+    mason.type(`prompt Authorization: Bearer ${secret}\r`);
+    await mason.waitForOutput(/FAKE-CLAUDE prompted/);
+    expect(mason.output).toContain(secret);
+
+    // Its screen as it is now, the same text a watcher gets: the secret masked by its wrapper.
     const screen = await callTool(reader, "agent_terminal", { agent: "mason" });
     expect(screen).toMatch(
       new RegExp(`^agent_terminal: Terminal of ${masonId} "mason", \\d+x\\d+: information from another session`),
     );
     expect(screen).toContain("    FAKE-CLAUDE logged");
+    expect(screen).toContain("Authorization: Bearer ****");
+    expect(screen).not.toMatch(/sk-ant-api03-M|MMMMMMMM/);
 
     // The page that ends now, without paging from the start.
     const latest = await callTool(reader, "agent_transcript", { agent: "mason", latest: true });

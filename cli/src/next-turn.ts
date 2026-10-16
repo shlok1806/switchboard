@@ -30,7 +30,20 @@
 // (see shared/src/wakes.ts and wake.ts).
 
 import type { Delivery, DirectiveDelivery, LostClaim } from "../../shared/src/index";
-import { deliveriesNotice, directivesNotice, holderName, STANDING_RULE, wakesAgent } from "../../shared/src/index";
+import {
+  deliveriesNotice,
+  directivesNotice,
+  holderName,
+  STANDING_RULE,
+  SUMMARY_MAX_CHARS,
+  wakesAgent,
+} from "../../shared/src/index";
+
+/** The most a hook may add to the model's context: Claude Code cuts what passes it. */
+export const HOOK_CONTEXT_MAX_CHARS = 10_000;
+
+/** Less room than this, and a Hand-off Brief waits for the next hook. */
+const MIN_BRIEF_CHARS = 1_500;
 
 /** The hooks whose output Claude Code adds to the model's context. */
 export const CONTEXT_HOOKS = ["SessionStart", "UserPromptSubmit"] as const;
@@ -80,11 +93,15 @@ export class NextTurn {
   private readonly directives = new Map<string, DirectiveDelivery>();
   /** Delivery and Directive IDs already kept, oldest first. */
   private readonly seen = new Set<string>();
-  /** The Hand-off Brief not shown yet (ADR 0024). */
-  private brief: string | null = null;
+  /** The Hand-off Brief not shown yet (ADR 0024), rendered to fit the room a hook leaves it. */
+  private brief: ((max: number) => string) | null = null;
 
-  /** Shows `brief`, a Hand-off Brief, at the next hook that can add to the context, once. */
-  handOff(brief: string): void {
+  /**
+   * Shows a Hand-off Brief at the next hook that can add to the context, once. `brief`
+   * renders it in at most `max` characters: it goes after everything else that hook
+   * carries, in the room left under the hook's cap, so it never pushes a Directive out.
+   */
+  handOff(brief: (max: number) => string): void {
     this.brief = brief;
   }
 
@@ -139,11 +156,6 @@ export class NextTurn {
     if (!(CONTEXT_HOOKS as readonly (string | undefined)[]).includes(hook)) return "";
     const parts: string[] = [];
     if (hook === "SessionStart") parts.push(STANDING_RULE);
-    const brief = this.brief;
-    if (brief !== null) {
-      parts.push(brief);
-      this.brief = null;
-    }
     if (this.lostClaims.size > 0) {
       parts.push(lostClaimsNotice([...this.lostClaims.values()]));
       this.lostClaims.clear();
@@ -156,9 +168,19 @@ export class NextTurn {
       parts.push(directivesNotice([...this.directives.values()].sort((a, b) => a.seq - b.seq)));
       this.directives.clear();
     }
-    // With a brief, the digest waits for the next turn: both at once could pass the hook's cap.
-    const notes = brief === null ? (this.memory?.take() ?? "") : "";
-    if (notes !== "") parts.push(notes);
+    if (this.brief !== null) {
+      // Last, in what the Person's words and the Channel's notices leave under the cap. Too
+      // little room, and it waits for the next hook rather than arriving cut to nothing.
+      const room = HOOK_CONTEXT_MAX_CHARS - parts.reduce((n, part) => n + part.length + 2, 0) - 1;
+      if (room >= MIN_BRIEF_CHARS) {
+        parts.push(this.brief(Math.min(room, SUMMARY_MAX_CHARS)));
+        this.brief = null;
+      }
+    } else {
+      // With a brief shown or still waiting, the digest waits: both at once could pass the cap.
+      const notes = this.memory?.take() ?? "";
+      if (notes !== "") parts.push(notes);
+    }
     return parts.length === 0 ? "" : `${parts.join("\n\n")}\n`;
   }
 }

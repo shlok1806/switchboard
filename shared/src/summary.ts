@@ -5,7 +5,6 @@
 // framed as information from the Channel, never an instruction (ADR 0005).
 
 import { CLI_SHORT_NAMES } from "./agents";
-import { holderName } from "./claims";
 import type { Agent, AgentId, Task, TaskNumber } from "./domain";
 import { cleanNoteText, describeNote, type MemoryNote } from "./memory";
 
@@ -57,13 +56,9 @@ function line(text: string, max: number): string {
 }
 
 /** One Task it holds: number, title, status, branch and where its Steps stand. */
-function describeHeld(task: Task, agent: AgentId): string {
+function describeHeld(task: Task): string {
   const parts = [`#${task.number} ${line(task.title, 200)} [${task.status}]`];
   if (task.claim?.stale === true) parts.push("Stale: its holder is Gone");
-  const holder = task.claim?.holder;
-  if (holder !== undefined && !(holder.kind === "agent" && holder.agentId === agent)) {
-    parts.push(`held by ${holderName(holder)}`);
-  }
   if (task.branch !== undefined) parts.push(`branch ${task.branch}`);
   if (task.pr !== undefined) parts.push(`pull request #${task.pr}`);
   if (task.steps.length > 0) {
@@ -115,7 +110,7 @@ function sections(summary: AgentSummary): Section[] {
   const rest = summary.notes.filter((note) => !questions.includes(note) && !deadEnds.includes(note));
   return [
     { lines: facts },
-    { heading: "Tasks it holds:", lines: summary.tasks.map((task) => describeHeld(task, agent.id)) },
+    { heading: "Tasks it holds:", lines: summary.tasks.map(describeHeld) },
     { heading: "Open questions:", lines: questions.map((note) => describeNote(note)) },
     { heading: "Dead ends:", lines: deadEnds.map((note) => describeNote(note)) },
     {

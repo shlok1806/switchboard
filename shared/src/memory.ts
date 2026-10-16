@@ -195,11 +195,17 @@ function repoPath(path: string): string {
   return path.replace(/^(?:\.\/)+/, "");
 }
 
-/** Whether two paths name the same file: the same, or one is the other with more of its path in front. */
+/**
+ * Whether two paths name the same file: the same, or one is the other with more of its
+ * path in front, such as an absolute path and the repo path it ends in. The shorter one
+ * must name a folder too: `client.ts` alone could be any folder's.
+ */
 function samePath(a: string, b: string): boolean {
   const x = repoPath(a);
   const y = repoPath(b);
-  return x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`);
+  if (x === y) return true;
+  const [short, long] = x.length < y.length ? [x, y] : [y, x];
+  return short.includes("/") && long.endsWith(`/${short}`);
 }
 
 /**

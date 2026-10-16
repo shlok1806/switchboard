@@ -16,7 +16,14 @@ import type {
   TerminalReadResponse,
   TouchedFilesResponse,
 } from "../../shared/src/index";
-import { claimPath, summaryPath, terminalReadPath } from "../../shared/src/index";
+import {
+  claimPath,
+  summaryPath,
+  TERMINAL_READ_MAX_COLS,
+  TERMINAL_READ_MAX_ROWS,
+  TRANSCRIPT_PAGE_BYTES,
+  terminalReadPath,
+} from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
 import { bearer, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
@@ -283,6 +290,25 @@ describe("Reading an Agent's terminal", () => {
         { agent, rows: 3 },
       ],
     ]);
+  });
+
+  it("answers a full-size screen with its bottom rows, within a transcript page, and says how many it left out", async () => {
+    const agent = await register("alice");
+    const rows = Array.from(
+      { length: TERMINAL_READ_MAX_ROWS },
+      (_, i) => `${String(i).padStart(3, "0")} ${"y".repeat(TERMINAL_READ_MAX_COLS - 4)}`,
+    );
+    await wrapper("alice", agent, (request) => screen(request, rows, TERMINAL_READ_MAX_COLS));
+    const response = await call(terminalReadPath(agent), "bob");
+    expect(response.status).toBe(200);
+    const read = await response.json<TerminalReadResponse>();
+    expect(new TextEncoder().encode(read.lines.join("\n")).length).toBeLessThanOrEqual(TRANSCRIPT_PAGE_BYTES);
+    // The newest rows, at the bottom, are the ones kept; the rest are counted.
+    expect(read.lines.at(-1)).toBe(rows.at(-1));
+    expect(read.cut).toBe(TERMINAL_READ_MAX_ROWS - read.lines.length);
+    expect(read.lines[0]).toBe(rows[read.cut ?? 0]);
+    const reads = (await events()).filter((e) => e.type === "terminal.read");
+    expect(reads.map((e) => e.payload)).toEqual([{ agent, rows: read.lines.length }]);
   });
 
   it("takes the screen only from the read Agent's own wrapper, and says why there is none", async () => {

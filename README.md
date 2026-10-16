@@ -447,7 +447,8 @@ between them (ADR 0024):
   questions and dead ends. It is built from what the Channel already holds, so it works
   for a Gone Agent too. People read it through `GET /api/agents/:id/summary`.
 - `agent_terminal` reads a running Agent's screen once, as the same redacted text its
-  watchers get, and the Channel records a `terminal.read` Event. `agent_transcript` takes
+  watchers get, at most 32 KB: a larger screen comes back as its bottom rows, with a count
+  of the rows left out. The Channel records a `terminal.read` Event. `agent_transcript` takes
   `latest: true` for the page that ends at the newest entry.
 
 A new session can continue another Agent's work:

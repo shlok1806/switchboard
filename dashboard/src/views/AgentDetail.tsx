@@ -98,30 +98,49 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
   const canDirect = can.directives && agent.presence !== "gone";
   const asking = agent.approval !== undefined && agent.presence !== "gone";
 
-  const facts: ReactNode[] = [
-    `${mine ? "Your" : `${agent.person}'s`} ${CLI_LABEL[agent.cli]} ${agent.host ? `on ${hostName(agent.host)}` : "in a terminal"}`,
-    agent.model && `${modelLabel(agent.model)}${agent.effort ? `, ${agent.effort} effort` : ""}`,
-    agent.role === "lead" && (children.length ? `lead of ${children.map(shortName).join(", ")}` : "lead"),
-    parent && `started by ${shortName(parent)}`,
-    predecessor && (
-      <>
-        continued from <AgentLink agent={predecessor} />
-      </>
-    ),
-    successors.length > 0 && (
-      <>
-        handed off to{" "}
-        {successors.map((s, i) => (
-          <Fragment key={s.id}>
-            {i > 0 && ", "}
-            <AgentLink agent={s} />
-          </Fragment>
-        ))}
-      </>
-    ),
-    `started ${ago(agent.startedAt)}`,
-    agent.proxyMode === "raw" && "shares raw turns",
-  ].filter(Boolean);
+  // Each fact keyed by what it says, so one coming or going leaves the others in place.
+  const facts: [key: string, fact: ReactNode][] = [
+    ["what", `${mine ? "Your" : `${agent.person}'s`} ${CLI_LABEL[agent.cli]} ${agent.host ? `on ${hostName(agent.host)}` : "in a terminal"}`],
+    ["model", agent.model && `${modelLabel(agent.model)}${agent.effort ? `, ${agent.effort} effort` : ""}`],
+    [
+      "lead",
+      agent.role === "lead" &&
+        (children.length ? (
+          <>
+            lead of <AgentNames agents={children} />
+          </>
+        ) : (
+          "lead"
+        )),
+    ],
+    [
+      "parent",
+      parent && (
+        <>
+          started by <AgentName agent={parent} />
+        </>
+      ),
+    ],
+    [
+      "continues",
+      predecessor && (
+        <>
+          continued from <AgentLink agent={predecessor} />
+        </>
+      ),
+    ],
+    [
+      "successors",
+      successors.length > 0 && (
+        <>
+          handed off to <AgentNames agents={successors} link />
+        </>
+      ),
+    ],
+    ["started", `started ${ago(agent.startedAt)}`],
+    ["raw", agent.proxyMode === "raw" && "shares raw turns"],
+  ];
+  const shown = facts.filter(([, fact]) => Boolean(fact));
 
   return (
     <div className="h-full overflow-y-auto">
@@ -136,8 +155,8 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
               </span>
             </h1>
             <p className="text-small text-ink-3">
-              {facts.map((fact, i) => (
-                <Fragment key={i}>
+              {shown.map(([key, fact], i) => (
+                <Fragment key={key}>
                   {i > 0 && " · "}
                   {fact}
                 </Fragment>
@@ -235,12 +254,38 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
   );
 }
 
+/** An Agent's short name, in mono where it is an ID rather than a Nickname (design.md). */
+function AgentName({ agent }: { agent: Agent | AgentId }) {
+  if (typeof agent === "string") return <span className="font-mono">{agent}</span>;
+  return agent.nickname === undefined ? <span className="font-mono">{shortName(agent)}</span> : <>{shortName(agent)}</>;
+}
+
+/** Agents' short names, comma separated, each a link to its page when `link` says so. */
+function AgentNames({ agents, link = false }: { agents: Agent[]; link?: boolean }) {
+  return (
+    <>
+      {agents.map((a, i) => (
+        <Fragment key={a.id}>
+          {i > 0 && ", "}
+          {link ? <AgentLink agent={a} /> : <AgentName agent={a} />}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 /** Another Agent's name, linking to its page; one the Channel no longer lists is its ID, as text. */
 function AgentLink({ agent }: { agent: Agent | AgentId }) {
-  if (typeof agent === "string") return <span className="text-ink-2">{agent}</span>;
+  if (typeof agent === "string") {
+    return (
+      <span className="text-ink-2">
+        <AgentName agent={agent} />
+      </span>
+    );
+  }
   return (
     <a href={href({ view: "agent", id: agent.id })} className="text-ink underline-offset-4 hover:underline">
-      {shortName(agent)}
+      <AgentName agent={agent} />
     </a>
   );
 }

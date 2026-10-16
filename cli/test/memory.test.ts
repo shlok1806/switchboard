@@ -63,6 +63,8 @@ describe("the memory digest", () => {
       [
         note(1, "fact", "On my Task"),
         { ...note(2, "fact", "On my file"), files: ["./web/src/login.ts"] },
+        // The same file name in another folder is another file.
+        { ...note(0, "fact", "On another login.ts"), files: ["api/src/login.ts"] },
         note(3, "question", "An open question"),
         note(4, "decision", "A decision elsewhere"),
         note(5, "fact", "A newer fact elsewhere"),
@@ -70,7 +72,7 @@ describe("the memory digest", () => {
       ].map((n) => (n.seq === 1 ? { ...n, task: 12 } : n)),
       undefined,
       false,
-      { tasks: [12], files: ["login.ts"] },
+      { tasks: [12], files: ["/Users/shlok/code/app/web/src/login.ts"] },
     );
     expect(
       digest
@@ -84,6 +86,7 @@ describe("the memory digest", () => {
       "- [question] An open question",
       "- [fact] On another Task",
       "- [fact] A newer fact elsewhere",
+      "- [fact] On another login.ts",
     ]);
   });
 });

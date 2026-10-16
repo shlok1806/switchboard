@@ -121,7 +121,7 @@ export function openStartAgent(prefill?: StartAgentPrefill) {
  * folder and a brief to edit, and the new session starts with what the Channel knows of it.
  * Hidden on a Channel whose Worker has no Hosts.
  */
-export function HandOffButton({ agent, task }: { agent: Agent; task?: Pick<Task, "number" | "title"> }) {
+export function HandOffButton({ agent, task }: { agent: Agent; task?: Pick<Task, "number"> }) {
   const supported = useHostsSupported();
   if (!supported) return null;
   const name = agent.nickname ?? agent.id;
@@ -133,7 +133,7 @@ export function HandOffButton({ agent, task }: { agent: Agent; task?: Pick<Task,
           fromName: name,
           ...(agent.host ? { host: agent.host } : {}),
           ...(agent.context?.cwd ? { cwd: agent.context.cwd } : {}),
-          brief: task ? `Carry on ${name}'s work on #${task.number} ${task.title}.` : `Carry on ${name}'s work.`,
+          brief: task ? `Carry on ${name}'s work on #${task.number}.` : `Carry on ${name}'s work.`,
         })
       }
     >
