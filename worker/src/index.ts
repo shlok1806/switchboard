@@ -188,6 +188,8 @@ const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
   "end",
   "touched-files",
   "transcript",
+  "summary",
+  "terminal",
   "nickname",
   "model",
   "approval",
@@ -244,8 +246,10 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       agentRoute !== null &&
       "id" in agentRoute &&
       agentRoute.kind !== "touched-files" &&
-      // Any session on the Channel may read any session's transcript (ADR 0019).
+      // Any session on the Channel may read any session's transcript (ADR 0019), summary and screen (ADR 0024).
       agentRoute.kind !== "transcript" &&
+      agentRoute.kind !== "summary" &&
+      agentRoute.kind !== "terminal" &&
       agentRoute.id !== caller.agent
     ) {
       return fail(403, `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`);

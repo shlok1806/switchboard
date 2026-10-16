@@ -4,8 +4,8 @@
  * and orchestrators see why it stopped. Read-only: the prompt is answered at its terminal.
  */
 
-import type { AgentId } from "./domain";
 import { agentPath } from "./agents";
+import type { AgentId } from "./domain";
 
 /** The most characters of what the prompt asks for (a command, a path, a tool's input) the Channel keeps. */
 export const MAX_APPROVAL_DETAIL_LENGTH = 2000;

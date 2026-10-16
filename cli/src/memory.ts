@@ -2,7 +2,8 @@
 //
 // - The inbox keeps the notes other Agents write, as they arrive on the Channel
 //   stream, and hands the next hook that can add to the model's context a digest of
-//   those its Agent has not been shown. It never waits on the network. Which note
+//   those its Agent has not been shown, those on the Tasks it holds and the files it
+//   edited first (ADR 0024): it follows both on the same stream. It never waits on the network. Which note
 //   the Agent was shown last is kept on this machine, under its Agent ID, so a
 //   restarted or resumed session catches up from there (`GET /api/memory?after=`).
 // - The nudges remind the model to write notes. They never write one themselves:
@@ -16,11 +17,15 @@ import { join } from "node:path";
 import type {
   AgentContext,
   AgentId,
+  AgentSummary,
   ChannelEvent,
+  DigestFocus,
+  Holder,
   HookEvent,
   MemoryNote,
   MemoryQuery,
   MemoryResponse,
+  TaskNumber,
 } from "../../shared/src/index";
 import { MAX_MEMORY_LIMIT, memoryDigest, memoryQueryString, noteFromEvent } from "../../shared/src/index";
 import type { ClaudeHookInput } from "./hooks/summarize";
@@ -31,12 +36,16 @@ export const MEMORY_HOOKS = ["PreCompact"] as const;
 
 /** The most notes the inbox holds for one digest. More than a digest shows: it counts the rest. */
 const MAX_HELD = 200;
+/** The most files the inbox weights the digest toward: the ones edited last. */
+const MAX_FOCUS_FILES = 50;
 
 export interface MemoryInboxOptions {
   /** Where each Agent's last-shown note is kept: one file per Agent ID. */
   dir: string;
   /** A Channel read as the Agent. */
   read: (path: string) => Promise<MemoryResponse>;
+  /** The Agent's own summary (ADR 0024): the Tasks it holds and files it edited, before this run. */
+  summary?: (agent: AgentId) => Promise<AgentSummary>;
   log: (line: string) => void;
 }
 
@@ -53,6 +62,10 @@ export class MemoryInbox {
   private readonly held = new Map<number, MemoryNote>();
   /** A catch-up found more notes than it fetched: older ones it will never show. */
   private earlier = false;
+  /** The Tasks the Agent holds, which its digest is weighted toward. */
+  private readonly tasks = new Set<TaskNumber>();
+  /** The files it edited, most recently first. */
+  private files: string[] = [];
 
   constructor(private readonly options: MemoryInboxOptions) {}
 
@@ -63,6 +76,7 @@ export class MemoryInbox {
       this.shown = this.readCursor(agent);
       // Notes held before the Agent was known that are its own, or that it was already shown.
       for (const [seq, note] of this.held) if (!this.wanted(note)) this.held.delete(seq);
+      await this.seed(agent);
     }
     const newest = Math.max(this.shown ?? 0, ...this.held.keys());
     const query: MemoryQuery = { limit: MAX_MEMORY_LIMIT, ...(newest > 0 ? { after: newest } : {}) };
@@ -75,10 +89,61 @@ export class MemoryInbox {
     }
   }
 
-  /** An Event from the Channel stream: kept when it is another Agent's note. */
+  /** What the Agent works on, from what the Channel knew of it before this run. */
+  private async seed(agent: AgentId): Promise<void> {
+    if (this.options.summary === undefined) return;
+    try {
+      const { tasks, files } = await this.options.summary(agent);
+      this.focus({ tasks: tasks.map((task) => task.number), files });
+    } catch (error) {
+      this.options.log(`could not read what this Agent works on: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Weights the digest toward these Tasks and files as well: the Agent's own, or those of
+   * an Agent whose work it carries on (ADR 0024).
+   */
+  focus(focus: Partial<DigestFocus>): void {
+    for (const task of focus.tasks ?? []) this.tasks.add(task);
+    for (const file of [...(focus.files ?? [])].reverse()) this.edited(file);
+  }
+
+  /** What the digest is weighted toward now. */
+  get currentFocus(): DigestFocus {
+    return { tasks: [...this.tasks], files: [...this.files] };
+  }
+
+  /**
+   * An Event from the Channel stream: kept when it is another Agent's note. The
+   * Agent's own Claims and file edits move what its digest is weighted toward.
+   */
   event(event: ChannelEvent): void {
     const note = noteFromEvent(event);
     if (note !== null) this.keep(note);
+    if (this.agent === null) return;
+    const mine = (holder: Holder) => holder.kind === "agent" && holder.agentId === this.agent;
+    const task = event.task;
+    switch (event.type) {
+      case "claim":
+        if (task !== undefined && mine(event.payload.holder)) this.tasks.add(task);
+        break;
+      case "claim.release":
+        if (task !== undefined && mine(event.payload.holder)) this.tasks.delete(task);
+        break;
+      case "takeover":
+        if (task === undefined) break;
+        if (mine(event.payload.to)) this.tasks.add(task);
+        else if (mine(event.payload.from)) this.tasks.delete(task);
+        break;
+      case "file.edit":
+        if (event.actor.kind === "agent" && event.actor.agentId === this.agent) this.edited(event.payload.path);
+        break;
+    }
+  }
+
+  private edited(path: string): void {
+    this.files = [path, ...this.files.filter((file) => file !== path)].slice(0, MAX_FOCUS_FILES);
   }
 
   /** The digest of notes the Agent has not been shown, once; "" when there are none. */
@@ -90,7 +155,7 @@ export class MemoryInbox {
     this.earlier = false;
     this.shown = Math.max(this.shown ?? 0, ...notes.map((note) => note.seq));
     this.writeCursor(this.agent, this.shown);
-    return memoryDigest(notes, undefined, earlier);
+    return memoryDigest(notes, undefined, earlier, this.currentFocus);
   }
 
   private wanted(note: MemoryNote): boolean {
@@ -167,6 +232,8 @@ export interface MemoryNudgesOptions {
   context: () => Promise<AgentContext | undefined>;
   env: NodeJS.ProcessEnv;
   log: (line: string) => void;
+  /** Whether to ask before compaction too: false where the CLI's compaction was not checked (ADR 0024). */
+  compaction?: boolean;
 }
 
 /** The Stop and PreCompact hooks' answers that ask the model for notes (ADR 0019). */
@@ -211,7 +278,11 @@ export class MemoryNudges {
     if (input.stop_hook_active === true) return null;
     const reasons: string[] = [];
     if (this.changed && !this.noted) reasons.push(EDIT_NUDGE);
-    if (this.compaction === "due" || (this.compaction === "not-asked" && (await this.nearCompaction()))) {
+    const compaction = this.options.compaction !== false;
+    if (
+      compaction &&
+      (this.compaction === "due" || (this.compaction === "not-asked" && (await this.nearCompaction())))
+    ) {
       this.compaction = "asked";
       reasons.push(COMPACTION_NUDGE);
     }
@@ -224,6 +295,7 @@ export class MemoryNudges {
 
   private async preCompact(input: ClaudeHookInput): Promise<string | null> {
     // Never a /compact the Person asked for, never twice, never once the Agent was asked.
+    if (this.options.compaction === false) return null;
     if (input.trigger !== "auto" || this.held || this.compaction !== "not-asked") return null;
     const context = await this.options.context();
     if (context?.tokens === undefined || context.window === undefined) return null;

@@ -231,6 +231,11 @@ export interface RegisterAgentRequest {
   host?: string;
   /** The spawn request this session answers: the `agent.spawn` Event's ID, from the Host. */
   spawn?: string;
+  /**
+   * The Agent whose work this session carries on (`switchboard run --from`, ADR 0024).
+   * Kept the first time only; an Agent the Channel does not know is refused.
+   */
+  continues?: AgentId;
 }
 
 /** `POST /api/agents` and `POST /api/agents/:id/heartbeat` answer with the Agent. */

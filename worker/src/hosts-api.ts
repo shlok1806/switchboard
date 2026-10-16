@@ -78,7 +78,7 @@ const MODE_REASON = `"permissionMode" must be one of ${PERMISSION_MODES.join(", 
 type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 function parseSpawn(body: Record<string, unknown>): Parsed<SpawnAgentRequest> {
-  const { host, cli, cwd, nickname, model, brief, permissionMode } = body;
+  const { host, cli, cwd, nickname, model, brief, permissionMode, from } = body;
   if (host !== undefined && (typeof host !== "string" || !HOST_NAME_PATTERN.test(host))) {
     return { ok: false, reason: '"host" must be the name of one of your Hosts.' };
   }
@@ -107,6 +107,9 @@ function parseSpawn(body: Record<string, unknown>): Parsed<SpawnAgentRequest> {
     return { ok: false, reason: `"brief" must be text of at most ${MAX_BRIEF_LENGTH} characters.` };
   }
   if (permissionMode !== undefined && !isPermissionMode(permissionMode)) return { ok: false, reason: MODE_REASON };
+  if (from !== undefined && (typeof from !== "string" || from.split("/").length !== 3)) {
+    return { ok: false, reason: '"from" must be the ID of the Agent whose work it carries on.' };
+  }
   return {
     ok: true,
     value: {
@@ -117,6 +120,7 @@ function parseSpawn(body: Record<string, unknown>): Parsed<SpawnAgentRequest> {
       ...(cleanModel === undefined ? {} : { model: cleanModel }),
       ...(text === undefined || text === "" ? {} : { brief: text }),
       ...(permissionMode === undefined ? {} : { permissionMode }),
+      ...(from === undefined ? {} : { from: from as AgentId }),
     },
   };
 }

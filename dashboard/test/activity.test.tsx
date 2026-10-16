@@ -76,6 +76,8 @@ function channel(events: ChannelEvent[] = turnHistory(), verdicts: Verdict[] = [
       events: events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === scope.agent),
     }),
     terminal: () => ({ send: () => false, close: () => {} }),
+    // A Worker without Hosts (ADR 0015): an Agent's page asks, for its Hand off.
+    hosts: async () => null,
     subscribe: (_c: number, onMessage: (m: StreamMessage) => void) => {
       push = onMessage;
       return () => {};

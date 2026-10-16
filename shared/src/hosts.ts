@@ -129,6 +129,11 @@ export interface SpawnAgentRequest {
   /** The session's first prompt, as the requesting Person's words. */
   brief?: string;
   permissionMode?: PermissionMode;
+  /**
+   * The Agent whose work it carries on (ADR 0024): it starts with that one's Hand-off
+   * Brief, as information. Any Agent on the Channel.
+   */
+  from?: AgentId;
 }
 
 /**
@@ -164,6 +169,8 @@ export interface HostSpawnMessage {
   by: PersonName;
   /** The lead that asked for `by` (ADR 0018); the brief is its Directive. */
   lead?: AgentId;
+  /** The Agent it continues (ADR 0024): the wrapper starts with `--from`. */
+  from?: AgentId;
 }
 
 /**

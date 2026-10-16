@@ -6,6 +6,8 @@
 //   POST /api/agents/:id/end         the session ended; the Agent goes Gone
 //   GET  /api/agents/:id/touched-files  the files the Agent has edited (Hook Capture)
 //   GET  /api/agents/:id/transcript  a page of its session, from its wrapper, redacted; anyone (ADR 0019)
+//   GET  /api/agents/:id/summary     what the Channel knows of it; anyone, Gone or not (ADR 0024)
+//   GET  /api/agents/:id/terminal    its screen, from its wrapper, redacted; anyone (ADR 0024)
 //   POST /api/agents/:id/proxy-mode  set the Agent's Proxy mode; its own Person only
 //   POST /api/agents/:id/nickname    rename the Agent; itself, or any Person (ADR 0009)
 //   POST /api/agents/:id/model       the model it runs on; itself or its Person (ADR 0010)
@@ -21,10 +23,12 @@ import type {
   AccountsResponse,
   AgentId,
   AgentResponse,
+  AgentSummary,
   AgentsResponse,
   Cli,
   ProxyMode,
   RegisterAgentRequest,
+  TerminalReadResponse,
   TouchedFilesResponse,
   TranscriptResponse,
 } from "../../shared/src/index";
@@ -61,6 +65,8 @@ export type AgentRoute =
   | { kind: "end"; id: AgentId }
   | { kind: "touched-files"; id: AgentId }
   | { kind: "transcript"; id: AgentId }
+  | { kind: "summary"; id: AgentId }
+  | { kind: "terminal"; id: AgentId }
   | { kind: "proxy-mode"; id: AgentId }
   | { kind: "nickname"; id: AgentId }
   | { kind: "model"; id: AgentId }
@@ -70,12 +76,14 @@ export type AgentRoute =
   | { kind: "role-revoke"; id: AgentId };
 
 const AGENT_ACTION =
-  /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|transcript|proxy-mode|nickname|model|approval|approval\/deny|role)$/;
+  /^\/api\/agents\/([^/]+)\/(heartbeat|end|touched-files|transcript|summary|terminal|proxy-mode|nickname|model|approval|approval\/deny|role)$/;
 const METHODS: Record<string, readonly string[]> = {
   heartbeat: ["POST"],
   end: ["POST"],
   "touched-files": ["GET"],
   transcript: ["GET"],
+  summary: ["GET"],
+  terminal: ["GET"],
   "proxy-mode": ["POST"],
   nickname: ["POST"],
   model: ["POST"],
@@ -150,6 +158,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
     context,
     host,
     spawn,
+    continues,
   } = body;
   const cleanedUsage = cleanUsage(usage);
   const cleanedContext = cleanContext(context);
@@ -189,6 +198,9 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
   if (spawn !== undefined && (typeof spawn !== "string" || host === undefined)) {
     return { ok: false, reason: '"spawn" must be the ID of the spawn its "host" was asked for.' };
   }
+  if (continues !== undefined && (typeof continues !== "string" || continues.split("/").length !== 3)) {
+    return { ok: false, reason: '"continues" must be the ID of the Agent this session carries on.' };
+  }
   return {
     ok: true,
     value: {
@@ -209,6 +221,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
       ...(cleanedUsage === undefined ? {} : { usage: cleanedUsage }),
       ...(host === undefined ? {} : { host }),
       ...(spawn === undefined ? {} : { spawn: spawn as string }),
+      ...(continues === undefined ? {} : { continues: continues as AgentId }),
     },
   };
 }
@@ -266,8 +279,19 @@ export async function handleAgentRoute(
     case "transcript": {
       const from = url.searchParams.get("from") ?? "0";
       if (!/^\d{1,9}$/.test(from)) return fail(400, '"from" must be an entry number, from 0.');
-      const result = await channel.readTranscript(caller, route.id, Number(from));
+      const latest = url.searchParams.get("latest");
+      if (latest !== null && latest !== "1") return fail(400, '"latest" must be 1, for the page that ends now.');
+      const result = await channel.readTranscript(caller, route.id, Number(from), latest === "1");
       return result.ok ? json<TranscriptResponse>(result.page) : fail(result.status, result.reason);
+    }
+    case "summary": {
+      const summary = await channel.agentSummary(route.id);
+      if (summary === null) return fail(404, `No Agent ${route.id} on this Channel.`);
+      return json<AgentSummary>(summary);
+    }
+    case "terminal": {
+      const result = await channel.readTerminal(caller, route.id);
+      return result.ok ? json<TerminalReadResponse>(result.screen) : fail(result.status, result.reason);
     }
     case "proxy-mode": {
       const { mode } = await readJson(request);

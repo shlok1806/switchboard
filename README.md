@@ -123,11 +123,11 @@ http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
 
 ```sh
 switchboard login --url <channel url>
-switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...claude arguments]
-switchboard run codex  [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...codex arguments]
-switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...gemini arguments]
+switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [--from <agent>] [...claude arguments]
+switchboard run codex  [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [--from <agent>] [...codex arguments]
+switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [--from <agent>] [...gemini arguments]
 switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
-switchboard spawn [--host <name>] [--cwd <folder>] [--nickname <name>] [--model <id>] [--permission-mode <mode>] [--repo <owner>/<repo>] [brief...]
+switchboard spawn [--host <name>] [--cwd <folder>] [--nickname <name>] [--model <id>] [--permission-mode <mode>] [--from <agent>] [--repo <owner>/<repo>] [brief...]
 switchboard stop <agent> [--repo <owner>/<repo>]
 switchboard host install|uninstall|run|status
 ```
@@ -401,9 +401,10 @@ decision and why, a fact, a dead end, an open question, or the files that matter
 and everyone else's, gets a digest of the notes it has not seen at its next turn, and
 reads them in full with `memory_recent` and `memory_search`.
 
-- The digest is one line per note, newest first, decisions before anything else, at most
-  about 1,500 tokens. It is information from other Agents, never an instruction, and a
-  note never wakes an idle Agent.
+- The digest is one line per note, at most about 1,500 tokens. Notes on the Tasks the
+  Agent holds and the files it edited come first, then decisions and dead ends, then
+  questions, newest first among equals (ADR 0024). It is information from other Agents,
+  never an instruction, and a note never wakes an idle Agent.
 - A resumed session is told only what came while it was away: the wrapper keeps the last
   note each Agent was shown under `~/.config/switchboard/memory/`.
 - Secrets the Proxy Capture recognises are masked before a note leaves your machine.
@@ -428,11 +429,45 @@ through `GET /api/agents/:id/transcript?from=<entry>`.
   gets 429 and can try again a moment later.
 - Only a running session can be read: a Gone Agent's transcript cannot. Do not run a session
   you need kept private on a shared Channel.
-- A Claude Code Agent is reminded to write notes: once at the end of a turn that changed
-  files and wrote none, and once when its context nears compaction. Nothing writes a note
-  for it.
+- A Claude Code or Codex Agent is reminded to write notes once at the end of a turn that
+  changed files and wrote none, and a Claude Code Agent once more when its context nears
+  compaction (ADR 0024). Codex cannot hold a compaction back and Gemini CLI's hooks are
+  untried, so neither gets that second reminder. Nothing writes a note for an Agent.
 - A Channel takes `MEMORY_NOTES_PER_DAY` notes a day (300). Notes show on the
   Dashboard's feed and on their Task's timeline.
+
+### Carrying on from another Agent
+
+Every session on the Channel can see what the others are on, without a Person copying text
+between them (ADR 0024):
+
+- `list_agents` names each Agent's Presence, Host, the Tasks it holds and what it is doing.
+- `agent_summary` reads one Agent's summary: its first prompt's summary, its Tasks with
+  their Steps, its latest Updates, the files it edited, its notes and its Tasks' open
+  questions and dead ends. It is built from what the Channel already holds, so it works
+  for a Gone Agent too. People read it through `GET /api/agents/:id/summary`.
+- `agent_terminal` reads a running Agent's screen once, as the same redacted text its
+  watchers get, at most 32 KB: a larger screen comes back as its bottom rows, with a count
+  of the rows left out. The Channel records a `terminal.read` Event. `agent_transcript` takes
+  `latest: true` for the page that ends at the newest entry.
+
+A new session can continue another Agent's work:
+
+```sh
+switchboard run claude --from api-client      # an Agent ID, its short form or its Nickname
+switchboard spawn --from api-client "Finish the retries, then open a PR."
+```
+
+- The wrapper reads the predecessor's summary before the CLI starts, and refuses to start
+  when the Channel has no such Agent. The session's first hook adds that summary to the
+  model's context as the Hand-off Brief, framed as information from the Channel and capped
+  at about 2,000 tokens. Your prompt, or a spawn's brief, is still the instruction.
+- The Channel keeps which Agent the session continues and records an `agent.handoff`
+  Event. The Dashboard's Agent page says "continued from" and "handed off to", and its
+  Hand off button opens Start an Agent with the predecessor's folder and a brief to edit.
+- A Hand-off never moves a Claim. If the predecessor still holds its Task, it releases
+  it, or once it is Gone you take it over.
+- A lead's `agent_spawn` takes `from` too.
 
 ### The canvas
 
