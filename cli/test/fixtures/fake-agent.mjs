@@ -5,7 +5,8 @@
 // - codex: `-c hooks.<Event>=[...]` and `-c mcp_servers.<name>.*` overrides. It runs
 //   hooks only when FAKE_CODEX_TRUSTED=1, as Codex runs session hooks only once the
 //   Person trusts them in /hooks. It picks a UUIDv7-like thread ID (or takes
-//   `resume <id>`) and writes its session file under $CODEX_HOME/sessions.
+//   `resume <id>`, or `resume --last`: the newest session file's) and writes its
+//   session file under $CODEX_HOME/sessions.
 // - gemini: the settings file in $GEMINI_CLI_SYSTEM_SETTINGS_PATH (`hooks`,
 //   `mcpServers`), with Gemini's hook names; it runs hooks with a sanitized
 //   environment. It picks a UUID (or takes `--resume <id>`).
@@ -36,7 +37,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -93,17 +94,24 @@ export async function runFake(dialect) {
   let resumed = false;
   /** Codex starts its session (session file, SessionStart hook) at the first prompt (seen with codex-cli 0.159.1). */
   let writeSessionFile = () => {};
+  const home = process.env.CODEX_HOME || join(homedir(), ".codex");
   if (dialect === "codex") {
     const at = rest.indexOf("resume");
     if (at !== -1 && rest[at + 1] && !rest[at + 1].startsWith("-")) {
       sessionId = rest[at + 1];
+      resumed = true;
+    } else if (at !== -1 && rest[at + 1] === "--last") {
+      const files = readdirSync(join(home, "sessions"), { recursive: true })
+        .map((name) => join(home, "sessions", String(name)))
+        .filter((path) => path.endsWith(".jsonl"))
+        .sort((a, b) => statSync(a).mtimeMs - statSync(b).mtimeMs);
+      sessionId = /([\w-]{36})\.jsonl$/.exec(files.at(-1) ?? "")?.[1];
       resumed = true;
     } else {
       // UUIDv7-like: the clock first, so every session starts the same.
       const hex = `01a0f2${randomBytes(13).toString("hex")}`;
       sessionId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
     }
-    const home = process.env.CODEX_HOME || join(homedir(), ".codex");
     const now = new Date();
     const two = (n) => String(n).padStart(2, "0");
     const dir = join(home, "sessions", String(now.getFullYear()), two(now.getMonth() + 1), two(now.getDate()));

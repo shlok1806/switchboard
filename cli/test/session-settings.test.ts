@@ -1,10 +1,10 @@
 // The per-session Claude Code settings the wrapper passes with --settings, and
 // how a hook's input becomes small Hook Events.
 
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { claude } from "../src/clis/claude";
 import type { HookCapture } from "../src/hooks/capture";
 import { HookSummarizer, SWITCHBOARD_TOOL, shortCommand } from "../src/hooks/summarize";
@@ -12,6 +12,13 @@ import type { SessionTools } from "../src/mcp-config";
 import { MCP_SERVER_NAME } from "../src/mcp-server";
 import { anthropicMessages } from "../src/proxy/anthropic";
 import { applySessionSettings, mergeSettings } from "../src/session-settings";
+
+/** A temp dir the current test removes when it finishes. */
+async function tempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 const hook = (command: string) => ({ type: "command" as const, command });
 
@@ -31,7 +38,7 @@ describe("session settings", () => {
   });
 
   it("writes the session's settings file and points --settings at it", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "switchboard-settings-"));
+    const dir = await tempDir("switchboard-settings-");
     const args = await applySessionSettings(["--model", "opus"], dir, dir, [
       { hooks: { Stop: [{ hooks: [hook("x")] }] } },
     ]);
@@ -42,7 +49,7 @@ describe("session settings", () => {
   });
 
   it("keeps the Person's own --settings, as a file or as JSON, and adds ours", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "switchboard-settings-"));
+    const dir = await tempDir("switchboard-settings-");
     await writeFile(join(dir, "mine.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [hook("mine")] }] } }));
     const ours = { hooks: { Stop: [{ hooks: [hook("ours")] }] } };
 
@@ -112,7 +119,7 @@ describe("summarizing hooks", () => {
 describe("Claude Code's proxy settings", () => {
   // What `install` gives Claude Code for its environment, in both places it reads it.
   async function proxyEnv(upstream: string, env: NodeJS.ProcessEnv = {}, personSettings?: object) {
-    const dir = await mkdtemp(join(tmpdir(), "switchboard-claude-"));
+    const dir = await tempDir("switchboard-claude-");
     const configDir = join(dir, "claude-config");
     await mkdir(configDir);
     if (personSettings) await writeFile(join(configDir, "settings.json"), JSON.stringify(personSettings));

@@ -120,7 +120,9 @@ export function openStartAgent(prefill?: StartAgentPrefill) {
 /**
  * Starts a new Agent that carries on `agent`'s work (ADR 0024): the sheet opens with its
  * folder and a brief to edit, and the new session starts with what the Channel knows of it.
- * Hidden on a Channel whose Worker has no Hosts.
+ * It starts on one of the Person's Hosts, or, for a Person with none, the sheet gives the
+ * `switchboard run claude --from` command for a terminal. Hidden while the Worker's answer
+ * on Hosts is unknown, and on a Worker without them (ADR 0015).
  */
 export function HandOffButton({ agent, task }: { agent: Agent; task?: Pick<Task, "number"> }) {
   const supported = useHostsSupported();
