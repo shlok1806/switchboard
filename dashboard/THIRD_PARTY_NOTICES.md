@@ -15,9 +15,9 @@ components are re-skinned through those tokens only.
 | Project | Licence | Copyright | Files |
 | --- | --- | --- | --- |
 | Kibo UI (github.com/shadcnblocks/kibo, registry item `kanban` at kibo-ui.com/r/kanban.json) | MIT | (c) 2023 - present shadcnblocks | `src/components/kibo-ui/kanban` (the Tasks board), `banner` |
-| Beautiful UI (github.com/slev12397/beautiful-ui, registry beautifului.dev) | MIT | (c) 2026 Shane Levine | `src/components/atoms/*` (Button), `src/components/primitives/*` (ChatComposer, CodeBlock, LoadingState, ToolChips) |
+| Beautiful UI (github.com/slev12397/beautiful-ui, registry beautifului.dev) | MIT | (c) 2026 Shane Levine | `src/components/atoms/*` (Button), `src/components/primitives/*` (CodeBlock, LoadingState) |
 | shadcn/ui (github.com/shadcn-ui/ui) | MIT | (c) 2023 shadcn | `src/components/ui/*` except the prompt-kit files below, `src/hooks/use-mobile.ts` |
-| prompt-kit (github.com/ibelick/prompt-kit) | MIT | (c) 2025 Julien Thibeaut | `src/components/ui/tool.tsx`, `reasoning.tsx` |
+| prompt-kit (github.com/ibelick/prompt-kit) | MIT | (c) 2025 Julien Thibeaut | `src/components/ui/reasoning.tsx` |
 
 Every file above is re-skinned and says so in a header comment where it changed.
 
@@ -30,7 +30,6 @@ Every file above is re-skinned and says so in a header comment where it changed.
 | Radix UI (`radix-ui`, `@radix-ui/react-use-controllable-state`) | MIT | (c) 2022 WorkOS |
 | cmdk | MIT | (c) 2022 Paco Coursey |
 | Sonner | MIT | (c) 2023 Emil Kowalski |
-| react-resizable-panels | MIT | (c) 2018 Brian Vaughn |
 | tw-animate-css | MIT | (c) 2025 Wombosvideo |
 | class-variance-authority, clsx, tailwind-merge | Apache-2.0 / MIT / MIT | their authors |
 | Tailwind CSS, Vite, React | MIT | their authors |

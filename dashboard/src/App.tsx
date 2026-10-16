@@ -1,5 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
-import { toast } from "sonner";
+import { Suspense, lazy, useState } from "react";
 import { PhoneBar, TabBar, TopBar } from "@/components/shell/nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
@@ -7,15 +6,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import LoadingState from "@/components/primitives/LoadingState";
 import { Button } from "@/components/atoms/Button";
 import { CommandPalette } from "@/components/domain/palette";
-import { useChannel, useIndex, useStore } from "@/data/store";
+import { useChannel, useIndex } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { DOWNGRADE_LABEL, prob } from "@/lib/format";
-import { go, href, useRoute, type Route } from "@/lib/router";
+import { href, useRoute, type Route } from "@/lib/router";
 import { signOut } from "@/lib/session";
 
 // One chunk per route, loaded on first visit.
 const NowView = lazy(() => import("@/views/NowView").then((m) => ({ default: m.NowView })));
-const FeedView = lazy(() => import("@/views/FeedView").then((m) => ({ default: m.FeedView })));
+const ActivityView = lazy(() => import("@/views/ActivityView").then((m) => ({ default: m.ActivityView })));
 const TasksView = lazy(() => import("@/views/TasksView").then((m) => ({ default: m.TasksView })));
 const TaskDetail = lazy(() => import("@/views/TaskDetail").then((m) => ({ default: m.TaskDetail })));
 const AgentsView = lazy(() => import("@/views/AgentsView").then((m) => ({ default: m.AgentsView })));
@@ -23,7 +21,6 @@ const AgentDetail = lazy(() => import("@/views/AgentDetail").then((m) => ({ defa
 const CanvasView = lazy(() => import("@/views/CanvasView").then((m) => ({ default: m.CanvasView })));
 const MemoryView = lazy(() => import("@/views/MemoryView").then((m) => ({ default: m.MemoryView })));
 const HostsView = lazy(() => import("@/views/HostsView").then((m) => ({ default: m.HostsView })));
-const CompareView = lazy(() => import("@/views/CompareView").then((m) => ({ default: m.CompareView })));
 
 function ViewFallback() {
   return (
@@ -32,33 +29,6 @@ function ViewFallback() {
         <Skeleton key={i} className="h-11 bg-panel" />
       ))}
     </div>
-  );
-}
-
-/** Toast when the Relay fires an Interrupt: the moment Persons most want to judge. */
-function useInterruptToasts() {
-  const store = useStore();
-  useEffect(
-    () =>
-      store.onMessage((m) => {
-        if (m.type !== "verdict") return;
-        const v = m.verdict;
-        if (v.option === "interrupt" && v.probabilities) {
-          toast(`Interrupt to ${v.agent}`, {
-            description: `Jev ${prob(v.probabilities.interrupt)} interrupt, ${prob(v.probabilities.queue)} queue`,
-            action: { label: "View", onClick: () => go({ view: "feed", event: v.event }) },
-          });
-        } else if (v.downgraded && v.probabilities) {
-          toast(`Queued for ${v.agent}, downgraded`, {
-            description:
-              v.downgraded.reason === "below-threshold"
-                ? `Interrupt ${prob(v.probabilities.interrupt)} was below the threshold`
-                : DOWNGRADE_LABEL[v.downgraded.reason].replace(/^./, (c) => c.toUpperCase()),
-            action: { label: "View", onClick: () => go({ view: "feed", event: v.event }) },
-          });
-        }
-      }),
-    [store],
   );
 }
 
@@ -105,7 +75,6 @@ export default function App() {
   const mobile = useIsMobile();
   const { taskByNumber } = useIndex();
   const [palette, setPalette] = useState(false);
-  useInterruptToasts();
 
   if (state.status === "loading") return <Loading />;
   if (state.status === "error")
@@ -142,7 +111,7 @@ export default function App() {
         <main className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] sm:pb-0">
           <Suspense fallback={<ViewFallback />}>
             {route.view === "now" && <NowView />}
-            {route.view === "feed" && <FeedView selected={route.event} />}
+            {route.view === "feed" && <ActivityView selected={route.event} byTurn={route.by === "turn"} turn={route.turn} />}
             {route.view === "tasks" && <TasksView />}
             {route.view === "task" && <TaskDetail number={route.number} />}
             {route.view === "agents" && <AgentsView />}
@@ -150,7 +119,6 @@ export default function App() {
             {route.view === "canvas" && <CanvasView selected={route.agent} />}
             {route.view === "memory" && <MemoryView />}
             {route.view === "hosts" && <HostsView selected={route.host} />}
-            {route.view === "compare" && <CompareView turn={route.turn} />}
           </Suspense>
         </main>
         {mobile && <TabBar route={route} />}

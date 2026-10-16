@@ -14,9 +14,10 @@ import { Chip } from "@/components/atoms/Chip";
 import { LeadDialog, useSetLead } from "@/components/domain/agent-role";
 import { PendingApproval } from "@/components/domain/approval";
 import { ContextWindow } from "@/components/domain/context";
-import { EventRow } from "@/components/domain/event";
+import { EventRow } from "@/components/domain/log";
 import { contextPercent, shortName, useClaimsOf } from "@/components/domain/fleet";
 import { OlderRow } from "@/components/domain/older";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { IssueLink } from "@/components/domain/pending";
 import { StopAgentButton } from "@/components/domain/start-agent";
 import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
@@ -35,11 +36,6 @@ import { cn } from "@/lib/utils";
 
 const CAPTURES = ["All", "Proxy", "Hook", "Tool"] as const;
 type Part = "terminal" | "history";
-
-/** Newest first here, so a group is the same sender within two minutes going back. */
-function sameSender(prev: ChannelEvent, e: ChannelEvent) {
-  return prev.actor.kind === "agent" && e.actor.kind === "agent" && prev.actor.agentId === e.actor.agentId && e.type !== "directive" && prev.type !== "directive" && Math.abs(Date.parse(prev.at) - Date.parse(e.at)) < 120_000;
-}
 
 export function AgentDetail({ id }: { id: string }) {
   const { agentById } = useIndex();
@@ -280,7 +276,7 @@ type Scoped = ReturnType<typeof useScopedHistory>;
 /** Everything the Channel heard from or about this Agent, newest first, by Capture. */
 function History({ scoped }: { scoped: Scoped }) {
   const { verdictsByEvent, fresh } = useChannel();
-  const { agentById, taskByNumber } = useIndex();
+  const mobile = useIsMobile();
   const [capture, setCapture] = useState<(typeof CAPTURES)[number]>("All");
   const history = useMemo(
     () =>
@@ -299,26 +295,24 @@ function History({ scoped }: { scoped: Scoped }) {
           </Chip>
         ))}
       </div>
-      <ul className="-mx-3 flex flex-col">
-        {history.length === 0 ? (
-          <li className="px-3 py-6 text-row text-ink-3">{scoped.loading ? "Loading" : "Nothing yet"}</li>
-        ) : (
-          history.map((e, i) => (
+      {history.length === 0 ? (
+        <p className="border-t border-rule py-6 text-row text-ink-3">{scoped.loading ? "Reading the History" : "Nothing yet."}</p>
+      ) : (
+        <ol className="border-t border-rule">
+          {history.map((e) => (
             <EventRow
-              continued={i > 0 && sameSender(history[i - 1]!, e)}
               key={e.id}
               event={e}
               verdicts={verdictsByEvent.get(e.id) ?? []}
-              agentById={agentById}
-              taskByNumber={taskByNumber}
               selected={false}
               fresh={fresh.has(e.id)}
-              onSelect={() => go({ view: "feed", event: e.id })}
+              onPick={() => go({ view: "feed", event: e.id })}
+              mobile={mobile}
             />
-          ))
-        )}
-        {scoped.more && <OlderRow loading={scoped.loading} onClick={scoped.loadOlder} className="px-3" />}
-      </ul>
+          ))}
+          {scoped.more && <OlderRow loading={scoped.loading} onClick={scoped.loadOlder} />}
+        </ol>
+      )}
     </section>
   );
 }

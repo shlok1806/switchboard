@@ -5,7 +5,7 @@
  * reaches them. The only coloured count is the number of lines that need you.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Bot, BookOpen, Check, Columns3, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
+import { Bot, BookOpen, Check, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useNeedsYou } from "@/components/domain/state";
+import { useUnseenInterrupts } from "@/data/interrupts";
 import { useChannel, useMe, useStore } from "@/data/store";
 import { localTime } from "@/lib/format";
 import { href, type Route } from "@/lib/router";
@@ -22,7 +23,7 @@ import { signOut } from "@/lib/session";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "compare" | "memory" | "hosts";
+export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "memory" | "hosts";
 
 /** The views, in the order the keys show them. The icon is for the command palette only. */
 export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
@@ -33,7 +34,6 @@ export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
   { id: "feed", title: "Activity", icon: MessagesSquare },
   { id: "memory", title: "Memory", icon: BookOpen },
   { id: "hosts", title: "Hosts", icon: Server },
-  { id: "compare", title: "Compare", icon: Columns3 },
 ];
 
 export function viewOf(route: Route): ViewId {
@@ -42,14 +42,15 @@ export function viewOf(route: Route): ViewId {
   return route.view;
 }
 
-/** What each key counts: every Agent and every open Task, and the lines that need you. */
+/** What each key counts: every Agent, every open Task, Interrupts not yet read, and the lines that need you. */
 export function useCounts() {
   const { agents, tasks } = useChannel();
   const needYou = useNeedsYou();
+  const interrupts = useUnseenInterrupts();
   return useMemo(() => {
     const open = tasks.filter((t) => t.status !== "done").length;
-    return { agents: agents.length, needYou, tasks: open };
-  }, [agents, tasks, needYou]);
+    return { agents: agents.length, needYou, tasks: open, interrupts };
+  }, [agents, tasks, needYou, interrupts]);
 }
 
 /** The mark: a jack, a square socket with its plug seated. */
@@ -73,7 +74,20 @@ function SignalCount({ n }: { n: number }) {
 }
 
 /** A view as a key: pressed (solid ink) when current. */
-function Key({ view, current, count, needYou }: { view: (typeof VIEWS)[number]; current: boolean; count?: number; needYou?: number }) {
+function Key({
+  view,
+  current,
+  count,
+  countLabel,
+  needYou,
+}: {
+  view: (typeof VIEWS)[number];
+  current: boolean;
+  count?: number;
+  /** What the count counts, for a screen reader, when the key's name does not say. */
+  countLabel?: string;
+  needYou?: number;
+}) {
   return (
     <a
       href={href({ view: view.id })}
@@ -87,7 +101,12 @@ function Key({ view, current, count, needYou }: { view: (typeof VIEWS)[number]; 
       {needYou ? (
         <SignalCount n={needYou} />
       ) : (
-        count !== undefined && <span className={cn("text-[12px] tabular-nums", current ? "text-paper/70" : "text-ink-3")}>{count}</span>
+        count !== undefined && (
+          <span className={cn("text-[12px] tabular-nums", current ? "text-paper/70" : "text-ink-3")}>
+            {count}
+            {countLabel && <span className="sr-only"> {countLabel}</span>}
+          </span>
+        )
       )}
     </a>
   );
@@ -97,7 +116,7 @@ function Key({ view, current, count, needYou }: { view: (typeof VIEWS)[number]; 
 export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; onSearch: () => void }) {
   const current = viewOf(route);
   const c = useCounts();
-  const counts: Partial<Record<ViewId, number>> = { agents: c.agents, tasks: c.tasks };
+  const counts: Partial<Record<ViewId, number>> = { agents: c.agents, tasks: c.tasks, feed: c.interrupts || undefined };
   return (
     <header className="flex h-[var(--topbar-h)] shrink-0 items-center gap-4 border-b border-rule bg-paper px-[var(--gutter)]">
       <a href={href({ view: "now" })} className="flex shrink-0 items-center gap-2 hover:no-underline" aria-label="Switchboard">
@@ -109,7 +128,14 @@ export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; 
       </code>
       <nav aria-label="Views" className="flex items-center gap-1">
         {VIEWS.map((v) => (
-          <Key key={v.id} view={v} current={v.id === current} count={counts[v.id]} needYou={v.id === "now" ? c.needYou : undefined} />
+          <Key
+            key={v.id}
+            view={v}
+            current={v.id === current}
+            count={counts[v.id]}
+            countLabel={v.id === "feed" ? (c.interrupts === 1 ? "new Interrupt" : "new Interrupts") : undefined}
+            needYou={v.id === "now" ? c.needYou : undefined}
+          />
         ))}
       </nav>
       <div className="ml-auto flex shrink-0 items-center gap-4">
@@ -175,6 +201,12 @@ export function TabBar({ route }: { route: Route }) {
           <span className="inline-flex items-center gap-1.5">
             {v.title}
             {v.id === "now" && c.needYou > 0 && <SignalCount n={c.needYou} />}
+            {v.id === "feed" && c.interrupts > 0 && (
+              <span className="text-[12px] text-ink-3 tabular-nums">
+                {c.interrupts}
+                <span className="sr-only"> {c.interrupts === 1 ? "new Interrupt" : "new Interrupts"}</span>
+              </span>
+            )}
           </span>
         </a>
       ))}
@@ -242,11 +274,6 @@ const THEMES: { id: ThemeChoice; label: string; icon: LucideIcon }[] = [
   { id: "light", label: "Light", icon: Sun },
   { id: "dark", label: "Dark", icon: Moon },
 ];
-
-export function initials(name: string) {
-  const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
-}
 
 function MenuItems({ withViews }: { withViews?: boolean }) {
   const me = useMe();

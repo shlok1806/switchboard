@@ -43,15 +43,17 @@ export function FilterSelect({
   label: string;
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  /** `short` names the picked option on the chip when the menu's label is long. */
+  options: { value: string; label: string; short?: string }[];
   allLabel: string;
 }) {
   const on = value !== "";
+  const picked = options.find((o) => o.value === value);
   return (
     <label
       className={cn(
-        "relative inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md pr-7 pl-3 text-small max-sm:pr-6 max-sm:pl-2.5 transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus",
-        on ? "bg-paper-3 font-medium text-ink" : "bg-inset text-ink-2 hover:bg-inset-2 hover:text-ink",
+        "relative inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-[var(--r)] border pr-6 pl-2 text-label font-medium transition-colors duration-[var(--dur)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus",
+        on ? "border-ink text-ink" : "border-rule text-ink-2 hover:border-ink-3 hover:text-ink",
       )}
     >
       <select
@@ -67,8 +69,9 @@ export function FilterSelect({
           </option>
         ))}
       </select>
-      <span className="max-w-[11rem] truncate">{on ? (options.find((o) => o.value === value)?.label ?? value) : label}</span>
-      <ChevronDown className="pointer-events-none absolute right-2.5 size-3.5 opacity-60 max-sm:right-2" aria-hidden />
+      {/* The picked value in full: a chip wraps nothing and cuts nothing. */}
+      <span className="whitespace-nowrap">{on ? (picked?.short ?? picked?.label ?? value) : label}</span>
+      <ChevronDown className="pointer-events-none absolute right-1.5 size-3.5 text-ink-3" aria-hidden />
     </label>
   );
 }

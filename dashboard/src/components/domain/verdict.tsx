@@ -1,9 +1,12 @@
-import type { Agent, AgentId, Verdict, VerdictOption } from "@shared/index";
-import { AlarmClock, ArrowDown } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+/*
+ * What the Relay decided for each Agent about one Event: the decision in words, Jev's three
+ * probabilities as one meter with the threshold an Interrupt must clear, the overlap that
+ * made it ask, and anything that changed the delivery on the way.
+ */
+import type { AgentId, Verdict, VerdictOption } from "@shared/index";
 import { DOWNGRADE_LABEL, VERDICT_LABEL, prob } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { AgentLink, VerdictPill } from "./pills";
+import { HolderLabel } from "./task";
 
 const ORDER: VerdictOption[] = ["interrupt", "queue", "drop"];
 const FILL: Record<VerdictOption, string> = {
@@ -13,131 +16,68 @@ const FILL: Record<VerdictOption, string> = {
 };
 
 /**
- * Jev's three probabilities as one bar, Interrupt first, with the threshold an
- * Interrupt must clear. The numbers sit under the bar so they read without hovering.
+ * Jev's three probabilities as one meter, Interrupt first, with a tick at the threshold an
+ * Interrupt must clear. The figures sit under it so they read without hovering.
  */
 export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict; threshold: number; className?: string }) {
   const p = verdict.probabilities;
   if (!p) {
-    return (
-      <div className={cn("flex flex-col gap-1", className)}>
-        <span className="text-small text-ink-3">
-          {verdict.source === "fallback" ? "Jev did not answer: Queued" : "No overlap: not asked"}
-        </span>
-      </div>
-    );
+    return <p className={cn("text-small text-ink-3", className)}>{verdict.source === "fallback" ? "Jev did not answer, so it was Queued." : "No overlap, so Jev was not asked."}</p>;
   }
   const top = ORDER.reduce((a, b) => (p[b] > p[a] ? b : a));
   return (
     <div className={cn("flex min-w-0 flex-col gap-1", className)}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div
-            className="relative flex h-2 w-full overflow-visible rounded-full bg-track"
-            role="img"
-            aria-label={ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(", ")}
-          >
-            <div className="flex h-full w-full gap-px overflow-hidden rounded-full">
-              {ORDER.map((o) => (
-                <span
-                  key={o}
-                  className={cn("h-full", FILL[o])}
-                  style={{ width: `${p[o] * 100}%` }}
-                />
-              ))}
-            </div>
-            <span
-              aria-hidden
-              className="absolute -top-1 -bottom-1 w-0.5 rounded-full bg-ink-2"
-              style={{ left: `${threshold * 100}%` }}
-            />
-          </div>
-        </TooltipTrigger>
-        <TooltipContent>
-          {ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(" · ")}. Interrupt needs {prob(threshold)}.
-        </TooltipContent>
-      </Tooltip>
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-small tabular-nums">
+      <div className="relative h-1 w-full bg-rule" role="img" aria-label={`${ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(", ")}. An Interrupt needs ${prob(threshold)}.`}>
+        <div className="flex h-full w-full gap-px">
+          {ORDER.map((o) => (
+            <span key={o} className={cn("h-full", FILL[o])} style={{ width: `${p[o] * 100}%` }} />
+          ))}
+        </div>
+        <span aria-hidden className="absolute -top-1 -bottom-1 w-px bg-ink" style={{ left: `${threshold * 100}%` }} />
+      </div>
+      <p className="flex flex-wrap gap-x-3 text-small tabular-nums">
         {ORDER.map((o) => (
-          <span key={o} className={cn("inline-flex items-center gap-1", o === top ? "text-ink" : "text-ink-3")}>
-            <span aria-hidden className={cn("size-1.5 rounded-full", FILL[o])} />
-            <span className="sr-only">{VERDICT_LABEL[o]}</span>
-            {prob(p[o])}
+          <span key={o} className={o === top ? "text-ink" : "text-ink-3"}>
+            {VERDICT_LABEL[o]} {prob(p[o])}
           </span>
         ))}
-      </div>
+      </p>
     </div>
-  );
-}
-
-export function DowngradeNote({ verdict }: { verdict: Verdict }) {
-  if (!verdict.downgraded) return null;
-  const why = DOWNGRADE_LABEL[verdict.downgraded.reason];
-  return (
-    <span className="inline-flex h-6 w-fit items-center gap-1.5 rounded-sm bg-paper-2 px-2 text-small text-ink">
-      <ArrowDown className="size-3" aria-hidden />
-      Downgraded: {why}
-    </span>
-  );
-}
-
-/** A Queue that did not wait for the next turn: the Agent was idle, and its wrapper woke it with it. */
-function WokeNote() {
-  return (
-    <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-paper-3 px-2 py-0.5 text-small text-ink">
-      <AlarmClock className="size-3" aria-hidden />
-      Delivered by a Wake: the Agent was idle
-    </span>
   );
 }
 
 /** Every Verdict for one Event: which Agent, what it decided, and why. */
 export function VerdictTable({
   verdicts,
-  agentById,
   threshold,
   woken = new Set(),
 }: {
   verdicts: Verdict[];
-  agentById: Map<AgentId, Agent>;
   threshold: number;
   /** The Agents whose Queue Verdict on this Event a Wake delivered. */
   woken?: ReadonlySet<AgentId>;
 }) {
-  if (!verdicts.length) {
-    return <p className="text-small text-ink-3">No Agent was asked.</p>;
-  }
-  const sorted = [...verdicts].sort(
-    (a, b) => ORDER.indexOf(a.option) - ORDER.indexOf(b.option) || (a.source === "jev" ? -1 : 1),
-  );
+  if (!verdicts.length) return <p className="text-small text-ink-3">No Agent was asked.</p>;
+  const sorted = [...verdicts].sort((a, b) => ORDER.indexOf(a.option) - ORDER.indexOf(b.option) || (a.source === "jev" ? -1 : 1));
   return (
-    <ul className="@container flex flex-col gap-0.5 overflow-hidden rounded-md">
+    <ul>
       {sorted.map((v) => (
-        <li key={v.agent} className="grid gap-2 bg-panel px-3 py-3 @xl:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] @xl:gap-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <AgentLink id={v.agent} agent={agentById.get(v.agent as AgentId)} />
-            <div className="flex flex-wrap items-center gap-1.5">
-              <VerdictPill option={v.option} />
-              {v.latencyMs !== undefined && (
-                <span className="text-small text-ink-3 tabular-nums">{v.latencyMs} ms</span>
-              )}
-            </div>
-          </div>
-          <div className="flex min-w-0 flex-col gap-1.5">
-            <VerdictBar verdict={v} threshold={threshold} />
-            {(v.overlap.files.length > 0 || v.overlap.symbols.length > 0) && (
-              <div className="flex flex-wrap items-center gap-1 text-small" aria-label="Overlap">
-                {v.overlap.symbols.map((s) => (
-                  <code key={s} className="rounded-sm bg-hover px-1.5 py-px font-mono text-ink-2">{s}</code> /* taste-skill-ignore: a symbol */
-                ))}
-                {v.overlap.files.map((f) => (
-                  <code key={f} className="rounded-sm bg-hover px-1.5 py-px font-mono text-ink-2">{f}</code> /* taste-skill-ignore: a path */
-                ))}
-              </div>
-            )}
-            <DowngradeNote verdict={v} />
-            {v.delivered === "queue" && woken.has(v.agent) && <WokeNote />}
-          </div>
+        <li key={v.agent} className="flex flex-col gap-1.5 border-b border-rule py-2.5">
+          <p className="flex flex-wrap items-baseline justify-between gap-x-3 text-row">
+            <HolderLabel holder={{ kind: "agent", agentId: v.agent }} />
+            <span className="text-small tabular-nums">
+              <span className={cn("font-semibold", v.option === "drop" ? "text-ink-2" : "text-ink")}>{VERDICT_LABEL[v.option]}</span>
+              {v.latencyMs !== undefined && <span className="text-ink-3"> · {v.latencyMs} ms</span>}
+            </span>
+          </p>
+          <VerdictBar verdict={v} threshold={threshold} />
+          {(v.overlap.files.length > 0 || v.overlap.symbols.length > 0) && (
+            <p className="text-small [overflow-wrap:anywhere] text-ink-3">
+              Overlaps <code className="text-ink-2">{[...v.overlap.symbols, ...v.overlap.files].join(", ")}</code>
+            </p>
+          )}
+          {v.downgraded && <p className="text-small text-ink">Queued instead: {DOWNGRADE_LABEL[v.downgraded.reason]}.</p>}
+          {v.delivered === "queue" && woken.has(v.agent) && <p className="text-small text-ink">Delivered by a Wake: the Agent was idle.</p>}
         </li>
       ))}
     </ul>
