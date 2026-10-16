@@ -125,6 +125,8 @@ export class HookSummarizer {
       case "SessionEnd":
         return [];
       case "Stop":
+        // A hook blocked this turn's first Stop and the CLI carried on: its end is counted.
+        if (input.stop_hook_active === true) return [];
         this.turns += 1;
         return [{ type: "turn.end", payload: { turn: this.turns } }];
       case "PostToolUse":

@@ -2532,9 +2532,9 @@ describe("Idle wake", () => {
     return (await api<HistoryResponse>("/api/events?tail=1000")).events;
   }
 
-  /** The `wake` Events for Agent `id`, oldest first. */
+  /** The `wake` Events for Agent `id`, oldest first: from the whole history, so a count never slides out of a page. */
   async function wakesOf(id: string): Promise<EventOf<"wake">[]> {
-    return (await latest()).filter(
+    return (await history()).events.filter(
       (e): e is EventOf<"wake"> => e.type === "wake" && e.actor.kind === "agent" && e.actor.agentId === id,
     );
   }
@@ -2755,6 +2755,230 @@ describe("Idle wake", () => {
       return found.length > 0 ? found : undefined;
     });
     expect(again?.prompt).toContain('posted an Update: "One more page size."');
+  }, 150_000);
+});
+
+// A Codex Agent is woken as a Claude Code one is, under the same cap (ADR 0027). Its
+// stand-in, like Codex, starts its session at the first prompt and continues a turn
+// whose Stop hook was blocked.
+describe("Idle wake in Codex", () => {
+  let a: Terminal;
+  let b: Terminal;
+  let aId = "";
+  let bId = "";
+  /** A's Task and B's Task. */
+  let pager = 0;
+  let styles = 0;
+  /** What each fake runs in a turn a pasted prompt starts at its idle prompt. */
+  let replyA = "";
+  let replyB = "";
+  /** How long Codex's stand-in continues a turn after its Stop hook was blocked. */
+  const CONTINUE_SECONDS = 6;
+
+  beforeAll(async () => {
+    const origin = join(scratch, "codex-wake-origin.git");
+    await git(scratch, "init", "--quiet", "--bare", "-b", "main", origin);
+    const seed = join(scratch, "codex-wake-seed");
+    await git(scratch, "clone", "--quiet", origin, seed);
+    await git(seed, "commit", "--quiet", "--allow-empty", "-m", "Start");
+    await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    await cloneChannel(origin, join(scratch, "codex-wake-a"));
+    await cloneChannel(origin, join(scratch, "codex-wake-b"));
+    github.origin = origin;
+    pager = github.open("Page the results");
+    styles = github.open("Style the results");
+    await openedOnGitHub(pager);
+    await openedOnGitHub(styles);
+    replyA = join(scratch, "codex-wake-reply-a");
+    replyB = join(scratch, "codex-wake-reply-b");
+    await writeFile(replyA, "");
+    await writeFile(replyB, "");
+    await mkdir(join(scratch, "codex-wake-home"), { recursive: true });
+
+    a = new Terminal(
+      ["run", "codex"],
+      {
+        ...gitEnv,
+        ...INTERRUPT_ENV,
+        SWITCHBOARD_CODEX_BIN: join(here, "fixtures", "fake-codex.mjs"),
+        CODEX_HOME: join(scratch, "codex-wake-home"),
+        FAKE_CODEX_TRUSTED: "1",
+        FAKE_AGENT_REPLY_FILE: replyA,
+        FAKE_AGENT_CONTINUE_SECONDS: String(CONTINUE_SECONDS),
+      },
+      await realpath(join(scratch, "codex-wake-a")),
+    );
+    const sessionId = (await a.waitForOutput(/FAKE-CODEX session=([\w-]+)/))[1] ?? "";
+    aId = `e2e/codex/${sessionId.slice(-4)}`;
+    b = new Terminal(
+      ["run", "claude"],
+      { ...gitEnv, ...INTERRUPT_ENV, FAKE_CLAUDE_REPLY_FILE: replyB },
+      await realpath(join(scratch, "codex-wake-b")),
+    );
+    bId = (await b.started()).agentEnv;
+    // Codex starts its session, and runs its first hook, at the first prompt.
+    a.type("prompt hello\r");
+    await a.waitForOutput(/FAKE-CODEX prompted/);
+    await a.attached(aId);
+    await b.attached(bId);
+    expect(await codexTool("claim_task", { task: pager })).toContain(`You hold Task #${pager} now`);
+    expect(await callTool(b, "claim_task", { task: styles })).toContain(`You hold Task #${styles} now`);
+    // Jev Queues everything addressed to an Agent; nothing is an Interrupt here.
+    jev.answer = { drop: 0.1, queue: 0.8, interrupt: 0.1 };
+  }, 60_000);
+
+  afterAll(async () => {
+    a?.type("quit\r");
+    b?.type("quit\r");
+    await Promise.all([a?.exited, b?.exited]);
+  });
+
+  /** Has Codex's stand-in call one of Switchboard's tools, and returns its answer. */
+  async function codexTool(tool: string, input: unknown): Promise<string> {
+    const seen = a.output.length;
+    a.type(`call ${tool} ${JSON.stringify(input)}\r`);
+    await waitFor(
+      `${tool} to answer`,
+      () => (a.output.slice(seen).includes(`FAKE-CODEX done ${tool}`) ? true : undefined),
+      30_000,
+    );
+    const answer = new RegExp(`FAKE-CODEX ${tool}(?: ERROR)?: (".*")`).exec(
+      a.output.slice(seen).replace(/\r/g, ""),
+    )?.[1];
+    return answer ? (JSON.parse(answer) as string) : "";
+  }
+
+  async function latest(): Promise<ChannelEvent[]> {
+    return (await api<HistoryResponse>("/api/events?tail=1000")).events;
+  }
+
+  /** The `wake` Events for Agent `id`, oldest first, from the whole history. */
+  async function wakesOf(id: string): Promise<EventOf<"wake">[]> {
+    return (await history()).events.filter(
+      (e): e is EventOf<"wake"> => e.type === "wake" && e.actor.kind === "agent" && e.actor.agentId === id,
+    );
+  }
+
+  function queuedFor(id: string, match: (event: ChannelEvent) => boolean): Promise<EventOf<"verdict">> {
+    return waitFor(
+      "the Queue Verdict",
+      async () => {
+        const events = await latest();
+        const event = events.filter(match).at(-1);
+        return events.find(
+          (e): e is EventOf<"verdict"> =>
+            e.type === "verdict" && e.payload.agent === id && e.payload.event === event?.id,
+        );
+      },
+      30_000,
+    );
+  }
+
+  /** The prompts pasted into Codex since output position `from`. */
+  function pastedSince(from: number): { prompt: string; during: string }[] {
+    const output = a.output.slice(from).replace(/\r/g, "");
+    return [...output.matchAll(/FAKE-CODEX pasted prompt=(".*?") during=(\w+)/g)].map((m) => ({
+      prompt: JSON.parse(m[1] ?? '""') as string,
+      during: m[2] ?? "",
+    }));
+  }
+
+  /** The Person ends the turn their last line started, so the Agent waits at its prompt. */
+  async function idle(term: Terminal, tag: string, ended: RegExp): Promise<void> {
+    const seen = term.output.length;
+    term.type("end\r");
+    await waitFor(`${tag}'s turn to end`, () => (ended.test(term.output.slice(seen)) ? true : undefined));
+  }
+  const idleA = () => idle(a, "A", /FAKE-CODEX turn ended/);
+  const idleB = () => idle(b, "B", /FAKE-CLAUDE turn ended/);
+
+  it("wakes an idle Codex Agent for an Update on its Task, as one prompt, once its Person is quiet", async () => {
+    await idleA();
+    await idleB();
+    const seen = a.output.length;
+    const endedAt = Date.now();
+
+    await callTool(b, "post_update", { task: pager, text: "Results now come in pages of 25." });
+    const update = await queuedFor(aId, (e) => e.type === "update" && e.task === pager);
+    const [woken] = await waitFor("Codex to be woken", () => {
+      const found = pastedSince(seen);
+      return found.length > 0 ? found : undefined;
+    });
+    expect(Date.now() - endedAt).toBeGreaterThanOrEqual(QUIET_SECONDS * 1000);
+    // Typed at its idle prompt, where it starts a turn of its own.
+    expect(woken?.during).toBe("nothing");
+    expect(woken?.prompt.split("\n")[0]).toContain("[Switchboard] Wake: this turn started because messages arrived");
+    expect(woken?.prompt).toContain(`From Agent ${bId} on Task #${pager}`);
+    expect(woken?.prompt).toContain('posted an Update: "Results now come in pages of 25."');
+    await a.waitForOutput(/FAKE-CODEX pasted turn done/);
+
+    const [wake] = await waitFor("the wake Event", async () => {
+      const found = await wakesOf(aId);
+      return found.length > 0 ? found : undefined;
+    });
+    expect(wake?.payload).toMatchObject({ verdicts: [update.id], events: [update.payload.event], directives: [] });
+  }, 60_000);
+
+  it("waits for the end of a turn Codex continues after its Stop hook asked for notes", async () => {
+    // The Person's turn edits files and writes no note: the wrapper blocks its Stop once,
+    // and Codex carries on with the turn.
+    const seen = a.output.length;
+    a.type("turn\r");
+    await a.waitForOutput(/FAKE-CODEX continuing the turn/);
+    await callTool(b, "post_update", { task: pager, text: "Page size is 50 after all." });
+    await queuedFor(aId, (e) => e.type === "update" && e.task === pager && e.payload.text.includes("50 after all"));
+    await waitFor(
+      "the continued turn to end",
+      () => (/FAKE-CODEX turn done/.test(a.output.slice(seen)) ? true : undefined),
+      CONTINUE_SECONDS * 1000 + 5000,
+    );
+    const [woken] = await waitFor("Codex to be woken", () => {
+      const found = pastedSince(seen);
+      return found.length > 0 ? found : undefined;
+    });
+    // Never typed into the turn it continued, only once that turn ended.
+    expect(woken?.during).toBe("nothing");
+    expect(woken?.prompt).toContain('posted an Update: "Page size is 50 after all."');
+    await a.waitForOutput(/FAKE-CODEX pasted turn done/);
+    expect(pastedSince(seen)).toHaveLength(1);
+  }, 60_000);
+
+  it("stops a Codex Agent and a Claude Code Agent answering each other at the same cap", async () => {
+    await writeFile(replyA, `call post_update ${JSON.stringify({ task: styles, text: "A answers" })}\n`);
+    await writeFile(replyB, `call post_update ${JSON.stringify({ task: pager, text: "B answers" })}\n`);
+    // A Person prompt counts each Agent's Wakes afresh.
+    await idleA();
+    await idleB();
+    const wokenA = (await wakesOf(aId)).length;
+    const wokenB = (await wakesOf(bId)).length;
+    const seen = a.output.length;
+
+    await callTool(b, "post_update", { task: pager, text: "Results are ready to style." });
+    await idleB();
+
+    const capped = await waitFor(
+      "the cap Update",
+      async () =>
+        (await latest()).find(
+          (e): e is EventOf<"update"> =>
+            e.type === "update" &&
+            e.actor.kind === "agent" &&
+            e.actor.agentId === aId &&
+            e.payload.text.includes("stopped waking"),
+        ),
+      90_000,
+    );
+    expect(capped.payload.text).toBe(
+      `Switchboard stopped waking ${aId} for Queued messages: it was woken 3 times in 10 minutes with no prompt or ` +
+        "Directive from its Person. What is Queued for it waits for its next turn, and a prompt or Directive from " +
+        "its Person lets it be woken again.",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    expect((await wakesOf(aId)).length - wokenA).toBe(3);
+    expect((await wakesOf(bId)).length - wokenB).toBe(3);
+    expect(pastedSince(seen)).toHaveLength(3);
+    await writeFile(replyA, "");
+    await writeFile(replyB, "");
   }, 150_000);
 });
 
