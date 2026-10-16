@@ -146,6 +146,8 @@ export function MemoryView({ selected }: { selected?: string }) {
               Find
               <input
                 type="search"
+                // `/` on this list searches here (the palette's shortcut).
+                data-slash-find
                 value={find}
                 onChange={(e) => setFind(e.target.value)}
                 placeholder="retries client.ts"

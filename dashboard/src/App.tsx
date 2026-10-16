@@ -161,7 +161,7 @@ export default function App() {
         </main>
         {mobile && <TabBar route={route} />}
       </div>
-      <CommandPalette open={palette} onOpenChange={setPalette} />
+      <CommandPalette open={palette} onOpenChange={setPalette} route={route} />
       <StartAgentSheet />
       {/* On a phone toasts come in from the top, so they never cover the composer or the tab bar. */}
       <Toaster
