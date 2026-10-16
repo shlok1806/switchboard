@@ -123,15 +123,18 @@ export function useEventsById(ids: readonly string[]): Map<string, ChannelEvent>
   }, [read, events, ids]);
 }
 
+/** Whether an Event's detail is on hand: still being read, not on the Channel, or unreadable. */
+export type DetailStatus = "ready" | "reading" | "missing" | "failed";
+
 /**
  * Event `id` and the Agents a Wake delivered it to. An Event older than those loaded
  * (a link to it) is read by ID, with the Wakes after it: they come soon after it.
  */
-export function useEventDetail(id: string | undefined): { event?: ChannelEvent; woken: Set<AgentId>; loaded: boolean } {
+export function useEventDetail(id: string | undefined): { event?: ChannelEvent; woken: Set<AgentId>; loaded: boolean; status: DetailStatus } {
   const store = useStore();
   const { events } = useChannel();
   const loaded = id === undefined ? undefined : events.find((e) => e.id === id);
-  const [read, setRead] = useState<{ id: string; event?: ChannelEvent; wakes: ChannelEvent[] }>();
+  const [read, setRead] = useState<{ id: string; event?: ChannelEvent; wakes: ChannelEvent[]; failed?: boolean }>();
 
   useEffect(() => {
     if (id === undefined || loaded !== undefined) return;
@@ -141,7 +144,8 @@ export function useEventDetail(id: string | undefined): { event?: ChannelEvent; 
       const wakes = event === undefined ? [] : await store.source.wakesAfter(event.seq);
       if (!cancelled) setRead({ id, event, wakes });
     })().catch(() => {
-      // Not found, or the Channel is unreachable: the detail stays empty.
+      // The Channel is unreachable: the detail says so rather than reading forever.
+      if (!cancelled) setRead({ id, wakes: [], failed: true });
     });
     return () => {
       cancelled = true;
@@ -149,11 +153,13 @@ export function useEventDetail(id: string | undefined): { event?: ChannelEvent; 
   }, [store, id, loaded]);
 
   return useMemo(() => {
-    if (id === undefined) return { woken: new Set(), loaded: true };
+    if (id === undefined) return { woken: new Set(), loaded: true, status: "ready" as const };
     // Every Event after a loaded one is loaded too, so its Wakes and Verdicts are.
-    if (loaded !== undefined) return { event: loaded, woken: wokenFor(events, id), loaded: true };
-    if (read?.id !== id) return { woken: new Set(), loaded: false };
-    return { event: read.event, woken: wokenFor([...read.wakes, ...events], id), loaded: false };
+    if (loaded !== undefined) return { event: loaded, woken: wokenFor(events, id), loaded: true, status: "ready" as const };
+    if (read?.id !== id) return { woken: new Set(), loaded: false, status: "reading" as const };
+    if (read.failed) return { woken: new Set(), loaded: false, status: "failed" as const };
+    if (!read.event) return { woken: new Set(), loaded: false, status: "missing" as const };
+    return { event: read.event, woken: wokenFor([...read.wakes, ...events], id), loaded: false, status: "ready" as const };
   }, [id, loaded, events, read]);
 }
 

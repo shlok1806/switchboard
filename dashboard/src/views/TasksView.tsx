@@ -15,7 +15,8 @@ import { ClaimAction, ClaimForAgentItems, ClaimForLabel, ClaimForMeItem, claimab
 import { FilterSelect } from "@/components/domain/filters";
 import { decideMove, taskGlyph } from "@/components/domain/moves";
 import { NewTaskButton } from "@/components/domain/new-task";
-import { IssueLink, Pending } from "@/components/domain/pending";
+import { IssueLink } from "@/components/domain/pending";
+import { EmptyView } from "@/components/shell/states";
 import { Glyph, State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { COLUMN_GLYPH, COLUMN_LABEL, HolderLabel, columnOf, currentStep, holderPerson, openBlockers, shownLabels, type Column } from "@/components/domain/task";
@@ -115,10 +116,9 @@ export function TasksView() {
 
   if (tasks.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3">
-        <Pending title="No Tasks yet">Open GitHub Issues show up here.</Pending>
-        <NewTaskButton />
-      </div>
+      <EmptyView view="Tasks" title="No Tasks yet" action={<NewTaskButton />}>
+        Every open GitHub Issue in {snapshot?.channel.repo ?? "the Channel's repository"} is a Task here. Open one and it shows up in Ready.
+      </EmptyView>
     );
   }
 

@@ -12,10 +12,15 @@ import { ChannelProvider, ChannelStore } from "@/data/store";
 import { href, parse } from "@/lib/router";
 
 describe("the route", () => {
-  it("opens on Now for an empty hash and for one it does not know", () => {
+  it("opens on Now for an empty hash", () => {
     expect(parse("")).toEqual({ view: "now" });
     expect(parse("#/")).toEqual({ view: "now" });
-    expect(parse("#/somewhere-else")).toEqual({ view: "now" });
+  });
+
+  it("keeps an address it does not know, so the page can say there is no such page", () => {
+    expect(parse("#/somewhere-else")).toEqual({ view: "missing", path: "/somewhere-else" });
+    expect(parse("#/tasks/abc")).toEqual({ view: "missing", path: "/tasks/abc" });
+    expect(href({ view: "missing", path: "/somewhere-else" })).toBe("#/somewhere-else");
   });
 
   it("still reaches Activity, and a link to Now comes back as Now", () => {

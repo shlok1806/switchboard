@@ -36,9 +36,11 @@ export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
   { id: "hosts", title: "Hosts", icon: Server },
 ];
 
-export function viewOf(route: Route): ViewId {
+/** The key a route sits under; an address that is no page sits under none. */
+export function viewOf(route: Route): ViewId | undefined {
   if (route.view === "task") return "tasks";
   if (route.view === "agent") return "agents";
+  if (route.view === "missing") return undefined;
   return route.view;
 }
 
@@ -115,8 +117,11 @@ function Key({
 /** The top bar, on a desk. */
 export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; onSearch: () => void }) {
   const current = viewOf(route);
+  const { status } = useChannel();
   const c = useCounts();
-  const counts: Partial<Record<ViewId, number>> = { agents: c.agents, tasks: c.tasks, feed: c.interrupts || undefined };
+  // Counts are the Channel's: none until it has loaded, rather than a row of zeros.
+  const ready = status === "ready";
+  const counts: Partial<Record<ViewId, number>> = ready ? { agents: c.agents, tasks: c.tasks, feed: c.interrupts || undefined } : {};
   return (
     <header className="flex h-[var(--topbar-h)] shrink-0 items-center gap-4 border-b border-rule bg-paper px-[var(--gutter)]">
       <a href={href({ view: "now" })} className="flex shrink-0 items-center gap-2 hover:no-underline" aria-label="Switchboard">
@@ -134,7 +139,7 @@ export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; 
             current={v.id === current}
             count={counts[v.id]}
             countLabel={v.id === "feed" ? (c.interrupts === 1 ? "new Interrupt" : "new Interrupts") : undefined}
-            needYou={v.id === "now" ? c.needYou : undefined}
+            needYou={v.id === "now" && ready ? c.needYou : undefined}
           />
         ))}
       </nav>
@@ -210,7 +215,7 @@ export function TabBar({ route }: { route: Route }) {
           </span>
         </a>
       ))}
-      <MoreMenu className={tab(!TABS.includes(current))} current={!TABS.includes(current)} />
+      <MoreMenu className={tab(current !== undefined && !TABS.includes(current))} current={current !== undefined && !TABS.includes(current)} />
     </nav>
   );
 }
@@ -227,12 +232,13 @@ function useClock() {
 const clock = (at: Date, timeZone: string) => localTime(at, timeZone) || localTime(at, Intl.DateTimeFormat().resolvedOptions().timeZone);
 
 /** Shown only while the Channel's live stream is down. */
+/** The stream's state, while it is not live. A Channel that failed says so on its page instead. */
 function Connection() {
-  const { connection } = useChannel();
-  if (connection === "live") return null;
+  const { connection, status } = useChannel();
+  if (connection === "live" || status === "error") return null;
   return (
     <span role="status" className="shrink-0 text-small text-ink-3">
-      Reconnecting
+      {status === "loading" ? "Joining the Channel" : "Reconnecting"}
     </span>
   );
 }
@@ -258,13 +264,6 @@ function People() {
             <span className="text-ink-2">{p.name}</span> {clock(now, p.timeZone)}
           </span>
         ))}
-      {!mine && (
-        <AccountMenu>
-          <button type="button" className="font-semibold text-ink">
-            {me}
-          </button>
-        </AccountMenu>
-      )}
     </div>
   );
 }

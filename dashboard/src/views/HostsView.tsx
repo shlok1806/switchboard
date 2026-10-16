@@ -4,21 +4,22 @@
  * start and how loose they may run. The inspector at the right reads the selected Host;
  * below 640px the rows stack and carry all of it themselves.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Agent, Host, Person } from "@shared/index";
+import { Button } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { GroupLine, byPerson, shortName } from "@/components/domain/fleet";
-import { Pending } from "@/components/domain/pending";
 import { StartAgentButton } from "@/components/domain/start-agent";
 import { Glyph, State, useAgentStates } from "@/components/domain/state";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
+import { CopyCommand, EmptyView, ErrorPage, ViewSkeleton } from "@/components/shell/states";
 import { useHosts } from "@/data/hosts";
 import { useChannel, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ago } from "@/lib/format";
-import { go, href } from "@/lib/router";
+import { go, href, replace } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
 type Filter = "all" | "live" | "offline" | "mine";
@@ -37,31 +38,45 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
   const { agents, snapshot } = useChannel();
   const me = useMe();
   const mobile = useIsMobile();
-  const { hosts: response, problem } = useHosts();
+  const [attempt, setAttempt] = useState(0);
+  const { hosts: response, problem } = useHosts(attempt);
+  // An address naming a Host the Channel does not have is corrected to the plain view, as on Agents.
+  const unknown = selectedId !== undefined && !!response && !response.hosts.some((h) => h.id === selectedId);
+  useEffect(() => {
+    if (unknown) replace({ view: "hosts" });
+  }, [unknown]);
   const [filter, setFilter] = useState<Filter>("all");
 
   if (response === undefined) {
     return problem ? (
-      <Pending title="Could not read the Hosts" className="h-full">
-        {problem}
-      </Pending>
+      <ErrorPage
+        title="Could not read the Hosts"
+        reason={problem}
+        actions={
+          <Button variant="primary" onClick={() => setAttempt((n) => n + 1)}>
+            Try again
+          </Button>
+        }
+      >
+        The rest of the Channel is fine. Only the list of Hosts did not load.
+      </ErrorPage>
     ) : (
-      <p className="px-[var(--gutter)] pt-5 text-row text-ink-3">Reading the Hosts</p>
+      <ViewSkeleton view="hosts" />
     );
   }
   if (response === null) {
     return (
-      <Pending title="Hosts are not on this Channel yet" className="h-full">
-        This Channel's Worker predates Hosts. Agents still join from a terminal with <code className="text-ink-2">switchboard run claude</code>.
-      </Pending>
+      <EmptyView view="Hosts" title="Hosts are not on this Channel yet" action={<CopyCommand command="switchboard run claude" />}>
+        This Channel's Worker predates Hosts. Agents still join from a terminal.
+      </EmptyView>
     );
   }
   const all = response.hosts;
   if (all.length === 0) {
     return (
-      <Pending title="No Hosts yet" className="h-full">
-        Run <code className="text-ink-2">switchboard host install --root ~/code/your-repo</code> on a machine to let it start Agents for you.
-      </Pending>
+      <EmptyView view="Hosts" title="No Hosts yet" action={<CopyCommand command="switchboard host install --root ~/code/your-repo" />}>
+        A Host is a machine that starts Agents for you. Install it on one, with the folder that holds your repositories.
+      </EmptyView>
     );
   }
 

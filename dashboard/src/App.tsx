@@ -1,16 +1,15 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { PhoneBar, TabBar, TopBar } from "@/components/shell/nav";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorPage, ViewErrorBoundary, ViewSkeleton } from "@/components/shell/states";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import LoadingState from "@/components/primitives/LoadingState";
-import { Button } from "@/components/atoms/Button";
+import { Button, buttonVariants } from "@/components/atoms/Button";
 import { CommandPalette } from "@/components/domain/palette";
 import { StartAgentSheet } from "@/components/domain/start-agent";
 import { useChannel, useIndex } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { href, useRoute, type Route } from "@/lib/router";
-import { signOut } from "@/lib/session";
+import { channelRepo, signOut } from "@/lib/session";
 
 // One chunk per route, loaded on first visit.
 const NowView = lazy(() => import("@/views/NowView").then((m) => ({ default: m.NowView })));
@@ -23,26 +22,21 @@ const CanvasView = lazy(() => import("@/views/CanvasView").then((m) => ({ defaul
 const MemoryView = lazy(() => import("@/views/MemoryView").then((m) => ({ default: m.MemoryView })));
 const HostsView = lazy(() => import("@/views/HostsView").then((m) => ({ default: m.HostsView })));
 
-function ViewFallback() {
-  return (
-    <div className="flex flex-col gap-2 p-4" aria-busy="true">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <Skeleton key={i} className="h-11 bg-panel" />
-      ))}
-    </div>
-  );
-}
-
-function Center({ children }: { children: React.ReactNode }) {
-  return <div className="flex min-h-dvh items-center justify-center bg-page p-4">{children}</div>;
-}
-
-function Loading() {
-  return (
-    <Center>
-      <LoadingState label="Joining the Channel" />
-    </Center>
-  );
+/**
+ * Which page the route is: a new one moves focus to the page (see App), a new selection on
+ * the same page does not, so a row keeps focus when it selects itself.
+ */
+function pageOf(route: Route): string {
+  switch (route.view) {
+    case "agent":
+      return `agent:${route.id}`;
+    case "task":
+      return `task:${route.number}`;
+    case "missing":
+      return `missing:${route.path}`;
+    default:
+      return route.view;
+  }
 }
 
 /** Where you are, inside a Task or an Agent: the way back, as a quiet trail over the page head. */
@@ -77,50 +71,93 @@ export default function App() {
   const { taskByNumber } = useIndex();
   const [palette, setPalette] = useState(false);
 
-  if (state.status === "loading") return <Loading />;
-  if (state.status === "error")
-    return (
-      <Center>
-        <div className="flex w-full max-w-sm flex-col gap-5 border-t border-rule-2 pt-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <h1 className="text-title font-semibold">Could not reach the Channel</h1>
-            <p className="text-small break-words text-ink-3">{state.error}</p>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button size="sm" onClick={() => void signOut()}>
-              Sign out
-            </Button>
-            <Button size="sm" variant="action" onClick={() => window.location.reload()}>
+  // Focus order: a new page puts focus at the start of the page, after the bars, as a page
+  // load would; a key's Tab then goes on into the page, not back through the top bar. A view
+  // that puts focus somewhere itself (the Directive field) keeps it, and so does a selection
+  // on the same page.
+  const main = useRef<HTMLElement>(null);
+  const page = pageOf(route);
+  const shown = useRef(page);
+  useEffect(() => {
+    if (shown.current === page) return;
+    shown.current = page;
+    const el = main.current;
+    if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
+  }, [page]);
+
+  const repo = state.snapshot?.channel.repo ?? channelRepo() ?? "";
+  const content =
+    state.status === "loading" ? (
+      <ViewSkeleton view={route.view} />
+    ) : state.status === "error" ? (
+      <ErrorPage
+        title="Could not reach the Channel"
+        reason={state.error}
+        actions={
+          <>
+            <Button variant="primary" onClick={() => window.location.reload()}>
               Try again
             </Button>
-          </div>
-        </div>
-      </Center>
+            <Button onClick={() => void signOut()}>Sign out</Button>
+          </>
+        }
+      >
+        The Dashboard could not read this Channel. Your Agents keep working; their Updates wait on the Channel until it answers.
+      </ErrorPage>
+    ) : (
+      <ViewErrorBoundary key={page}>
+        <Suspense fallback={<ViewSkeleton view={route.view} />}>
+          {route.view === "now" && <NowView />}
+          {route.view === "feed" && <ActivityView selected={route.event} byTurn={route.by === "turn"} turn={route.turn} />}
+          {route.view === "tasks" && <TasksView />}
+          {route.view === "task" && <TaskDetail number={route.number} />}
+          {route.view === "agents" && <AgentsView selected={route.selected} />}
+          {route.view === "agent" && <AgentDetail id={route.id} focus={route.focus} />}
+          {route.view === "canvas" && <CanvasView selected={route.agent} />}
+          {route.view === "memory" && <MemoryView selected={route.note} />}
+          {route.view === "hosts" && <HostsView selected={route.host} />}
+          {route.view === "missing" && (
+            <ErrorPage
+              title="No such page"
+              actions={
+                <a href={href({ view: "now" })} className={buttonVariants({ variant: "primary" })}>
+                  Go to Now
+                </a>
+              }
+            >
+              <code className="[overflow-wrap:anywhere]">#{route.path}</code> is not a page of this Dashboard. The link may be from an older version of it.
+            </ErrorPage>
+          )}
+        </Suspense>
+      </ViewErrorBoundary>
     );
-
-  const repo = state.snapshot?.channel.repo ?? "Channel";
 
   return (
     <TooltipProvider delayDuration={500}>
       <div className="flex h-dvh flex-col bg-page">
+        <a
+          href="#main"
+          onClick={(e) => {
+            e.preventDefault();
+            main.current?.focus();
+          }}
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-[var(--r)] focus:bg-ink focus:px-3 focus:py-1.5 focus:text-small focus:text-paper"
+        >
+          Skip to the page
+        </a>
         {mobile ? (
           <PhoneBar repo={repo} onSearch={() => setPalette(true)} />
         ) : (
           <TopBar route={route} repo={repo} onSearch={() => setPalette(true)} />
         )}
         <Crumb route={route} taskTitle={route.view === "task" ? taskByNumber.get(route.number)?.title : undefined} />
-        <main className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] sm:pb-0">
-          <Suspense fallback={<ViewFallback />}>
-            {route.view === "now" && <NowView />}
-            {route.view === "feed" && <ActivityView selected={route.event} byTurn={route.by === "turn"} turn={route.turn} />}
-            {route.view === "tasks" && <TasksView />}
-            {route.view === "task" && <TaskDetail number={route.number} />}
-            {route.view === "agents" && <AgentsView selected={route.selected} />}
-            {route.view === "agent" && <AgentDetail id={route.id} focus={route.focus} />}
-            {route.view === "canvas" && <CanvasView selected={route.agent} />}
-            {route.view === "memory" && <MemoryView selected={route.note} />}
-            {route.view === "hosts" && <HostsView selected={route.host} />}
-          </Suspense>
+        <main
+          ref={main}
+          id="main"
+          tabIndex={-1}
+          className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] outline-none sm:pb-0"
+        >
+          {content}
         </main>
         {mobile && <TabBar route={route} />}
       </div>

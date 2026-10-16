@@ -13,6 +13,7 @@ import {
 } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 import { Sheet } from "@/components/shell/sheet";
+import { CopyCommand } from "@/components/shell/states";
 import { useHosts, useHostsSupported } from "@/data/hosts";
 import { useMe, useStore } from "@/data/store";
 import { hostName } from "@/lib/format";
@@ -112,6 +113,18 @@ export function StartAgentButton() {
       Start an Agent
     </Button>
   );
+}
+
+/**
+ * The one action of a Channel with no Agents: Start an Agent when one of your Hosts is Live,
+ * otherwise the command that adds one from a terminal. Nothing while the Hosts are read.
+ */
+export function FirstAgentAction() {
+  const me = useMe();
+  const { hosts: response, problem } = useHosts();
+  if (response === undefined && !problem) return null;
+  if (response?.hosts.some((h) => h.live && h.person === me)) return <StartAgentButton />;
+  return <CopyCommand command="switchboard run claude" />;
 }
 
 /** The Start an Agent sheet, mounted once by the app. */

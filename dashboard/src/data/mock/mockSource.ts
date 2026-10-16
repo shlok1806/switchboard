@@ -53,6 +53,8 @@ const clone = <T,>(v: T): T => structuredClone(v);
  * A simulated Channel. It replays a scripted history, then plays live Events on a
  * timer and answers Person actions the way the Worker will, including refusals.
  */
+export type MockState = "loading" | "empty" | "error";
+
 export class MockChannelSource implements ChannelSource {
   readonly me = ME;
   readonly capabilities = ALL_CAPABILITIES;
@@ -76,13 +78,32 @@ export class MockChannelSource implements ChannelSource {
   private timers: ReturnType<typeof setTimeout>[] = [];
   private started = false;
 
-  constructor(private readonly opts: { latencyMs?: number; speed?: number; /** Pads the fleet to this many Agents (`?agents=200`). */ fleet?: number } = {}) {
+  constructor(
+    private readonly opts: {
+      latencyMs?: number;
+      speed?: number;
+      /** Pads the fleet to this many Agents (`?agents=200`). */
+      fleet?: number;
+      /**
+       * A Channel in one of the states every view must draw (`?state=`): still loading (the
+       * snapshot never comes), empty (no Agents, Tasks, Events or Hosts), or unreachable.
+       */
+      state?: MockState;
+    } = {},
+  ) {
+    if (opts.state === "empty") {
+      this.agents = [];
+      this.tasks = [];
+      return;
+    }
     this.agents = withFleet(clone(seedAgents), opts.fleet ?? 0);
     for (const b of HISTORY) this.apply(b, new Date(T0 + b.t * 60_000).toISOString(), false);
   }
 
   async snapshot(): Promise<ChannelSnapshot> {
+    if (this.opts.state === "loading") await new Promise(() => {});
     await new Promise((r) => setTimeout(r, this.opts.latencyMs ?? 700));
+    if (this.opts.state === "error") throw new Error("The Channel's Worker answered 503: it is restarting after a deploy.");
     return clone({
       channel: { id: "main", repo: REPO, mainBranch: "main" },
       persons,
@@ -118,7 +139,7 @@ export class MockChannelSource implements ChannelSource {
     this.listeners.add(onMessage);
     onState("connecting");
     const ready = setTimeout(() => onState("live"), 250);
-    if (!this.started) {
+    if (!this.started && this.opts.state !== "empty") {
       this.started = true;
       this.play();
     }
@@ -385,6 +406,7 @@ export class MockChannelSource implements ChannelSource {
     const running = this.agents.filter((a) => a.host !== undefined && a.presence !== "gone").length;
     // The other Persons' Hosts the demo Agents run on (a Person starts Agents only on their
     // own), and a laptop of shlok's that has been Offline for two days.
+    if (this.opts.state === "empty") return { hosts: [], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running: 0 };
     const host = (id: `${string}/${string}`, roots: string[], extra: Partial<Host> = {}): Host => ({ ...this.host, id, person: id.split("/")[0]!, name: id.split("/")[1]!, roots, ...extra });
     const twoDays = new Date(T0 - 2 * 86_400_000).toISOString();
     const others = [

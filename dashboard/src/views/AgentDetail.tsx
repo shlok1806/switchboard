@@ -26,6 +26,7 @@ import { Glyph, State, useAgentState, useAgentStates } from "@/components/domain
 import { TerminalPanel } from "@/components/domain/terminal";
 import { useNow } from "@/components/domain/usage";
 import { Section } from "@/components/shell/section";
+import { ErrorPage } from "@/components/shell/states";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
@@ -42,12 +43,17 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
   const agent = agentById.get(id as AgentId);
   if (!agent) {
     return (
-      <div className="px-[var(--gutter)] py-6 text-row text-ink-2">
-        No Agent {id}.{" "}
-        <a href={href({ view: "agents" })} className="text-ink underline underline-offset-4">
-          Back to Agents
-        </a>
-      </div>
+      <ErrorPage
+        title="No such Agent"
+        reason={id}
+        actions={
+          <a href={href({ view: "agents" })} className={buttonVariants({ variant: "primary" })}>
+            Back to Agents
+          </a>
+        }
+      >
+        No Agent on this Channel has that ID. A stopped Agent leaves the list once its Person clears it.
+      </ErrorPage>
     );
   }
   return <AgentPage key={agent.id} agent={agent} focus={focus} />;

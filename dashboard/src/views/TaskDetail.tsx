@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import type { Agent, ChannelEvent, EventType, Task } from "@shared/index";
-import { Button } from "@/components/atoms/Button";
+import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { ClaimAction } from "@/components/domain/claim";
 import { EventBody } from "@/components/domain/event";
@@ -20,6 +20,7 @@ import { TakeoverAction } from "@/components/domain/takeover";
 import { COLUMN_LABEL, HolderLabel, columnOf, currentStep, openBlockers, shownLabels } from "@/components/domain/task";
 import { VerdictTable } from "@/components/domain/verdict";
 import { Section } from "@/components/shell/section";
+import { ErrorPage } from "@/components/shell/states";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
 import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
@@ -73,12 +74,16 @@ export function TaskDetail({ number }: { number: number }) {
 
   if (!task) {
     return (
-      <div className="px-[var(--gutter)] pt-5 text-row text-ink-2">
-        No Task #{number}.{" "}
-        <a href={href({ view: "tasks" })} className="text-ink underline">
-          Back to the Tasks
-        </a>
-      </div>
+      <ErrorPage
+        title={`No Task #${number}`}
+        actions={
+          <a href={href({ view: "tasks" })} className={buttonVariants({ variant: "primary" })}>
+            Back to the Tasks
+          </a>
+        }
+      >
+        The Channel has no open or recent Task with that number. A closed Issue leaves the board after a while.
+      </ErrorPage>
     );
   }
 
