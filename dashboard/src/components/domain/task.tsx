@@ -50,6 +50,15 @@ export function holderPerson(t: Task, agentById: Map<AgentId, Agent>): string | 
 }
 
 /** `status:*` labels mirror the column the Task already sits in (ADR 0001), so views leave them out. */
+/**
+ * The index of the Step its holder is on: the first open one, while someone holds the Task
+ * and nothing halts it (a Stale Claim, or a blocker that arrived after the Claim). -1 when none.
+ */
+export function currentStep(t: Task): number {
+  if (!t.claim || t.claim.stale || (t.claim.blockedBy?.length ?? 0) > 0) return -1;
+  return t.steps.findIndex((s) => !s.done);
+}
+
 export const shownLabels = (t: Task) => t.labels.filter((l) => !l.startsWith("status:"));
 
 /**

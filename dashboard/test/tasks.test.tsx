@@ -7,7 +7,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Agent, AgentId, ChannelSnapshot, PersonAction, Task } from "@shared/index";
+import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, PersonAction, Task } from "@shared/index";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { TaskDetail } from "@/views/TaskDetail";
@@ -43,7 +43,14 @@ const task = (number: number, title: string, extra: Partial<Task> = {}): Task =>
 });
 
 const tasks = [
-  task(12, "Add the avatar upload", { labels: ["web"] }),
+  task(12, "Add the avatar upload", {
+    labels: ["web"],
+    steps: [
+      { index: 0, text: "Pick a storage bucket", done: false },
+      { index: 1, text: "Resize on upload", done: false },
+    ],
+  }),
+  task(15, "Add a timeout option to request()", { blockedBy: [12] }),
   task(14, "Page the Users API by 50", {
     status: "claimed",
     claim: { task: 14, holder: { kind: "agent", agentId: quill.id }, claimedAt: "2026-10-15T09:10:00.000Z", stale: false },
@@ -60,6 +67,11 @@ const tasks = [
   }),
 ];
 
+const history = [
+  { id: "e1", seq: 1, at: "2026-10-15T09:10:00.000Z", type: "claim", actor: { kind: "agent", agentId: quill.id }, capture: "tool", task: 14, payload: { holder: { kind: "agent", agentId: quill.id } } },
+  { id: "e2", seq: 2, at: "2026-10-15T09:20:00.000Z", type: "file.edit", actor: { kind: "agent", agentId: quill.id }, capture: "hook", task: 14, payload: { path: "web/src/users.tsx" } },
+] as unknown as ChannelEvent[];
+
 function channel(acted: PersonAction[] = []) {
   const source = {
     me: "ana",
@@ -67,7 +79,7 @@ function channel(acted: PersonAction[] = []) {
     snapshot: async () =>
       ({ channel: { repo: "ana/app" }, persons: [{ name: "ana" }], agents: [quill, moth], tasks, events: [], verdicts: [], relay: { interruptThreshold: 0.6 }, cursor: 0 }) as unknown as ChannelSnapshot,
     hosts: async () => null,
-    scopedEvents: async () => ({ events: [] }),
+    scopedEvents: async (scope: { task?: number }) => ({ events: scope.task === 14 ? history : [] }),
     act: async (a: PersonAction) => {
       acted.push(a);
       return { ok: true };
@@ -109,6 +121,55 @@ describe("the Tasks board", () => {
     expect(screen.getAllByText("Fix the Safari login crash").length).toBeGreaterThan(0);
   });
 
+  it("marks no Step in progress on a Task nobody holds", async () => {
+    render(<TasksView />, { wrapper: channel() });
+    fireEvent.click(await screen.findByText("Add the avatar upload"));
+    const inspector = screen.getByRole("complementary", { name: "#12 Add the avatar upload, in the inspector" });
+    expect(within(inspector).getByText("Pick a storage bucket")).toBeTruthy();
+    expect(within(inspector).queryByText("In progress:")).toBeNull();
+    expect(within(inspector).getAllByText("To do:")).toHaveLength(2);
+  });
+
+  it("narrows the board to my Tasks and to blocked ones", async () => {
+    render(<TasksView />, { wrapper: channel() });
+    fireEvent.click(await screen.findByRole("button", { name: /^Mine \d/ }));
+    // Ana's Agents hold #14 and #17; nobody holds #12 or #15.
+    expect(screen.getByText("Page the Users API by 50")).toBeTruthy();
+    expect(screen.queryByText("Add the avatar upload")).toBeNull();
+    expect(screen.queryByText("Add a timeout option to request()")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Blocked \d/ }));
+    expect(screen.getByText("Add a timeout option to request()")).toBeTruthy();
+    expect(screen.queryByText("Page the Users API by 50")).toBeNull();
+    expect(screen.queryByText("Add the avatar upload")).toBeNull();
+  });
+
+  it("keeps a click on a card's Claim menu from opening the card in the inspector", async () => {
+    render(<TasksView />, { wrapper: channel() });
+    const card = (await screen.findByText("Add the avatar upload")).closest("[aria-roledescription='Task card']") as HTMLElement;
+    expect(card.getAttribute("aria-label")).toBe("#12 Add the avatar upload");
+    fireEvent.click(within(card).getByRole("button", { name: "Claim" }));
+    expect(screen.getByRole("complementary", { name: /^#17 / })).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: /^#12 / })).toBeNull();
+  });
+
+  it("offers on a phone only the moves the Channel will make", async () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    try {
+      render(<TasksView />, { wrapper: channel() });
+      const card = (await screen.findByText("Page the Users API by 50")).closest("[aria-roledescription='Task card']") as HTMLElement;
+      fireEvent.pointerDown(within(card).getByRole("button", { name: "Move" }), { button: 0, pointerType: "mouse" });
+      const menu = await screen.findByRole("menu");
+      // Ana's Agent holds it, so she can release it to Open; In review and Done come from GitHub.
+      expect(within(menu).getByRole("menuitem", { name: "Open" })).toBeTruthy();
+      expect(within(menu).queryByRole("menuitem", { name: "In review" })).toBeNull();
+      expect(within(menu).queryByRole("menuitem", { name: "Done" })).toBeNull();
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    }
+  });
+
   it("opens a Task as a sheet on a phone only when its card is tapped, and Escape closes it", async () => {
     const width = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
@@ -142,6 +203,22 @@ describe("a Task's page", () => {
     fireEvent.change(screen.getByLabelText("Directive to quill"), { target: { value: "Run the API tests." } });
     fireEvent.click(within(screen.getByLabelText("Directive to quill").closest("form")!).getByRole("button", { name: "Send" }));
     await waitFor(() => expect(acted).toContainEqual({ type: "directive", to: quill.id, text: "Run the API tests." }));
+  });
+
+  it("shows the Task's work on the Timeline, and everything with All", async () => {
+    render(<TaskDetail number={14} />, { wrapper: channel() });
+    const timeline = (await screen.findByRole("heading", { name: "Timeline" })).closest("section")!;
+    await within(timeline).findByText("Claimed");
+    expect(within(timeline).queryByText("Edited web/src/users.tsx")).toBeNull();
+    fireEvent.click(within(timeline).getByRole("button", { name: /^All/ }));
+    expect(within(timeline).getByText("Edited web/src/users.tsx")).toBeTruthy();
+  });
+
+  it("claims an unclaimed Task from its head only", async () => {
+    render(<TaskDetail number={12} />, { wrapper: channel() });
+    await screen.findByRole("heading", { level: 1, name: /Add the avatar upload/ });
+    expect(screen.getAllByRole("button", { name: "Claim" })).toHaveLength(1);
+    expect(screen.getByText("Nobody holds it.")).toBeTruthy();
   });
 
   it("leads with Take over on a Stale Claim and sends no Directive to its Gone Agent", async () => {

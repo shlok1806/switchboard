@@ -4,7 +4,7 @@
  * take a Stale Claim over, switch to its branch, post an Update on it, or send its Agent a
  * Directive. Below 640px the aside follows the Task, except a Stale Claim, which leads.
  */
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import type { Agent, ChannelEvent, EventType, Task } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
@@ -17,7 +17,7 @@ import { OlderRow } from "@/components/domain/older";
 import { IssueLink } from "@/components/domain/pending";
 import { Glyph, State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
-import { COLUMN_LABEL, HolderLabel, columnOf, openBlockers, shownLabels } from "@/components/domain/task";
+import { COLUMN_LABEL, HolderLabel, columnOf, currentStep, openBlockers, shownLabels } from "@/components/domain/task";
 import { VerdictTable } from "@/components/domain/verdict";
 import { Section } from "@/components/shell/section";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
@@ -97,14 +97,15 @@ export function TaskDetail({ number }: { number: number }) {
   ].filter(Boolean);
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div key={number} className="h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-[var(--gutter)] pt-3 pb-10">
         <header className="flex flex-wrap items-start gap-x-6 gap-y-3">
           <div className="flex min-w-0 flex-[1_1_420px] flex-col gap-1">
-            <h1 className="flex min-w-0 flex-wrap items-center gap-x-2.5 text-head font-semibold [overflow-wrap:anywhere] text-ink">
-              <Glyph state={taskGlyph(task, me, agentById)} />
+            {/* Inline, not flex: a long title wraps under itself and keeps its glyph and state on its lines. */}
+            <h1 className="min-w-0 text-head font-semibold [overflow-wrap:anywhere] text-ink">
+              <Glyph state={taskGlyph(task, me, agentById)} className="relative -top-0.5 mr-2.5" />
               {task.title}
-              <State state={taskGlyph(task, me, agentById)} word={COLUMN_LABEL[col]} glyph={false} className="text-row" />
+              <State state={taskGlyph(task, me, agentById)} word={COLUMN_LABEL[col]} glyph={false} className="ml-2.5 text-row whitespace-nowrap" />
             </h1>
             <p className="text-small text-ink-3">
               {facts.join(" · ")}
@@ -195,7 +196,7 @@ export function TaskDetail({ number }: { number: number }) {
             </section>
           </div>
 
-          <aside aria-label="Work on it" className="flex min-w-0 flex-[4_1_320px] flex-col gap-6 max-sm:contents">
+          <aside aria-label="Work on it" className="flex min-w-0 flex-[4_1_320px] flex-col gap-6 max-sm:contents max-sm:[&>*]:basis-full">
             <Section title={claim?.stale ? "Stale Claim" : "Claim"} className={cn(claim?.stale && "max-sm:order-first")} bodyClassName="flex flex-col gap-2">
               {claim ? (
                 <>
@@ -219,9 +220,6 @@ export function TaskDetail({ number }: { number: number }) {
                       </>
                     )}
                   </p>
-                  <span className="w-28 empty:hidden">
-                    <ClaimAction task={task} />
-                  </span>
                 </>
               )}
             </Section>
@@ -262,13 +260,12 @@ export function TaskDetail({ number }: { number: number }) {
 
 /** The Steps as a checklist: done, the one its holder is on, and the rest. */
 function StepList({ task, holder }: { task: Task; holder: React.ReactNode }) {
-  const halted = task.claim?.stale === true || (task.claim?.blockedBy?.length ?? 0) > 0;
-  const firstOpen = task.steps.findIndex((s) => !s.done);
+  const current = currentStep(task);
   return (
     <Section title="Steps" meta={`${task.stepsDone} of ${task.steps.length} done`} bodyClassName="pt-0">
       <ol>
         {task.steps.map((s, i) => {
-          const next = task.claim !== undefined && !halted && i === firstOpen;
+          const next = i === current;
           return (
             <li key={s.index} className={cn("flex flex-wrap items-baseline gap-x-2.5 border-b border-rule py-2.5 text-row", s.done || next ? "text-ink" : "text-ink-3")}>
               <Glyph state={s.done ? "done" : next ? "running" : "idle"} className="relative top-px" />
@@ -287,11 +284,15 @@ function StepList({ task, holder }: { task: Task; holder: React.ReactNode }) {
 function Branch({ branch }: { branch: string }) {
   const command = `git fetch && git switch ${branch}`;
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(command);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
     } catch {
       toast.error("Could not copy the command");
     }
@@ -305,7 +306,7 @@ function Branch({ branch }: { branch: string }) {
         </button>
       }
     >
-      <code className="block rounded-[var(--r)] bg-paper-2 px-2.5 py-2 text-small [overflow-wrap:anywhere] text-ink">{command}</code>
+      <code className="block rounded-[var(--r)] bg-paper-2 px-2.5 py-1.5 text-small [overflow-wrap:anywhere] text-ink">{command}</code>
     </Section>
   );
 }

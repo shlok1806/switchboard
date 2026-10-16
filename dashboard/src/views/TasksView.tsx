@@ -6,9 +6,9 @@
  * to the Task's page. Dragging a card claims or releases it. Below 640px the columns scroll
  * sideways one at a time, a card's menu moves it, and the inspector opens as a sheet.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import type { Agent, AgentId, Task } from "@shared/index";
+import type { Agent, AgentId, ChannelEvent, Task } from "@shared/index";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { ClaimAction, ClaimForAgentItems, ClaimForLabel, ClaimForMeItem, claimable, useClaims } from "@/components/domain/claim";
@@ -18,12 +18,13 @@ import { NewTaskButton } from "@/components/domain/new-task";
 import { IssueLink, Pending } from "@/components/domain/pending";
 import { Glyph, State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
-import { COLUMN_GLYPH, COLUMN_LABEL, HolderLabel, columnOf, holderPerson, openBlockers, shownLabels, type Column } from "@/components/domain/task";
+import { COLUMN_GLYPH, COLUMN_LABEL, HolderLabel, columnOf, currentStep, holderPerson, openBlockers, shownLabels, type Column } from "@/components/domain/task";
 import { KanbanBoard, KanbanCard, KanbanCards, KanbanHeader, KanbanProvider, type KanbanMove } from "@/components/kibo-ui/kanban";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { EVENT_TYPE_LABEL, actorName, ago, summarize } from "@/lib/format";
@@ -76,7 +77,6 @@ export function TasksView() {
         if (agent && !(t.claim?.holder.kind === "agent" && t.claim.holder.agentId === agent)) return false;
         return true;
       }),
-    // biome-ignore lint/correctness/useExhaustiveDependencies: `mine` and `blocked` read only what is listed.
     [tasks, show, person, agent, me, agentById, taskByNumber],
   );
 
@@ -138,6 +138,9 @@ export function TasksView() {
 
   const card = (c: Card) => {
     const waiting = pending.has(c.task.number);
+    // A phone's Move menu offers only the moves the Channel will make.
+    const moves = columns.filter((to) => to !== c.column && decideMove(c.task, c.column, to, me, agentById, can.takeover).kind !== "refuse");
+    const claimForAgents = c.column === "open" && claimable(c.task) ? claims.mine : [];
     return (
       <KanbanCard
         key={c.id}
@@ -154,15 +157,17 @@ export function TasksView() {
           task={c.task}
           waiting={waiting}
           menu={
-            !can.claims ? null : mobile ? (
-              <MoveMenu
-                column={c.column}
-                options={columns}
-                onPick={(to) => void move({ item: c, from: c.column, to })}
-                claimFor={c.column === "open" && claimable(c.task) ? claims.mine : []}
-                onClaimFor={(id) => void claimFor(c.task, id)}
-              />
-            ) : c.column === "open" && claimable(c.task) && !waiting ? (
+            !can.claims || waiting ? null : mobile ? (
+              moves.length + claimForAgents.length > 0 && (
+                <MoveMenu
+                  column={c.column}
+                  options={moves}
+                  onPick={(to) => void move({ item: c, from: c.column, to })}
+                  claimFor={claimForAgents}
+                  onClaimFor={(id) => void claimFor(c.task, id)}
+                />
+              )
+            ) : c.column === "open" && claimable(c.task) ? (
               <ClaimMenu me={me} agents={claims.mine} onPick={(id) => void claimFor(c.task, id)} />
             ) : null
           }
@@ -307,7 +312,7 @@ function TaskCard({ task, waiting, menu }: { task: Task; waiting: boolean; menu:
 function StepMeter({ done, total }: { done: number; total: number }) {
   return (
     <span className="inline-flex items-center gap-1.5 tabular-nums" title={`${done} of ${total} Steps done`}>
-      <span aria-hidden className="h-1 w-8 bg-rule">
+      <span aria-hidden className="h-1 w-14 bg-rule">
         <span className="block h-full bg-ink-2" style={{ width: `${(done / total) * 100}%` }} />
       </span>
       {done}/{total}
@@ -318,17 +323,17 @@ function StepMeter({ done, total }: { done: number; total: number }) {
 
 /** The selected Task, read without leaving the board: where it stands, its Steps, its branch and its last work. */
 function TaskInspector({ task, onClose }: { task: Task; onClose?: () => void }) {
-  const { events } = useChannel();
   const { agentById } = useIndex();
   const me = useMe();
   const can = useCapabilities();
   // Claim leads when the Task is free to claim; otherwise Open does.
   const claimHere = can.claims && claimable(task);
   const column = columnOf(task);
-  const work = useMemo(() => events.filter((e) => e.task === task.number).reverse(), [events, task.number]);
+  const onTask = useCallback((e: ChannelEvent) => e.task === task.number, [task.number]);
+  const scoped = useScopedHistory({ task: task.number }, onTask);
+  const work = useMemo(() => scoped.events.slice().reverse(), [scoped.events]);
   const update = work.find((e) => e.type === "update");
-  const firstOpen = task.steps.findIndex((s) => !s.done);
-  const halted = task.claim?.stale === true || (task.claim?.blockedBy?.length ?? 0) > 0;
+  const current = currentStep(task);
   const fact = [
     task.claim
       ? `${task.claim.stale ? "Stale: its holder is Gone" : "Claimed"} ${ago(task.claim.claimedAt)}.`
@@ -382,7 +387,7 @@ function TaskInspector({ task, onClose }: { task: Task; onClose?: () => void }) 
         {task.steps.length > 0 ? (
           <ol>
             {task.steps.map((s, i) => {
-              const next = !halted && i === firstOpen;
+              const next = i === current;
               return (
                 <li key={s.index} className={cn("flex items-baseline gap-2.5 border-b border-rule py-2 text-row", s.done || next ? "text-ink" : "text-ink-3")}>
                   <Glyph state={s.done ? "done" : next ? "running" : "idle"} className="relative top-px" />
@@ -419,7 +424,7 @@ function TaskInspector({ task, onClose }: { task: Task; onClose?: () => void }) 
         bodyClassName="pt-0"
       >
         {work.length === 0 ? (
-          <p className="pt-3 text-small text-ink-3">Nothing on the Channel about it yet.</p>
+          <p className="pt-3 text-small text-ink-3">{scoped.loading ? "Reading the Timeline" : "Nothing on the Channel about it yet."}</p>
         ) : (
           <ol>
             {work.slice(0, 5).map((e) => (
