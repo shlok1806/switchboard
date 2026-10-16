@@ -440,7 +440,7 @@ export class HttpChannelSource implements ChannelSource {
     const route = (() => {
       switch (action.type) {
         case "update":
-          return { path: "/api/updates", body: { text: action.text, task: action.task } };
+          return { path: "/api/updates", body: { text: action.text, task: action.task, to: action.to } };
         case "directive":
           return { path: "/api/directives", body: { to: action.to, text: action.text } };
         case "takeover":

@@ -197,7 +197,7 @@ export const LIVE: Beat[] = [
     truncated: { context: false, response: false },
   }, { turn: "dev-t23" }),
   beat(12.4, "command", D, "hook", { command: "git rebase origin/task/12-rename-getjson" }, { task: 16, turn: "dev-t23" }),
-  beat(13, "update", D, "tool", { text: "Saw the rename in #12. Rebased task/16 and now wrapping request() instead of getJson." }, { task: 16, turn: "dev-t23" }),
+  beat(13, "update", D, "tool", { text: "Saw the rename in #12. Rebased task/16 and now wrapping request() instead of getJson.", to: [A.shlokClaude] }, { task: 16, turn: "dev-t23" }),
   // Maya's session was idle: her wrapper woke it for the Queued push.
   {
     t: 15,

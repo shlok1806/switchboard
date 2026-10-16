@@ -35,7 +35,7 @@ Anything recorded on the channel, such as a Claim, a Step completed, a file edit
 _Avoid_: Log, activity, message
 
 **Update**:
-An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening.
+An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening. It may be addressed to Agents by their Agent IDs: each addressee always hears it, Queued at least, and still as information, never as an instruction (ADR 0026).
 _Avoid_: Status, note, post
 
 **Memory Note**:
@@ -91,7 +91,7 @@ The Relay's decision for one Event and one Agent. Drop means the Agent never hea
 _Avoid_: Decision, classification, routing
 
 **Wake**:
-An idle Agent's wrapper typing what waits for its next turn as one prompt, which starts that turn, once its Person is quiet. Only a Directive, an Update on the Agent's Task, or a change to a file it touched wakes it; the rest rides along. An Agent is woken at most 3 times in 10 minutes without a prompt or Directive from its Person, so two Agents cannot wake each other forever.
+An idle Agent's wrapper typing what waits for its next turn as one prompt, which starts that turn, once its Person is quiet. Only a Directive, an Update addressed to the Agent or on its Task, or a change to a file it touched wakes it; the rest rides along. An Agent is woken at most 3 times in 10 minutes without a prompt or Directive from its Person, so two Agents cannot wake each other forever.
 _Avoid_: Nudge, ping, poke
 
 ## Participants

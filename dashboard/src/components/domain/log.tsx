@@ -83,7 +83,7 @@ export function Who({ event }: { event: ChannelEvent }) {
   return <span className="text-ink-2">{a.kind === "github" ? "GitHub" : "The Relay"}</span>;
 }
 
-/** What an Event says, with code set as code and a Directive naming whom it is for. */
+/** What an Event says, with code set as code and a Directive or an addressed Update naming whom it is for. */
 function What({ event }: { event: ChannelEvent }) {
   const { agentById } = useIndex();
   if (event.type === "command" || event.type === "tool.call" || event.type === "file.edit")
@@ -93,6 +93,18 @@ function What({ event }: { event: ChannelEvent }) {
     return (
       <span className="max-w-[72ch] [overflow-wrap:anywhere] text-ink">
         <span className="text-ink-3">to {to ? ownedName(to) : event.payload.to}: </span>
+        {event.payload.text}
+      </span>
+    );
+  }
+  if (event.type === "update" && event.payload.to) {
+    const names = event.payload.to.map((id) => {
+      const to = agentById.get(id);
+      return to ? ownedName(to) : id;
+    });
+    return (
+      <span className="max-w-[72ch] [overflow-wrap:anywhere] text-ink">
+        <span className="text-ink-3">to {names.join(", ")}: </span>
         {event.payload.text}
       </span>
     );

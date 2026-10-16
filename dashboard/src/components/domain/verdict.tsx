@@ -77,6 +77,7 @@ export function VerdictTable({
             </p>
           )}
           {v.downgraded && <p className="text-small text-ink">Queued instead: {DOWNGRADE_LABEL[v.downgraded.reason]}.</p>}
+          {v.raised && <p className="text-small text-ink">Queued, not Dropped: the Update is addressed to this Agent.</p>}
           {v.delivered === "queue" && woken.has(v.agent) && <p className="text-small text-ink">Delivered by a Wake: the Agent was idle.</p>}
         </li>
       ))}

@@ -182,6 +182,27 @@ describe("an Interrupt", () => {
   });
 });
 
+describe("an addressed Update", () => {
+  it("names whom it was for in its row and in the inspector, and why the Relay Queued it", async () => {
+    const asked = ev("update", moth, { text: "Can you take the PR side?", to: [quill.id] }, { capture: "tool" });
+    const raised = verdict(asked, quill, {
+      option: "queue",
+      delivered: "queue",
+      probabilities: { interrupt: 0.05, queue: 0.1, drop: 0.85 },
+      overlap: { files: [], symbols: [] },
+      addressed: "it is addressed to you",
+      raised: { from: "drop", reason: "addressed" },
+    });
+    render(<ActivityView selected={asked.id} />, { wrapper: channel([...turnHistory(), asked], [raised]) });
+
+    const inspector = await screen.findByRole("complementary", { name: "Update, in the inspector" });
+    const said = screen.getByText((_, el) => el?.tagName === "SPAN" && el.textContent === "to ana/quill: Can you take the PR side?");
+    expect(said.closest("[role=button]")).toBeTruthy();
+    expect(within(inspector).getByText(/^To$/).nextElementSibling?.textContent).toContain("ana/quill");
+    expect(within(inspector).getByText("Queued, not Dropped: the Update is addressed to this Agent.")).toBeTruthy();
+  });
+});
+
 describe("the log by model turn", () => {
   it("folds a turn into one row that opens on its three Captures side by side", async () => {
     render(<ActivityView />, { wrapper: channel() });

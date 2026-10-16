@@ -251,7 +251,10 @@ export class MockChannelSource implements ChannelSource {
       case "update": {
         const text = action.text.trim();
         if (!text) return { ok: false, reason: "An Update needs some text." };
-        this.record(makeEvent("update", me, null, { text }, { at, task: action.task }), undefined, true);
+        const unknown = action.to?.filter((id) => !this.agents.some((a) => a.id === id)) ?? [];
+        if (unknown.length > 0) return { ok: false, reason: `No Agent on this Channel is called ${unknown.join(", ")}.` };
+        const payload = action.to ? { text, to: [...new Set(action.to)] } : { text };
+        this.record(makeEvent("update", me, null, payload, { at, task: action.task }), undefined, true);
         return { ok: true };
       }
       case "directive": {

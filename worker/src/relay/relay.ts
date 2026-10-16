@@ -2,13 +2,15 @@
 // except the Agent that caused it, it gives one Verdict: Drop, Queue or Interrupt.
 //
 // 1. It works out overlap in code (see overlap.ts) and whether the Event is
-//    addressed to the Agent: its Task or its Claim changing. Directives never
-//    reach the Relay: they are addressed and always delivered (directives.ts).
+//    addressed to the Agent: an Update naming it in `to` (ADR 0026), its Task or
+//    its Claim changing. Directives never reach the Relay: they are addressed and
+//    always delivered (directives.ts).
 // 2. With neither, it Drops without asking Jev, and still records the Verdict
 //    (source "rule").
 // 3. Otherwise it asks Jev one choice question with structured state (issue #3).
 //    An Interrupt below the threshold becomes a Queue. Jev failing or timing out
-//    never loses the Event: it is Queued (source "fallback") and logged.
+//    never loses the Event: it is Queued (source "fallback") and logged. An Update
+//    addressed to the Agent in `to` is never Dropped: a Drop becomes a Queue.
 // 4. An Interrupt is pushed to the Agent's wrapper right away, over its WebSocket,
 //    and the wrapper types it into the session as a prompt. It becomes a Queue
 //    instead, labelled as downgraded, when the Agent's CLI cannot receive
@@ -92,6 +94,8 @@ export interface RelayHost {
   sql: SqlStorage;
   /** The Agents that are not Gone. */
   liveAgents(): Agent[];
+  /** Agent `id`, Gone or not, or null when the Channel does not know it. */
+  agent(id: AgentId): Agent | null;
   /** The Tasks whose Claim an Agent holds. */
   heldTasks(): Task[];
   task(number: TaskNumber): Task | null;
@@ -138,6 +142,8 @@ interface Plan {
   sender: Actor;
   overlap: { files: string[]; symbols: string[] };
   addressed: string | null;
+  /** Whether the Event is an Update naming the Agent in `to`, so it is never Dropped (ADR 0026). */
+  named: boolean;
   /** Files it touched and its Task's files: the ones it gets hunks for. */
   mine: Set<string>;
   state: RelayState;
@@ -197,8 +203,14 @@ const CLAIM_EVENTS: ReadonlySet<EventType> = new Set([
   "claim.unblocked",
 ]);
 
+/** Whether `event` is an Update that names Agent `id` in `to` (ADR 0026). */
+function namesAgent(event: ChannelEvent, id: AgentId): boolean {
+  return event.type === "update" && event.payload.to?.includes(id) === true;
+}
+
 /** Why `event` is addressed to Agent `id`, which holds `held`, or null when it is not. */
 export function addressedTo(event: ChannelEvent, id: AgentId, held: ReadonlySet<TaskNumber>): string | null {
+  if (namesAgent(event, id)) return "it is addressed to you";
   const names = (holder: { kind: string; agentId?: string }) => holder.kind === "agent" && holder.agentId === id;
   const task = event.task === undefined ? "" : ` on Task #${event.task}`;
   if (CLAIM_EVENTS.has(event.type) && "holder" in event.payload && names(event.payload.holder)) {
@@ -315,9 +327,14 @@ export class Relay {
     }
     let option = answer.choice;
     let downgraded: Verdict["downgraded"];
+    let raised: Verdict["raised"];
     if (option === "interrupt" && answer.probabilities.interrupt < this.host.threshold) {
       option = "queue";
       downgraded = { from: "interrupt", reason: "below-threshold" };
+    }
+    if (option === "drop" && plan.named) {
+      option = "queue";
+      raised = { from: "drop", reason: "addressed" };
     }
     return {
       option,
@@ -327,6 +344,7 @@ export class Relay {
       probabilities: answer.probabilities,
       confidence: answer.confidence,
       ...(downgraded === undefined ? {} : { downgraded }),
+      ...(raised === undefined ? {} : { raised }),
       state: plan.state,
       latencyMs: Date.now() - started,
     };
@@ -450,11 +468,20 @@ export class Relay {
     this.host.sendTo(agent.person, { type: "delivery", agent: agent.id, deliveries: [delivery] });
   }
 
-  /** Works out, for every connected Agent but the one that caused the Event, what the Relay knows. */
+  /**
+   * Works out, for every connected Agent but the one that caused the Event, and for
+   * every Agent an Update is addressed to even when it is Gone, what the Relay knows.
+   */
   private plan(event: AgentDeliverable): Plan[] {
     const sender = this.senderOf(event);
     const cause = sender.kind === "agent" ? sender.agentId : null;
-    const agents = this.host.liveAgents().filter((agent) => agent.id !== cause);
+    const live = this.host.liveAgents();
+    const liveIds = new Set(live.map((agent) => agent.id));
+    const gone = (event.type === "update" ? (event.payload.to ?? []) : [])
+      .filter((id) => !liveIds.has(id))
+      .map((id) => this.host.agent(id))
+      .filter((agent) => agent !== null);
+    const agents = [...live, ...gone].filter((agent) => agent.id !== cause);
     if (agents.length === 0) return [];
     const tasks = this.host.heldTasks();
     const recent = this.recentCode(event.seq);
@@ -497,7 +524,7 @@ export class Relay {
         },
         overlap: { sharedFiles: overlap.files, symbolsAgentUses: overlap.symbols, addressedToAgent: addressed },
       };
-      return { agent, sender, overlap, addressed, mine, state };
+      return { agent, sender, overlap, addressed, named: namesAgent(event, agent.id), mine, state };
     });
   }
 

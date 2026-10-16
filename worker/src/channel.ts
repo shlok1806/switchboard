@@ -490,6 +490,7 @@ export class Channel extends DurableObject<Env> {
       sql: ctx.storage.sql,
       heldTasks: () => this.tasks.held(),
       liveAgents: () => this.agents.live(),
+      agent: (id) => this.agents.find(id),
       task: (number) => this.tasks.read(number),
       touchedFiles: (id) => this.hooks.touchedFiles(id),
       jev: () => jevFor(env),
@@ -989,17 +990,38 @@ export class Channel extends DurableObject<Env> {
 
   /**
    * Records an Update: one a Person wrote directly (from the CLI or the Dashboard),
-   * or one an Agent posted through Switchboard's tools (the Tool Capture).
+   * or one an Agent posted through Switchboard's tools (the Tool Capture). `to`
+   * addresses it to Agents on the Channel, Gone ones too, never the sender (ADR 0026).
    */
-  postUpdate(caller: Caller, text: string, task?: TaskNumber): { ok: true; event: ChannelEvent } | ClaimRefusal {
+  postUpdate(
+    caller: Caller,
+    text: string,
+    task?: TaskNumber,
+    to?: readonly AgentId[],
+  ): { ok: true; event: ChannelEvent } | ClaimRefusal {
     this.join(caller.person);
     const who = this.claims.resolve(caller);
     if (!who.ok) return who;
+    if (to !== undefined) {
+      if (caller.agent !== undefined && to.includes(caller.agent)) {
+        return { ok: false, status: 400, reason: "An Agent cannot address an Update to itself." };
+      }
+      const unknown = to.filter((id) => this.agents.find(id) === null);
+      if (unknown.length > 0) {
+        return {
+          ok: false,
+          status: 400,
+          reason:
+            `No Agent on this Channel is called ${unknown.join(", ")}. ` +
+            "Address Agents by their Agent ID, as list_agents shows it.",
+        };
+      }
+    }
     const event = this.append({
       type: "update",
       actor: who.acting.actor,
       capture: who.acting.capture,
-      payload: { text },
+      payload: { text, ...(to === undefined ? {} : { to: [...to] }) },
       ...(task === undefined ? {} : { task }),
     });
     // The holder's Update shows as the last Update in the Issue's status comment.

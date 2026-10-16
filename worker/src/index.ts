@@ -24,13 +24,13 @@ import type {
   RelayResponse,
   TaskNumber,
 } from "../../shared/src/index";
-import { MAX_EVENT_IDS, MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
+import { MAX_ADDRESSEES, MAX_EVENT_IDS, MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
 import { type AgentRoute, handleAgentRoute, matchAgentRoute } from "./agents-api";
 import { channelRepo, devMode, readCredential } from "./auth";
 import { handleAuthRoute, isAuthRoute } from "./auth-api";
 import { handleBranchRoute, matchBranchRoute } from "./branches-api";
 import type { Caller } from "./claims";
-import { handleClaimRoute, matchClaimRoute } from "./claims-api";
+import { handleClaimRoute, isAgentId, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
 import { agentMayCall, HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } from "./hosts-api";
 import { fail, json, readJson } from "./http";
@@ -132,7 +132,12 @@ async function handlePostUpdate(request: Request, channel: ChannelStub, caller: 
   if (task !== undefined && !(typeof task === "number" && Number.isInteger(task) && task > 0)) {
     return fail(400, '"task" must be a GitHub Issue number.');
   }
-  const result = await channel.postUpdate(caller, text, task);
+  // The Agents it is addressed to (ADR 0026), each named once.
+  const to = Array.isArray(body.to) && body.to.every(isAgentId) ? [...new Set(body.to)] : undefined;
+  if (body.to !== undefined && !(to !== undefined && to.length >= 1 && to.length <= MAX_ADDRESSEES)) {
+    return fail(400, `"to" must be a list of 1 to ${MAX_ADDRESSEES} Agent IDs, such as alice/claude/7f3a.`);
+  }
+  const result = await channel.postUpdate(caller, text, task, to);
   if (!result.ok) return fail(result.status, result.reason);
   return json<PostUpdateResponse>({ ok: true, event: result.event }, 201);
 }
