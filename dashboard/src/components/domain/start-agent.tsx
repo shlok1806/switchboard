@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode, type RefObject } from "react";
 import { toast } from "sonner";
 import type { Agent, Host, PermissionMode } from "@shared/index";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 import { Sheet } from "@/components/shell/sheet";
+import { useHosts } from "@/data/hosts";
 import { useMe, useStore } from "@/data/store";
 import { hostName } from "@/lib/format";
 import { go } from "@/lib/router";
@@ -76,22 +77,17 @@ export function useHostsSupported(): boolean | null {
   return supported;
 }
 
-/** This Person's own Hosts, and the Channel's cap on Agents Hosts run. `null` while loading. */
-function useMyHosts() {
-  const store = useStore();
+/**
+ * This Person's own Hosts, and the Channel's cap on Agents Hosts run, read as the Hosts page
+ * reads them: again when a Host comes or goes, an Agent on one starts or stops, or `again`
+ * changes. `null` while loading.
+ */
+function useMyHosts(again: number): { hosts: Host[]; cap?: number; running?: number; problem?: string } | null {
   const me = useMe();
-  const [state, setState] = useState<{ hosts: Host[]; cap?: number; running?: number; problem?: string } | null>(null);
-  useEffect(() => {
-    let live = true;
-    store.source
-      .hosts()
-      .then((r) => live && setState(r === null ? { hosts: [] } : { hosts: r.hosts.filter((h) => h.person === me), cap: r.cap, running: r.running }))
-      .catch((e: Error) => live && setState({ hosts: [], problem: e.message }));
-    return () => {
-      live = false;
-    };
-  }, [store, me]);
-  return state;
+  const { hosts: response, problem } = useHosts(again);
+  if (response === undefined) return problem === undefined ? null : { hosts: [], problem };
+  if (response === null) return { hosts: [] };
+  return { hosts: response.hosts.filter((h) => h.person === me), cap: response.cap, running: response.running };
 }
 
 /** One field, its label above it in 13 ink-3 (design.md), a note under it. */
@@ -101,7 +97,14 @@ function Field({ label, optional, hint, children }: { label: string; optional?: 
     <div className="flex min-w-0 flex-col gap-1.5">
       <label className="flex min-w-0 flex-col gap-1 text-small text-ink-3">
         <span>
-          {label} {optional && <span className="text-ink-4">optional</span>}
+          {label}
+          {/* Shown, but not part of the field's name: the name is what the field holds. */}
+          {optional && (
+            <span aria-hidden className="text-ink-4">
+              {" "}
+              optional
+            </span>
+          )}
         </span>
         {children}
       </label>
@@ -149,9 +152,17 @@ export function StartAgentSheet() {
   );
   // While a start is asked for, the sheet stays: closing it would hide the answer.
   const [busy, setBusy] = useState(false);
+  // The form says whether Start may be pressed; the button sits in the sheet's action row.
+  const [ready, setReady] = useState(false);
   // Unmounted (a test, or the app torn down), it is closed: the next mount starts closed.
   useEffect(() => () => setSheet(false), []);
-  const loaded = useMyHosts();
+  // Each opening reads the Hosts again, so the cap and who is Live are as of now.
+  const [opened, setOpened] = useState(0);
+  useEffect(() => {
+    if (open) setOpened((n) => n + 1);
+  }, [open]);
+  const loaded = useMyHosts(opened);
+  const brief = useRef<HTMLTextAreaElement>(null);
   const close = () => setSheet(false);
   const hosts = loaded?.hosts ?? [];
   return (
@@ -159,6 +170,13 @@ export function StartAgentSheet() {
       open={open}
       onClose={close}
       locked={busy}
+      // The brief is what most starts need first. Focused here, not with autoFocus, so the
+      // sheet still knows what opened it and gives focus back there when it closes.
+      onOpenAutoFocus={(e) => {
+        if (!brief.current) return;
+        e.preventDefault();
+        brief.current.focus();
+      }}
       title="Start an Agent"
       description={
         loaded === null
@@ -172,40 +190,35 @@ export function StartAgentSheet() {
           <Button type="button" disabled={busy} onClick={close}>
             {hosts.length === 0 ? "Close" : "Cancel"}
           </Button>
-          {hosts.length > 0 && <StartButton busy={busy} />}
+          {hosts.length > 0 && (
+            <Button type="submit" form={FORM_ID} variant="primary" busy={busy} disabled={!ready}>
+              Start Agent
+            </Button>
+          )}
         </>
       }
     >
-      {open && loaded !== null && (hosts.length === 0 ? <NoHosts /> : <StartAgentForm hosts={hosts} cap={loaded.cap} running={loaded.running} busy={busy} setBusy={setBusy} onDone={close} />)}
+      {open &&
+        loaded !== null &&
+        (hosts.length === 0 ? (
+          <NoHosts />
+        ) : (
+          <StartAgentForm
+            hosts={hosts}
+            cap={loaded.cap}
+            running={loaded.running}
+            busy={busy}
+            setBusy={setBusy}
+            setReady={setReady}
+            briefRef={brief}
+            onDone={close}
+          />
+        ))}
     </Sheet>
   );
 }
 
 const FORM_ID = "start-agent";
-
-// The form reports whether Start may be pressed; the button sits in the sheet's action row.
-let canStart = false;
-const startListeners = new Set<() => void>();
-function setCanStart(v: boolean) {
-  if (v === canStart) return;
-  canStart = v;
-  for (const l of startListeners) l();
-}
-
-function StartButton({ busy }: { busy: boolean }) {
-  const ready = useSyncExternalStore(
-    (l) => {
-      startListeners.add(l);
-      return () => startListeners.delete(l);
-    },
-    () => canStart,
-  );
-  return (
-    <Button type="submit" form={FORM_ID} variant="primary" busy={busy} disabled={!ready}>
-      Start Agent
-    </Button>
-  );
-}
 
 function NoHosts() {
   return (
@@ -222,6 +235,8 @@ function StartAgentForm({
   running,
   busy,
   setBusy,
+  setReady,
+  briefRef,
   onDone,
 }: {
   hosts: Host[];
@@ -229,6 +244,8 @@ function StartAgentForm({
   running?: number;
   busy: boolean;
   setBusy: (busy: boolean) => void;
+  setReady: (ready: boolean) => void;
+  briefRef: RefObject<HTMLTextAreaElement | null>;
   onDone: () => void;
 }) {
   const store = useStore();
@@ -261,9 +278,9 @@ function StartAgentForm({
   const full = cap !== undefined && running !== undefined && running >= cap;
   const ready = !busy && host.live && !!path && !refusal && !!chosenMode && !full;
   useEffect(() => {
-    setCanStart(ready);
-    return () => setCanStart(false);
-  }, [ready]);
+    setReady(ready);
+    return () => setReady(false);
+  }, [ready, setReady]);
 
   // A long path shows its end, the part that names the repo, unless the Person is editing it.
   useEffect(() => {
@@ -334,19 +351,19 @@ function StartAgentForm({
             className={cn(FIELD, "font-mono" /* taste-skill-ignore: a path is code */, refusal && "border-ink")}
           />
         </Field>
-        {refusal ? (
+        {refusal && (
           <p id="start-agent-folder-refusal" className="text-small text-ink">
             <WithCode text={refusal} />
           </p>
-        ) : (
-          <FolderChoices host={host} value={folder} onPick={setCwd} />
         )}
+        {/* Under a refusal too: one of these is the way out of it. */}
+        <FolderChoices host={host} value={folder} onPick={setCwd} />
       </div>
       <Field label="Brief" optional hint="Its first prompt, sent as your Directive.">
         <textarea
           name="brief"
+          ref={briefRef}
           rows={4}
-          autoFocus
           maxLength={MAX_BRIEF_LENGTH}
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
@@ -425,6 +442,8 @@ function FolderChoices({ host, value, onPick }: { host: Host; value: string; onP
             key={root}
             type="button"
             onClick={() => onPick(root)}
+            // The path itself, not the break points set into it for wrapping.
+            aria-label={root}
             aria-pressed={value === root}
             className={cn(
               "inline-flex min-h-[26px] max-w-full items-center rounded-[var(--r)] border px-2 py-0.5 text-left text-label font-medium transition-colors duration-[var(--dur)] active:translate-y-px",
@@ -453,11 +472,18 @@ function FolderChoices({ host, value, onPick }: { host: Host; value: string; onP
 /** How long Stop waits for the Agent to go Gone before it may be asked again. */
 const STOP_WAIT_MS = 30_000;
 
-/** Stop an Agent one of this Person's Hosts runs: its session ends and it goes Gone. */
-export function StopAgentButton({ agent }: { agent: Agent }) {
+/**
+ * Stop an Agent one of this Person's Hosts runs: its session ends and it goes Gone. While it
+ * asks, `onAsking` lets the page take its own primary away, so the question holds the only
+ * one; once asked, `onStopped` puts focus somewhere that stays, as the question goes.
+ */
+export function StopAgentButton({ agent, onAsking, onStopped }: { agent: Agent; onAsking?: (asking: boolean) => void; onStopped?: () => void }) {
   const store = useStore();
   const me = useMe();
   const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    onAsking?.(confirming);
+  }, [confirming, onAsking]);
   // Taking the question back puts focus on Stop again, where it was.
   const stopButton = useRef<HTMLButtonElement>(null);
   const backToStop = useRef(false);
@@ -492,8 +518,12 @@ export function StopAgentButton({ agent }: { agent: Agent }) {
     asking.current = false;
     setBusy(false);
     setConfirming(false);
-    if (!result.ok) return toast.error(result.reason);
+    if (!result.ok) {
+      backToStop.current = true;
+      return toast.error(result.reason);
+    }
     setStopping(true);
+    onStopped?.();
     toast.success(`Asked ${hostName(agent.host ?? "")} to stop ${name}`);
   };
 

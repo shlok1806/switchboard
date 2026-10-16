@@ -61,6 +61,11 @@ function AgentPage({ agent }: { agent: Agent }) {
   const state = useAgentState(agent);
   const [part, setPart] = useState<Part>("terminal");
   const [renaming, setRenaming] = useState(false);
+  // While Stop asks, its question is the header's only action: the others step aside until it
+  // is answered or taken back, so it holds the one primary and fits a phone's row.
+  const [stopAsking, setStopAsking] = useState(false);
+  // Once Stop is asked for, focus lands on the Agent's name, which stays on the page.
+  const heading = useRef<HTMLHeadingElement>(null);
   const directive = useRef<HTMLTextAreaElement>(null);
 
   const aboutAgent = useCallback(
@@ -96,7 +101,7 @@ function AgentPage({ agent }: { agent: Agent }) {
       <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-[var(--gutter)] pt-3 pb-10">
         <header className="flex flex-wrap items-start gap-x-6 gap-y-3">
           <div className="flex min-w-0 flex-[1_1_420px] flex-col gap-1">
-            <h1 className="flex min-w-0 flex-wrap items-center gap-x-2.5 text-head font-semibold [overflow-wrap:anywhere] text-ink">
+            <h1 ref={heading} tabIndex={-1} className="flex min-w-0 flex-wrap items-center gap-x-2.5 text-head font-semibold [overflow-wrap:anywhere] text-ink outline-none">
               <Glyph state={state} />
               {agent.nickname ?? agent.id}
               <span title={`Last seen ${ago(agent.lastSeenAt)}`}>
@@ -106,7 +111,7 @@ function AgentPage({ agent }: { agent: Agent }) {
             <p className="text-small text-ink-3">{facts.join(" · ")}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {canDirect && (
+            {canDirect && !stopAsking && (
               <Button
                 variant="primary"
                 onClick={() => {
@@ -117,9 +122,9 @@ function AgentPage({ agent }: { agent: Agent }) {
                 Directive
               </Button>
             )}
-            <Button onClick={() => setRenaming(true)}>Rename</Button>
-            <StopAgentButton agent={agent} />
-            <MoreActions agent={agent} onRename={() => setRenaming(true)} />
+            {!stopAsking && <Button onClick={() => setRenaming(true)}>Rename</Button>}
+            <StopAgentButton agent={agent} onAsking={setStopAsking} onStopped={() => heading.current?.focus()} />
+            {!stopAsking && <MoreActions agent={agent} onRename={() => setRenaming(true)} />}
           </div>
         </header>
 

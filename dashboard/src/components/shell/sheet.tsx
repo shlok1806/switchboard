@@ -1,11 +1,11 @@
 /*
- * A side sheet (design.md): a form that needs the page beside it, such as Start an Agent. It
+ * A side sheet (design.md, Side sheet): a form that needs the page beside it, such as Start an Agent. It
  * comes in from the right at 400px over a light veil, and below 640px from the bottom as a
  * bottom sheet over the tab bar. It is a dialog: it holds focus, Escape or Close shuts it
  * (unless `locked`, while an answer is awaited), and focus goes back to what opened it. The
  * head and the actions stay put while the body scrolls between them.
  */
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { buttonVariants } from "@/components/atoms/Button";
@@ -18,6 +18,7 @@ export function Sheet({
   title,
   description,
   actions,
+  onOpenAutoFocus,
   children,
 }: {
   open: boolean;
@@ -28,13 +29,27 @@ export function Sheet({
   description?: ReactNode;
   /** The row of buttons under the body. */
   actions?: ReactNode;
+  /** Where focus goes on opening: call `preventDefault` and focus a field. Focus still returns to the opener on closing. */
+  onOpenAutoFocus?: (e: Event) => void;
   children: ReactNode;
 }) {
+  // A Radix dialog gives focus back to its Trigger, and a sheet opened from anywhere has none:
+  // it gives focus back to whatever had it when the sheet opened, if that is still on the page.
+  const opener = useRef<HTMLElement | null>(null);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(next) => !next && !locked && onClose()}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/25 dark:bg-black/55" />
         <DialogPrimitive.Content
+          onOpenAutoFocus={(e) => {
+            opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            onOpenAutoFocus?.(e);
+          }}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            if (opener.current?.isConnected) opener.current.focus();
+            opener.current = null;
+          }}
           className={cn(
             "fixed z-50 flex flex-col bg-paper text-ink outline-none",
             "inset-y-0 right-0 w-[400px] max-w-full border-l border-rule-2",

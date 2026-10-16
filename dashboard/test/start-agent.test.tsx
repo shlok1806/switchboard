@@ -110,10 +110,55 @@ describe("starting an Agent", () => {
     fireEvent.submit(document.getElementById("start-agent") as HTMLFormElement);
     expect(spawnAgent).not.toHaveBeenCalled();
 
+    // The Host's folders stay under the refusal: one click is the way out of it.
+    fireEvent.click(screen.getByRole("button", { name: "/Users/shlok/code/app" }));
+    expect(folder.getAttribute("aria-invalid")).toBeNull();
+    expect(start.disabled).toBe(false);
+
     // A folder under a root is fine.
     fireEvent.change(folder, { target: { value: "/Users/shlok/code/app/web" } });
     expect(folder.getAttribute("aria-invalid")).toBeNull();
     expect(start.disabled).toBe(false);
+  });
+
+  it("reads the Hosts again each time it opens", async () => {
+    // An Agent stopped while the sheet was closed: the next opening says so.
+    let running = 4;
+    const hosts = vi.fn(async (): Promise<HostsResponse> => ({ hosts: [host], cap: 20, running }));
+    render(
+      <>
+        <StartAgentButton />
+        <StartAgentSheet />
+      </>,
+      { wrapper: withChannel(source({ hosts })) },
+    );
+    const opener = await screen.findByRole("button", { name: "Start an Agent" });
+    fireEvent.click(opener);
+    expect(await screen.findByText("4 of 20 Agents running on Hosts")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    running = 3;
+    fireEvent.click(opener);
+    expect(await screen.findByText("3 of 20 Agents running on Hosts")).toBeTruthy();
+  });
+
+  it("puts focus in the brief, and gives it back to what opened it on Escape", async () => {
+    render(
+      <>
+        <StartAgentButton />
+        <StartAgentSheet />
+      </>,
+      { wrapper: withChannel(source({})) },
+    );
+    const opener = await screen.findByRole("button", { name: "Start an Agent" });
+    opener.focus();
+    fireEvent.click(opener);
+    const brief = await screen.findByRole("textbox", { name: "Brief" });
+    await waitFor(() => expect(document.activeElement).toBe(brief));
+    fireEvent.keyDown(brief, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
   it("shows the Channel's cap before Start, and will not start past it", async () => {
@@ -194,10 +239,13 @@ describe("stopping an Agent", () => {
   it("cannot be asked twice: Stop waits, disabled, until the Agent is Gone", async () => {
     const stopAgent = vi.fn(async (): Promise<ActionResult> => ({ ok: true }));
     const wrapper = withChannel(source({ stopAgent }));
-    const { rerender } = render(<StopAgentButton agent={agent} />, { wrapper });
+    const onStopped = vi.fn();
+    const { rerender } = render(<StopAgentButton agent={agent} onStopped={onStopped} />, { wrapper });
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop Agent" }));
     const stopping = (await screen.findByRole("button", { name: "Stopping" })) as HTMLButtonElement;
+    // The question is gone, so the page is told to put focus somewhere that stays.
+    expect(onStopped).toHaveBeenCalledTimes(1);
     expect(stopping.disabled).toBe(true);
     fireEvent.click(stopping);
     expect(screen.queryByRole("group", { name: /^Stop / })).toBeNull();

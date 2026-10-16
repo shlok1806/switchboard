@@ -184,6 +184,16 @@ its meta and its link stay on the head's first line and the title wraps instead.
 (the 42% of the context window) puts its meta on its own line under the figure. Below 640px the
 inspector is not on the page; it opens as a bottom sheet from the row.
 
+Side sheet. For a form that needs the page beside it (Start an Agent), never a centred
+dialog: 400px from the right edge, a 1px `--rule-2` on its left, `--paper` fill, over a
+veil of black at 25% (55% in dark) that dims the page without lightening it. A head (the
+15/600 title, a 13 ink-3 sentence, Close at the right), a body that scrolls, and the actions
+on a row under a 1px `--rule`, right-aligned, the primary last. It is modal: it holds focus,
+Escape, the veil and Close shut it (none of them while an answer is awaited), and focus goes
+back to what opened it. Opening focuses the field most starts need first. Below 640px it is a
+bottom sheet over the same veil, full width, at most 90% of the screen tall, with the actions
+above the home indicator. One sheet serves every place that opens it.
+
 Phone. One breakpoint, 640px: every PAGE below it uses the phone pattern, which is also the
 Phone board. The top bar is the wordmark, the channel and Search (no kbd hint); the views
 move to a 56px bottom tab bar fixed to the bottom edge (Now with its signal chip, Agents,

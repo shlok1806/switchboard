@@ -18,6 +18,7 @@ import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { useEventDetail } from "@/data/history";
+import type { HistoryScope } from "@/data/source";
 import { useChannel, useIndex, useStore } from "@/data/store";
 import { TAG_LABEL, ago, clock } from "@/lib/format";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -93,68 +94,68 @@ export function MemoryView({ selected }: { selected?: string }) {
 
   return (
     <div className="flex h-full min-h-0">
-    <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-      <div className="flex w-full max-w-[60rem] flex-col gap-5 px-[var(--gutter)] pt-5 pb-12">
-        <PageHead
-          title="Memory"
-          facts={[
-            loaded && `${notes.length}${loaded.more ? "+" : ""} ${notes.length === 1 && !loaded.more ? "note" : "notes"}${searching ? " match" : ""}`,
-            q ? "best match first" : "newest first",
-            "Agents leave them with memory_note",
-          ]}
-        />
-        <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-          <div role="group" aria-label="Tag" className="flex flex-wrap gap-1.5">
-            <Chip on={tag === null} onClick={() => setTag(null)}>
-              All
-            </Chip>
-            {MEMORY_TAGS.map((t) => (
-              <Chip key={t} on={tag === t} onClick={() => setTag(tag === t ? null : t)}>
-                {TAG_LABEL[t]}
+      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex w-full max-w-[60rem] flex-col gap-5 px-[var(--gutter)] pt-5 pb-12">
+          <PageHead
+            title="Memory"
+            facts={[
+              loaded && `${notes.length}${loaded.more ? "+" : ""} ${notes.length === 1 && !loaded.more ? "note" : "notes"}${searching ? " match" : ""}`,
+              q ? "best match first" : "newest first",
+              "Agents leave them with memory_note",
+            ]}
+          />
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+            <div role="group" aria-label="Tag" className="flex flex-wrap gap-1.5">
+              <Chip on={tag === null} onClick={() => setTag(null)}>
+                All
               </Chip>
-            ))}
-          </div>
-          <label className="ml-auto flex flex-col gap-1 text-small text-ink-3 max-sm:ml-0 max-sm:w-full">
-            Find
-            <input
-              type="search"
-              value={find}
-              onChange={(e) => setFind(e.target.value)}
-              placeholder="retries client.ts"
-              className="h-[30px] w-60 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:w-full max-sm:text-[16px]"
-            />
-          </label>
-        </div>
-
-        {problem && (
-          <p role="alert" className="text-small text-ink-2">
-            Could not read the notes: {problem}
-          </p>
-        )}
-        {loaded === undefined ? (
-          !problem && <p className="border-t border-rule py-6 text-row text-ink-3">Reading the notes</p>
-        ) : notes.length === 0 ? (
-          <p className="border-t border-rule py-6 text-row text-ink-3">
-            {searching ? "No note matches." : "No notes yet. An Agent leaves one with memory_note when it learns something the others should know."}
-          </p>
-        ) : (
-          <ol className="border-t border-rule" aria-label="Notes">
-            {notes.map((n) => (
-              <Note key={n.id} note={n} selected={n.id === selected} onPick={() => pick(n.id)} />
-            ))}
-            {loaded.more &&
-              (q ? (
-                // The Worker ranks a search's matches, so there is no older page of them to ask for.
-                <li className="py-3 text-small text-ink-3">
-                  The best {notes.length} matches. Narrow the search for more.
-                </li>
-              ) : (
-                <OlderRow loading={older} onClick={loadOlder} what="notes" />
+              {MEMORY_TAGS.map((t) => (
+                <Chip key={t} on={tag === t} onClick={() => setTag(tag === t ? null : t)}>
+                  {TAG_LABEL[t]}
+                </Chip>
               ))}
-          </ol>
-        )}
+            </div>
+            <label className="ml-auto flex flex-col gap-1 text-small text-ink-3 max-sm:ml-0 max-sm:w-full">
+              Find
+              <input
+                type="search"
+                value={find}
+                onChange={(e) => setFind(e.target.value)}
+                placeholder="retries client.ts"
+                className="h-[30px] w-60 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:w-full max-sm:text-[16px]"
+              />
+            </label>
+          </div>
+
+          {problem && (
+            <p role="alert" className="text-small text-ink-2">
+              Could not read the notes: {problem}
+            </p>
+          )}
+          {loaded === undefined ? (
+            !problem && <p className="border-t border-rule py-6 text-row text-ink-3">Reading the notes</p>
+          ) : notes.length === 0 ? (
+            <p className="border-t border-rule py-6 text-row text-ink-3">
+              {searching ? "No note matches." : "No notes yet. An Agent leaves one with memory_note when it learns something the others should know."}
+            </p>
+          ) : (
+            <ol className="border-t border-rule" aria-label="Notes">
+              {notes.map((n) => (
+                <Note key={n.id} note={n} selected={n.id === selected} onPick={() => pick(n.id)} />
+              ))}
+              {loaded.more &&
+                (q ? (
+                  // The Worker ranks a search's matches, so there is no older page of them to ask for.
+                  <li className="py-3 text-small text-ink-3">
+                    The best {notes.length} matches. Narrow the search for more.
+                  </li>
+                ) : (
+                  <OlderRow loading={older} onClick={loadOlder} what="notes" />
+                ))}
+            </ol>
+          )}
+        </div>
       </div>
-    </div>
       {selected && <NoteInspector id={selected} onClose={mobile ? close : undefined} />}
     </div>
   );
@@ -219,19 +220,45 @@ const AROUND = 4;
 
 /** A note in the inspector, with the Events around it. */
 function NoteInspector({ id, onClose }: { id: string; onClose?: () => void }) {
+  const store = useStore();
   const { events, verdictsByEvent } = useChannel();
   const { event } = useEventDetail(id);
   const note = event ? noteFromEvent(event) : null;
-  const around = useMemo(() => {
-    if (!note) return { before: [], after: [], loaded: false };
-    const i = events.findIndex((e) => e.id === note.id);
-    if (i < 0) return { before: [], after: [], loaded: false };
-    const near = (e: ChannelEvent) =>
-      e.id !== note.id && ((e.actor.kind === "agent" && e.actor.agentId === note.author) || (note.task !== undefined && e.task === note.task));
-    const before = events.slice(0, i).filter(near).slice(-AROUND);
-    const after = events.slice(i + 1).filter(near).slice(0, AROUND);
-    return { before, after, loaded: true };
-  }, [events, note]);
+  const near = (e: ChannelEvent) =>
+    !!note && e.id !== note.id && ((e.actor.kind === "agent" && e.actor.agentId === note.author) || (note.task !== undefined && e.task === note.task));
+  const at = note ? events.findIndex((e) => e.id === note.id) : -1;
+  // A note older than the Events loaded: its author's and its Task's Events before it are
+  // read from the Channel, a page of each.
+  const [readBefore, setReadBefore] = useState<{ id: string; events?: ChannelEvent[] }>();
+  const older = note !== null && at < 0;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the note's id, seq, author and Task are what the read asks for.
+  useEffect(() => {
+    if (!note || !older) return;
+    let live = true;
+    const scopes: HistoryScope[] = [{ agent: note.author }, ...(note.task !== undefined ? [{ task: note.task }] : [])];
+    Promise.all(scopes.map((scope) => store.source.scopedEvents(scope, note.seq))).then(
+      (pages) => {
+        if (!live) return;
+        const byId = new Map<string, ChannelEvent>();
+        for (const page of pages) for (const e of page.events) byId.set(e.id, e);
+        setReadBefore({ id: note.id, events: [...byId.values()].sort((a, b) => a.seq - b.seq) });
+      },
+      () => live && setReadBefore({ id: note.id }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [store, note?.id, note?.seq, note?.author, note?.task, older]);
+  const around = (() => {
+    if (!note) return { state: "none" as const };
+    if (at >= 0) {
+      return { state: "loaded" as const, before: events.slice(0, at).filter(near).slice(-AROUND), after: events.slice(at + 1).filter(near).slice(0, AROUND) };
+    }
+    if (readBefore?.id !== note.id) return { state: "reading" as const };
+    if (!readBefore.events) return { state: "failed" as const };
+    // What came after an older note is between it and the Events loaded: not shown.
+    return { state: "older" as const, before: readBefore.events.filter(near).slice(-AROUND), after: [] };
+  })();
   const row = (e: ChannelEvent) => (
     <EventRow
       key={e.id}
@@ -260,15 +287,18 @@ function NoteInspector({ id, onClose }: { id: string; onClose?: () => void }) {
             <NoteBody note={note} />
           </div>
           <Section title="Around it" meta={note.task !== undefined ? `its author's and #${note.task}'s Events` : "its author's Events"} as="h3">
-            {!around.loaded ? (
-              <p className="text-small text-ink-3">This note is older than the Events loaded, so what came around it is not shown.</p>
+            {around.state === "none" || around.state === "reading" ? (
+              <p className="text-small text-ink-3">Reading what came before it</p>
+            ) : around.state === "failed" ? (
+              <p className="text-small text-ink-3">Could not read what came before it. It is in <a href={href({ view: "agent", id: note.author })} className="text-ink hover:underline">its author's history</a>.</p>
             ) : around.before.length + around.after.length === 0 ? (
-              <p className="text-small text-ink-3">Nothing else from its author{note.task !== undefined && " or on its Task"} is loaded.</p>
+              <p className="text-small text-ink-3">Nothing else from its author{note.task !== undefined && " or on its Task"} {around.state === "older" ? "came before it" : "is loaded"}.</p>
             ) : (
               <ol className="border-t border-rule">
                 {around.before.map(row)}
                 <li className="list-none border-b border-rule px-1 py-2 text-small font-medium text-ink">This note, {clock(note.at)}</li>
                 {around.after.map(row)}
+                {around.state === "older" && <li className="list-none px-1 py-2 text-small text-ink-3">What came after it is not loaded. It is in <a href={href({ view: "agent", id: note.author })} className="text-ink hover:underline">its author's history</a>.</li>}
               </ol>
             )}
           </Section>

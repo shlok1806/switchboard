@@ -9,8 +9,9 @@ import { cn } from "@/lib/utils";
 export function SectionHead({ title, meta, action, as: H = "h2", id }: { title: ReactNode; meta?: ReactNode; action?: ReactNode; as?: "h2" | "h3"; id?: string }) {
   return (
     <header className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule-2 pb-2">
-      <H id={id} className="min-w-0 flex-[1_1_160px] text-title font-semibold text-ink [overflow-wrap:anywhere]">
-        {title}
+      <H className="min-w-0 flex-[1_1_160px] text-title font-semibold text-ink [overflow-wrap:anywhere]">
+        {/* The id names the section by its title alone, not the meta after it. */}
+        <span id={id}>{title}</span>
         {meta && <span className="ml-3 inline-block text-small font-normal text-ink-3">{meta}</span>}
       </H>
       {action && <span className="shrink-0 text-small">{action}</span>}

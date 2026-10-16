@@ -124,7 +124,9 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
   // kept in arrival order, which is not always seq order, so it is the max, not the last.
   const maxSeq = useMemo(() => shown.reduce((m, e) => Math.max(m, e.seq), 0), [shown]);
   const maxSeqNow = useRef(maxSeq);
-  maxSeqNow.current = maxSeq;
+  useLayoutEffect(() => {
+    maxSeqNow.current = maxSeq;
+  }, [maxSeq]);
   const [readTo, setReadTo] = useState(0);
   const follow = (on: boolean) => {
     // Everything on the log when it stops following has been read; only what comes after counts.
@@ -136,6 +138,9 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
   // A scroll the log made itself (to a turn) is not the Person scrolling: it must not turn
   // following back on. Cleared after two frames in case the scroll moved nothing.
   const ownScroll = useRef(false);
+  // The Person scrolled since the log last scrolled to a turn: a later change of the rows'
+  // shape (the window crossing 640px) leaves the log where they put it.
+  const movedSinceTurn = useRef(false);
   const newest = shown.at(-1);
   const oldestId = shown[0]?.id;
   const unread = followingNow ? 0 : shown.filter((e) => e.seq > readTo).length;
@@ -169,14 +174,18 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
   }, [filters, group]);
   // A link to a turn scrolls to it once, when it names a new turn: picking an Event inside the
   // turn, or new Events arriving, leaves the log where it is. On a phone the rows change shape
-  // once the width is known, so the turn is scrolled to again then.
+  // once the width is known, so the turn is scrolled to again then, unless the Person has
+  // scrolled away from it.
   const shownTurn = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
     const at = turn && `${turn}|${mobile}`;
     if (!at || at === shownTurn.current) return;
     const target = document.getElementById(`turn-${turn}`);
     if (!target) return;
+    const sameTurn = shownTurn.current?.startsWith(`${turn}|`);
     shownTurn.current = at;
+    if (sameTurn && movedSinceTurn.current) return;
+    movedSinceTurn.current = false;
     follow(false);
     ownScroll.current = true;
     target.scrollIntoView({ block: "start" });
@@ -345,6 +354,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                 ownScroll.current = false;
                 return;
               }
+              movedSinceTurn.current = true;
               const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK;
               if (atBottom !== following.current) follow(atBottom);
               if (atBottom && maxSeq > readTo) setReadTo(maxSeq);
