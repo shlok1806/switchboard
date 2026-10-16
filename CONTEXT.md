@@ -43,12 +43,28 @@ A short, tagged fact an Agent writes on purpose for the Channel's shared memory:
 _Avoid_: Memory entry, fact, summary
 
 **Memory Digest**:
-What an Agent's wrapper adds to its context at its next turn: one line for each Memory Note other Agents wrote since it was last shown one, newest first, decisions before anything else, capped at about 1,500 tokens. A Memory Note never wakes an Agent.
+What an Agent's wrapper adds to its context at its next turn: one line for each Memory Note other Agents wrote since it was last shown one, capped at about 1,500 tokens. Notes on the Agent's own Tasks and files come first, then decisions and dead ends, then questions, newest first among equals (ADR 0024). A Memory Note never wakes an Agent.
 _Avoid_: Summary, recap
+
+**Agent Summary**:
+What the Channel knows of one Agent, in one read (ADR 0024): its latest Context Reading, the Tasks it holds, its latest Updates, the files it edited, its notes and its Tasks' open questions and dead ends, and the Agents it continues or that continue it. Built from rows the Channel already keeps, so it reads nothing from a session and works for a Gone Agent.
+_Avoid_: Profile, status, digest
+
+**Hand-off**:
+A session starting as the continuation of another Agent (ADR 0024), with `switchboard run <cli> --from <agent>`, a Host spawn's `from`, or the Dashboard's Hand off. The Channel keeps which Agent it continues, set once, and records an `agent.handoff` Event. A Hand-off never moves a Claim.
+_Avoid_: Transfer, takeover (a Takeover moves a Claim, ADR 0002)
+
+**Hand-off Brief**:
+The predecessor's Agent Summary, added to the successor's context by its first hook that can add any, framed as information from the Channel and capped at about 2,000 tokens. It is information, never an instruction: the successor's instructions come from its own Person (ADR 0005).
+_Avoid_: Handover prompt, Directive
 
 **Transcript Read**:
 A page of a running Agent's session that another Agent or a Person pulled through the Channel (ADR 0019). The Agent's wrapper reads it from the session file, condenses and always redacts it before it leaves the machine; the Channel keeps none of it, only a `transcript.read` Event. A Gone Agent's transcript cannot be read.
 _Avoid_: Log, history, export
+
+**Terminal Read**:
+A running Agent's screen as plain text, pulled once through the Channel by another Agent or a Person (ADR 0024): the same redacted text its watchers get (ADR 0021). The Channel keeps none of it, only a `terminal.read` Event.
+_Avoid_: Screenshot, terminal watch (a watch streams, ADR 0021)
 
 **Capture**:
 The route by which an Event reached the channel. Proxy captures come from the model's API traffic. Hook captures come from the agent CLI's lifecycle events. Tool captures come from the Agent calling Switchboard's own tools.

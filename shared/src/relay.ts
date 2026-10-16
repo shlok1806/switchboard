@@ -35,6 +35,10 @@ export const UNRELAYED_EVENT_TYPES: readonly EventType[] = [
   "memory.note",
   // Who read whose transcript is for the Dashboard: the read is the reader's business (ADR 0019).
   "transcript.read",
+  // Reading another Agent's screen, and a session continuing another (ADR 0024): the
+  // successor starts with the brief; other Agents are not told.
+  "terminal.read",
+  "agent.handoff",
   // About names, not work (ADR 0009).
   "agent.rename",
   "agent.model",

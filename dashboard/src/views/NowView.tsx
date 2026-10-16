@@ -31,6 +31,7 @@ const QUIET: ReadonlySet<EventType> = new Set<EventType>([
   "turn.end",
   "proxy.raw",
   "transcript.read",
+  "terminal.read",
   "verdict",
   "directive.delivery",
   "wake",

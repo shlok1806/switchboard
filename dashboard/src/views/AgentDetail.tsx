@@ -5,7 +5,7 @@
  * the context window, the account, where it runs and what the Relay heard from it. History
  * is the other section. Below 640px the right column follows the left.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { Agent, AgentId, ChannelEvent } from "@shared/index";
 import { modelLabel } from "@shared/index";
@@ -20,7 +20,7 @@ import { OlderRow } from "@/components/domain/older";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { IssueLink } from "@/components/domain/pending";
 import { RenameDialog } from "@/components/domain/rename";
-import { StopAgentButton } from "@/components/domain/start-agent";
+import { HandOffButton, StopAgentButton } from "@/components/domain/start-agent";
 import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
 import { Glyph, State, useAgentState, useAgentStates } from "@/components/domain/state";
 import { TerminalPanel } from "@/components/domain/terminal";
@@ -81,7 +81,9 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
       // Renamed by a Person, or its name taken while it was Gone (ADR 0009).
       (e.type === "agent.rename" && e.payload.agent === agent.id) ||
       // Stopped by its Person, on the Host that runs it (ADR 0015).
-      (e.type === "agent.stop" && e.payload.agent === agent.id),
+      (e.type === "agent.stop" && e.payload.agent === agent.id) ||
+      // Continued by another Agent (ADR 0024).
+      (e.type === "agent.handoff" && e.payload.from === agent.id),
     [agent.id],
   );
   const scoped = useScopedHistory({ agent: agent.id }, aboutAgent);
@@ -89,15 +91,34 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
   const held = claimsOf.get(agent.id) ?? [];
   const children = agents.filter((a) => a.parent === agent.id);
   const parent = agent.parent ? agents.find((a) => a.id === agent.parent) : undefined;
+  // A Hand off's two ends (ADR 0024): the Agent this one continues, and those that continue it.
+  const predecessor = agent.continues ? (agents.find((a) => a.id === agent.continues) ?? agent.continues) : undefined;
+  const successors = agents.filter((a) => a.continues === agent.id);
   const mine = agent.person === me;
   const canDirect = can.directives && agent.presence !== "gone";
   const asking = agent.approval !== undefined && agent.presence !== "gone";
 
-  const facts = [
+  const facts: ReactNode[] = [
     `${mine ? "Your" : `${agent.person}'s`} ${CLI_LABEL[agent.cli]} ${agent.host ? `on ${hostName(agent.host)}` : "in a terminal"}`,
     agent.model && `${modelLabel(agent.model)}${agent.effort ? `, ${agent.effort} effort` : ""}`,
     agent.role === "lead" && (children.length ? `lead of ${children.map(shortName).join(", ")}` : "lead"),
     parent && `started by ${shortName(parent)}`,
+    predecessor && (
+      <>
+        continued from <AgentLink agent={predecessor} />
+      </>
+    ),
+    successors.length > 0 && (
+      <>
+        handed off to{" "}
+        {successors.map((s, i) => (
+          <Fragment key={s.id}>
+            {i > 0 && ", "}
+            <AgentLink agent={s} />
+          </Fragment>
+        ))}
+      </>
+    ),
     `started ${ago(agent.startedAt)}`,
     agent.proxyMode === "raw" && "shares raw turns",
   ].filter(Boolean);
@@ -114,7 +135,14 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
                 <State state={state} person={agent.person} glyph={false} className="text-row" />
               </span>
             </h1>
-            <p className="text-small text-ink-3">{facts.join(" · ")}</p>
+            <p className="text-small text-ink-3">
+              {facts.map((fact, i) => (
+                <Fragment key={i}>
+                  {i > 0 && " · "}
+                  {fact}
+                </Fragment>
+              ))}
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {canDirect && !stopAsking && (
@@ -129,6 +157,7 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
               </Button>
             )}
             {!stopAsking && <Button onClick={() => setRenaming(true)}>Rename</Button>}
+            {!stopAsking && <HandOffButton agent={agent} task={held[0]} />}
             <StopAgentButton agent={agent} onAsking={setStopAsking} onStopped={() => heading.current?.focus()} />
             {!stopAsking && <MoreActions agent={agent} onRename={() => setRenaming(true)} />}
           </div>
@@ -203,6 +232,16 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
       </div>
       <RenameDialog agent={agent} open={renaming} onOpenChange={setRenaming} />
     </div>
+  );
+}
+
+/** Another Agent's name, linking to its page; one the Channel no longer lists is its ID, as text. */
+function AgentLink({ agent }: { agent: Agent | AgentId }) {
+  if (typeof agent === "string") return <span className="text-ink-2">{agent}</span>;
+  return (
+    <a href={href({ view: "agent", id: agent.id })} className="text-ink underline-offset-4 hover:underline">
+      {shortName(agent)}
+    </a>
   );
 }
 

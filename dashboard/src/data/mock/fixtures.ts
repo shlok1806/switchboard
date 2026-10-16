@@ -110,6 +110,8 @@ export const agents: Agent[] = [
     host: "shlok/studio",
     // A lead (ADR 0018): it started the Codex Agent below, so the canvas draws an edge between them.
     role: "lead",
+    // It carries on the old Codex session's work (ADR 0024), so both pages name the other.
+    continues: A.shlokCodexOld,
     account: "sh…@illinois.edu",
     model: "claude-opus-5-5",
     effort: "high",

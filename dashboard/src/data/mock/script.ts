@@ -80,6 +80,8 @@ export const HISTORY: Beat[] = [
   beat(-66, "claim", M, "tool", { holder: { kind: "agent", agentId: A.mayaClaude } }, { task: 14 }),
   beat(-61, "claim.refused", M, "tool", { heldBy: { kind: "person", person: "dev" } }, { task: 13 }),
   beat(-52, "session.start", S, null, { cwd: "~/code/app", resumed: false, source: "startup" }),
+  // shlok started it with `switchboard run claude --from`: it continues the old Codex session (ADR 0024).
+  beat(-52, "agent.handoff", S, null, { from: A.shlokCodexOld }),
   beat(-48, "claim", S, "tool", { holder: { kind: "agent", agentId: A.shlokClaude } }, { task: 12 }),
   beat(-44, "task.create", person("shlok"), null, { title: "Add the channel-messages rule to AGENTS.md", url: "https://github.com/shlok1806/app/issues/19", via: "channel" }, { task: 19 }),
   beat(-40, "session.start", SX, null, { cwd: "~/code/app", resumed: false, source: "startup" }),
@@ -157,6 +159,8 @@ export const LIVE: Beat[] = [
   beat(7.8, "turn.end", S, "hook", { turn: 88 }, { turn: "shlok-t88" }),
   // Maya's Claude reads what shlok's did before it touches the callers (ADR 0019).
   beat(8.4, "transcript.read", M, "tool", { agent: A.shlokClaude, from: 0, entries: 42 }),
+  // And dev's reads what is on shlok's screen right now (ADR 0024).
+  beat(8.6, "terminal.read", D, "tool", { agent: A.shlokClaude, rows: 48 }),
   beat(9, "command", S, "hook", { command: "git push origin task/12-rename-getjson" }, { task: 12 }),
   named(
     beat(9.8, "push", S, null, {

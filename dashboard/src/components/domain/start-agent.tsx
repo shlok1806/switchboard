@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode, type RefObject } from "react";
 import { toast } from "sonner";
-import type { Agent, Host, PermissionMode } from "@shared/index";
+import type { Agent, AgentId, Host, PermissionMode, Task } from "@shared/index";
 import {
   DEFAULT_PERMISSION_MODE,
   MAX_BRIEF_LENGTH,
@@ -86,18 +86,60 @@ function Field({ label, optional, hint, children }: { label: string; optional?: 
   );
 }
 
+/**
+ * What a Hand off fills the sheet with (ADR 0024): the Agent the new one continues, where it
+ * worked, and a brief the Person edits.
+ */
+export interface StartAgentPrefill {
+  from: AgentId;
+  /** The predecessor's name, as the sheet says it. */
+  fromName: string;
+  /** The predecessor's Host, by ID, when a Host ran it. */
+  host?: string;
+  cwd?: string;
+  brief?: string;
+}
+
 // One Start an Agent sheet for the whole Dashboard: the Hosts page, the Agents toolbar, the
-// Canvas and the palette all open the same one.
+// Canvas, the palette and an Agent's Hand off all open the same one.
 let sheetOpen = false;
+let sheetPrefill: StartAgentPrefill | undefined;
 const sheetListeners = new Set<() => void>();
-function setSheet(open: boolean) {
+function setSheet(open: boolean, prefill?: StartAgentPrefill) {
   sheetOpen = open;
+  sheetPrefill = open ? prefill : undefined;
   for (const l of sheetListeners) l();
 }
 
-/** Opens the Start an Agent sheet. */
-export function openStartAgent() {
-  setSheet(true);
+/** Opens the Start an Agent sheet, filled in for a Hand off when `prefill` says so. */
+export function openStartAgent(prefill?: StartAgentPrefill) {
+  setSheet(true, prefill);
+}
+
+/**
+ * Starts a new Agent that carries on `agent`'s work (ADR 0024): the sheet opens with its
+ * folder and a brief to edit, and the new session starts with what the Channel knows of it.
+ * Hidden on a Channel whose Worker has no Hosts.
+ */
+export function HandOffButton({ agent, task }: { agent: Agent; task?: Pick<Task, "number" | "title"> }) {
+  const supported = useHostsSupported();
+  if (!supported) return null;
+  const name = agent.nickname ?? agent.id;
+  return (
+    <Button
+      onClick={() =>
+        openStartAgent({
+          from: agent.id,
+          fromName: name,
+          ...(agent.host ? { host: agent.host } : {}),
+          ...(agent.context?.cwd ? { cwd: agent.context.cwd } : {}),
+          brief: task ? `Carry on ${name}'s work on #${task.number} ${task.title}.` : `Carry on ${name}'s work.`,
+        })
+      }
+    >
+      Hand off
+    </Button>
+  );
 }
 
 /**
@@ -108,7 +150,7 @@ export function StartAgentButton() {
   const supported = useHostsSupported();
   if (!supported) return null;
   return (
-    <Button variant="primary" onClick={openStartAgent}>
+    <Button variant="primary" onClick={() => openStartAgent()}>
       Start an Agent
     </Button>
   );
@@ -123,6 +165,8 @@ export function StartAgentSheet() {
     },
     () => sheetOpen,
   );
+  // Read with the open state it came with: one opening, one prefill.
+  const prefill = open ? sheetPrefill : undefined;
   // While a start is asked for, the sheet stays: closing it would hide the answer.
   const [busy, setBusy] = useState(false);
   // The form says whether Start may be pressed; the button sits in the sheet's action row.
@@ -149,6 +193,9 @@ export function StartAgentSheet() {
         if (!brief.current) return;
         e.preventDefault();
         brief.current.focus();
+        // A Hand off's brief is there to be added to: the caret goes after it.
+        const end = brief.current.value.length;
+        brief.current.setSelectionRange(end, end);
       }}
       title="Start an Agent"
       description={
@@ -177,6 +224,8 @@ export function StartAgentSheet() {
           <NoHosts />
         ) : (
           <StartAgentForm
+            key={prefill?.from ?? ""}
+            prefill={prefill}
             hosts={hosts}
             cap={loaded.cap}
             running={loaded.running}
@@ -203,6 +252,7 @@ function NoHosts() {
 }
 
 function StartAgentForm({
+  prefill,
   hosts,
   cap,
   running,
@@ -212,6 +262,7 @@ function StartAgentForm({
   briefRef,
   onDone,
 }: {
+  prefill?: StartAgentPrefill;
   hosts: Host[];
   cap?: number;
   running?: number;
@@ -222,10 +273,11 @@ function StartAgentForm({
   onDone: () => void;
 }) {
   const store = useStore();
-  const [chosenHost, setChosenHost] = useState<string>();
+  // A Hand off starts on the predecessor's Host and in its folder, when this Person has that Host.
+  const [chosenHost, setChosenHost] = useState<string | undefined>(() => hosts.find((h) => h.id === prefill?.host)?.name);
   const host = hosts.find((h) => h.name === chosenHost) ?? hosts.find((h) => h.live) ?? hosts[0]!;
-  const [cwd, setCwd] = useState<string>();
-  const [brief, setBrief] = useState("");
+  const [cwd, setCwd] = useState<string | undefined>(() => (prefill?.cwd && underRoots(prefill.cwd, host.roots) ? prefill.cwd : undefined));
+  const [brief, setBrief] = useState(prefill?.brief ?? "");
   const [nickname, setNickname] = useState("");
   const [model, setModel] = useState("");
   const [mode, setMode] = useState<PermissionMode>();
@@ -275,6 +327,7 @@ function StartAgentForm({
       ...(brief.trim() ? { brief: brief.trim() } : {}),
       ...(nickname.trim() ? { nickname: nickname.trim() } : {}),
       ...(model.trim() ? { model: model.trim() } : {}),
+      ...(prefill ? { from: prefill.from } : {}),
     });
     starting.current = false;
     setBusy(false);
@@ -291,6 +344,12 @@ function StartAgentForm({
 
   return (
     <form id={FORM_ID} onSubmit={submit} className="flex min-w-0 flex-col gap-4">
+      {prefill && (
+        <p className="text-row [overflow-wrap:anywhere] text-ink">
+          Continues <span className="font-semibold">{prefill.fromName}</span>.{" "}
+          <span className="text-ink-3">It starts with what the Channel knows of its work, as information. The brief below is the instruction.</span>
+        </p>
+      )}
       {hosts.length > 1 && (
         <Field label="Host">
           <select
