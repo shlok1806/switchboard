@@ -62,6 +62,9 @@ export type MockState = "ready" | "loading" | "empty" | "error" | "read-error";
 const READ_FAILED = "The Channel's Worker answered 500 to this read.";
 
 export class MockChannelSource implements ChannelSource {
+  async agent(id: AgentId): Promise<Agent | null> {
+    return this.agents.find((agent) => agent.id === id) ?? null;
+  }
   readonly me = ME;
   readonly capabilities = ALL_CAPABILITIES;
   readonly isMock = true;

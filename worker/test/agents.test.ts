@@ -78,8 +78,8 @@ class FakePerson {
     return this.post(`${agentPath(id)}/end`, {});
   }
 
-  async agents(): Promise<Agent[]> {
-    const response = await call("/api/agents", {
+  async agents(includeGone = false): Promise<Agent[]> {
+    const response = await call(includeGone ? "/api/agents?include=gone" : "/api/agents", {
       headers: { Authorization: await bearer(this.name) },
     });
     expect(response.status).toBe(200);
@@ -322,7 +322,8 @@ describe("Presence", () => {
     const { id } = await shlok.registered("e0d00000-0000-4000-8000-000000000000");
     expect((await shlok.end(id)).status).toBe(200);
     expect((await shlok.end(id)).status).toBe(200);
-    expect((await shlok.agents())[0]?.presence).toBe("gone");
+    expect(await shlok.agents()).toEqual([]);
+    expect((await shlok.agents(true))[0]?.presence).toBe("gone");
     expect((await shlok.agentEvents()).filter((e) => e.type === "presence").map(brief)).toEqual([
       ["presence", id, "live"],
       ["presence", id, "gone"],
@@ -365,10 +366,8 @@ describe("going Gone after silence", () => {
 
     advance(2000);
     expect(await runDurableObjectAlarm(channelStub())).toBe(true);
-    expect((await shlok.agents()).map((a) => [a.id, a.presence]).sort()).toEqual([
-      [quiet.id, "gone"],
-      [chatty.id, "idle"],
-    ]);
+    expect((await shlok.agents()).map((a) => [a.id, a.presence])).toEqual([[chatty.id, "idle"]]);
+    expect((await shlok.agents(true)).find((a) => a.id === quiet.id)?.presence).toBe("gone");
     const gone = (await shlok.agentEvents()).at(-1);
     expect(gone).toMatchObject({ type: "presence", capture: null, payload: { presence: "gone" } });
     expect(gone?.actor).toEqual({ kind: "agent", agentId: quiet.id });
@@ -376,7 +375,8 @@ describe("going Gone after silence", () => {
     // The chatty Agent goes silent too; the alarm set itself for it.
     advance(TEN_MINUTES);
     expect(await runDurableObjectAlarm(channelStub())).toBe(true);
-    expect((await shlok.agents()).every((a) => a.presence === "gone")).toBe(true);
+    expect(await shlok.agents()).toEqual([]);
+    expect((await shlok.agents(true)).every((a) => a.presence === "gone")).toBe(true);
     // With everyone Gone there is nothing left to watch.
     expect(await runDurableObjectAlarm(channelStub())).toBe(false);
   });
@@ -387,7 +387,7 @@ describe("going Gone after silence", () => {
     const { id } = await shlok.registered("b0b00000-0000-4000-8000-000000000000");
     advance(TEN_MINUTES + 1000);
     await runDurableObjectAlarm(channelStub());
-    expect((await shlok.agents())[0]?.presence).toBe("gone");
+    expect((await shlok.agents(true))[0]?.presence).toBe("gone");
 
     const response = await shlok.heartbeat(id, "live");
     expect((await response.json<AgentResponse>()).agent.presence).toBe("live");
@@ -407,7 +407,7 @@ describe("sharing the Channel's one alarm with the Task reconcile", () => {
     const headers = { Authorization: await bearer("shlok") };
     const titles = async () =>
       (await (await call("/api/tasks", { headers })).json<TaskListResponse>()).tasks.map((t) => t.title);
-    const presence = async (id: AgentId) => (await shlok.agents()).find((a) => a.id === id)?.presence;
+    const presence = async (id: AgentId) => (await shlok.agents(true)).find((a) => a.id === id)?.presence;
 
     // Reading Tasks schedules the reconcile (every 5 minutes); the Agent schedules its silence check.
     expect(await titles()).toEqual([]);

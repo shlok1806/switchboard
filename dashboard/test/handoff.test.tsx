@@ -52,6 +52,7 @@ let channels = 0;
 function channel(
   spawnAgent = vi.fn(async (): Promise<SpawnResult> => ({ ok: false, reason: "not in this test" })),
   hosts: Host[] = [host],
+  roster: Agent[] = [scout, mason],
 ) {
   const repo = ++channels;
   const source = {
@@ -61,7 +62,7 @@ function channel(
       ({
         channel: { repo: `ana/app-${repo}` },
         persons: [{ name: "ana" }],
-        agents: [scout, mason],
+        agents: roster,
         tasks: [],
         events: [],
         verdicts: [],
@@ -69,6 +70,7 @@ function channel(
         cursor: 0,
       }) as unknown as ChannelSnapshot,
     eventsById: async () => [],
+    agent: async (id: AgentId) => [scout, mason].find((a) => a.id === id) ?? null,
     wakesAfter: async () => [],
     scopedEvents: async () => ({ events: [] }),
     hosts: async (): Promise<HostsResponse> => ({ hosts, cap: 4, running: 1 }),
@@ -81,6 +83,10 @@ function channel(
 }
 
 describe("an Agent's page after a Hand off", () => {
+  it("keeps a Gone Agent's page reachable by address after it leaves the roster", async () => {
+    render(<AgentDetail id={scout.id} />, { wrapper: channel(undefined, [host], [mason]) });
+    expect(await screen.findByRole("heading", { name: /scout/ })).toBeTruthy();
+  });
   it("says which Agent it continues, and the predecessor says which continue it, each a link", async () => {
     const wrapper = channel();
     const { unmount } = render(<AgentDetail id={mason.id} />, { wrapper });

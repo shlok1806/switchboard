@@ -18,6 +18,8 @@ export interface ChannelState {
   connection: ConnectionState;
   snapshot?: Omit<ChannelSnapshot, "events" | "verdicts" | "agents" | "tasks" | "accounts">;
   agents: Agent[];
+  /** Seen Agents retained for direct pages and links after they leave the current roster. */
+  historicalAgents: Agent[];
   /** Every account with usage readings (ADR 0011), most recently read first. */
   accounts: AccountUsage[];
   tasks: Task[];
@@ -35,10 +37,12 @@ type Listener = () => void;
 
 /** Holds Channel state and applies stream messages. Views read it through hooks. */
 export class ChannelStore {
+  private allAgents: Agent[] = [];
   private state: ChannelState = {
     status: "loading",
     connection: "connecting",
     agents: [],
+    historicalAgents: [],
     accounts: [],
     tasks: [],
     events: [],
@@ -65,7 +69,8 @@ export class ChannelStore {
    * board settles without waiting for the stream to echo it.
    */
   applyTask(task: Task) {
-    this.set({ tasks: upsert(this.state.tasks, task, (t) => t.number === task.number) });
+    const tasks = upsert(this.state.tasks, task, (t) => t.number === task.number);
+    this.set({ tasks, agents: visibleAgents(this.allAgents, tasks) });
   }
 
   /** For side effects such as toasts. */
@@ -89,13 +94,15 @@ export class ChannelStore {
       .then((snap) => {
         if (cancelled) return;
         const { events, verdicts, agents, tasks, accounts = [], olderBefore, ...rest } = snap;
+        this.allAgents = agents;
         const byEvent = new Map<string, Verdict[]>();
         for (const v of verdicts) byEvent.set(v.event, [...(byEvent.get(v.event) ?? []), v]);
         this.set({
           status: "ready",
           snapshot: rest,
           events,
-          agents,
+          agents: visibleAgents(agents, tasks),
+          historicalAgents: agents,
           accounts,
           tasks,
           verdictsByEvent: byEvent,
@@ -155,13 +162,17 @@ export class ChannelStore {
         break;
       }
       case "agent":
-        this.set({ agents: upsert(s.agents, m.agent, (a) => a.id === m.agent.id) });
+        this.allAgents = upsert(this.allAgents, m.agent, (a) => a.id === m.agent.id);
+        this.set({ agents: visibleAgents(this.allAgents, s.tasks), historicalAgents: this.allAgents });
         break;
       case "account":
         this.set({ accounts: upsert(s.accounts, m.account, (a) => a.email === m.account.email) });
         break;
       case "task":
-        this.set({ tasks: upsert(s.tasks, m.task, (t) => t.number === m.task.number) });
+        {
+          const tasks = upsert(s.tasks, m.task, (t) => t.number === m.task.number);
+          this.set({ tasks, agents: visibleAgents(this.allAgents, tasks) });
+        }
         break;
       case "person":
         if (s.snapshot)
@@ -172,6 +183,11 @@ export class ChannelStore {
     }
     for (const l of this.messageListeners) l(m);
   }
+}
+
+function visibleAgents(agents: Agent[], tasks: Task[]): Agent[] {
+  const holders = new Set(tasks.flatMap((task) => task.claim?.holder.kind === "agent" ? [task.claim.holder.agentId] : []));
+  return agents.filter((agent) => agent.presence !== "gone" || holders.has(agent.id));
 }
 
 function upsert<T>(list: T[], item: T, match: (x: T) => boolean): T[] {
@@ -211,10 +227,10 @@ export function useCapabilities() {
 
 /** Lookups that views use everywhere. */
 export function useIndex() {
-  const { agents, tasks } = useChannel();
+  const { historicalAgents, tasks } = useChannel();
   return useMemo(() => {
-    const agentById = new Map<AgentId, Agent>(agents.map((a) => [a.id, a]));
+    const agentById = new Map<AgentId, Agent>(historicalAgents.map((a) => [a.id, a]));
     const taskByNumber = new Map<TaskNumber, Task>(tasks.map((t) => [t.number, t]));
     return { agentById, taskByNumber };
-  }, [agents, tasks]);
+  }, [historicalAgents, tasks]);
 }

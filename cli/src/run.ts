@@ -161,7 +161,7 @@ async function predecessorOf(
   client: ChannelClient,
   name: string,
 ): Promise<{ summary: AgentSummary; continuing: Map<AgentId, AgentId> } | string> {
-  const { agents } = await client.request<AgentsResponse>("/api/agents");
+  const { agents } = await client.request<AgentsResponse>("/api/agents?include=gone");
   const found = matchAgents(agents, name);
   if (found.length === 0) return `no Agent on this Channel is called ${name}, so this session cannot continue it.`;
   if (found.length > 1) return `${name} could be ${found.map((a) => a.id).join(", ")}; use the full Agent ID.`;

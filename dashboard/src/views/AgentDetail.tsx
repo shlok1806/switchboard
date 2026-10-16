@@ -41,7 +41,18 @@ type Part = "terminal" | "history";
 
 export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) {
   const { agentById } = useIndex();
-  const agent = agentById.get(id as AgentId);
+  const store = useStore();
+  const [historical, setHistorical] = useState<Agent | null>();
+  const current = agentById.get(id as AgentId);
+  useEffect(() => {
+    if (current) return;
+    let active = true;
+    if (typeof store.source.agent !== "function") return;
+    store.source.agent(id as AgentId).then((agent) => { if (active) setHistorical(agent); });
+    return () => { active = false; };
+  }, [current, id, store]);
+  const agent = current ?? historical;
+  if (agent === undefined) return null;
   if (!agent) {
     return (
       <ErrorPage
@@ -54,7 +65,7 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
           </a>
         }
       >
-        No Agent on this Channel has that ID. A stopped Agent leaves the list once its Person clears it.
+        No Agent on this Channel has that ID.
       </ErrorPage>
     );
   }
@@ -64,7 +75,7 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
 function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
   const me = useMe();
   const can = useCapabilities();
-  const { agents } = useChannel();
+  const { historicalAgents: agents } = useChannel();
   const claimsOf = useClaimsOf();
   const state = useAgentState(agent);
   const [part, setPart] = useState<Part>("terminal");

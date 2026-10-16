@@ -3,6 +3,7 @@ import type {
   AccountsResponse,
   ActionResult,
   AgentId,
+  AgentSummary,
   AgentResponse,
   AgentRole,
   AgentsResponse,
@@ -45,6 +46,7 @@ import {
   releasePath,
   rolePath,
   memoryQueryString,
+  summaryPath,
 } from "@shared/index";
 import type {
   Capabilities,
@@ -226,6 +228,11 @@ export class HttpChannelSource implements ChannelSource {
       cursor: latest.cursor,
       ...olderThan(latest.events),
     };
+  }
+
+  async agent(id: AgentId) {
+    try { return (await this.get<AgentSummary>(summaryPath(id))).agent; }
+    catch { return null; }
   }
 
   async olderEvents(before: number): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">> {

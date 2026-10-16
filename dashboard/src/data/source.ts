@@ -1,5 +1,6 @@
 import type {
   ActionResult,
+  Agent,
   AgentId,
   AgentRole,
   ChannelEvent,
@@ -106,6 +107,8 @@ export interface ChannelSource {
   readonly isMock: boolean;
   /** The Channel now, with only its latest Events: older ones come from `olderEvents`. */
   snapshot(): Promise<ChannelSnapshot>;
+  /** One Agent by address, including a Gone Agent no longer in the current roster. */
+  agent(id: AgentId): Promise<Agent | null>;
   /** The page of Events before `seq`, oldest first, with `olderBefore` set when there are older ones still. */
   olderEvents(before: number): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">>;
   /** The latest page of `scope`'s Events, or the page before `seq` `before`. Never Verdicts. */

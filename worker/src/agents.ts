@@ -205,9 +205,13 @@ function stamped(usage: ReportedUsage, now: number): string {
 export class AgentRoster {
   constructor(private readonly host: RosterHost) {}
 
-  list(): Agent[] {
+  list(includeGone = false): Agent[] {
     return this.host.sql
-      .exec<AgentRow>("SELECT * FROM agents ORDER BY last_seen_at DESC, id")
+      .exec<AgentRow>(
+        includeGone
+          ? "SELECT * FROM agents ORDER BY last_seen_at DESC, id"
+          : "SELECT * FROM agents WHERE presence != 'gone' OR EXISTS (SELECT 1 FROM tasks WHERE holder_agent = agents.id) ORDER BY last_seen_at DESC, id",
+      )
       .toArray()
       .map(rowToAgent);
   }

@@ -154,7 +154,7 @@ async function api<T>(path: string): Promise<T> {
 }
 
 async function agents(): Promise<Agent[]> {
-  return (await api<AgentsResponse>("/api/agents")).agents;
+  return (await api<AgentsResponse>("/api/agents?include=gone")).agents;
 }
 
 /** Every Event on the Channel, oldest first: `/api/events` gives a page of at most MAX_HISTORY_LIMIT. */

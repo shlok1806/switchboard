@@ -682,8 +682,8 @@ export class Channel extends DurableObject<Env> {
   }
 
   /** Every Agent the Channel has seen, most recently seen first. */
-  listAgents(): Agent[] {
-    return this.agents.list();
+  listAgents(includeGone = false): Agent[] {
+    return this.agents.list(includeGone);
   }
 
   /**

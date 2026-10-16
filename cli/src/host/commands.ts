@@ -335,7 +335,7 @@ export function spawnCommand(args: string[]): Promise<number> {
     const from =
       values.from === undefined
         ? undefined
-        : oneAgent((await client.request<AgentsResponse>("/api/agents")).agents, values.from).id;
+        : oneAgent((await client.request<AgentsResponse>("/api/agents?include=gone")).agents, values.from).id;
     const answer = await client.request<SpawnAgentResponse>(
       "/api/agents/spawn",
       {
