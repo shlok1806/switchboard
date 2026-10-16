@@ -1,12 +1,19 @@
 // How `switchboard run claude` works out the session, and so the Agent ID, from
 // the arguments the Person passes to Claude Code.
 
-import { mkdir, mkdtemp, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { planSession, projectDir, withSessionId } from "../src/claude-session";
 import { takeNickname } from "../src/run";
+
+/** A temp dir the current test removes when it finishes. */
+async function tempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 const NEW = "11111111-2222-4333-8444-555555555555";
 const OLD = "7f3a0000-0000-4000-8000-000000000000";
@@ -56,7 +63,7 @@ describe("planSession", () => {
   });
 
   it("turns --continue into --resume of the latest session in this directory", async () => {
-    const claudeDir = await mkdtemp(join(tmpdir(), "switchboard-claude-"));
+    const claudeDir = await tempDir("switchboard-claude-");
     const dir = projectDir(claudeDir, cwd);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, `${NEW}.jsonl`), "{}\n");

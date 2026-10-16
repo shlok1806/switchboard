@@ -58,6 +58,12 @@ let wrangler: ChildProcess | null = null;
 let scratch = "";
 let env: Record<string, string> = {};
 let cwd = "";
+/**
+ * The temp dir of every wrapper and Host this suite starts. A wrapper removes its session
+ * dirs when it ends, but the tests that SIGKILL one leave them, Agent secret included.
+ * Not inside `scratch`: a wrapper's hook socket path must stay under 104 bytes on macOS.
+ */
+let wrapperTmp = "";
 const terminals: pty.IPty[] = [];
 const github = new GitHubApi("e2e/repo");
 /** The Relay's Interrupt rate limit in this test: at most one per Agent this often. */
@@ -306,6 +312,7 @@ beforeAll(async () => {
   await isolateGit();
   // By default the Person runs the wrapper in a clone of the Channel's repo, whose origin is a local stand-in.
   cwd = await realpath(await mkdtemp(join(tmpdir(), "switchboard-repo-")));
+  wrapperTmp = await mkdtemp(join(tmpdir(), "sb-tmp-"));
   const origin = join(scratch, "default-origin.git");
   await git(scratch, "init", "--quiet", "--bare", "-b", "main", origin);
   await cloneChannel(origin, cwd);
@@ -383,6 +390,7 @@ beforeAll(async () => {
     SWITCHBOARD_IDLE_AFTER_SECONDS: "1",
     SWITCHBOARD_HEARTBEAT_SECONDS: "0.5",
     CLAUDE_CONFIG_DIR: join(scratch, "claude"),
+    TMPDIR: wrapperTmp,
   };
 }, 90_000);
 
@@ -404,6 +412,7 @@ afterAll(async () => {
   // Retries: a terminal a failed test left behind may still be writing its config.
   if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 5 });
   if (cwd) await rm(cwd, { recursive: true, force: true });
+  if (wrapperTmp) await rm(wrapperTmp, { recursive: true, force: true, maxRetries: 5 });
 });
 
 describe("switchboard run claude", () => {
@@ -2850,6 +2859,63 @@ describe("switchboard run codex and gemini", () => {
     expect(await sessionEvents(id)).toEqual({ starts: 2, ends: 2 });
   }, 90_000);
 
+  it("settles --from once Codex has found the session: a brief once, and never a second Agent to continue (ADR 0024)", async () => {
+    const trusted = { ...fakeEnv, FAKE_CODEX_TRUSTED: "1" };
+    /** The context Codex's SessionStart hook added: Codex starts its session at the first prompt. */
+    const sessionStart = async (term: Terminal) => {
+      await promptContext(term, "FAKE-CODEX", "UserPromptSubmit", "hello");
+      return JSON.parse(
+        (await term.waitForOutput(/FAKE-CODEX hook SessionStart exit=0 context=(".*")/))[1] ?? '""',
+      ) as string;
+    };
+    const quit = async (term: Terminal) => {
+      term.type("quit\r");
+      expect(await term.exited).toBe(0);
+    };
+    // Two Agents a session could continue.
+    const [first, second] = await Promise.all(
+      ["first-hand", "second-hand"].map(async (nickname) => {
+        const term = new Terminal(["run", "codex", "--nickname", nickname], trusted);
+        const { sessionId } = await startedAs(term, "FAKE-CODEX");
+        await sessionStart(term);
+        const id = `e2e/codex/${sessionId.slice(-4)}`;
+        await waitFor(nickname, async () => (await agents()).find((a) => a.id === id));
+        await quit(term);
+        return id;
+      }),
+    );
+
+    const successor = new Terminal(["run", "codex", "--from", "first-hand"], trusted);
+    const { sessionId } = await startedAs(successor, "FAKE-CODEX");
+    const successorId = `e2e/codex/${sessionId.slice(-4)}`;
+    expect(await sessionStart(successor)).toContain(`this session continues the work of ${first} "first-hand"`);
+    await quit(successor);
+    const handoffs = async () =>
+      (await history()).events.filter(
+        (e) => e.type === "agent.handoff" && e.actor.kind === "agent" && e.actor.agentId === successorId,
+      );
+    expect(await handoffs()).toHaveLength(1);
+
+    // `resume --last` is known only once Codex runs: the same Agent, which has its brief already.
+    const resumed = new Terminal(["run", "codex", "--from", "first-hand", "resume", "--last"], trusted);
+    expect((await startedAs(resumed, "FAKE-CODEX")).sessionId).toBe(sessionId);
+    const again = await sessionStart(resumed);
+    expect(again).toContain("[Switchboard] Standing rule");
+    expect(again).not.toContain("continues the work of");
+    await waitForPresence(successorId as AgentId, "live");
+    await quit(resumed);
+
+    // Resumed to continue another Agent, it is stopped and told why: the Channel keeps the first.
+    const other = new Terminal(["run", "codex", "--from", "second-hand", "resume", "--last"], trusted);
+    expect((await startedAs(other, "FAKE-CODEX")).sessionId).toBe(sessionId);
+    other.type("prompt hello\r");
+    expect(await other.exited).toBe(2);
+    expect(other.output).toContain(`${successorId} continues ${first} already`);
+    expect(other.output).not.toContain(`continues the work of ${second}`);
+    expect((await agents()).find((a) => a.id === successorId)?.continues).toBe(first);
+    expect(await handoffs()).toHaveLength(1);
+  }, 90_000);
+
   it("asks Codex once for notes when a turn changed files and wrote none (ADR 0024)", async () => {
     const term = new Terminal(["run", "codex"], { ...fakeEnv, FAKE_CODEX_TRUSTED: "1" });
     await startedAs(term, "FAKE-CODEX");
@@ -4057,6 +4123,13 @@ describe("Agents carrying context to each other (ADR 0024)", () => {
       term.type("quit\r");
       expect(await term.exited).toBe(0);
     }
+
+    // It continues the mason: resumed to continue another Agent, it is refused before the CLI starts.
+    const other = new Terminal(["run", "claude", "--from", readerId, "--resume", successorSession]);
+    expect(await other.exited).toBe(2);
+    expect(other.output).toContain(`${successorId} continues ${masonId} already`);
+    expect(other.output).not.toContain("FAKE-CLAUDE");
+    expect((await agents()).find((a) => a.id === successorId)?.continues).toBe(masonId);
   }, 120_000);
 });
 

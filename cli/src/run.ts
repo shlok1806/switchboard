@@ -153,21 +153,22 @@ export function takeFrom(args: string[]): { from?: string; rest: string[] } {
 
 /**
  * The summary of the one Agent `name` names on the Channel (ADR 0024), read as the
- * Person, or why there is none. `briefed` is true when `self`, the Agent a resumed
- * session already is, continues it already: that session has its Hand-off Brief.
+ * Person, or why there is none, with the Agent each of the Channel's Agents continues
+ * already. A resumed session's Agent ID is known only once its session is, which for a
+ * picker `--resume` and for Codex and Gemini is after the CLI starts.
  */
 async function predecessorOf(
   client: ChannelClient,
   name: string,
-  self: AgentId | null,
-): Promise<{ summary: AgentSummary; briefed: boolean } | string> {
+): Promise<{ summary: AgentSummary; continuing: Map<AgentId, AgentId> } | string> {
   const { agents } = await client.request<AgentsResponse>("/api/agents");
   const found = matchAgents(agents, name);
   if (found.length === 0) return `no Agent on this Channel is called ${name}, so this session cannot continue it.`;
   if (found.length > 1) return `${name} could be ${found.map((a) => a.id).join(", ")}; use the full Agent ID.`;
   const predecessor = found[0] as Agent;
-  const briefed = self !== null && agents.some((a) => a.id === self && a.continues === predecessor.id);
-  return { summary: await client.request<AgentSummary>(summaryPath(predecessor.id)), briefed };
+  const continuing = new Map<AgentId, AgentId>();
+  for (const agent of agents) if (agent.continues !== undefined) continuing.set(agent.id, agent.continues);
+  return { summary: await client.request<AgentSummary>(summaryPath(predecessor.id)), continuing };
 }
 
 export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<number> {
@@ -264,31 +265,52 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // `--from` (ADR 0024): the session carries on another Agent's work, and starts with
   // what the Channel knows of it. One that cannot be read stops here, before the CLI runs.
   let predecessor: AgentSummary | null = null;
-  // A resumed session that continues it already has its brief in its context: it is not
-  // given again, as a Host does not pass --from to a resume (ADR 0024).
-  let briefed = false;
+  // The Agent each Agent on the Channel continues already: the Channel sets it once.
+  let continuing = new Map<AgentId, AgentId>();
   if (fromFlag !== undefined && plan.kind !== "none") {
-    const self = plan.kind === "known" && plan.resumed ? agentIdFor(config.person, adapter.cli, plan.sessionId) : null;
     try {
-      const found = await predecessorOf(client, fromFlag, self);
+      const found = await predecessorOf(client, fromFlag);
       if (typeof found === "string") {
         console.error(`switchboard: ${found}`);
         return 2;
       }
       predecessor = found.summary;
-      briefed = found.briefed;
+      continuing = found.continuing;
     } catch (error) {
       console.error(`switchboard: could not read ${fromFlag} from the Channel: ${(error as Error).message}`);
       return 1;
     }
-    log(`continues ${predecessor.agent.id}${briefed ? ", briefed already" : ""}`);
-    console.error(
-      dim(
-        briefed
-          ? `switchboard: this session continues ${summaryName(predecessor.agent)}; it was told what the Channel knows of it when it started.`
-          : `switchboard: this session continues ${summaryName(predecessor.agent)}; it starts with what the Channel knows of it.`,
-      ),
-    );
+  }
+  /**
+   * What `--from` means for session `sessionId`, once it is known: "brief" for a session
+   * that starts continuing the predecessor, "briefed" for a resumed one that continues it
+   * already and has its brief in its context (a Host does not pass --from to a resume), or
+   * why it cannot continue it: it continues another Agent, and the Channel keeps the first.
+   */
+  const continuation = (sessionId: string): "brief" | "briefed" | { refused: string } => {
+    const from = (predecessor as AgentSummary).agent;
+    const self = agentIdFor(config.person, adapter.cli, sessionId);
+    const already = continuing.get(self);
+    if (already === undefined) return "brief";
+    if (already === from.id) return "briefed";
+    return {
+      refused: `${self} continues ${already} already, and a session continues one Agent: it cannot continue ${from.id} too. Start a new session with --from ${from.id} instead.`,
+    };
+  };
+  const known = plan.kind === "known" && predecessor !== null ? continuation(plan.sessionId) : null;
+  if (known !== null && typeof known === "object") {
+    console.error(`switchboard: ${known.refused}`);
+    return 2;
+  }
+  if (predecessor !== null) {
+    log(`continues ${predecessor.agent.id}${known === "briefed" ? ", briefed already" : ""}`);
+    const told = {
+      brief: "; it starts with what the Channel knows of it",
+      briefed: "; it was told what the Channel knows of it when it started",
+    };
+    // A session found once the CLI runs is told, or not, once it is found.
+    const how = known === null ? "" : told[known];
+    console.error(dim(`switchboard: this session continues ${summaryName(predecessor.agent)}${how}.`));
   }
   // Which login of the CLI this Agent runs under, shown beside it on the Channel (ADR 0009).
   const account = await accountLabel(adapter.cli, accountFlag, env);
@@ -574,10 +596,32 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // rule at SessionStart.
   const nextTurn = new NextTurn(memory);
   if (predecessor !== null) {
-    if (!briefed) nextTurn.handOff((max) => handoffBrief(predecessor, max));
+    if (known === "brief") nextTurn.handOff((max) => handoffBrief(predecessor, max));
     // Notes on its predecessor's Tasks and files matter to it too.
     memory.focus({ tasks: predecessor.tasks.map((task) => task.number), files: predecessor.files });
   }
+  // A session found once the CLI runs settles `--from` when it is found: from a hook,
+  // before that hook adds to the context; from a picker's session files, for the next
+  // hook. One that cannot continue the predecessor is not registered: its CLI is
+  // stopped, and the Person told why when it exits.
+  let continuationSettled = predecessor === null || plan.kind === "known";
+  let refusedContinuation: string | undefined;
+  const settleContinuation = (sessionId: string): boolean => {
+    if (continuationSettled) return refusedContinuation === undefined;
+    continuationSettled = true;
+    const decided = continuation(sessionId);
+    if (typeof decided === "object") {
+      refusedContinuation = decided.refused;
+      log(`refused --from: ${decided.refused}`);
+      child?.kill();
+      return false;
+    }
+    log(
+      `session ${sessionId} continues ${(predecessor as AgentSummary).agent.id}${decided === "briefed" ? ", briefed already" : ""}`,
+    );
+    if (decided === "brief") nextTurn.handOff((max) => handoffBrief(predecessor as AgentSummary, max));
+    return true;
+  };
   // False once a CLI whose hooks need the Person's trust is seen not to run them:
   // what the Agent must be told then goes to the read_channel tool instead of a hook.
   let hooksRunning = true;
@@ -825,7 +869,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     void memory.registered(agent.id);
   };
   const linkTo = (sessionId: string, resumed: boolean) => {
-    if (link !== null) return;
+    if (link !== null || !settleContinuation(sessionId)) return;
     log(`session ${sessionId}`);
     link = new AgentLink(client, session(sessionId, resumed), heartbeatMs, log, onRegistered, addForNextTurn);
     link.report(idle?.current ?? "live");
@@ -1051,6 +1095,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   stdin.pause();
   // The terminal is the wrapper's again: the hooks never ran, so say how to trust them.
   if (hint !== undefined && !hooksRunning) stdout.write(`${dim(`switchboard: ${hint}`)}\n`);
+  if (refusedContinuation !== undefined) stdout.write(`switchboard: ${refusedContinuation}\n`);
   const visitors = presence.summary();
   if (visitors !== null) stdout.write(`${dim(`switchboard: ${visitors}`)}\n`);
   // Send what the last hooks (turn end, SessionEnd) reported before the session ends.
@@ -1061,5 +1106,5 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   await stopHooks();
   sessionTools?.dispose();
   log(`exited ${exitCode}`);
-  return exitCode;
+  return refusedContinuation === undefined ? exitCode : 2;
 }

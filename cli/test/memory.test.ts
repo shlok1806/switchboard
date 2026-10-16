@@ -2,14 +2,21 @@
 // it works on first, then decisions and dead ends, newest first among equals, within its
 // cap, and what is left out counted.
 
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import type { AgentId, MemoryNote, MemoryTag } from "../../shared/src/index";
 import { MEMORY_DIGEST_HEADING, memoryDigest } from "../../shared/src/index";
 import type { ClaudeHookInput } from "../src/hooks/summarize";
 import { COMPACTION_NUDGE, compactionPoint, MemoryInbox, MemoryNudges } from "../src/memory";
+
+/** A temp dir the current test removes when it finishes. */
+async function tempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 function note(seq: number, tag: MemoryTag, text = `Note ${seq}`): MemoryNote {
   return {
@@ -110,7 +117,7 @@ describe("what the inbox weights the digest toward", () => {
     });
 
   it("follows the Tasks it claims and releases and the files it edits, from where it was before", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "memory-inbox-"));
+    const dir = await tempDir("memory-inbox-");
     const inbox = new MemoryInbox({
       dir,
       read: async () => ({ notes: [] }),
@@ -151,7 +158,7 @@ describe("catching up after a session was away", () => {
   const AWAY = "older notes from while this session was away not shown: memory_recent lists them.";
 
   it("says older notes were left out when more came than it fetched, once", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "memory-inbox-"));
+    const dir = await tempDir("memory-inbox-");
     const inbox = new MemoryInbox({
       dir,
       read: async () => ({ notes: [note(90, "fact")], more: true }),

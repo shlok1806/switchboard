@@ -88,7 +88,7 @@ describe("the dev server's proxy to a Worker", () => {
     expect(origin).toBe(workerOrigin);
   });
 
-  it("passes a request from another site on as it came, for the Worker to refuse", async () => {
+  it("keeps the Origin of a request from another site, for the Worker to refuse", async () => {
     expect(await through("/r/ana/app/api/join", { Origin: "https://elsewhere.example" })).toBe("https://elsewhere.example");
   });
 });
