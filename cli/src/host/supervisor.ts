@@ -16,6 +16,12 @@
 //   it was running.
 // - A stop sends SIGTERM to the wrapper, which ends the session on the Channel, then
 //   SIGKILL after `STOP_GRACE_MS`.
+// - Who asks is checked here too (ADR 0028): every spawn, stop, pause and resume names
+//   the requesting Person, and this machine's `--allow` list decides, never the Channel's copy.
+// - A pause ends the wrapper like a stop, but keeps the Agent in `agents.json` marked
+//   paused, and the Channel is told with `host.paused`. A paused Agent is never resumed
+//   by the Host itself, not after a crash or a restart: only a `host.resume` brings it
+//   back, with `--resume <session-id>`, once the local limits pass again.
 
 import { randomUUID } from "node:crypto";
 import { renameSync } from "node:fs";
@@ -29,8 +35,11 @@ import {
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
 } from "../../../shared/src/index";
+import { ChannelClient, targetOf } from "../channel-client";
 import type { Config } from "../config";
-import { checkFolderAndMode, checkSpawn, type LocalLimits, resolveRoots } from "./check";
+import { cachedAttachList } from "../terminal/attach-keys";
+import { checkAllowChange } from "./allow";
+import { checkControl, checkFolderAndMode, checkSpawn, type LocalLimits, resolveRoots } from "./check";
 import {
   agentLogPath,
   agentsPath,
@@ -39,6 +48,7 @@ import {
   type HostSettings,
   readAgents,
   writeAgents,
+  writeSettings,
 } from "./files";
 
 export const MAX_RESUMES = 3;
@@ -80,8 +90,14 @@ export interface SupervisorOptions {
 interface Running {
   entry: HostedAgent;
   term: pty.IPty;
-  /** Asked to stop: its exit is not a crash. */
+  /** Asked to stop or pause: its exit is not a crash. */
   stopping: boolean;
+  /** Asked to pause (ADR 0028): its exit keeps the Agent, paused. */
+  pausing: boolean;
+  /** Asked to stop (rather than ended by itself, or by a pause). */
+  stopRequested: boolean;
+  /** Started by a resume of a paused Agent, for the Person `resumedBy`: if it never registers, the Agent stays paused. */
+  resumedBy?: string;
   registered: boolean;
   /** The spawn it answers, until the Channel says the session started. */
   spawn?: string;
@@ -146,7 +162,11 @@ export class HostSupervisor {
   private retry = 0;
   private pending: ReturnType<typeof setTimeout> | undefined;
   /** This machine's own limits, from `switchboard host install`: never the Channel's copy (ADR 0017). */
-  private readonly limits: LocalLimits;
+  private limits: LocalLimits;
+  /** The settings as they are now: a signed change from the Dashboard rewrites the allow-list (ADR 0028). */
+  private settings: HostSettings;
+  private readonly attachList = cachedAttachList();
+  private readonly allowSeqs = new Map<string, number>();
   private readonly hostId: string;
 
   constructor(private readonly options: SupervisorOptions) {
@@ -155,8 +175,12 @@ export class HostSupervisor {
       roots: resolveRoots(options.settings.roots),
       maxPermissionMode: options.settings.maxPermissionMode,
       maxAgents: options.settings.maxAgents,
+      owner: options.config.person,
+      allow: options.settings.allow,
+      allowChannel: options.settings.allowChannel,
     };
     this.hostId = `${options.config.person}/${options.settings.name}`;
+    this.settings = options.settings;
   }
 
   /** Resumes the Agents it ran before, and attaches to the Channel. */
@@ -176,6 +200,11 @@ export class HostSupervisor {
     }
     for (const entry of saved) this.known.set(entry.agent, entry);
     for (const entry of saved) {
+      // A Paused Agent stays paused through a restart: only a resume request brings it back.
+      if (entry.paused) {
+        this.options.log(`${entry.agent} is paused; leaving it`);
+        continue;
+      }
       this.options.log(`resuming ${entry.agent} in ${entry.cwd}`);
       this.launch(entry, { resume: true });
     }
@@ -207,6 +236,11 @@ export class HostSupervisor {
     return [...this.running.values()].map((r) => r.entry);
   }
 
+  /** The Agents paused here. */
+  pausedAgents(): HostedAgent[] {
+    return [...this.known.values()].filter((a) => a.paused);
+  }
+
   private connect(): void {
     if (this.closed) return;
     this.pending = undefined;
@@ -219,6 +253,8 @@ export class HostSupervisor {
     ws.addEventListener("open", () => {
       this.retry = 0;
       this.options.log(`attached to ${settings.repo} at ${config.url} as ${this.hostId}`);
+      // A pause whose confirmation went out while detached: say so again (the Channel ignores repeats).
+      for (const paused of this.pausedAgents()) this.send({ type: "host.paused", agent: paused.agent });
       keepalive = setInterval(() => ws.send(LIVE_PING), 30_000);
     });
     ws.addEventListener("message", (event) => {
@@ -238,7 +274,10 @@ export class HostSupervisor {
         if (frame.type === "host.spawn") this.spawn(frame);
         else if (frame.type === "host.spawned" && typeof frame.spawn === "string") {
           this.spawned(frame as unknown as HostSpawnedMessage);
-        } else if (frame.type === "host.stop" && typeof frame.agent === "string") this.stop(frame.agent as AgentId);
+        } else if (frame.type === "host.stop") this.control("stop", frame);
+        else if (frame.type === "host.pause") this.control("pause", frame);
+        else if (frame.type === "host.resume") this.control("resume", frame);
+        else if (frame.type === "host.allow") void this.changeAllow(frame);
       } catch (error) {
         this.options.log(
           `could not handle a ${type} frame: ${error instanceof Error ? error.message : "unknown error"}`,
@@ -258,10 +297,80 @@ export class HostSupervisor {
     });
   }
 
+  private send(frame: Record<string, unknown>): void {
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(frame));
+  }
+
   private fail(spawn: string, reason: string): void {
     this.options.log(`spawn ${spawn} failed: ${reason}`);
-    const frame = { type: "host.spawn.failed", spawn, reason: reason.slice(0, MAX_SPAWN_FAILURE_LENGTH) };
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(frame));
+    this.send({ type: "host.spawn.failed", spawn, reason: reason.slice(0, MAX_SPAWN_FAILURE_LENGTH) });
+  }
+
+  /** Tells the Channel that `action` for `agent`, asked by `by`, was refused or could not be done. */
+  private refuse(action: "stop" | "pause" | "resume", agent: AgentId | null, by: string, reason: string): void {
+    this.options.log(`${action} ${agent ?? "(no Agent)"} for ${by} refused: ${reason}`);
+    if (agent === null) return;
+    this.send({ type: "host.control.failed", action, agent, by, reason: reason.slice(0, MAX_SPAWN_FAILURE_LENGTH) });
+  }
+
+  /**
+   * A signed allow-list change from the owner's Dashboard (ADR 0028): applied to this
+   * machine's own file only for a key attach.json trusts for this Host's Person, then
+   * republished to the Channel. Answered either way.
+   */
+  private async changeAllow(frame: Record<string, unknown>): Promise<void> {
+    const id = typeof frame.id === "string" ? frame.id.slice(0, 100) : null;
+    if (id === null) return;
+    const answer = (ok: boolean, reason?: string) => {
+      if (!ok) this.options.log(`allow-list change refused: ${reason}`);
+      this.send({ type: "host.allow.result", id, ok, ...(reason === undefined ? {} : { reason }) });
+    };
+    try {
+      const checked = await checkAllowChange(frame, {
+        owner: this.options.config.person,
+        host: this.settings.name,
+        repo: this.settings.repo,
+        list: await this.attachList(),
+        now: Date.now(),
+        seqs: this.allowSeqs,
+      });
+      if (!checked.ok) return answer(false, checked.reason);
+      this.settings = { ...this.settings, allow: checked.allow, allowChannel: checked.allowChannel };
+      writeSettings(this.settings, this.options.env);
+      this.limits = { ...this.limits, allow: checked.allow, allowChannel: checked.allowChannel };
+      this.options.log(
+        `allow-list changed by key ${checked.fingerprint}: ${checked.allowChannel ? "the whole Channel" : checked.allow.join(", ") || "only the owner"}`,
+      );
+      // Tell the Channel what this machine now allows, from this machine's file.
+      const { config } = this.options;
+      await new ChannelClient(targetOf(config, this.settings.repo)).request("/api/hosts", {
+        method: "POST",
+        body: JSON.stringify({
+          name: this.settings.name,
+          roots: this.settings.roots,
+          maxPermissionMode: this.settings.maxPermissionMode,
+          allow: this.settings.allow,
+          allowChannel: this.settings.allowChannel,
+        }),
+      });
+      answer(true);
+    } catch (error) {
+      answer(false, `could not apply it: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
+
+  /** A stop, pause or resume from the Channel: checked against this Host's own allow-list first. */
+  private control(action: "stop" | "pause" | "resume", frame: Record<string, unknown>): void {
+    const checked = checkControl(frame, this.limits);
+    if (!checked.ok) {
+      this.refuse(action, checked.agent, checked.by, checked.reason);
+      return;
+    }
+    const { agent, by } = checked;
+    this.options.log(`${action} ${agent} asked by ${by}`);
+    if (action === "stop") this.stop(agent, by);
+    else if (action === "pause") this.pause(agent, by);
+    else this.resume(agent, by);
   }
 
   /** Starts what spawn `frame` asks for, once this Host's own limits allow it, or answers why not. */
@@ -310,19 +419,75 @@ export class HostSupervisor {
     this.options.log(`${running.entry.agent} started its session`);
   }
 
-  /** Asks the wrapper of Agent `agent` to end its session, then kills it if it does not. */
-  private stop(agent: AgentId): void {
+  /** Asks the wrapper of Agent `agent` to end its session, then kills it if it does not. A paused Agent has no process: it is forgotten. */
+  private stop(agent: AgentId, by: string): void {
     const running = this.running.get(agent);
     if (running === undefined) {
-      this.options.log(`asked to stop ${agent}, which this Host does not run`);
+      if (this.known.get(agent)?.paused) {
+        this.options.log(`${agent} was paused; it is not kept any more`);
+        this.forget(agent);
+      } else {
+        this.refuse("stop", agent, by, "this Host does not run it");
+      }
       return;
     }
-    this.options.log(`stopping ${agent}`);
+    running.stopRequested = true;
+    this.end(running);
+  }
+
+  /** Ends a wrapper: SIGTERM, then SIGKILL if it does not go. */
+  private end(running: Running): void {
+    const { agent } = running.entry;
     running.stopping = true;
     this.signal(running, "SIGTERM");
     setTimeout(() => {
       if (this.running.get(agent) === running) this.signal(running, "SIGKILL");
     }, STOP_GRACE_MS).unref();
+  }
+
+  /** Ends Agent `agent`'s process and keeps its session: marked paused first, so no restart can resume it. */
+  private pause(agent: AgentId, by: string): void {
+    const running = this.running.get(agent);
+    const known = this.known.get(agent);
+    if (running === undefined) {
+      if (known?.paused) this.send({ type: "host.paused", agent });
+      else this.refuse("pause", agent, by, "this Host does not run it");
+      return;
+    }
+    if (running.spawn !== undefined || !running.registered) {
+      this.refuse("pause", agent, by, "it is still starting; pause it once it is on the Channel");
+      return;
+    }
+    // Written before the process ends, so a Host that dies meanwhile does not bring it back.
+    this.remember({ ...running.entry, paused: true });
+    running.pausing = true;
+    this.end(running);
+  }
+
+  /** Relaunches paused Agent `agent` from its saved session, once this Host's own limits allow it again. */
+  private resume(agent: AgentId, by: string): void {
+    const entry = this.known.get(agent);
+    if (entry === undefined || !entry.paused) {
+      this.refuse(
+        "resume",
+        agent,
+        by,
+        this.running.has(agent) ? "it is running already" : "this Host has not paused it",
+      );
+      return;
+    }
+    if (this.running.size >= this.limits.maxAgents) {
+      const most = this.limits.maxAgents;
+      this.refuse("resume", agent, by, `this Host runs at most ${most} Agent${most === 1 ? "" : "s"} at once`);
+      return;
+    }
+    const allowed = checkFolderAndMode(entry.cwd, entry.permissionMode, this.limits);
+    if (!allowed.ok) {
+      this.refuse("resume", agent, by, allowed.reason);
+      return;
+    }
+    const { paused: _, ...running } = entry;
+    this.launch(running, { resume: true, resumedBy: by });
   }
 
   private signal(running: Running, signal: NodeJS.Signals): void {
@@ -333,7 +498,10 @@ export class HostSupervisor {
     }
   }
 
-  private launch(entry: HostedAgent, how: { resume: boolean; spawn?: string; prompt?: string; from?: AgentId }): void {
+  private launch(
+    entry: HostedAgent,
+    how: { resume: boolean; spawn?: string; prompt?: string; from?: AgentId; resumedBy?: string },
+  ): void {
     const { env, settings } = this.options;
     // A resume is checked again: the folder or the Host's own limits may have changed since.
     const allowed = checkFolderAndMode(entry.cwd, entry.permissionMode, this.limits);
@@ -365,6 +533,9 @@ export class HostSupervisor {
       entry,
       term,
       stopping: false,
+      pausing: false,
+      stopRequested: false,
+      ...(how.resumedBy === undefined ? {} : { resumedBy: how.resumedBy }),
       registered: false,
       ...(how.spawn === undefined ? {} : { spawn: how.spawn }),
       watchingTrust: true,
@@ -416,6 +587,18 @@ export class HostSupervisor {
       if (this.running.get(entry.agent) === running) this.running.delete(entry.agent);
       log.append(`\n[host] ${new Date().toISOString()} exited ${exitCode}${signal ? ` signal ${signal}` : ""}\n`);
       if (this.closed) return;
+      if (running.pausing) {
+        this.options.log(`${entry.agent} paused`);
+        this.send({ type: "host.paused", agent: entry.agent });
+        return;
+      }
+      if (running.resumedBy !== undefined && !running.registered && !running.stopRequested) {
+        // A resume that never reached the Channel: keep it paused, and say why.
+        const reason = `its session did not resume (exit ${exitCode}): ${lastLine(running.tail)}`;
+        this.remember({ ...entry, paused: true });
+        this.refuse("resume", entry.agent, running.resumedBy, reason);
+        return;
+      }
       const unanswered = running.spawn !== undefined;
       if (running.spawn !== undefined) {
         this.options.log(`${entry.agent} exited before its session started: ${lastLine(running.tail)}`);

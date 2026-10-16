@@ -1,14 +1,19 @@
 // The Host commands (ADR 0015):
 //
-//   switchboard host install [--name N] [--root DIR]... [--max-permission-mode M] [--max-agents N] [--repo R]
+//   switchboard host install [--name N] [--root DIR]... [--max-permission-mode M] [--max-agents N]
+//                            [--allow LOGIN]... [--allow-channel] [--repo R]
 //   switchboard host uninstall
 //   switchboard host run       (what the LaunchAgent runs; tests run it directly)
 //   switchboard host status
-//   switchboard spawn [--host N] [--cwd DIR] [--nickname N] [--model M] [--permission-mode M] [--repo R] [brief...]
+//   switchboard host list      (every Host on the Channel, and who may use it)
+//   switchboard spawn [--host N|PERSON/N] [--cwd DIR] [--nickname N] [--model M] [--permission-mode M] [--repo R] [brief...]
 //   switchboard stop <agent> [--repo R]
+//   switchboard pause <agent> [--repo R]    (ADR 0028)
+//   switchboard resume <agent> [--repo R]   (ADR 0028)
 //   switchboard role grant <agent> lead | revoke <agent> [--repo R]   (ADR 0018)
 //
-// `spawn` and `stop` work from anywhere: they ask the Channel, which asks the Host.
+// `spawn`, `stop`, `pause` and `resume` work from anywhere: they ask the Channel, which
+// asks the Host. They reach another Person's Host only if its install said `--allow` for you.
 // `role` makes one of the Person's Agents a lead, which may spawn and stop on their
 // Hosts, and send Directives, for the Agents it starts.
 
@@ -20,6 +25,7 @@ import type {
   Agent,
   AgentResponse,
   AgentsResponse,
+  ControlAgentResponse,
   HostResponse,
   HostsResponse,
   PermissionMode,
@@ -31,8 +37,11 @@ import {
   agentPath,
   DEFAULT_PERMISSION_MODE,
   HOST_NAME_PATTERN,
+  hostAllows,
   isAgentRole,
   isPermissionMode,
+  LOGIN_PATTERN,
+  MAX_HOST_ALLOW,
   PERMISSION_MODES,
   rolePath,
 } from "../../../shared/src/index";
@@ -59,10 +68,12 @@ import { installLaunchAgent, LAUNCH_AGENT_LABEL, launchAgentLoaded, plistPath, u
 import { HostSupervisor } from "./supervisor";
 
 export const HOST_USAGE = `Usage:
-  switchboard host install [--name <name>] [--root <folder>]... [--max-permission-mode <mode>] [--max-agents <n>] [--repo <owner>/<repo>]
+  switchboard host install [--name <name>] [--root <folder>]... [--max-permission-mode <mode>] [--max-agents <n>]
+                           [--allow <login>]... [--allow-channel] [--repo <owner>/<repo>]
   switchboard host uninstall
   switchboard host run
-  switchboard host status`;
+  switchboard host status
+  switchboard host list [--repo <owner>/<repo>]`;
 
 class CommandError extends Error {}
 
@@ -135,11 +146,27 @@ async function install(args: string[]): Promise<number> {
       root: { type: "string", multiple: true },
       "max-permission-mode": { type: "string" },
       "max-agents": { type: "string" },
+      allow: { type: "string", multiple: true },
+      "allow-channel": { type: "boolean" },
       repo: { type: "string" },
     },
   });
   const config = await signedIn();
   const name = values.name ?? defaultName();
+  // Who else may use this Host: written here, on this machine, and checked here on every request (ADR 0028).
+  // A plain install (no --allow, no --allow-channel) keeps what the Dashboard or an earlier install set.
+  const previous = readSettings();
+  const keep = values.allow === undefined && values["allow-channel"] === undefined && previous?.name === name;
+  const allow = keep
+    ? (previous?.allow ?? [])
+    : [...new Set((values.allow ?? []).map((login) => login.toLowerCase().replace(/^@/, "")))].filter(
+        (login) => login !== config.person,
+      );
+  for (const login of allow) {
+    if (!LOGIN_PATTERN.test(login)) throw new CommandError(`--allow ${login} is not a GitHub login.`);
+  }
+  if (allow.length > MAX_HOST_ALLOW) throw new CommandError(`--allow takes at most ${MAX_HOST_ALLOW} logins.`);
+  const allowChannel = keep ? (previous?.allowChannel ?? false) : values["allow-channel"] === true;
   if (!HOST_NAME_PATTERN.test(name)) {
     throw new CommandError('--name must be lower-case letters, digits and "-", at most 40.');
   }
@@ -157,11 +184,11 @@ async function install(args: string[]): Promise<number> {
   const { client, repo } = await channelFor(config, values.repo);
   const { host } = await client.request<HostResponse>("/api/hosts", {
     method: "POST",
-    body: JSON.stringify({ name, roots, maxPermissionMode }),
+    body: JSON.stringify({ name, roots, maxPermissionMode, allow, allowChannel }),
   });
   // The limits this machine keeps are the ones typed here, not the Channel's answer:
-  // the Host checks every spawn against them (ADR 0017).
-  writeSettings({ name, repo, roots, maxPermissionMode, maxAgents });
+  // the Host checks every request against them (ADR 0017, ADR 0028).
+  writeSettings({ name, repo, roots, maxPermissionMode, maxAgents, allow, allowChannel });
   const plist = await installLaunchAgent({
     node: process.execPath,
     cli: realpathSync(process.argv[1] ?? ""),
@@ -178,9 +205,16 @@ async function install(args: string[]): Promise<number> {
   console.log(`  Starts Agents under: ${roots.join(", ")}`);
   console.log(`  Permission mode: at most "${maxPermissionMode}"`);
   console.log(`  Agents at once: at most ${maxAgents}`);
+  console.log(`  ${allowed(allow, allowChannel)}`);
   console.log(`  LaunchAgent: ${plist}`);
   console.log(`  Log: ${hostLogPath()}`);
   return 0;
+}
+
+/** The line that says who may use a Host besides its owner. */
+function allowed(allow: readonly string[], allowChannel: boolean): string {
+  if (allowChannel) return "Allowed: every Person with write access to this Channel";
+  return allow.length === 0 ? "Allowed: only you" : `Allowed: you and ${allow.join(", ")}`;
 }
 
 async function uninstall(): Promise<number> {
@@ -271,6 +305,7 @@ async function status(): Promise<number> {
   console.log(`  Folders: ${settings.roots.join(", ")}`);
   console.log(`  Permission mode: at most "${settings.maxPermissionMode}"`);
   console.log(`  Agents at once: at most ${settings.maxAgents}`);
+  console.log(`  ${allowed(settings.allow, settings.allowChannel)}`);
   console.log(`  LaunchAgent: ${(await launchAgentLoaded()) ? `loaded (${plistPath()})` : "not loaded"}`);
   console.log(`  Supervisor: ${pid === null ? "not running" : `running (pid ${pid})`}; log ${hostLogPath()}`);
   if (config !== null) {
@@ -287,9 +322,28 @@ async function status(): Promise<number> {
     agents = [];
   }
   console.log(agents.length === 0 ? "  No Agents." : `  Agents (${agents.length}):`);
-  for (const a of agents)
-    console.log(`    ${a.agent}${a.nickname ? ` "${a.nickname}"` : ""} in ${a.cwd} (${a.permissionMode})`);
+  for (const a of agents) {
+    const state = a.paused ? ", paused" : "";
+    console.log(`    ${a.agent}${a.nickname ? ` "${a.nickname}"` : ""} in ${a.cwd} (${a.permissionMode}${state})`);
+  }
   console.log(`  Files: ${hostDir()}`);
+  return 0;
+}
+
+/** Every Host on the Channel, and whether the signed-in Person may use it. */
+async function list(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { repo: { type: "string" } } });
+  const config = await signedIn();
+  const { client } = await channelFor(config, values.repo);
+  const { hosts } = await client.request<HostsResponse>("/api/hosts");
+  if (hosts.length === 0) console.log("No Hosts on this Channel.");
+  for (const host of hosts) {
+    const usable = hostAllows(host, config.person);
+    const who = host.allowChannel ? "everyone" : host.allow.length === 0 ? "only its owner" : host.allow.join(", ");
+    console.log(
+      `${host.id}  ${host.live ? "Live" : "Offline"}  ${usable ? "you may use it" : "not open to you"}  (allows ${who})`,
+    );
+  }
   return 0;
 }
 
@@ -305,6 +359,8 @@ export function hostCommand(args: string[]): Promise<number> {
         return run();
       case "status":
         return status();
+      case "list":
+        return list(rest);
       default:
         console.error(HOST_USAGE);
         return 2;
@@ -435,4 +491,53 @@ export function stopCommand(args: string[]): Promise<number> {
     console.log(`Asked ${answer.host} to stop ${answer.agent}.`);
     return 0;
   });
+}
+
+/** The one Agent `name` names among those whose Presence is in `presences`. */
+function oneIn(agents: Agent[], name: string, presences: readonly string[], what: string): Agent {
+  const found = matchAgents(
+    agents.filter((a) => presences.includes(a.presence)),
+    name,
+  );
+  if (found.length !== 1) {
+    throw new CommandError(
+      found.length === 0
+        ? `no ${what} Agent is called ${name}. Name it by its Agent ID or Nickname.`
+        : `${name} could be ${found.map((a) => a.id).join(", ")}. Use the full Agent ID.`,
+    );
+  }
+  return found[0] as Agent;
+}
+
+function controlCommand(action: "pause" | "resume", args: string[]): Promise<number> {
+  return command(async () => {
+    const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { repo: { type: "string" } } });
+    const [name, ...extra] = positionals;
+    if (name === undefined || extra.length > 0) {
+      console.error(`Usage: switchboard ${action} <agent> [--repo <owner>/<repo>]`);
+      return 2;
+    }
+    const config = await signedIn();
+    const { client } = await channelFor(config, values.repo);
+    const { agents } = await client.request<AgentsResponse>("/api/agents");
+    const agent =
+      action === "pause" ? oneIn(agents, name, ["live", "idle"], "running") : oneIn(agents, name, ["paused"], "Paused");
+    const answer = await client.request<ControlAgentResponse>(`${agentPath(agent.id)}/${action}`, { method: "POST" });
+    console.log(
+      action === "pause"
+        ? `Asked ${answer.host} to pause ${answer.agent}. It keeps its session and Claims; \`switchboard resume\` brings it back.`
+        : `Asked ${answer.host} to resume ${answer.agent} from its saved session.`,
+    );
+    return 0;
+  });
+}
+
+/** Ends an Agent's process on its Host and keeps its session (ADR 0028). */
+export function pauseCommand(args: string[]): Promise<number> {
+  return controlCommand("pause", args);
+}
+
+/** Relaunches a Paused Agent from its saved session (ADR 0028). */
+export function resumeCommand(args: string[]): Promise<number> {
+  return controlCommand("resume", args);
 }

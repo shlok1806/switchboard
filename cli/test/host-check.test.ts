@@ -5,7 +5,14 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { checkFolderAndMode, checkSpawn, type LocalLimits, resolveRoots } from "../src/host/check";
+import {
+  checkControl,
+  checkFolderAndMode,
+  checkSpawn,
+  type LocalLimits,
+  mayRequest,
+  resolveRoots,
+} from "../src/host/check";
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "switchboard-check-")));
 const root = join(base, "root");
@@ -14,7 +21,14 @@ for (const dir of [join(root, "app"), sibling, join(base, "outside")]) mkdirSync
 symlinkSync(join(base, "outside"), join(root, "escape"));
 afterAll(() => rmSync(base, { recursive: true, force: true }));
 
-const limits: LocalLimits = { roots: resolveRoots([root]), maxPermissionMode: "acceptEdits", maxAgents: 8 };
+const limits: LocalLimits = {
+  roots: resolveRoots([root]),
+  maxPermissionMode: "acceptEdits",
+  maxAgents: 8,
+  owner: "shlok",
+  allow: ["bob"],
+  allowChannel: false,
+};
 
 const spawn = (fields: Record<string, unknown> = {}) =>
   checkSpawn(
@@ -122,5 +136,40 @@ describe("the Host's check of a spawn frame", () => {
       expect(spawn(fields)).toMatchObject({ ok: false, spawn: "sp_1" });
     }
     expect(spawn({ model: "claude-opus-5-5", nickname: "fix-login" })).toMatchObject({ ok: true });
+  });
+});
+
+describe("the Host's check of who is asking (ADR 0028)", () => {
+  it("allows its owner and the Persons its own file names, and nobody else", () => {
+    expect(mayRequest("shlok", limits)).toBe(true);
+    expect(mayRequest("bob", limits)).toBe(true);
+    expect(mayRequest("carol", limits)).toBe(false);
+    expect(spawn({ by: "carol" })).toMatchObject({ ok: false, reason: expect.stringContaining("--allow carol") });
+    expect(spawn({ by: "bob" })).toMatchObject({ ok: true, request: { by: "bob" } });
+  });
+
+  it("opens to any Channel member under --allow-channel, but still not to a malformed name", () => {
+    const open: LocalLimits = { ...limits, allow: [], allowChannel: true };
+    expect(mayRequest("carol", open)).toBe(true);
+    for (const by of ["", "Carol Smith", "../x", 7, null, undefined]) expect(mayRequest(by, open)).toBe(false);
+  });
+
+  it("is narrower than a Channel that would let the Person in: the Host's own file decides", () => {
+    // The Channel's copy listed carol; this machine's file does not.
+    expect(checkControl({ type: "host.stop", agent: "shlok/claude/ab12", by: "carol" }, limits)).toMatchObject({
+      ok: false,
+      agent: "shlok/claude/ab12",
+      by: "carol",
+    });
+    expect(checkControl({ type: "host.pause", agent: "shlok/claude/ab12", by: "bob" }, limits)).toEqual({
+      ok: true,
+      agent: "shlok/claude/ab12",
+      by: "bob",
+    });
+  });
+
+  it("refuses a control frame that names no Agent, or names one as something that reads as an option", () => {
+    expect(checkControl({ by: "shlok" }, limits)).toMatchObject({ ok: false, agent: null });
+    expect(checkControl({ agent: "-r/claude/x", by: "shlok" }, limits)).toMatchObject({ ok: false, agent: null });
   });
 });
