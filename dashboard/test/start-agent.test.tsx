@@ -183,7 +183,7 @@ describe("starting an Agent", () => {
     const onOpenChange = vi.fn();
     render(
       <>
-        <CommandPalette open onOpenChange={onOpenChange} />
+        <CommandPalette open onOpenChange={onOpenChange} route={{ view: "agents" }} />
         <StartAgentSheet />
       </>,
       { wrapper: withChannel(source({})) },
@@ -217,7 +217,7 @@ describe("starting an Agent", () => {
       <>
         <StartAgentButton />
         <StartAgentSheet />
-        <CommandPalette open onOpenChange={() => {}} />
+        <CommandPalette open onOpenChange={() => {}} route={{ view: "agents" }} />
       </>,
       { wrapper: withChannel(source({ hosts })) },
     );

@@ -386,7 +386,7 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
       }}
     >
       {trail.length > 0 && (
-        <ol aria-label="Steps" className="flex min-w-0 items-center gap-1 border-b border-rule py-2 pr-12 pl-3 text-small">
+        <ol aria-label="Steps" className="flex min-w-0 items-center gap-1 pt-2.5 pr-12 pb-1 pl-3 text-small">
           {trail.map((t, i) => (
             <li key={t} className="flex min-w-0 items-center gap-1">
               {i > 0 && <ChevronRight aria-hidden className="size-3 shrink-0 text-ink-3" />}

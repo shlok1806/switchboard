@@ -79,7 +79,7 @@ function TableRow({ i, wide = true }: { i: number; wide?: boolean }) {
 
 function GroupBar({ w = "9rem" }: { w?: string }) {
   return (
-    <div className="flex h-11 items-center border-b border-rule-2 pl-3">
+    <div className="flex h-11 items-center border-b border-rule-2 pl-3" /* taste-skill-ignore: the rule of the row it stands in for */>
       <Bar w={w} />
     </div>
   );
@@ -104,7 +104,7 @@ function Table({ rows = 6, wide = true }: { rows?: number; wide?: boolean }) {
 /** A log row: the time, who, the kind, what happened. */
 function LogRow({ i }: { i: number }) {
   return (
-    <div className="flex h-9 items-center gap-6 border-b border-rule px-1 max-sm:h-auto max-sm:flex-col max-sm:items-start max-sm:gap-2 max-sm:py-3">
+    <div className="flex h-9 items-center gap-6 border-b border-rule px-1 max-sm:h-auto max-sm:flex-col max-sm:items-start max-sm:gap-2 max-sm:py-3" /* taste-skill-ignore: the rule of the row it stands in for */>
       <Bar w="3.5rem" />
       <span className="flex w-36 shrink-0 items-center gap-2">
         <span aria-hidden className="size-2.5 shrink-0 rounded-full border border-rule-2" />
@@ -131,7 +131,7 @@ function Card({ i }: { i: number }) {
 /** A paragraph of a note: two lines, then its files and author. */
 function NoteBlock({ i }: { i: number }) {
   return (
-    <div className="flex flex-col gap-2.5 border-b border-rule py-4">
+    <div className="flex flex-col gap-2.5 border-b border-rule py-4" /* taste-skill-ignore: the rule of the row it stands in for */>
       <Bar w="100%" className="max-w-[38rem]" />
       <Bar w={TASKS[i % TASKS.length]!} className="max-w-full" />
       <Bar w="13rem" h="h-2" />
@@ -142,11 +142,11 @@ function NoteBlock({ i }: { i: number }) {
 /** A narrow column at the right: sections of label and value lines. */
 function SideColumn() {
   return (
-    <aside className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-5 border-l border-rule px-5 pt-5 max-lg:hidden">
+    <aside className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-5 border-l border-rule px-5 pt-5 max-lg:hidden" /* taste-skill-ignore: the rule of the row it stands in for */>
       {[0, 1, 2].map((s) => (
         <div key={s} className="flex flex-col gap-3">
           <Bar w="6rem" h="h-3" />
-          <div className="h-px bg-rule-2" />
+          <div className="h-px bg-rule-2" /* taste-skill-ignore: the rule of the row it stands in for */ />
           {[0, 1, 2].map((i) => (
             <Bar key={i} w={TASKS[(s + i) % TASKS.length]!} className="max-w-full" />
           ))}
@@ -219,7 +219,7 @@ function Body({ view }: { view: Route["view"] }) {
         <>
           <ChipBars n={7} />
           <div className="flex flex-col">
-            <div className="h-8 border-b border-rule" />
+            <div className="h-8 border-b border-rule" /* taste-skill-ignore: the rule of the row it stands in for */ />
             {Array.from({ length: 12 }, (_, i) => (
               <LogRow key={i} i={i} />
             ))}
@@ -270,7 +270,7 @@ function Body({ view }: { view: Route["view"] }) {
           <Bar w="45%" />
           <div className="flex flex-col">
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="flex h-10 items-center gap-3 border-b border-rule">
+              <div key={i} className="flex h-10 items-center gap-3 border-b border-rule" /* taste-skill-ignore: the rule of the row it stands in for */>
                 <span aria-hidden className="size-2.5 shrink-0 rounded-full border border-rule-2" />
                 <Bar w={TASKS[i]!} className="max-w-full" />
               </div>
@@ -305,7 +305,7 @@ export function ViewSkeleton({ view }: { view: Route["view"] }) {
 /** A view with nothing to show yet: what is missing, how it comes, and the one thing to do. */
 export function EmptyState({ title, children, action, className }: { title: string; children: ReactNode; action?: ReactNode; className?: string }) {
   return (
-    <section data-view-state="empty" aria-label={title} className={cn("flex max-w-[34rem] flex-col items-start gap-1.5 border-t border-rule pt-5", className)}>
+    <section data-view-state="empty" aria-label={title} className={cn("flex max-w-[34rem] flex-col items-start gap-1.5 border-t border-rule pt-5", className)} /* taste-skill-ignore: the top rule of the list it stands in for */>
       <h2 className="text-title font-semibold text-ink">{title}</h2>
       <p className="text-row text-ink-3">{children}</p>
       {action && <div className="pt-3">{action}</div>}
@@ -365,7 +365,7 @@ export function ErrorPage({ title, reason, children, actions }: { title: string;
           {title}
         </h1>
         {children && <p className="text-row text-ink-2">{children}</p>}
-        {reason && <p className="w-full rounded-[var(--r)] bg-paper-2 px-2.5 py-1.5 font-mono text-small [overflow-wrap:anywhere] text-ink-2">{reason}</p>}
+        {reason && <p className="w-full rounded-[var(--r)] bg-paper-2 px-2.5 py-1.5 text-small [overflow-wrap:anywhere] text-ink-2">{reason}</p>}
         <div className="flex flex-wrap items-center gap-2 pt-3">{actions}</div>
       </section>
     </div>

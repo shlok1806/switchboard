@@ -31,6 +31,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
 import { CAPTURE_LABEL, CLI_LABEL, ago, hostName } from "@/lib/format";
+import { scrollMotion } from "@/lib/motion";
 import { go, href } from "@/lib/router";
 import { isStale, limitsFor, resetText } from "@/lib/usage";
 import { cn } from "@/lib/utils";
@@ -127,8 +128,8 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
               <Button
                 variant="primary"
                 onClick={() => {
-                  directive.current?.focus();
-                  directive.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+                  directive.current?.focus({ preventScroll: true });
+                  directive.current?.scrollIntoView({ block: "center", behavior: scrollMotion() });
                 }}
               >
                 Directive
@@ -160,7 +161,7 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
                       heading="h2"
                       onOpenTerminal={() => {
                         const t = document.getElementById("terminal");
-                        t?.scrollIntoView({ block: "start", behavior: "smooth" });
+                        t?.scrollIntoView({ block: "start", behavior: scrollMotion() });
                         t?.focus({ preventScroll: true });
                       }}
                     />
