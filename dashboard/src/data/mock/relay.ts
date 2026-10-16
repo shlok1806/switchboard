@@ -74,9 +74,12 @@ export function relay(
   // context, or per-call lifecycle Events such as tool calls and commands.
   if (UNRELAYED_EVENT_TYPES.includes(event.type)) return verdicts;
   const senderAgent = event.actor.kind === "agent" ? event.actor.agentId : null;
+  // An Update's addressees always hear it, Gone or not (ADR 0025).
+  const to: readonly string[] = event.type === "update" ? (event.payload.to ?? []) : [];
 
   for (const agent of agents) {
-    if (agent.presence === "gone" || agent.id === senderAgent) continue;
+    const named = to.includes(agent.id);
+    if ((agent.presence === "gone" && !named) || agent.id === senderAgent) continue;
     const overlap = overlapFor(event, agent);
     const heldTask = tasks.find((t) => t.claim?.holder.kind === "agent" && t.claim.holder.agentId === agent.id);
     const sameTask =
@@ -91,6 +94,7 @@ export function relay(
       else if (hasOverlap) probabilities = { drop: 0.35, queue: 0.58, interrupt: 0.07 };
       else if (sameTask && (event.type === "update" || event.type === "takeover" || event.type === "merge"))
         probabilities = { drop: 0.22, queue: 0.74, interrupt: 0.04 };
+      else if (named) probabilities = { drop: 0.52, queue: 0.41, interrupt: 0.07 };
     }
 
     if (!probabilities) {
@@ -115,6 +119,11 @@ export function relay(
       option = "queue";
       downgraded = { from: "interrupt", reason: "cli-cannot-interrupt" };
     }
+    let raised: Verdict["raised"];
+    if (option === "drop" && named) {
+      option = "queue";
+      raised = { from: "drop", reason: "addressed" };
+    }
     verdicts.push({
       event: event.id,
       agent: agent.id,
@@ -124,7 +133,9 @@ export function relay(
       source: "jev",
       probabilities,
       downgraded,
+      raised,
       overlap,
+      ...(named ? { addressed: "it is addressed to you" } : {}),
       latencyMs: 170 + Math.round(Math.random() * 60),
     });
   }

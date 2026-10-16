@@ -57,7 +57,7 @@ export type StreamMessage =
 /** Actions a Person takes from the Dashboard. Each maps to one HTTP POST. */
 export type PersonAction =
   /** `POST /api/updates` */
-  | { type: "update"; text: string; task?: TaskNumber }
+  | { type: "update"; text: string; task?: TaskNumber; to?: AgentId[] }
   /** `POST /api/directives` */
   | { type: "directive"; to: AgentId; text: string }
   /** `POST /api/tasks/:number/takeover`. Only valid on a Stale Claim (ADR 0002). */
@@ -118,6 +118,9 @@ export const MAX_EVENT_IDS = 100;
 
 /** The longest Update text the Channel accepts, in characters. */
 export const MAX_UPDATE_LENGTH = 4000;
+
+/** The most Agents one Update may be addressed to (ADR 0025). */
+export const MAX_ADDRESSEES = 20;
 
 /** `POST /api/updates` answers with the recorded Update Event. */
 export interface PostUpdateResponse {

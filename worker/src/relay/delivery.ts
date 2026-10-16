@@ -43,7 +43,9 @@ export function summarizeEvent(event: ChannelEvent): string {
     case "file.edit":
       return `edited ${event.payload.path} (+${event.payload.additions} -${event.payload.deletions}), not committed yet`;
     case "update":
-      return `posted an Update: ${quote(event.payload.text)}`;
+      return event.payload.to === undefined
+        ? `posted an Update: ${quote(event.payload.text)}`
+        : `posted an Update to ${event.payload.to.join(", ")}: ${quote(event.payload.text)}`;
     case "directive":
       return `sent a Directive to ${event.payload.to}: ${quote(event.payload.text)}`;
     case "claim":

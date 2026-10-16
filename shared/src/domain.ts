@@ -384,8 +384,11 @@ export interface EventPayloads {
   "claim.blocked": { holder: Holder; blockedBy: TaskNumber[] };
   /** A claimed Task that was blocked after its Claim is no longer blocked. */
   "claim.unblocked": { holder: Holder };
-  /** An Event written on purpose, in readable language. */
-  update: { text: string };
+  /**
+   * An Event written on purpose, in readable language. `to` names the Agents it is
+   * addressed to: each always hears it, still as information (ADR 0025).
+   */
+  update: { text: string; to?: AgentId[] };
   /** A message from a Person to an Agent. The only message with instruction weight. */
   directive: { to: AgentId; text: string };
   /**
@@ -608,6 +611,14 @@ export interface Verdict {
   downgraded?: {
     from: "interrupt";
     reason: DowngradeReason;
+  };
+  /**
+   * Set when Jev picked Drop for an Agent the Update is addressed to, so the Relay
+   * Queued it instead: `option` is "queue" (ADR 0025).
+   */
+  raised?: {
+    from: "drop";
+    reason: "addressed";
   };
   overlap: Overlap;
   /** Why the Event is addressed to the Agent, when it is. */

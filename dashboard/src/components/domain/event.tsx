@@ -169,6 +169,20 @@ export function EventBody({ event }: { event: ChannelEvent }) {
       );
     case "wake":
       return <WakeBody event={event} />;
+    case "update":
+      if (!event.payload.to) return <p className="text-row [overflow-wrap:anywhere] text-ink">{summarize(event)}</p>;
+      return (
+        <dl className="flex flex-col gap-3">
+          <Field label="To">
+            <span className="flex flex-wrap gap-x-3 gap-y-1">
+              {event.payload.to.map((id) => (
+                <HolderLabel key={id} holder={{ kind: "agent", agentId: id }} />
+              ))}
+            </span>
+          </Field>
+          <p className="text-row whitespace-pre-wrap [overflow-wrap:anywhere] text-ink">{event.payload.text}</p>
+        </dl>
+      );
     case "directive":
       return (
         <div className="flex flex-col gap-2">
