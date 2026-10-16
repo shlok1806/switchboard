@@ -14,7 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useNeedsYou } from "@/components/domain/state";
+import { Glyph, useNeedsYou } from "@/components/domain/state";
 import { useUnseenInterrupts } from "@/data/interrupts";
 import { useChannel, useMe, useStore } from "@/data/store";
 import { localTime } from "@/lib/format";
@@ -51,7 +51,8 @@ export function useCounts() {
   const interrupts = useUnseenInterrupts();
   return useMemo(() => {
     const open = tasks.filter((t) => t.status !== "done").length;
-    return { agents: agents.length, needYou, tasks: open, interrupts };
+    const stale = tasks.filter((t) => t.claim?.stale).length;
+    return { agents: agents.length, needYou, tasks: open, stale, interrupts };
   }, [agents, tasks, needYou, interrupts]);
 }
 
@@ -206,6 +207,13 @@ export function TabBar({ route }: { route: Route }) {
           <span className="inline-flex items-center gap-1.5">
             {v.title}
             {v.id === "now" && c.needYou > 0 && <SignalCount n={c.needYou} />}
+            {v.id === "tasks" && c.stale > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[12px] font-semibold text-signal tabular-nums">
+                <Glyph state="stale" className="size-2.5" />
+                {c.stale}
+                <span className="sr-only"> stale</span>
+              </span>
+            )}
             {v.id === "feed" && c.interrupts > 0 && (
               <span className="text-[12px] text-ink-3 tabular-nums">
                 {c.interrupts}

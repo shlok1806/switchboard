@@ -307,7 +307,7 @@ describe("the Agents view on a phone", () => {
         </Wrapper>,
       );
       const sheet = screen.getByRole("dialog", { name: "scout, in the inspector" });
-      expect(document.activeElement).toBe(sheet);
+      await waitFor(() => expect(document.activeElement).toBe(sheet));
       fireEvent.keyDown(sheet, { key: "Escape" });
       expect(window.location.hash).toBe("#/agents");
       rerender(
@@ -316,7 +316,7 @@ describe("the Agents view on a phone", () => {
         </Wrapper>,
       );
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(document.activeElement).toBe(screen.getByRole("button", { name: /scout/ }));
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: /scout/ })));
     } finally {
       Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
     }

@@ -4,8 +4,9 @@
 // once in light at 1440 and once in dark at 390. Each page is drawn by the built Dashboard over
 // the simulated Channel (`?mock=1&state=`, which also stops its clock and timed Events, so two
 // runs draw the same pictures) in headless Chrome, and must show the state asked for: the
-// marker `data-view-state` the state components set, or a drawn view with none. A failed check
-// fails the run. The pictures land in dashboard/screenshots/ (not committed), to look at.
+// marker `data-view-state` the state components set, or a drawn view with none. A phone picture
+// must also not scroll sideways anywhere but the terminal's screen (plan slice 12). A failed
+// check fails the run. The pictures land in dashboard/screenshots/ (not committed), to look at.
 //
 //   npm run build && npm run shots
 //
@@ -145,6 +146,22 @@ const PROBE = `(() => {
   return { state: marked ? marked.getAttribute("data-view-state") : null, drawn };
 })()`;
 
+// What scrolls sideways on the page: the page itself, or any box whose content is wider than it
+// and that scrolls, except the terminal's screen, which keeps its columns.
+const SIDEWAYS = `(() => {
+  const found = [];
+  const page = document.scrollingElement;
+  if (page.scrollWidth > page.clientWidth + 1) found.push("the page");
+  for (const el of document.querySelectorAll("body *")) {
+    if (el.matches("pre[aria-label=Screen]")) continue;
+    const x = getComputedStyle(el).overflowX;
+    if ((x === "auto" || x === "scroll") && el.scrollWidth > el.clientWidth + 1) {
+      found.push(el.tagName.toLowerCase() + (el.getAttribute("aria-label") ? "[" + el.getAttribute("aria-label") + "]" : "." + String(el.className).split(" ")[0]));
+    }
+  }
+  return found;
+})()`;
+
 async function main() {
   const previewPort = await freePort();
   const preview = spawn("npx", ["vite", "preview", "--host", "127.0.0.1", "--port", String(previewPort), "--strictPort"], { cwd: root, stdio: "ignore" });
@@ -210,6 +227,10 @@ async function main() {
       count++;
       if (seen?.state !== want || (want === null && !seen.drawn)) {
         failures.push(`${name}: wanted ${want ?? "a ready view"}, saw ${seen?.state ?? (seen?.drawn ? "a ready view" : "nothing drawn")}`);
+      }
+      if (w < 640) {
+        const sideways = await page.evaluate(SIDEWAYS);
+        if (sideways.length) failures.push(`${name}: scrolls sideways: ${sideways.join(", ")}`);
       }
     }
   }

@@ -14,6 +14,7 @@ import { Chip } from "@/components/atoms/Chip";
 import { Facts, Steps } from "@/components/domain/agent-sections";
 import { DenyAction, PendingApproval } from "@/components/domain/approval";
 import { contextPercent, shortName } from "@/components/domain/fleet";
+import { InspectorFrame } from "@/components/shell/inspector";
 import { EmptyView } from "@/components/shell/states";
 import { FirstAgentAction, StartAgentButton } from "@/components/domain/start-agent";
 import { Glyph, State, useAgentStates, useNeedsYou } from "@/components/domain/state";
@@ -30,7 +31,6 @@ import {
   edgePoints,
   fit,
   frameRect,
-  MIN_ZOOM,
   groups as groupOrder,
   place,
   zoomAt,
@@ -47,8 +47,6 @@ import { cn } from "@/lib/utils";
 interface View {
   positions: Record<string, Point>;
   camera?: Camera;
-  /** A phone's own camera: one saved on a desktop would show a phone a corner of the canvas. */
-  phoneCamera?: Camera;
 }
 
 const viewKey = (repo: string) => `switchboard.canvas.${repo}`;
@@ -57,7 +55,7 @@ function loadView(repo: string): View {
   try {
     const raw = window.localStorage.getItem(viewKey(repo));
     const parsed = raw ? (JSON.parse(raw) as Partial<View>) : {};
-    return { positions: parsed.positions ?? {}, camera: parsed.camera, phoneCamera: parsed.phoneCamera };
+    return { positions: parsed.positions ?? {}, camera: parsed.camera };
   } catch {
     return { positions: {} };
   }
@@ -267,14 +265,88 @@ function Minimap({ frames, camera, size, onMove }: { frames: Rect[]; camera: Cam
   );
 }
 
+/**
+ * A phone's canvas (design.md): the same frames as lanes in a list, each Agent a two-line row,
+ * and an Agent its lead started set in under that lead, which is what a line says on the canvas.
+ * A row opens the Agent in the inspector's sheet.
+ */
+function Lanes({
+  groups,
+  states,
+  claims,
+  me,
+  selected,
+  shown,
+  onSelect,
+}: {
+  groups: Group[];
+  states: Map<string, AgentState>;
+  claims: Map<string, Task[]>;
+  me: string;
+  selected?: string;
+  shown: (a: Agent) => boolean;
+  onSelect: (id: AgentId) => void;
+}) {
+  const lanes = groups.map((g) => ({ group: g, agents: g.agents.filter(shown) })).filter((l) => l.agents.length > 0);
+  if (lanes.length === 0) return <p className="pt-2 text-row text-ink-2">No Agent here passes the filter.</p>;
+  return (
+    <div className="flex flex-col gap-6">
+      {lanes.map(({ group, agents }) => {
+        // In the lane's order, each lead followed by the Agents it started, however deep.
+        const inLane = new Set(agents.map((a) => a.id));
+        const rows: { agent: Agent; depth: number }[] = [];
+        const add = (a: Agent, depth: number) => {
+          rows.push({ agent: a, depth });
+          for (const c of agents) if (c.parent === a.id) add(c, depth + 1);
+        };
+        for (const a of agents) if (!a.parent || !inLane.has(a.parent)) add(a, 0);
+        return (
+          <section key={group.key} aria-labelledby={`lane-${group.key}`}>
+            <h2 id={`lane-${group.key}`} className="flex items-baseline gap-1.5 border-b border-rule-2 pb-2 text-small" /* taste-skill-ignore: the phone list's group rule, as the fleet's */>
+              <span className="text-title font-semibold text-ink">{frameName(group)}</span>
+              <span className="text-ink-3 tabular-nums">
+                {group.person === me ? `${group.person} (you)` : group.person} · {agents.length} {agents.length === 1 ? "Agent" : "Agents"}
+              </span>
+            </h2>
+            <ul>
+              {rows.map(({ agent, depth }) => {
+                const state = states.get(agent.id) ?? "gone";
+                const task = claims.get(agent.id)?.[0];
+                const lead = agent.parent ? agents.find((p) => p.id === agent.parent) : undefined;
+                return (
+                  <li key={agent.id} className="border-b border-rule" /* taste-skill-ignore: the phone list's row rule, as the fleet's */ style={{ paddingLeft: Math.min(depth, 3) * 20 }}>
+                    <button
+                      type="button"
+                      aria-pressed={selected === agent.id}
+                      onClick={() => onSelect(agent.id)}
+                      className="flex min-h-11 w-full flex-col gap-0.5 py-2.5 text-left hover:bg-paper-2"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Glyph state={state} />
+                        <span className={cn("min-w-0 flex-1 text-row font-semibold [overflow-wrap:anywhere]", state === "gone" ? "text-ink-3" : "text-ink")}>{shortName(agent)}</span>
+                        <span className={cn("shrink-0 text-small tabular-nums", needsPerson(state) ? "font-semibold text-signal" : "text-ink-3")}>
+                          {stateWord(state, agent.person)} · {age(agent, state)}
+                        </span>
+                      </span>
+                      <span className="pl-5 text-small [overflow-wrap:anywhere] text-ink-3">
+                        {task ? `#${task.number} ${task.title}` : "No Claim"}
+                        {lead && ` · started by ${shortName(lead)}`}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 /** The open Agent (design.md's inspector): who and where, its Ask, its Task's Steps, and where it runs. */
 function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; state: AgentState; tasks: Task[]; sheet: boolean; onClose: () => void }) {
   const me = useMe();
-  const root = useRef<HTMLElement>(null);
-  // On a phone the inspector is a sheet over the canvas: it takes focus when it opens.
-  useEffect(() => {
-    if (sheet) root.current?.focus();
-  }, [sheet, agent.id]);
   const { agents } = useChannel();
   const parent = agent.parent ? agents.find((a) => a.id === agent.parent) : undefined;
   const children = agents.filter((a) => a.parent === agent.id);
@@ -287,23 +359,9 @@ function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; stat
   ]
     .filter(Boolean)
     .join(" ");
-  return (
-    <aside
-      ref={root}
-      role={sheet ? "dialog" : undefined}
-      tabIndex={sheet ? -1 : undefined}
-      aria-label={`${name(agent)} on the canvas`}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.stopPropagation();
-          onClose();
-        }
-      }}
-      className={cn(
-        "flex min-h-0 flex-col gap-5 overflow-y-auto bg-paper",
-        sheet ? "absolute inset-x-0 bottom-0 z-10 max-h-[60%] border-t border-rule-2 p-4" : "w-[320px] shrink-0 border-l border-rule pl-5",
-      )}
-    >
+  const label = `${name(agent)} on the canvas`;
+  const body = (
+    <>
       <div className="flex flex-col gap-2">
         <div className="flex items-start gap-2">
           <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
@@ -336,6 +394,28 @@ function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; stat
           ]}
         />
       </Section>
+    </>
+  );
+  // On a phone the inspector is a sheet over the list, as every view's is.
+  if (sheet) {
+    return (
+      <InspectorFrame label={label} onClose={onClose}>
+        {body}
+      </InspectorFrame>
+    );
+  }
+  return (
+    <aside
+      aria-label={label}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+      className="flex min-h-0 w-[320px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-rule bg-paper pl-5"
+    >
+      {body}
     </aside>
   );
 }
@@ -385,29 +465,25 @@ export function CanvasView({ selected }: { selected?: string }) {
     const observer = new ResizeObserver(([entry]) => setSize({ w: entry.contentRect.width, h: entry.contentRect.height }));
     observer.observe(el);
     return () => observer.disconnect();
-  }, [empty]);
+  }, [empty, mobile]);
 
-  // A phone sees every frame at once and zooms in from there; a desktop starts readable, at 100%.
-  const firstView = useCallback(
-    () => fit(bounds(allRects), size.w, size.h, mobile ? MIN_ZOOM : FIRST_ZOOM, mobile ? 16 : 32, "start"),
-    [allRects, size, mobile],
-  );
+  // The canvas starts readable, at 100%.
+  const firstView = useCallback(() => fit(bounds(allRects), size.w, size.h, FIRST_ZOOM, 32, "start"), [allRects, size]);
   // The first time there is room and nodes, frame them all. After that the camera moves only when the Person moves it.
-  const cameraField = mobile ? "phoneCamera" : "camera";
-  const saved = view[cameraField];
+  const saved = view.camera;
   const camera = saved ?? (size.w ? firstView() : { x: 0, y: 0, k: 1 });
   const setCamera = useCallback(
     (next: Camera | ((c: Camera) => Camera)) => {
       setView((v) => {
-        const current = v[cameraField] ?? camera;
-        return { ...v, [cameraField]: typeof next === "function" ? next(current) : next };
+        const current = v.camera ?? camera;
+        return { ...v, camera: typeof next === "function" ? next(current) : next };
       });
     },
-    [camera, cameraField],
+    [camera],
   );
   useEffect(() => {
-    if (!saved && size.w && allRects.length) setView((v) => (v[cameraField] ? v : { ...v, [cameraField]: firstView() }));
-  }, [saved, cameraField, size, allRects, firstView]);
+    if (!saved && size.w && allRects.length) setView((v) => (v.camera ? v : { ...v, camera: firstView() }));
+  }, [saved, size, allRects, firstView]);
   const fitAll = () => setCamera(fit(bounds(allRects), size.w, size.h));
   const zoomBy = (factor: number) => setCamera((c) => zoomAt(c, factor, { x: size.w / 2, y: size.h / 2 }));
   const centerOn = (p: Point) => setCamera((c) => ({ ...c, x: size.w / 2 - p.x * c.k, y: size.h / 2 - p.y * c.k }));
@@ -424,7 +500,7 @@ export function CanvasView({ selected }: { selected?: string }) {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [setCamera]);
+  }, [setCamera, mobile]);
 
   // Pointers: one on the ground pans, two pinch, one on a node drags it once it moves a few pixels.
   const pointers = useRef(new Map<number, Point>());
@@ -567,8 +643,8 @@ export function CanvasView({ selected }: { selected?: string }) {
           hostCount > 0 && `${hostCount} ${hostCount === 1 ? "Host" : "Hosts"}`,
           `${agents.length} ${agents.length === 1 ? "Agent" : "Agents"}`,
           needsYou > 0 && <span className="font-semibold text-signal">{needsYou} {needsYou === 1 ? "needs" : "need"} you</span>,
-          "a line is who started whom",
-          "positions are yours and kept in this browser",
+          mobile ? "set in under the Agent that started it" : "a line is who started whom",
+          !mobile && "positions are yours and kept in this browser",
         ]}
       />
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -585,121 +661,124 @@ export function CanvasView({ selected }: { selected?: string }) {
         </div>
         <span className="text-small font-medium text-ink-2 max-sm:hidden">Laid out by Host</span>
         <div className="ml-auto flex flex-wrap items-center gap-2 max-sm:ml-0">
-          <Button onClick={fitAll}>Fit</Button>
-          <Button onClick={() => setView({ positions: {} })}>Reset layout</Button>
+          {!mobile && <Button onClick={fitAll}>Fit</Button>}
+          {!mobile && <Button onClick={() => setView({ positions: {} })}>Reset layout</Button>}
           <StartAgentButton />
         </div>
       </div>
-      <div className="relative flex min-h-[420px] flex-1 gap-6">
-        <div className="relative min-w-0 flex-1 overflow-hidden rounded-[var(--r)] border border-rule">
-          <div
-            ref={viewport}
-            role="application"
-            aria-roledescription="canvas"
-            aria-label="Agents on the Channel, by Host. Drag to pan, arrow keys to move, plus and minus to zoom, 0 to fit."
-            tabIndex={0}
-            onKeyDown={onKey}
-            onPointerDown={(e) => {
-              if (isGround(e.target)) onDown(e);
-            }}
-            onPointerMove={onMove}
-            onPointerUp={onUp}
-            onPointerCancel={onUp}
-            onClick={(e) => {
-              if (!isGround(e.target)) return;
-              if (suppressClick.current) suppressClick.current = false;
-              else select();
-            }}
-            className="absolute inset-0 cursor-default touch-none overflow-clip bg-paper focus-visible:-outline-offset-2"
-          >
-            {/* The 24px dot grid (design.md), moving with the camera. */}
-            <svg aria-hidden data-ground className="absolute inset-0 size-full">
-              <pattern id="canvas-dots" patternUnits="userSpaceOnUse" width={24 * camera.k} height={24 * camera.k} x={camera.x} y={camera.y}>
-                <circle cx={1.2} cy={1.2} r={1.1} style={{ fill: "var(--rule)" }} />
-              </pattern>
-              <rect width="100%" height="100%" fill="url(#canvas-dots)" />
-            </svg>
-            <div data-ground className="absolute top-0 left-0 origin-top-left" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.k})` }}>
-              {frames.map((f) => (
-                <Frame key={f.group.key} group={f.group} rect={f.rect} me={me} />
-              ))}
-              <svg aria-hidden className="pointer-events-none absolute top-0 left-0 overflow-visible" width="1" height="1">
-                <defs>
-                  <marker id="lead-head" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="7" markerHeight="7" orient="auto">
-                    <path d="M0 0 L8 4 L0 8 z" className="fill-edge" />
-                  </marker>
-                  <marker id="lead-head-active" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="7" markerHeight="7" orient="auto">
-                    <path d="M0 0 L8 4 L0 8 z" className="fill-edge-active" />
-                  </marker>
-                </defs>
-                {agents.map((a) => {
-                  const from = a.parent ? at.get(a.parent) : undefined;
-                  const to = at.get(a.id);
-                  if (!from || !to || !shown(a) || !agents.some((p) => p.id === a.parent && shown(p))) return null;
-                  const active = selected === a.id || selected === a.parent;
-                  return (
-                    <polyline
-                      key={`edge-${a.id}`}
-                      data-edge={`${a.parent} ${a.id}`}
-                      points={edgePoints(from, to)
-                        .map((p) => `${p.x},${p.y}`)
-                        .join(" ")}
-                      fill="none"
-                      strokeWidth={active ? 2 : 1.5}
-                      markerEnd={`url(#${active ? "lead-head-active" : "lead-head"})`}
-                      className={active ? "stroke-edge-active" : "stroke-edge"}
-                    />
-                  );
-                })}
+      {mobile ? (
+        <Lanes groups={groupList} states={states} claims={claims} me={me} selected={selected} shown={shown} onSelect={(id) => select(id)} />
+      ) : (
+        <div className="relative flex min-h-[420px] flex-1 gap-6">
+          <div className="relative min-w-0 flex-1 overflow-hidden rounded-[var(--r)] border border-rule">
+            <div
+              ref={viewport}
+              role="application"
+              aria-roledescription="canvas"
+              aria-label="Agents on the Channel, by Host. Drag to pan, arrow keys to move, plus and minus to zoom, 0 to fit."
+              tabIndex={0}
+              onKeyDown={onKey}
+              onPointerDown={(e) => {
+                if (isGround(e.target)) onDown(e);
+              }}
+              onPointerMove={onMove}
+              onPointerUp={onUp}
+              onPointerCancel={onUp}
+              onClick={(e) => {
+                if (!isGround(e.target)) return;
+                if (suppressClick.current) suppressClick.current = false;
+                else select();
+              }}
+              className="absolute inset-0 cursor-default touch-none overflow-clip bg-paper focus-visible:-outline-offset-2"
+            >
+              {/* The 24px dot grid (design.md), moving with the camera. */}
+              <svg aria-hidden data-ground className="absolute inset-0 size-full">
+                <pattern id="canvas-dots" patternUnits="userSpaceOnUse" width={24 * camera.k} height={24 * camera.k} x={camera.x} y={camera.y}>
+                  <circle cx={1.2} cy={1.2} r={1.1} style={{ fill: "var(--rule)" }} />
+                </pattern>
+                <rect width="100%" height="100%" fill="url(#canvas-dots)" />
               </svg>
-              {/* In frame order, so Tab moves through the canvas the way it reads. */}
-              {groupList
-                .flatMap((g) => g.agents)
-                .map((a) => {
-                  const state = states.get(a.id) ?? "gone";
-                  return (
-                    <Node
-                      key={a.id}
-                      agent={a}
-                      state={state}
-                      task={claims.get(a.id)?.[0]}
-                      repo={snapshot?.channel.repo}
-                      at={at.get(a.id) ?? ORIGIN}
-                      selected={selected === a.id}
-                      filtered={!shown(a)}
-                      muted={state === "gone" && !claims.has(a.id)}
-                      onPointerDown={onNodeDown}
-                      onSelect={onNodeSelect}
-                      onFocus={onNodeFocus}
-                    />
-                  );
-                })}
+              <div data-ground className="absolute top-0 left-0 origin-top-left" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.k})` }}>
+                {frames.map((f) => (
+                  <Frame key={f.group.key} group={f.group} rect={f.rect} me={me} />
+                ))}
+                <svg aria-hidden className="pointer-events-none absolute top-0 left-0 overflow-visible" width="1" height="1">
+                  <defs>
+                    <marker id="lead-head" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+                      <path d="M0 0 L8 4 L0 8 z" className="fill-edge" />
+                    </marker>
+                    <marker id="lead-head-active" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+                      <path d="M0 0 L8 4 L0 8 z" className="fill-edge-active" />
+                    </marker>
+                  </defs>
+                  {agents.map((a) => {
+                    const from = a.parent ? at.get(a.parent) : undefined;
+                    const to = at.get(a.id);
+                    if (!from || !to || !shown(a) || !agents.some((p) => p.id === a.parent && shown(p))) return null;
+                    const active = selected === a.id || selected === a.parent;
+                    return (
+                      <polyline
+                        key={`edge-${a.id}`}
+                        data-edge={`${a.parent} ${a.id}`}
+                        points={edgePoints(from, to)
+                          .map((p) => `${p.x},${p.y}`)
+                          .join(" ")}
+                        fill="none"
+                        strokeWidth={active ? 2 : 1.5}
+                        markerEnd={`url(#${active ? "lead-head-active" : "lead-head"})`}
+                        className={active ? "stroke-edge-active" : "stroke-edge"}
+                      />
+                    );
+                  })}
+                </svg>
+                {/* In frame order, so Tab moves through the canvas the way it reads. */}
+                {groupList
+                  .flatMap((g) => g.agents)
+                  .map((a) => {
+                    const state = states.get(a.id) ?? "gone";
+                    return (
+                      <Node
+                        key={a.id}
+                        agent={a}
+                        state={state}
+                        task={claims.get(a.id)?.[0]}
+                        repo={snapshot?.channel.repo}
+                        at={at.get(a.id) ?? ORIGIN}
+                        selected={selected === a.id}
+                        filtered={!shown(a)}
+                        muted={state === "gone" && !claims.has(a.id)}
+                        onPointerDown={onNodeDown}
+                        onSelect={onNodeSelect}
+                        onFocus={onNodeFocus}
+                      />
+                    );
+                  })}
+              </div>
             </div>
-          </div>
-          <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-end justify-between gap-3">
-            <div className="pointer-events-auto max-sm:hidden">
-              <Legend />
-            </div>
-            <div className="pointer-events-auto ml-auto flex flex-col items-end gap-2">
-              {!mobile && size.w > 0 && <Minimap frames={allRects} camera={camera} size={size} onMove={centerOn} />}
-              <div className="flex items-center rounded-[var(--r)] border border-rule-2 bg-paper">
-                <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.2)} className="h-7 w-8 text-row text-ink-2 hover:bg-paper-2 hover:text-ink">
-                  −
-                </button>
-                <span className="w-12 text-center text-small text-ink tabular-nums" aria-live="polite">
-                  {Math.round(camera.k * 100)}%
-                </span>
-                <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.2)} className="h-7 w-8 text-row text-ink-2 hover:bg-paper-2 hover:text-ink">
-                  +
-                </button>
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-end justify-between gap-3">
+              <div className="pointer-events-auto">
+                <Legend />
+              </div>
+              <div className="pointer-events-auto ml-auto flex flex-col items-end gap-2">
+                {size.w > 0 && <Minimap frames={allRects} camera={camera} size={size} onMove={centerOn} />}
+                <div className="flex items-center rounded-[var(--r)] border border-rule-2 bg-paper">
+                  <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.2)} className="h-7 w-8 text-row text-ink-2 hover:bg-paper-2 hover:text-ink">
+                    −
+                  </button>
+                  <span className="w-12 text-center text-small text-ink tabular-nums" aria-live="polite">
+                    {Math.round(camera.k * 100)}%
+                  </span>
+                  <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.2)} className="h-7 w-8 text-row text-ink-2 hover:bg-paper-2 hover:text-ink">
+                    +
+                  </button>
+                </div>
               </div>
             </div>
           </div>
+          {chosen && <Inspector agent={chosen} state={states.get(chosen.id) ?? "gone"} tasks={claims.get(chosen.id) ?? []} sheet={false} onClose={() => select()} />}
         </div>
-        {chosen && (
-          <Inspector agent={chosen} state={states.get(chosen.id) ?? "gone"} tasks={claims.get(chosen.id) ?? []} sheet={mobile} onClose={() => select()} />
-        )}
-      </div>
+      )}
+      {mobile && chosen && <Inspector agent={chosen} state={states.get(chosen.id) ?? "gone"} tasks={claims.get(chosen.id) ?? []} sheet onClose={() => select()} />}
     </div>
   );
 }

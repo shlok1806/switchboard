@@ -149,6 +149,8 @@ describe("a list whose filter or search matches nothing", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^Stale/ }));
     await waitFor(() => expect(within(empty()).getByRole("heading", { name: "No Task matches these filters" })).toBeTruthy());
     expect(document.querySelectorAll("[data-view-state=empty]")).toHaveLength(1);
+    // The board's columns do not say it again under it.
+    expect(screen.queryByText("None match.")).toBeNull();
     fireEvent.click(within(empty()).getByRole("button", { name: "Clear the filters" }));
     await waitFor(() => expect(empty()).toBeNull());
   });

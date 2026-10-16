@@ -170,18 +170,37 @@ describe("the Tasks board", () => {
     }
   });
 
+  it("shows one column at a time on a phone, the claimed one first, and another when it is picked", async () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    try {
+      render(<TasksView />, { wrapper: channel() });
+      const columns = await screen.findByRole("group", { name: "Column" });
+      expect(within(columns).getByRole("button", { name: /^Claimed/ }).getAttribute("aria-pressed")).toBe("true");
+      expect(await screen.findByText("Page the Users API by 50")).toBeTruthy();
+      expect(screen.queryByText("Add the avatar upload")).toBeNull();
+      fireEvent.click(within(columns).getByRole("button", { name: /^Open/ }));
+      expect(await screen.findByText("Add the avatar upload")).toBeTruthy();
+      expect(screen.queryByText("Page the Users API by 50")).toBeNull();
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    }
+  });
+
   it("opens a Task as a sheet on a phone only when its card is tapped, and Escape closes it", async () => {
     const width = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
     try {
       render(<TasksView />, { wrapper: channel() });
+      // A phone shows one column at a time; this Task is in Open.
+      fireEvent.click(within(await screen.findByRole("group", { name: "Column" })).getByRole("button", { name: /^Open/ }));
       const card = await screen.findByText("Add the avatar upload");
       expect(screen.queryByRole("dialog")).toBeNull();
       fireEvent.click(card);
       const sheet = await screen.findByRole("dialog", { name: "#12 Add the avatar upload, in the inspector" });
-      expect(document.activeElement).toBe(sheet);
+      await waitFor(() => expect(document.activeElement).toBe(sheet));
       fireEvent.keyDown(sheet, { key: "Escape" });
-      expect(screen.queryByRole("dialog")).toBeNull();
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     } finally {
       Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
     }

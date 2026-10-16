@@ -195,7 +195,10 @@ gutter. Name 15/600 with glyph and state word, a one-line fact sentence, the act
 sections with section heads. A section head's title takes the free width (`flex:1 1 160px`) so
 its meta and its link stay on the head's first line and the title wraps instead. A figure block
 (the 42% of the context window) puts its meta on its own line under the figure. Below 640px the
-inspector is not on the page; it opens as a bottom sheet from the row.
+inspector is not on the page; it opens as a bottom sheet from the row, full width over the side
+sheet's veil and the tab bar, at most 85% of the screen tall. It is modal as the side sheet is:
+it holds focus, which lands on the sheet itself, Escape, the veil and Close shut it, and focus
+goes back to the row.
 
 Side sheet. For a form that needs the page beside it (Start an Agent), never a centred
 dialog: 400px from the right edge, a 1px `--rule-2` on its left, `--paper` fill, over a
@@ -218,7 +221,15 @@ secondary line and Context on the right (the meter is dropped, the figure stays)
 is the Task. Host and the actions key are dropped; the row itself opens the Agent. Group rows
 stay as a line. The selected row keeps its paper-3 band. From 640 up the Agents table drops the
 Host column and then the context meter by the width it has, not the window's (see Agents
-table). The queue keeps its actions.
+table). The queue keeps its actions. Nothing scrolls sideways below 640px but a terminal's
+screen, and `npm run shots` fails a phone picture where anything else does. The Tasks board
+shows one column at a time under a row of column tabs (label and count, a 2px ink rule under
+the current one; Claimed first while it holds a card), and drops the column's own head. The
+canvas is its frames as lanes in a list: each lane's head as its frame names it, then two-line
+rows (glyph, name, the state word and age on the right; the Task, or No Claim), an Agent set in
+20px under the lead that started it with "started by" on its second line. Fit, Reset layout,
+the zoom and the key go with the canvas; a row opens the inspector's sheet. The Tasks tab
+carries the stale count beside its name: a signal triangle and the number.
 
 States. Every view has four, and `npm run shots` checks each one over the simulated Channel
 (`?mock=1&state=ready|loading|empty|error|read-error`, on a stopped clock): a ready view in
@@ -232,7 +243,8 @@ puts, where the rows would start, a rule, a 15/600 line saying what is missing, 
 sentence on how it fills (running text, so not the muted ink), and exactly one action: the button that fills it (Start an Agent,
 New Task, Post an Update), or, when only a terminal can, the command shown whole in mono with
 Copy beside it. A filter or a search that matches nothing is empty too, and its action
-clears it. Error is a page, not a toast: a 20/600 line saying what failed, a sentence on
+clears it; it takes the place of what it empties (the Tasks board goes, not just its cards), so
+the page says it once. Error is a page, not a toast: a 20/600 line saying what failed, a sentence on
 what still works, the server's own reason in a `--paper-2` block when there is one, and its
 actions (Try again first, then a way back). An address with no page says "No such page", an
 unknown Agent or Task says so with a link back to its list (not an alert: nothing failed, so

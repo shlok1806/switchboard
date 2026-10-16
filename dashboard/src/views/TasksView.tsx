@@ -53,6 +53,8 @@ export function TasksView() {
   const [picked, setPicked] = useState<number | null>(null);
   // On a phone the picked Task opens as a sheet, and only when a card is tapped.
   const [sheet, setSheet] = useState<number | null>(null);
+  // A phone shows one column at a time, picked above the board; until one is picked, Claimed while it holds a card, else the first that does.
+  const [lane, setLane] = useState<Column | null>(null);
   // Moves the Channel has not answered yet: the card waits in its new column.
   const [pending, setPending] = useState<Map<number, Column>>(new Map());
 
@@ -140,6 +142,9 @@ export function TasksView() {
   const first = cards.find((c) => c.column === "stale") ?? cards.find((c) => c.column === "claimed") ?? cards[0];
   const selected = (picked !== null && taskByNumber.get(picked)) || first?.task;
   const sheetTask = sheet !== null ? taskByNumber.get(sheet) : undefined;
+  const laneTotal = (c: Column) => inColumn(c) + (c === "claimed" ? inColumn("stale") : 0);
+  const phoneLane = lane ?? (columns.includes("claimed") && laneTotal("claimed") > 0 ? "claimed" : (columns.find((c) => laneTotal(c) > 0) ?? columns[0]!));
+  const boardColumns = mobile ? [phoneLane] : columns;
 
   const card = (c: Card) => {
     const waiting = pending.has(c.task.number);
@@ -232,51 +237,72 @@ export function TasksView() {
           </p>
         )}
 
-        {filtered && shown.length === 0 && (
+        {filtered && shown.length === 0 ? (
           <EmptyState title="No Task matches these filters" action={<Button onClick={clearFilters}>Clear the filters</Button>}>
             {tasks.length} {tasks.length === 1 ? "Task is" : "Tasks are"} on the board, and none passes {[show !== "all", person !== "", agent !== ""].filter(Boolean).length === 1 ? "the filter" : "every filter"}.
           </EmptyState>
-        )}
-        <div className="min-h-0 flex-1">
-          <KanbanProvider<Card>
-            columns={columns.map((c) => ({ id: c, name: COLUMN_LABEL[c] }))}
-            data={cards}
-            onMove={move}
-            pointerDrag={!mobile}
-            className={cn(
-              "min-h-0 gap-4",
-              // A phone shows one column at a time and scrolls sideways between them; a tablet too narrow for four columns scrolls as well.
-              mobile ? "snap-x snap-mandatory auto-cols-[calc(100%-40px)] overflow-x-auto" : "auto-cols-[minmax(220px,1fr)] overflow-x-auto",
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col gap-4">
+            {mobile && (
+              <div role="group" aria-label="Column" className="grid grid-flow-col auto-cols-fr border-b border-rule-2">
+                {columns.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    aria-pressed={phoneLane === c}
+                    onClick={() => setLane(c)}
+                    className={cn(
+                      "-mb-px flex min-h-11 items-center justify-center gap-1.5 border-b-2 px-1 text-label font-medium whitespace-nowrap",
+                      phoneLane === c ? "border-ink text-ink" : "border-transparent text-ink-2",
+                    )}
+                  >
+                    {COLUMN_LABEL[c]}
+                    <span className="text-ink-3 tabular-nums">{laneTotal(c)}</span>
+                  </button>
+                ))}
+              </div>
             )}
-          >
-            {(column) => {
-              const id = column.id as Column;
-              const stale = id === "claimed" ? inColumn("stale") : 0;
-              return (
-                <KanbanBoard key={id} id={id} className="min-h-0 snap-start rounded-none bg-transparent">
-                  <KanbanHeader className="flex items-center gap-2 border-b border-rule-2 px-0 pt-0 pb-2">
-                    <Glyph state={COLUMN_GLYPH[id]} />
-                    <h2 className="text-title font-semibold text-ink">{column.name}</h2>
-                    <span className="text-small text-ink-3 tabular-nums">{inColumn(id) + stale}</span>
-                  </KanbanHeader>
-                  {stale > 0 && (
-                    <section aria-label="Stale Claims" className="shrink-0 border-b border-rule pb-3">
-                      <p className="pt-3 pb-2 text-small text-ink-3">
-                        <State state="stale" word={`${stale} Stale ${stale === 1 ? "Claim" : "Claims"}`} className="text-small" />, held by a Gone Agent. Anyone may take it over.
-                      </p>
-                      <KanbanCards<Card> id="stale" className="min-h-0 px-0 pb-0">
-                        {card}
-                      </KanbanCards>
-                    </section>
-                  )}
-                  <KanbanCards<Card> id={id} className="px-0 pt-3 pb-6" empty={<p className="py-6 text-small text-ink-3">{filtered ? "None match." : "Nothing here."}</p>}>
-                    {card}
-                  </KanbanCards>
-                </KanbanBoard>
-              );
-            }}
-          </KanbanProvider>
-        </div>
+            <KanbanProvider<Card>
+              columns={boardColumns.map((c) => ({ id: c, name: COLUMN_LABEL[c] }))}
+              data={cards}
+              onMove={move}
+              pointerDrag={!mobile}
+              className={cn(
+                "min-h-0 gap-4",
+                // A phone shows the picked column across its width; a tablet too narrow for four columns scrolls sideways.
+                mobile ? "auto-cols-[100%]" : "auto-cols-[minmax(220px,1fr)] overflow-x-auto",
+              )}
+            >
+              {(column) => {
+                const id = column.id as Column;
+                const stale = id === "claimed" ? inColumn("stale") : 0;
+                return (
+                  <KanbanBoard key={id} id={id} className="min-h-0 rounded-none bg-transparent">
+                    <KanbanHeader className={mobile ? "sr-only" : "flex items-center gap-2 border-b border-rule-2 px-0 pt-0 pb-2"}>
+                      <Glyph state={COLUMN_GLYPH[id]} />
+                      <h2 className="text-title font-semibold text-ink">{column.name}</h2>
+                      <span className="text-small text-ink-3 tabular-nums">{inColumn(id) + stale}</span>
+                    </KanbanHeader>
+                    {stale > 0 && (
+                      <section aria-label="Stale Claims" className={cn("shrink-0 pb-3", inColumn(id) > 0 && "border-b border-rule")}>
+                        <p className="pt-3 pb-2 text-small text-ink-3">
+                          <State state="stale" word={`${stale} Stale ${stale === 1 ? "Claim" : "Claims"}`} className="text-small" />, held by a Gone Agent. Anyone may take it over.
+                        </p>
+                        <KanbanCards<Card> id="stale" className="min-h-0 px-0 pb-0">
+                          {card}
+                        </KanbanCards>
+                      </section>
+                    )}
+                    <KanbanCards<Card> id={id} className="px-0 pt-3 pb-6" // Stale Claims above already fill the column.
+                      empty={stale > 0 ? null : <p className="py-6 text-small text-ink-3">{filtered ? "None match." : "Nothing here."}</p>}>
+                      {card}
+                    </KanbanCards>
+                  </KanbanBoard>
+                );
+              }}
+            </KanbanProvider>
+          </div>
+        )}
       </div>
       {!mobile && selected && <TaskInspector key={selected.number} task={selected} />}
       {mobile && sheetTask && <TaskInspector key={sheetTask.number} task={sheetTask} onClose={() => setSheet(null)} />}

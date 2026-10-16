@@ -128,39 +128,23 @@ describe("the canvas", () => {
     }
   });
 
-  it("frames a phone afresh instead of using a camera saved on a desktop", async () => {
-    window.localStorage.setItem("switchboard.canvas.shlok1806/app", JSON.stringify({ positions: {}, camera: { x: -900, y: -600, k: 2 } }));
-    render(<CanvasView />, { wrapper: channel([lead, child]) });
-    await node(/^planner/);
-    expect(currentZoom()).toBe(2);
-    cleanup();
-
+  it("lists the frames as lanes on a phone, a lead's Agent under it, and a tap opens the Agent", async () => {
     const width = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
-    // A phone's viewport, as the canvas measures it: happy-dom lays nothing out.
-    vi.stubGlobal("ResizeObserver", class {
-      constructor(private report: ResizeObserverCallback) {}
-      observe() {
-        this.report([{ contentRect: { width: 390, height: 640 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
-      }
-      unobserve() {}
-      disconnect() {}
-    });
     try {
-      render(<CanvasView />, { wrapper: channel([lead, child]) });
-      await node(/^planner/);
-      // Two nodes side by side are wider than a phone: the canvas zooms out to fit them.
-      await waitFor(() => expect(currentZoom()).toBeLessThan(1));
-      // and keeps that as the phone's own camera.
-      await waitFor(() => expect(JSON.parse(window.localStorage.getItem("switchboard.canvas.shlok1806/app")!).phoneCamera).toBeDefined());
+      const { container } = render(<CanvasView />, { wrapper: channel([maya, child, lead]) });
+      await screen.findByText("planner");
+      // No canvas to pan on a phone: the frames are lanes, yours first.
+      expect(container.querySelector("[role=application]")).toBeNull();
+      const lanes = screen.getAllByRole("region");
+      expect(lanes.map((l) => l.querySelector("h2")?.textContent)).toEqual(["terminalsshlok (you) · 2 Agents", "terminalsmaya · 1 Agent"]);
+      const rows = within(lanes[0]!).getAllByRole("button");
+      expect(rows.map((r) => r.textContent)).toEqual([expect.stringMatching(/^planner/), expect.stringMatching(/^codex\/bbbb.*started by planner$/)]);
+      fireEvent.click(rows[1]!);
+      expect(window.location.hash).toBe(`#/canvas/${encodeURIComponent(child.id)}`);
     } finally {
       Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
-      vi.unstubAllGlobals();
     }
-    const saved = JSON.parse(window.localStorage.getItem("switchboard.canvas.shlok1806/app")!);
-    expect(Math.round(saved.phoneCamera.k * 100)).toBe(Math.round(currentZoom() * 100));
-    // The desktop's camera is still there for its next visit.
-    expect(saved.camera).toEqual({ x: -900, y: -600, k: 2 });
   });
 
   it("puts the nodes in frame order, so Tab moves through the canvas the way it reads", async () => {
