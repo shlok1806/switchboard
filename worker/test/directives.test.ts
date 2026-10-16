@@ -6,7 +6,7 @@
 
 import { reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentId,
   AgentResponse,
@@ -25,6 +25,9 @@ import { agentPath, deliveriesNotice, directivesNotice, STANDING_RULE } from "..
 import { installJev } from "../src/relay/jev";
 import { bearer, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeJev } from "./fake-jev";
+
+// waitFor waits up to 4 s and the attach tests sleep past the bound on top, above vitest's 5 s default.
+vi.setConfig({ testTimeout: 15_000 });
 
 let jev: FakeJev;
 
