@@ -465,6 +465,9 @@ switchboard spawn --from api-client "Finish the retries, then open a PR."
 - The Channel keeps which Agent the session continues and records an `agent.handoff`
   Event. The Dashboard's Agent page says "continued from" and "handed off to", and its
   Hand off button opens Start an Agent with the predecessor's folder and a brief to edit.
+  Without a Host, it shows the `switchboard run claude --from` command for that folder.
+- Resuming the session with `--from` again (`switchboard run claude --from api-client
+  --resume <id>`) does not repeat the brief: the session has it already.
 - A Hand-off never moves a Claim. If the predecessor still holds its Task, it releases
   it, or once it is Gone you take it over.
 - A lead's `agent_spawn` takes `from` too.

@@ -3,7 +3,7 @@
 // continues and those that continue it, and Hand off opens the one Start an Agent sheet filled
 // in for a successor, which starts with `from` set.
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentId, ChannelSnapshot, Host, HostsResponse } from "@shared/index";
@@ -49,7 +49,10 @@ const scout = agent("ana/claude/aaaa", "scout", {
 const mason = agent("ana/claude/bbbb", "mason", { host: host.id, continues: scout.id });
 
 let channels = 0;
-function channel(spawnAgent = vi.fn(async (): Promise<SpawnResult> => ({ ok: false, reason: "not in this test" }))) {
+function channel(
+  spawnAgent = vi.fn(async (): Promise<SpawnResult> => ({ ok: false, reason: "not in this test" })),
+  hosts: Host[] = [host],
+) {
   const repo = ++channels;
   const source = {
     me: "ana",
@@ -68,7 +71,7 @@ function channel(spawnAgent = vi.fn(async (): Promise<SpawnResult> => ({ ok: fal
     eventsById: async () => [],
     wakesAfter: async () => [],
     scopedEvents: async () => ({ events: [] }),
-    hosts: async (): Promise<HostsResponse> => ({ hosts: [host], cap: 4, running: 1 }),
+    hosts: async (): Promise<HostsResponse> => ({ hosts, cap: 4, running: 1 }),
     spawnAgent,
     terminal: () => ({ send: () => false, close: () => {} }),
     subscribe: () => () => {},
@@ -143,5 +146,22 @@ describe("handing off an Agent", () => {
     fireEvent.click(start);
     await waitFor(() => expect(spawnAgent).toHaveBeenCalledTimes(1));
     expect(spawnAgent.mock.calls[0]?.[0]).not.toHaveProperty("from");
+  });
+
+  it("without a Host, says how to continue it from a terminal in its folder", async () => {
+    render(
+      <>
+        <AgentDetail id={scout.id} />
+        <StartAgentSheet />
+      </>,
+      { wrapper: channel(undefined, []) },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Hand off" }));
+    const sheet = await screen.findByRole("dialog", { name: "Start an Agent" });
+    await waitFor(() => expect(sheet.textContent).toContain("To continue scout now"));
+    expect(within(sheet).getByText(/switchboard run claude --from/).textContent).toBe(
+      `cd /Users/ana/code/app/web && switchboard run claude --from ${scout.id}`,
+    );
+    expect(screen.queryByRole("button", { name: "Start Agent" })).toBeNull();
   });
 });

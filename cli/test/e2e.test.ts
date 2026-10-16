@@ -4010,7 +4010,7 @@ describe("Agents carrying context to each other (ADR 0024)", () => {
     expect(await mason.exited).toBe(0);
     await waitForPresence(masonId, "gone");
     const successor = new Terminal(["run", "claude", "--from", "mason"]);
-    const { agentEnv: successorId } = await successor.started();
+    const { agentEnv: successorId, sessionId: successorSession } = await successor.started();
     await successor.waitForOutput(new RegExp(`this session continues ${masonId} "mason"`));
     const start =
       (await successor.waitForOutput(/hook SessionStart exit=0 ms=\d+ out=([\s\S]*?)\r?\n[^\n]*\[\?2004h/))[1] ?? "";
@@ -4038,7 +4038,22 @@ describe("Agents carrying context to each other (ADR 0024)", () => {
     expect(await unknown.exited).toBe(2);
     expect(unknown.output).toContain("no Agent on this Channel is called nobody-here");
 
-    for (const term of [reader, successor]) {
+    // Resumed with the same command, it is the same Agent, which has its brief already.
+    successor.type("quit\r");
+    expect(await successor.exited).toBe(0);
+    const resumed = new Terminal(["run", "claude", "--from", "mason", "--resume", successorSession]);
+    expect((await resumed.started()).agentEnv).toBe(successorId);
+    await resumed.waitForOutput(/it was told what the Channel knows of it when it started/);
+    const again =
+      (await resumed.waitForOutput(/hook SessionStart exit=0 ms=\d+ out=([\s\S]*?)\r?\n[^\n]*\[\?2004h/))[1] ?? "";
+    expect(again).toContain("[Switchboard] Standing rule");
+    expect(again).not.toContain("continues the work of");
+    expect(await submitPrompt(resumed, "carry on")).not.toContain("continues the work of");
+    expect(
+      (await history()).events.filter((e) => e.type === "agent.handoff" && e.payload.from === masonId),
+    ).toHaveLength(1);
+
+    for (const term of [reader, resumed]) {
       term.type("quit\r");
       expect(await term.exited).toBe(0);
     }

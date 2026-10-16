@@ -221,7 +221,7 @@ export function StartAgentSheet() {
       {open &&
         loaded !== null &&
         (hosts.length === 0 ? (
-          <NoHosts />
+          <NoHosts prefill={prefill} />
         ) : (
           <StartAgentForm
             key={prefill?.from ?? ""}
@@ -242,13 +242,35 @@ export function StartAgentSheet() {
 
 const FORM_ID = "start-agent";
 
-function NoHosts() {
+const COMMAND = "block rounded-[var(--r)] bg-paper-2 px-2.5 py-1.5 text-small [overflow-wrap:anywhere] text-ink";
+
+/** No Host to start on. A Hand off still has its way without one: a terminal in the predecessor's folder. */
+function NoHosts({ prefill }: { prefill?: StartAgentPrefill }) {
   return (
     <>
-      <p className="text-row text-ink">Install one on the machine, naming the folders its Agents may work in:</p>
-      <code className="block rounded-[var(--r)] bg-paper-2 px-2.5 py-1.5 text-small [overflow-wrap:anywhere] text-ink">switchboard host install --root ~/code/your-repo</code>
+      {prefill && (
+        <>
+          <p className="text-row [overflow-wrap:anywhere] text-ink">
+            To continue <span className="font-semibold">{prefill.fromName}</span> now, start Claude Code through Switchboard in a terminal
+            {prefill.cwd ? ", in its folder" : ""}. It starts with what the Channel knows of its work.
+          </p>
+          <code className={COMMAND}>
+            {prefill.cwd ? `cd ${shellQuote(prefill.cwd)} && ` : ""}switchboard run claude --from {shellQuote(prefill.from)}
+          </code>
+        </>
+      )}
+      <p className="text-row text-ink">
+        {prefill ? "Or install a Host on the machine to start it from here" : "Install one on the machine"}, naming the folders its Agents may
+        work in:
+      </p>
+      <code className={COMMAND}>switchboard host install --root ~/code/your-repo</code>
     </>
   );
+}
+
+/** `text` as one shell word: as it is when it is safe bare, else single-quoted. */
+function shellQuote(text: string): string {
+  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`;
 }
 
 function StartAgentForm({
