@@ -2,7 +2,7 @@
 // except the Agent that caused it, it gives one Verdict: Drop, Queue or Interrupt.
 //
 // 1. It works out overlap in code (see overlap.ts) and whether the Event is
-//    addressed to the Agent: an Update naming it in `to` (ADR 0025), its Task or
+//    addressed to the Agent: an Update naming it in `to` (ADR 0026), its Task or
 //    its Claim changing. Directives never reach the Relay: they are addressed and
 //    always delivered (directives.ts).
 // 2. With neither, it Drops without asking Jev, and still records the Verdict
@@ -142,7 +142,7 @@ interface Plan {
   sender: Actor;
   overlap: { files: string[]; symbols: string[] };
   addressed: string | null;
-  /** Whether the Event is an Update naming the Agent in `to`, so it is never Dropped (ADR 0025). */
+  /** Whether the Event is an Update naming the Agent in `to`, so it is never Dropped (ADR 0026). */
   named: boolean;
   /** Files it touched and its Task's files: the ones it gets hunks for. */
   mine: Set<string>;
@@ -203,7 +203,7 @@ const CLAIM_EVENTS: ReadonlySet<EventType> = new Set([
   "claim.unblocked",
 ]);
 
-/** Whether `event` is an Update that names Agent `id` in `to` (ADR 0025). */
+/** Whether `event` is an Update that names Agent `id` in `to` (ADR 0026). */
 function namesAgent(event: ChannelEvent, id: AgentId): boolean {
   return event.type === "update" && event.payload.to?.includes(id) === true;
 }

@@ -132,7 +132,7 @@ async function handlePostUpdate(request: Request, channel: ChannelStub, caller: 
   if (task !== undefined && !(typeof task === "number" && Number.isInteger(task) && task > 0)) {
     return fail(400, '"task" must be a GitHub Issue number.');
   }
-  // The Agents it is addressed to (ADR 0025), each named once.
+  // The Agents it is addressed to (ADR 0026), each named once.
   const to = Array.isArray(body.to) && body.to.every(isAgentId) ? [...new Set(body.to)] : undefined;
   if (body.to !== undefined && !(to !== undefined && to.length >= 1 && to.length <= MAX_ADDRESSEES)) {
     return fail(400, `"to" must be a list of 1 to ${MAX_ADDRESSEES} Agent IDs, such as alice/claude/7f3a.`);

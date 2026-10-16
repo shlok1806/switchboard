@@ -35,7 +35,7 @@ Anything recorded on the channel, such as a Claim, a Step completed, a file edit
 _Avoid_: Log, activity, message
 
 **Update**:
-An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening. It may be addressed to Agents by their Agent IDs: each addressee always hears it, Queued at least, and still as information, never as an instruction (ADR 0025).
+An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening. It may be addressed to Agents by their Agent IDs: each addressee always hears it, Queued at least, and still as information, never as an instruction (ADR 0026).
 _Avoid_: Status, note, post
 
 **Memory Note**:

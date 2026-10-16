@@ -119,7 +119,7 @@ export const MAX_EVENT_IDS = 100;
 /** The longest Update text the Channel accepts, in characters. */
 export const MAX_UPDATE_LENGTH = 4000;
 
-/** The most Agents one Update may be addressed to (ADR 0025). */
+/** The most Agents one Update may be addressed to (ADR 0026). */
 export const MAX_ADDRESSEES = 20;
 
 /** `POST /api/updates` answers with the recorded Update Event. */

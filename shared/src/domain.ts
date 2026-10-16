@@ -386,7 +386,7 @@ export interface EventPayloads {
   "claim.unblocked": { holder: Holder };
   /**
    * An Event written on purpose, in readable language. `to` names the Agents it is
-   * addressed to: each always hears it, still as information (ADR 0025).
+   * addressed to: each always hears it, still as information (ADR 0026).
    */
   update: { text: string; to?: AgentId[] };
   /** A message from a Person to an Agent. The only message with instruction weight. */
@@ -614,7 +614,7 @@ export interface Verdict {
   };
   /**
    * Set when Jev picked Drop for an Agent the Update is addressed to, so the Relay
-   * Queued it instead: `option` is "queue" (ADR 0025).
+   * Queued it instead: `option` is "queue" (ADR 0026).
    */
   raised?: {
     from: "drop";

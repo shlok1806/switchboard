@@ -74,7 +74,7 @@ export function relay(
   // context, or per-call lifecycle Events such as tool calls and commands.
   if (UNRELAYED_EVENT_TYPES.includes(event.type)) return verdicts;
   const senderAgent = event.actor.kind === "agent" ? event.actor.agentId : null;
-  // An Update's addressees always hear it, Gone or not (ADR 0025).
+  // An Update's addressees always hear it, Gone or not (ADR 0026).
   const to: readonly string[] = event.type === "update" ? (event.payload.to ?? []) : [];
 
   for (const agent of agents) {

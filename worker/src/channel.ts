@@ -987,7 +987,7 @@ export class Channel extends DurableObject<Env> {
   /**
    * Records an Update: one a Person wrote directly (from the CLI or the Dashboard),
    * or one an Agent posted through Switchboard's tools (the Tool Capture). `to`
-   * addresses it to Agents on the Channel, Gone ones too, never the sender (ADR 0025).
+   * addresses it to Agents on the Channel, Gone ones too, never the sender (ADR 0026).
    */
   postUpdate(
     caller: Caller,
