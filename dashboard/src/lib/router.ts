@@ -7,8 +7,10 @@ export type Route =
   | { view: "feed"; event?: string; by?: "turn"; turn?: string }
   | { view: "tasks" }
   | { view: "task"; number: number }
-  | { view: "agents" }
-  | { view: "agent"; id: string }
+  /** The Agents table, with one Agent selected into the inspector (on a phone, its sheet). */
+  | { view: "agents"; selected?: string }
+  /** An Agent's page; `focus` opens it with the Directive field focused. */
+  | { view: "agent"; id: string; focus?: "directive" }
   | { view: "canvas"; agent?: string }
   | { view: "memory"; note?: string }
   | { view: "hosts"; host?: string };
@@ -22,6 +24,9 @@ export function parse(hash: string): Route {
     case "tasks":
       return a ? { view: "task", number: Number(a) } : { view: "tasks" };
     case "agents":
+      // #/agents/select/<id> selects a row; no Agent ID is "select" (they are person/cli/hex).
+      if (a === "select") return b ? { view: "agents", selected: b } : { view: "agents" };
+      if (a && b === "directive") return { view: "agent", id: a, focus: "directive" };
       return a ? { view: "agent", id: a } : { view: "agents" };
     // Compare is the log grouped by turn now (slice 9); its old links open there.
     case "compare":
@@ -57,9 +62,9 @@ export function href(route: Route): string {
     case "task":
       return `#/tasks/${route.number}`;
     case "agents":
-      return "#/agents";
+      return route.selected ? `#/agents/select/${encodeURIComponent(route.selected)}` : "#/agents";
     case "agent":
-      return `#/agents/${encodeURIComponent(route.id)}`;
+      return `#/agents/${encodeURIComponent(route.id)}${route.focus ? `/${route.focus}` : ""}`;
     case "canvas":
       return route.agent ? `#/canvas/${encodeURIComponent(route.agent)}` : "#/canvas";
     case "memory":
@@ -71,6 +76,12 @@ export function href(route: Route): string {
 
 export function go(route: Route) {
   window.location.hash = href(route);
+}
+
+/** Corrects the address without a new history entry: Back skips the address it replaces. */
+export function replace(route: Route) {
+  history.replaceState(history.state, "", href(route));
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
 }
 
 export function useRoute(): Route {

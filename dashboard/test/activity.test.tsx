@@ -412,6 +412,14 @@ describe("an Agent's History", () => {
   });
 });
 
+describe("an Agent's page opened for a Directive", () => {
+  it("puts focus in the Directive field, ready to type", async () => {
+    render(<AgentDetail id={quill.id} focus="directive" />, { wrapper: channel() });
+    const field = await screen.findByRole("textbox", { name: /Directive/ });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+});
+
 function rowWithAsync(el: HTMLElement): HTMLElement {
   return el.closest("[role=button]") as HTMLElement;
 }

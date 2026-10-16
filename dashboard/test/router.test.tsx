@@ -37,6 +37,13 @@ describe("the route", () => {
     expect(parse(href({ view: "hosts" }))).toEqual({ view: "hosts", host: undefined });
     expect(parse(href({ view: "hosts", host: "maya/maya-mbp" }))).toEqual({ view: "hosts", host: "maya/maya-mbp" });
   });
+
+  it("selects an Agent in the table, or opens its page ready for a Directive", () => {
+    const id = "maya/claude/2b8d";
+    expect(parse(href({ view: "agents", selected: id }))).toEqual({ view: "agents", selected: id });
+    expect(parse(href({ view: "agent", id }))).toEqual({ view: "agent", id });
+    expect(parse(href({ view: "agent", id, focus: "directive" }))).toEqual({ view: "agent", id, focus: "directive" });
+  });
 });
 
 afterEach(() => {

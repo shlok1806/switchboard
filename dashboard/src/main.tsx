@@ -76,11 +76,13 @@ function Root() {
 
   useEffect(() => {
     if (wantsMock()) {
-      const speed = Number(new URLSearchParams(window.location.search).get("speed") ?? "1");
+      const params = new URLSearchParams(window.location.search);
+      const speed = Number(params.get("speed") ?? "1");
+      const fleet = Number(params.get("agents") ?? "0");
       void import("@/data/mock/mockSource").then(({ MockChannelSource }) =>
         setBoot({
           kind: "ready",
-          store: new ChannelStore(new MockChannelSource({ speed: Number.isFinite(speed) && speed > 0 ? speed : 1 })),
+          store: new ChannelStore(new MockChannelSource({ speed: Number.isFinite(speed) && speed > 0 ? speed : 1, fleet: Number.isFinite(fleet) ? Math.min(fleet, 1000) : 0 })),
         }),
       );
       return;

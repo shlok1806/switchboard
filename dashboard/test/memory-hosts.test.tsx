@@ -288,16 +288,35 @@ describe("the Agents view on a phone", () => {
     const width = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
     try {
-      render(<AgentsView />, { wrapper: channel({}) });
+      // The sheet follows the address, as the Hosts view's does.
+      window.location.hash = "#/agents";
+      const Wrapper = channel({});
+      const { rerender } = render(
+        <Wrapper>
+          <AgentsView />
+        </Wrapper>,
+      );
       const row = await screen.findByRole("button", { name: /scout/ });
       expect(screen.queryByRole("dialog")).toBeNull();
       row.focus();
       fireEvent.click(row);
+      expect(window.location.hash).toBe(`#/agents/select/${encodeURIComponent(scout.id)}`);
+      rerender(
+        <Wrapper>
+          <AgentsView selected={scout.id} />
+        </Wrapper>,
+      );
       const sheet = screen.getByRole("dialog", { name: "scout, in the inspector" });
       expect(document.activeElement).toBe(sheet);
       fireEvent.keyDown(sheet, { key: "Escape" });
+      expect(window.location.hash).toBe("#/agents");
+      rerender(
+        <Wrapper>
+          <AgentsView />
+        </Wrapper>,
+      );
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(document.activeElement).toBe(row);
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: /scout/ }));
     } finally {
       Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
     }
