@@ -307,7 +307,7 @@ export function EmptyState({ title, children, action, className }: { title: stri
   return (
     <section data-view-state="empty" aria-label={title} className={cn("flex max-w-[34rem] flex-col items-start gap-1.5 border-t border-rule pt-5", className)} /* taste-skill-ignore: the top rule of the list it stands in for */>
       <h2 className="text-title font-semibold text-ink">{title}</h2>
-      <p className="text-row text-ink-3">{children}</p>
+      <p className="text-row text-ink-2">{children}</p>
       {action && <div className="pt-3">{action}</div>}
     </section>
   );
