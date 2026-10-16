@@ -220,6 +220,37 @@ stay as a line. The selected row keeps its paper-3 band. From 640 up the Agents 
 Host column and then the context meter by the width it has, not the window's (see Agents
 table). The queue keeps its actions.
 
+States. Every view has four, and `npm run shots` draws each one in both themes at 1440 and 390
+(`?mock=1&state=loading|empty|error`). Loading keeps the page head's title and draws the
+view's own shape in `--rule` bars (rows for a table, cards for the board, boxes for the
+canvas, the dark box for a terminal) under one slow opacity pulse that reduced motion stops;
+it says "Loading Agents" to a screen reader, never on screen. Empty keeps the page head and
+puts, where the rows would start, a rule, a 15/600 line saying what is missing, one 13 ink-3
+sentence on how it fills, and exactly one action: the button that fills it (Start an Agent,
+New Task, Post an Update), or, when only a terminal can, the command shown whole in mono with
+Copy beside it. A filter or a search that matches nothing is empty too, and its action
+clears it. Error is a page, not a toast: a 20/600 line saying what failed, a sentence on
+what still works, the server's own reason in a `--paper-2` block when there is one, and its
+actions (Try again first, then a way back). An address with no page says "No such page", an
+unknown Agent or Task says so with a link back to its list, and an unknown note or Event in
+the inspector says so with Close. Nothing reads "Loading" or "Reading" forever: a read that
+fails or finds nothing becomes one of these.
+
+Palette. ⌘K anywhere, and `/` on a list (Memory's `/` goes to its Find). One input over
+Commands, Agents, Tasks, Views and Theme, pinned 12% from the top so it never moves as the list
+changes. A command that needs an argument shows a chevron and takes it in a second step:
+Directive to, an Agent, then the text, sent with Enter; Stop, one of your Agents on a Host,
+then Stop or Keep it running; Take over, a Stale Task, which you then hold; Watch, an Agent,
+whose page opens. The steps so far sit as a trail of chips over the input, with "⌫ back" at
+the right: Backspace in an empty input, or Escape, goes back one step, and Escape at the top
+closes. Agents picked lately come first, under Recent, kept per browser. A live deployment
+lists its other Channels as "Switch to owner/repo".
+
+Focus and motion. Skip to the page is the first Tab stop. Opening another page puts focus on
+the page itself, so the next Tab starts at its top; picking a row on the same page leaves
+focus where it was. Every move is transform or opacity, and with reduced motion asked for,
+CSS animation, transitions and smooth scrolling stop and script scrolls jump.
+
 ## What every screen must share
 
 The top bar with the pressed key; the state vocabulary and the one meaning of `--signal`;

@@ -39,6 +39,17 @@ jobs:
       - name: Dashboard
         working-directory: dashboard
         run: npm run build && npm test
+      # Every view in every state, light and dark, at 1440 and 390 (dashboard/scripts/shots.mjs).
+      - name: Dashboard screenshots
+        working-directory: dashboard
+        run: npm run shots
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-screenshots
+          path: dashboard/screenshots/
+          if-no-files-found: ignore
 
   deploy:
     needs: check
