@@ -17,7 +17,7 @@ export function Glyph({ state, className }: { state: GlyphState; className?: str
       viewBox="0 0 12 12"
       aria-hidden
       data-state={state}
-      className={cn("inline-block size-3 shrink-0", needsPerson(state) ? "text-signal" : "text-ink", className)}
+      className={cn("inline-block size-3 shrink-0", needsPerson(state) ? "text-signal" : state === "running" ? "text-running" : "text-ink", className)}
     >
       {SHAPES[state]}
     </svg>

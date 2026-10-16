@@ -643,7 +643,7 @@ function Inspector({
             <ul>
               {task.steps.map((s, i) => (
                 <li key={s.index} className={cn("flex items-baseline gap-2.5 border-b border-rule py-2 text-row", s.done || i === firstOpen ? "text-ink" : "text-ink-3")}>
-                  <Glyph state={s.done ? "done" : i === firstOpen ? "running" : "idle"} className="relative top-px" />
+                  <Glyph state={s.done ? "done" : i === firstOpen ? "running" : "idle"} className="relative top-px text-ink" />
                   <span className="sr-only">{s.done ? "Done:" : i === firstOpen ? "Next:" : "Open:"}</span>
                   <span className="min-w-0 [overflow-wrap:anywhere]">{s.text}</span>
                 </li>
