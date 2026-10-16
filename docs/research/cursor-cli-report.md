@@ -4,7 +4,7 @@
 
 | SHA | Summary |
 | --- | --- |
-| e1f59f9 | Research note (`docs/research/cursor-cli.md`) and ADR 0026 |
+| e1f59f9 | Research note (`docs/research/cursor-cli.md`) and ADR 0027 |
 | ba45a3f | `switchboard run cursor`, shared `cursor` CLI type, Dashboard label/token, README and CONTEXT |
 
 ## Tests
