@@ -313,7 +313,7 @@ function ColumnTabs({ columns, current, count, onPick }: { columns: Column[]; cu
     document.getElementById(tabId(next))?.focus();
   };
   return (
-    <div role="tablist" aria-label="Column" onKeyDown={onKeyDown} className="grid grid-flow-col auto-cols-fr border-b border-rule-2">
+    <div role="tablist" aria-label="Column" onKeyDown={onKeyDown} className="grid grid-flow-col auto-cols-fr border-b border-rule-2" /* taste-skill-ignore: the rule the current tab's ink rule sits on */>
       {columns.map((c) => (
         <button
           key={c}

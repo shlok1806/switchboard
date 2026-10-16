@@ -214,7 +214,8 @@ Phone. One breakpoint, 640px: every PAGE below it uses the phone pattern, which 
 Phone board. The top bar is the wordmark, the channel and Search (no kbd hint); the views
 move to a 56px bottom tab bar fixed to the bottom edge (Now with its signal chip, Agents,
 Tasks, Activity, More; Canvas, Memory and Hosts live under More), every target at least
-44px, the page gets 56px of bottom padding; the People strip is hidden. The page gutter is 16.
+44px (a button, a chip, a filter, Close and a section head's link included; a link inside
+running text is the one exception), the page gets 56px of bottom padding; the People strip is hidden. The page gutter is 16.
 A table never sits in a horizontal scroll box: below 640px its rows stack (`table.stack`):
 line one is the glyph, the state word and Since on the right; line two is the name with its
 secondary line and Context on the right (the meter is dropped, the figure stays); line three
@@ -222,8 +223,10 @@ is the Task. Host and the actions key are dropped; the row itself opens the Agen
 stay as a line. The selected row keeps its paper-3 band. From 640 up the Agents table drops the
 Host column and then the context meter by the width it has, not the window's (see Agents
 table). The queue keeps its actions. Nothing scrolls sideways below 640px but a terminal's
-screen, and `npm run shots` fails a phone picture where anything else does. The Tasks board
-shows one column at a time under a row of column tabs (label and count, a 2px ink rule under
+screen, and a view scrolls as a whole, its head with its content, since html and body clip:
+`npm run shots` fails a phone picture where anything else scrolls sideways or where content
+sits under the tab bar with nothing that scrolls to it, at 390 and at 320 by 568. The Tasks board
+shows one column at a time under a row of column tabs (a tablist the arrow keys move along; label and count, a 2px ink rule under
 the current one; Claimed first while it holds a card), and drops the column's own head. The
 canvas is its frames as lanes in a list: each lane's head as its frame names it, then two-line
 rows (glyph, name, the state word and age on the right; the Task, or No Claim), an Agent set in
