@@ -99,7 +99,7 @@ export function Secondary({ agent, model = true }: { agent: Agent; model?: boole
   const parts = [
     cliShort(agent),
     model && agent.model && modelLabel(agent.model),
-    agent.role === "lead" && `lead of ${led}`,
+    agent.role === "lead" && `lead\u00a0of\u00a0${led}`,
     parent && `started by ${agentName(parent)}`,
   ].filter(Boolean);
   return <span className="block text-small text-ink-3">{parts.join(" · ")}</span>;

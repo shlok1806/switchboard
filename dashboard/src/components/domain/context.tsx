@@ -6,7 +6,8 @@ import { useNow } from "./usage";
 /**
  * How full the Agent's context window is (ADR 0012), as design.md's figure block: the
  * percent at the figure step, the tokens behind it, and an ink meter. A high reading is a
- * number, not a colour. `compact` is a table cell: the figure and a 56px meter.
+ * number, not a colour. `compact` is a table cell: the figure and a 56px meter, which goes when the
+ * table's container is narrow (the figure stays).
  */
 export function ContextWindow({ agent, compact = false }: { agent: Agent; compact?: boolean }) {
   const now = useNow();
@@ -31,7 +32,7 @@ export function ContextWindow({ agent, compact = false }: { agent: Agent; compac
     return (
       <span className="inline-flex items-center gap-2 tabular-nums">
         {percent === undefined ? <span className="text-ink-3">-</span> : `${Math.round(percent)}%`}
-        {meter("w-14 max-[900px]:hidden")}
+        {meter("w-14 @max-[40rem]:hidden")}
       </span>
     );
   return (

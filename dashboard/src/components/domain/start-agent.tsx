@@ -460,12 +460,15 @@ export function StopAgentButton({
   onAsking,
   onStopped,
   ask,
+  returnFocusTo,
 }: {
   agent: Agent;
   onAsking?: (asking: boolean) => void;
   onStopped?: () => void;
   /** Changed to a new number, it asks at once: a menu's Stop item opens the question here. */
   ask?: number;
+  /** Where focus goes when the question is taken back, instead of Stop: the menu that asked. */
+  returnFocusTo?: HTMLElement | null;
 }) {
   const store = useStore();
   const me = useMe();
@@ -488,15 +491,16 @@ export function StopAgentButton({
     asked.current = onAsking;
   }, [onAsking]);
   useEffect(() => () => asked.current?.(false), []);
-  // Taking the question back puts focus on Stop again, where it was.
+  // Taking the question back puts focus where the question was asked from: Stop, or the menu.
   const stopButton = useRef<HTMLButtonElement>(null);
   const backToStop = useRef(false);
   useEffect(() => {
     if (!confirming && backToStop.current) {
       backToStop.current = false;
-      stopButton.current?.focus();
+      if (returnFocusTo?.isConnected) returnFocusTo.focus();
+      else stopButton.current?.focus();
     }
-  }, [confirming]);
+  }, [confirming, returnFocusTo]);
   const takeBack = () => {
     backToStop.current = true;
     setConfirming(false);

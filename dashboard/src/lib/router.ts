@@ -78,6 +78,12 @@ export function go(route: Route) {
   window.location.hash = href(route);
 }
 
+/** Corrects the address without a new history entry: Back skips the address it replaces. */
+export function replace(route: Route) {
+  history.replaceState(history.state, "", href(route));
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
 export function useRoute(): Route {
   const [route, setRoute] = useState(() => parse(window.location.hash));
   useEffect(() => {

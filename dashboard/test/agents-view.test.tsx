@@ -119,6 +119,14 @@ describe("the selected Agent", () => {
   });
 });
 
+describe("an address naming an Agent the Channel does not have", () => {
+  it("becomes the plain view once the Channel has loaded", async () => {
+    window.location.hash = "#/agents/select/maya%2Fclaude%2Fgone";
+    render(<AgentsView selected="maya/claude/gone" />, { wrapper: channel() });
+    await waitFor(() => expect(window.location.hash).toBe("#/agents"));
+  });
+});
+
 describe("the row menu", () => {
   it("opens an Agent, or its page ready for a Directive, without selecting the row", async () => {
     render(<AgentsView />, { wrapper: channel() });
@@ -142,6 +150,18 @@ describe("the row menu", () => {
     await waitFor(() => expect(act_).toHaveBeenCalledWith({ type: "rename", agent: quill.id, nickname: "quill-2" }));
   });
 
+  it("gives focus back to the menu's button when the rename dialog is shut with Escape", async () => {
+    render(<AgentsView />, { wrapper: channel() });
+    const trigger = await screen.findByRole("button", { name: "Actions for quill" });
+    openMenu(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const field = await screen.findByRole("textbox", { name: "Nickname" });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    fireEvent.keyDown(field, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("asks Stop's question in the inspector, for an Agent your Host runs", async () => {
     const Wrapper = channel();
     const { rerender } = render(
@@ -163,6 +183,9 @@ describe("the row menu", () => {
     await waitFor(() => expect(document.activeElement).toBe(within(question).getByRole("button", { name: "Cancel" })));
     // The question holds the inspector's one primary.
     expect(within(inspector).queryByRole("link", { name: "Open the terminal" })).toBeNull();
+    // Taken back, focus goes to the menu that asked, not to the inspector's Stop.
+    fireEvent.keyDown(within(question).getByRole("button", { name: "Cancel" }), { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Actions for scout" })));
   });
 });
 
@@ -172,41 +195,89 @@ describe("compact rows", () => {
     await screen.findByText("quill", { selector: "a" });
     const table = screen.getByRole("table");
     expect(within(table).getAllByText(/Opus 5\.5/).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Compact" }));
+    const toggle = screen.getByRole("button", { name: "Compact rows" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
     expect(document.documentElement.dataset.density).toBe("compact");
     expect(localStorage.getItem("switchboard.density")).toBe("compact");
     expect(within(table).queryByText(/Opus 5\.5/)).toBeNull();
   });
 });
 
+/** 200 Agents in a table happy-dom pretends to lay out. */
+function longFleet() {
+  // happy-dom lays nothing out: every box is 900px tall here, so the scroller shows about 30 rows.
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(900);
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+  // Its ResizeObserver reports empty boxes; one that reports nothing leaves those sizes standing.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(20_000);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(900);
+  // Nor does it scroll for scrollTo: this one moves the box and says so, as a browser does.
+  vi.spyOn(Element.prototype, "scrollTo").mockImplementation(function (this: Element, options?: ScrollToOptions | number) {
+    if (typeof options === "object" && options.top !== undefined) this.scrollTop = options.top;
+    this.dispatchEvent(new Event("scroll"));
+  });
+  return Array.from({ length: 200 }, (_, i) => agent(`${["shlok", "maya", "dev"][i % 3]}/claude/${(0x1000 + i).toString(16)}`, `agent-${i}`));
+}
+
+const rendered = () => document.querySelectorAll("tbody tr[data-index]").length;
+const scrollerOf = () => document.querySelector("table")!.closest(".overflow-y-auto") as HTMLElement;
+
 describe("a long fleet", () => {
   it("renders only the rows near the screen, and others as it scrolls", async () => {
-    // happy-dom lays nothing out: every box is 900px tall here, so the scroller shows about 30 rows.
-    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(900);
-    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
-    // Its ResizeObserver reports empty boxes; one that reports nothing leaves those sizes standing.
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const fleet = Array.from({ length: 200 }, (_, i) => agent(`${["shlok", "maya", "dev"][i % 3]}/claude/${(0x1000 + i).toString(16)}`, `agent-${i}`));
-    render(<AgentsView />, { wrapper: channel(fleet) });
-    const rendered = () => document.querySelectorAll("tbody tr[data-index]").length;
+    render(<AgentsView />, { wrapper: channel(longFleet()) });
     await waitFor(() => expect(rendered()).toBeGreaterThan(0));
     expect(screen.getByText("agent-0", { selector: "a" })).toBeTruthy();
     expect(rendered()).toBeLessThan(60);
     expect(screen.queryByText("agent-199", { selector: "a" })).toBeNull();
 
-    const scroller = document.querySelector("table")!.closest(".overflow-y-auto") as HTMLElement;
+    const scroller = scrollerOf();
     await act(async () => {
       scroller.scrollTop = 100_000;
       fireEvent.scroll(scroller);
     });
     await waitFor(() => expect(screen.queryByText("agent-0", { selector: "a" })).toBeNull());
     expect(rendered()).toBeLessThan(60);
+  });
+
+  it("opens on an Agent far down the list with its row on the page", async () => {
+    const fleet = longFleet();
+    const late = fleet.find((a) => a.nickname === "agent-197")!;
+    render(<AgentsView selected={late.id} />, { wrapper: channel(fleet) });
+    expect(await screen.findByText("agent-197", { selector: "a" })).toBeTruthy();
+    expect(scrollerOf().scrollTop).toBeGreaterThan(0);
+  });
+
+  it("numbers every row for a screen reader, rendered or not", async () => {
+    render(<AgentsView />, { wrapper: channel(longFleet()) });
+    await waitFor(() => expect(rendered()).toBeGreaterThan(0));
+    const table = screen.getByRole("table");
+    // 200 Agents, 3 Person lines and the head row.
+    expect(table.getAttribute("aria-rowcount")).toBe("204");
+    expect(table.querySelector("thead tr")?.getAttribute("aria-rowindex")).toBe("1");
+    const first = table.querySelectorAll("tbody tr[data-index]");
+    expect([...first].slice(0, 2).map((r) => r.getAttribute("aria-rowindex"))).toEqual(["2", "3"]);
+  });
+
+  it("keeps the row holding focus when it scrolls out of view", async () => {
+    render(<AgentsView />, { wrapper: channel(longFleet()) });
+    const row = (await screen.findByText("agent-0", { selector: "a" })).closest("tr")!;
+    act(() => row.focus());
+    const scroller = scrollerOf();
+    await act(async () => {
+      scroller.scrollTop = 100_000;
+      fireEvent.scroll(scroller);
+    });
+    await waitFor(() => expect(screen.queryByText("agent-3", { selector: "a" })).toBeNull());
+    expect(document.activeElement).toBe(row);
+    expect(row.isConnected).toBe(true);
   });
 });

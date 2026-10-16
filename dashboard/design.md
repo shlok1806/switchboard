@@ -145,11 +145,15 @@ wrap; they are never truncated with an ellipsis.
 Agents table. The column heads stay in view as the table scrolls. Each row ends in a menu
 (Open, Directive, Rename, Stop); an item that opens a question or a dialog puts focus in
 it, and Escape gives focus back to the menu's button. Compact rows (30px, one line, the
-secondary line and the note hidden) are a Compact chip in the toolbar and a palette
-command, kept per browser. The selected Agent is in the address (`#/agents/select/<id>`),
-so it survives a reload and a reconnect. Beside the inspector the table drops Host, then
-Context, as its own width narrows (a container query, not the window's width). Past 80
-rows only the rows near the screen are rendered.
+secondary line and the note hidden) are a view control in the toolbar ("Compact rows", a
+pressed toggle beside Find, not a filter chip) and a palette command, kept per browser. The
+selected Agent is in the address (`#/agents/select/<id>`), so it survives a reload and a
+reconnect, and is scrolled into view when the address names it; an address naming an Agent
+the Channel does not have becomes `#/agents`. Beside the inspector the table drops the Host
+column, then the context meter (the figure stays), as its own width narrows: a container
+query, not the window's width. Past 80 rows only the rows near the screen are rendered,
+plus the row holding focus. Arrow keys between rows are a later slice; today Tab moves
+through rows, Enter opens one and Space selects it.
 
 Chips (filters). 26px, 12.5/500, 1px `--rule` border; the current one has an ink border
 and ink text. Counts follow the word.
@@ -212,8 +216,9 @@ A table never sits in a horizontal scroll box: below 640px its rows stack (`tabl
 line one is the glyph, the state word and Since on the right; line two is the name with its
 secondary line and Context on the right (the meter is dropped, the figure stays); line three
 is the Task. Host and the actions key are dropped; the row itself opens the Agent. Group rows
-stay as a line. The selected row keeps its paper-3 band. Between 640 and 900 the Agents table
-drops the Host column and the context meter. The queue keeps its actions.
+stay as a line. The selected row keeps its paper-3 band. From 640 up the Agents table drops the
+Host column and then the context meter by the width it has, not the window's (see Agents
+table). The queue keeps its actions.
 
 ## What every screen must share
 

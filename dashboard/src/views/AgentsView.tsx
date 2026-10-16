@@ -8,10 +8,11 @@
  * the rows stack, the inspector is not on the page, and a row opens
  * the Agent as a sheet.
  */
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { Rows3 } from "lucide-react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { Person } from "@shared/index";
-import { buttonVariants } from "@/components/atoms/Button";
+import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { PendingApproval } from "@/components/domain/approval";
 import { ContextWindow } from "@/components/domain/context";
@@ -30,7 +31,7 @@ import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { setDensity, useDensity } from "@/lib/density";
 import { CLI_LABEL, ago, elapsed, hostName } from "@/lib/format";
-import { go, href } from "@/lib/router";
+import { go, href, replace } from "@/lib/router";
 import { countStates, isNeedsYou } from "@/lib/state";
 import { modelLabel } from "@shared/index";
 import { cn } from "@/lib/utils";
@@ -41,11 +42,13 @@ type Filter = "all" | "needs" | "running" | "idle" | "gone" | "mine";
 const VIRTUAL_FROM = 80;
 const COLUMNS = 7;
 
-/** What the row menu asks the page to do: rename the Agent, or open Stop's question. */
+/**
+ * What the row menu asks the page to do: rename the Agent, or open Stop's question. `back` is
+ * the menu's button, where focus returns once the dialog or the question closes.
+ */
 interface RowActions {
-  /** `back` is the menu's button, where focus returns once the dialog closes. */
   rename: (id: string, back: HTMLElement | null) => void;
-  stop: (id: string) => void;
+  stop: (id: string, back: HTMLElement | null) => void;
 }
 
 export function AgentsView({ selected: selectedId }: { selected?: string }) {
@@ -59,7 +62,7 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   const [find, setFind] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; back: HTMLElement | null } | null>(null);
   // The menu's Stop opens the question in the inspector; a new number asks again.
-  const [stopAsk, setStopAsk] = useState<{ id: string; n: number }>();
+  const [stopAsk, setStopAsk] = useState<{ id: string; n: number; back: HTMLElement | null }>();
   // State, not a ref: the table's virtualiser reads it in its own layout effect, which runs
   // before this element's ref would be attached, and must render again once it exists.
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
@@ -67,9 +70,9 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   const rowActions = useMemo<RowActions>(
     () => ({
       rename: (id, back) => setRenaming({ id, back }),
-      stop: (id) => {
+      stop: (id, back) => {
         go({ view: "agents", selected: id });
-        setStopAsk({ id, n: Date.now() });
+        setStopAsk({ id, n: Date.now(), back });
       },
     }),
     [],
@@ -97,6 +100,13 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   useEffect(() => {
     setStopAsk((ask) => (ask && ask.id !== selectedId ? undefined : ask));
   }, [selectedId]);
+  // An address naming an Agent the Channel does not have (stopped and gone from the list, or
+  // mistyped) is corrected to the plain view once the Channel has loaded, so it never says one
+  // Agent while showing another.
+  const unknown = selectedId !== undefined && snapshot !== undefined && agents.length > 0 && !lines.some((l) => l.agent.id === selectedId);
+  useEffect(() => {
+    if (unknown) replace({ view: "agents" });
+  }, [unknown]);
 
   if (agents.length === 0) {
     return (
@@ -139,7 +149,6 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   const selected = named ?? (mobile ? undefined : byPerson[0]?.[1][0]);
   const close = () => go({ view: "agents" });
   const zones = new Map((snapshot?.persons ?? []).map((p: Person) => [p.name, p.timeZone]));
-  const actions = rowActions;
   const renamed = renaming ? agents.find((a) => a.id === renaming.id) : undefined;
 
   return (
@@ -161,12 +170,6 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
               </Chip>
             ))}
           </div>
-          {/* Compact rows: one line each, 30px. The Person lines already say how rows are grouped. */}
-          <span className="max-sm:hidden">
-            <Chip on={density === "compact"} onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}>
-              Compact
-            </Chip>
-          </span>
           <label className="ml-auto flex items-center gap-2 text-small text-ink-3 max-sm:w-full">
             <span>Find</span>
             <input
@@ -177,6 +180,16 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
               className="h-[30px] w-56 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:flex-1 max-sm:text-[16px]"
             />
           </label>
+          {/* A view control, not a filter: compact rows are one line each, 30px. */}
+          <Button
+            variant="ghost"
+            aria-pressed={density === "compact"}
+            onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
+            className="gap-1.5 aria-pressed:bg-paper-3 max-sm:hidden"
+          >
+            <Rows3 className="size-3.5" aria-hidden />
+            Compact rows
+          </Button>
           <StartAgentButton />
         </div>
 
@@ -203,7 +216,8 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
             me={me}
             zones={zones}
             compact={density === "compact"}
-            actions={actions}
+            actions={rowActions}
+            target={named ? selectedId : undefined}
           />
         )}
       </div>
@@ -212,7 +226,7 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
           key={selected.agent.id}
           line={selected}
           onClose={mobile ? close : undefined}
-          stopAsk={stopAsk?.id === selected.agent.id ? stopAsk.n : undefined}
+          stopAsk={stopAsk?.id === selected.agent.id ? stopAsk : undefined}
         />
       )}
       {renamed && <RenameDialog agent={renamed} open onOpenChange={(open) => !open && setRenaming(null)} returnFocusTo={renaming?.back} />}
@@ -224,11 +238,13 @@ type Item = { kind: "group"; person: string; count: number } | { kind: "agent"; 
 
 /**
  * The table: one row group per Person. A long fleet is virtualised: rows near the screen
- * render between two spacer rows that keep the scroll height, each measured as it renders.
+ * render between spacer rows that keep the scroll height, each measured as it renders, and
+ * the row holding focus stays rendered when it scrolls away, so focus is never dropped.
  */
 function AgentTable({
   groups,
   selected,
+  target,
   scroller,
   me,
   zones,
@@ -237,6 +253,8 @@ function AgentTable({
 }: {
   groups: [string, Line[]][];
   selected?: string;
+  /** The Agent the address names: scrolled into view when the address names it. */
+  target?: string;
   scroller: HTMLDivElement | null;
   me: string;
   zones: Map<string, string | undefined>;
@@ -263,34 +281,52 @@ function AgentTable({
     seen.observe(el);
     return () => seen.disconnect();
   }, [virtual, scroller]);
+
+  // The row that holds focus, by key: it stays in the rendered range wherever it scrolls.
+  const [focused, setFocused] = useState<string>();
+  const keyOf = (it: Item) => (it.kind === "group" ? `group:${it.person}` : it.line.agent.id);
+  const focusedAt = focused === undefined ? -1 : items.findIndex((it) => keyOf(it) === focused);
   const rows = useVirtualizer({
     count: virtual ? items.length : 0,
     getScrollElement: () => scroller,
     // As measured: a Person line, a compact row, a comfortable row with its second line.
     estimateSize: (i) => (items[i]?.kind === "group" ? 44 : compact ? 30 : 56),
-    getItemKey: (i) => {
-      const it = items[i]!;
-      return it.kind === "group" ? `group:${it.person}` : it.line.agent.id;
-    },
+    getItemKey: (i) => keyOf(items[i]!),
     overscan: 10,
     scrollMargin: margin,
+    rangeExtractor: (range: Range) => {
+      const shown = defaultRangeExtractor(range);
+      return focusedAt < 0 || shown.includes(focusedAt) ? shown : [...shown, focusedAt].sort((a, b) => a - b);
+    },
   });
 
-  // An Agent named in the address is scrolled to once, when the page opens on it.
-  const scrolledTo = useRef(false);
+  // The Agent the address names is scrolled to each time the address names a new one: on
+  // opening the page, and on following a link to another. A row already in view stays put. It
+  // waits for the scroller, and in a long fleet for the rows' place in it, before it scrolls.
+  const scrolledTo = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (scrolledTo.current || !selected) return;
-    scrolledTo.current = true;
-    const at = items.findIndex((it) => it.kind === "agent" && it.line.agent.id === selected);
+    if (!target || target === scrolledTo.current || !scroller || (virtual && margin === 0)) return;
+    const at = items.findIndex((it) => it.kind === "agent" && it.line.agent.id === target);
     if (at < 0) return;
+    scrolledTo.current = target;
+    const el = document.getElementById(rowId(target));
+    if (el) {
+      const box = el.getBoundingClientRect();
+      const view = scroller.getBoundingClientRect();
+      const under = head.current?.getBoundingClientRect().bottom ?? view.top;
+      if (box.top >= under && box.bottom <= view.bottom) return;
+    }
     if (virtual) rows.scrollToIndex(at, { align: "center" });
-    else document.getElementById(rowId(selected))?.scrollIntoView({ block: "nearest" });
-  }, [selected, items, virtual, rows]);
+    else el?.scrollIntoView({ block: "center" });
+  }, [target, items, virtual, scroller, margin, rows]);
 
+  // In a virtualised table the rows carry their place, so a screen reader counts all of them.
+  const rowIndex = (index?: number) => (virtual && index !== undefined ? index + 2 : undefined);
   const row = (it: Item, measure?: { index: number; ref: Ref<HTMLTableRowElement> }) =>
     it.kind === "group" ? (
-      <tr key={`group:${it.person}`} data-index={measure?.index} ref={measure?.ref}>
-        <th scope="rowgroup" colSpan={COLUMNS} className="p-0 text-left font-normal">
+      <tr key={`group:${it.person}`} data-index={measure?.index} ref={measure?.ref} aria-rowindex={rowIndex(measure?.index)}>
+        {/* A rowgroup head only where the Person has its own row group. */}
+        <th scope={virtual ? undefined : "rowgroup"} colSpan={COLUMNS} className="p-0 text-left font-normal">
           <GroupLine person={it.person} me={me} zone={zones.get(it.person)} count={it.count} />
         </th>
       </tr>
@@ -302,24 +338,35 @@ function AgentTable({
         compact={compact}
         actions={actions}
         index={measure?.index}
+        rowIndex={rowIndex(measure?.index)}
         ref={measure?.ref}
       />
     );
 
-  const virtualRows = rows.getVirtualItems();
-  const before = virtual && virtualRows.length > 0 ? virtualRows[0]!.start - margin : 0;
-  const after = virtual && virtualRows.length > 0 ? rows.getTotalSize() - (virtualRows.at(-1)!.end - margin) : 0;
+  // Rendered rows with a spacer wherever rows are skipped: before the first, after the last,
+  // and around a focused row kept rendered far from the others.
+  const body: ReactNode[] = [];
+  if (virtual) {
+    let end = margin;
+    for (const v of rows.getVirtualItems()) {
+      if (v.start > end) body.push(<Spacer key={`gap:${v.index}`} height={v.start - end} />);
+      body.push(row(items[v.index]!, { index: v.index, ref: rows.measureElement }));
+      end = v.end;
+    }
+    const total = rows.getTotalSize() + margin;
+    if (total > end) body.push(<Spacer key="gap:end" height={total - end} />);
+  }
 
   return (
     <table className="w-full border-collapse text-left" aria-rowcount={virtual ? items.length + 1 : undefined}>
       {/* The head stays in view over a long fleet. A collapsed border scrolls away from a sticky
           head, so its rule is drawn inside it. It sticks at the scroller's edge, over its pt-5. */}
       <thead ref={head} className="sticky -top-5 z-10 bg-page shadow-[inset_0_-1px_0_var(--rule)]">
-        <tr className="text-label font-medium text-ink-3">
-          <th scope="col" className="w-[9.5rem] py-2 pr-3 pl-3 font-medium">State</th>
+        <tr className="text-label font-medium text-ink-3" aria-rowindex={virtual ? 1 : undefined}>
+          <th scope="col" className="w-[9.5rem] py-2 pr-3 pl-3 font-medium @max-[40rem]:w-[7.5rem]">State</th>
           <th scope="col" className="min-w-[8rem] py-2 pr-3 font-medium">Agent</th>
           <th scope="col" className="py-2 pr-3 font-medium">Working on</th>
-          <th scope="col" className="w-[7.5rem] py-2 pr-3 text-right font-medium @max-[40rem]:hidden">Context</th>
+          <th scope="col" className="w-[7.5rem] py-2 pr-3 text-right font-medium @max-[40rem]:w-16">Context</th>
           <th scope="col" className="py-2 pr-3 font-medium @max-[52rem]:hidden">Host</th>
           <th scope="col" className="w-20 py-2 pr-3 text-right font-medium">Since</th>
           <th scope="col" className="w-10 py-2 pr-1">
@@ -328,10 +375,17 @@ function AgentTable({
         </tr>
       </thead>
       {virtual ? (
-        <tbody>
-          {before > 0 && <Spacer height={before} />}
-          {virtualRows.map((v) => row(items[v.index]!, { index: v.index, ref: rows.measureElement }))}
-          {after > 0 && <Spacer height={after} />}
+        <tbody
+          onFocus={(e) => {
+            const tr = (e.target as Element).closest("tr[data-index]");
+            const at = tr ? Number(tr.getAttribute("data-index")) : -1;
+            if (items[at]) setFocused(keyOf(items[at]));
+          }}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(undefined);
+          }}
+        >
+          {body}
         </tbody>
       ) : (
         groups.map(([person, group]) => (
@@ -362,7 +416,8 @@ function WorkingOn({ line, note: withNote = true }: { line: Line; note?: boolean
   const [first, ...rest] = claims;
   const note =
     a.approval && (state === "needs" || state === "needs-other")
-      ? `Asked to run ${a.approval.tool} ${elapsed(a.approval.openedAt)} ago`
+      ? // The time holds together: "28 s ago" never breaks between its words.
+        `Asked to run ${a.approval.tool} ${`${elapsed(a.approval.openedAt)} ago`.replaceAll(" ", "\u00a0")}`
       : state === "stale" && first
         ? `${first.stepsDone} of ${first.steps.length} Steps done. Anyone can take it over.`
         : (a.context?.activity ?? a.context?.task);
@@ -389,6 +444,7 @@ const Row = memo(function Row({
   compact,
   actions,
   index,
+  rowIndex,
   ref,
 }: {
   line: Line;
@@ -397,6 +453,8 @@ const Row = memo(function Row({
   actions: RowActions;
   /** Set when the table is virtualised, for measuring the row. */
   index?: number;
+  /** Its place among all the rows, when the table is virtualised (aria-rowindex). */
+  rowIndex?: number;
   ref?: Ref<HTMLTableRowElement>;
 }) {
   const { agent: a, state } = line;
@@ -408,6 +466,7 @@ const Row = memo(function Row({
       ref={ref}
       id={rowId(a.id)}
       data-index={index}
+      aria-rowindex={rowIndex}
       tabIndex={0}
       aria-selected={selected}
       onClick={select}
@@ -439,7 +498,7 @@ const Row = memo(function Row({
       <td className={cell}>
         <WorkingOn line={line} note={!compact} />
       </td>
-      <td className={cn(cell, "text-right text-row @max-[40rem]:hidden")}>
+      <td className={cn(cell, "text-right text-row")}>
         <ContextWindow agent={a} compact />
       </td>
       <td className={cn(cell, "text-row whitespace-nowrap text-ink-2 @max-[52rem]:hidden")}>{a.host ? hostName(a.host) : "terminal"}</td>
@@ -501,7 +560,7 @@ function RowMenu({ line, actions, compact }: { line: Line; actions: RowActions; 
         {canStop(a, me) && (
           <DropdownMenuItem
             onSelect={() => {
-              then.current = () => actions.stop(a.id);
+              then.current = () => actions.stop(a.id, trigger.current);
             }}
           >
             Stop
@@ -513,8 +572,18 @@ function RowMenu({ line, actions, compact }: { line: Line; actions: RowActions; 
 }
 
 /** The selected Agent, read without leaving the list. */
-function Inspector({ line, onClose, stopAsk }: { line: Line; onClose?: () => void; stopAsk?: number }) {
+function Inspector({
+  line,
+  onClose,
+  stopAsk,
+}: {
+  line: Line;
+  onClose?: () => void;
+  /** Stop asked from the row menu: `n` asks, and `back` is where focus goes when it is taken back. */
+  stopAsk?: { n: number; back: HTMLElement | null };
+}) {
   const { agent: a, state, claims } = line;
+  const can = useCapabilities();
   // While Stop asks, its question holds the inspector's one primary.
   const [stopAsking, setStopAsking] = useState(false);
   const me = useMe();
@@ -545,11 +614,18 @@ function Inspector({ line, onClose, stopAsk }: { line: Line; onClose?: () => voi
         <p className="text-row text-ink-2">{fact}</p>
         <div className="flex flex-wrap items-center gap-2 pt-1">
           {!stopAsking && (
-            <a href={href({ view: "agent", id: a.id })} className={buttonVariants({ variant: "primary" })}>
-              Open the terminal
-            </a>
+            <>
+              <a href={href({ view: "agent", id: a.id })} className={buttonVariants({ variant: "primary" })}>
+                Open the terminal
+              </a>
+              {can.directives && a.presence !== "gone" && (
+                <a href={href({ view: "agent", id: a.id, focus: "directive" })} className={buttonVariants({ variant: "secondary" })}>
+                  Directive
+                </a>
+              )}
+            </>
           )}
-          <StopAgentButton agent={a} ask={stopAsk} onAsking={setStopAsking} />
+          <StopAgentButton agent={a} ask={stopAsk?.n} returnFocusTo={stopAsk?.back} onAsking={setStopAsking} />
         </div>
       </div>
       <PendingApproval agent={a} />

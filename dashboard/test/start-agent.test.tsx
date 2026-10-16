@@ -8,6 +8,7 @@ import type { ActionResult, Agent, Host, HostsResponse } from "@shared/index";
 import { CommandPalette } from "@/components/domain/palette";
 import { StartAgentButton, StartAgentSheet, StopAgentButton } from "@/components/domain/start-agent";
 import type { ChannelSource, SpawnResult } from "@/data/source";
+import { readHosts } from "@/data/hosts";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 
 afterEach(() => {
@@ -224,6 +225,27 @@ describe("starting an Agent", () => {
     expect(await screen.findByRole("button", { name: "Start an Agent", hidden: true })).toBeTruthy();
     expect(await screen.findByRole("option", { name: /Start an Agent/ })).toBeTruthy();
     expect(hosts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("reading the Hosts", () => {
+  it("shares a read under way, but not one that began before a Host came or went", async () => {
+    const answers: ReturnType<typeof pending<HostsResponse>>[] = [];
+    const hosts = vi.fn(() => {
+      const p = pending<HostsResponse>();
+      answers.push(p);
+      return p.promise;
+    });
+    const store = new ChannelStore(source({ hosts }));
+    const first = readHosts(store, "e1");
+    expect(readHosts(store, "e1")).toBe(first);
+    expect(hosts).toHaveBeenCalledTimes(1);
+    // A host.online arrives while the first read is out: its answer may predate it.
+    const after = readHosts(store, "e2");
+    expect(after).not.toBe(first);
+    expect(hosts).toHaveBeenCalledTimes(2);
+    answers[1]!.settle({ hosts: [host], cap: 4, running: 1 });
+    expect((await after)?.running).toBe(1);
   });
 });
 
