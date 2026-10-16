@@ -1,12 +1,12 @@
 // The screenshot tests (design.md, States): every view in each state it can be in, ready,
 // loading, empty and error (and a failed read where a view has one). A ready view is drawn in
-// light and dark at 1440 and 390 pixels wide; the other states, whose check is the marker,
+// light and dark at 1440 and 390 pixels wide (and light at 320 by 568); the other states, whose check is the marker,
 // once in light at 1440 and once in dark at 390. Each page is drawn by the built Dashboard over
 // the simulated Channel (`?mock=1&state=`, which also stops its clock and timed Events, so two
 // runs draw the same pictures) in headless Chrome, and must show the state asked for: the
 // marker `data-view-state` the state components set, or a drawn view with none. A phone picture
-// must also not scroll sideways anywhere but the terminal's screen (plan slice 12). A failed
-// check fails the run. The pictures land in dashboard/screenshots/ (not committed), to look at.
+// must also not scroll sideways anywhere but the terminal's screen, and must reach all of its
+// content (plan slice 12; PHONE_LAYOUT). A failed check fails the run. The pictures land in dashboard/screenshots/ (not committed), to look at.
 //
 //   npm run build && npm run shots
 //
@@ -30,6 +30,8 @@ const PAGES = { agent: "agents/shlok%2Fclaude%2F7f3a", task: "tasks/12" };
 const STATES = ["ready", "loading", "empty", "error"];
 const DESK = [1440, 900];
 const PHONE = [390, 844];
+// The smallest phone still in use, where a view that cannot scroll loses the most.
+const SMALL = [320, 568];
 /** The theme and size each picture of a state is taken at. */
 const SHOTS = {
   ready: [
@@ -37,6 +39,7 @@ const SHOTS = {
     ["dark", DESK],
     ["light", PHONE],
     ["dark", PHONE],
+    ["light", SMALL],
   ],
   other: [
     ["light", DESK],
@@ -146,20 +149,46 @@ const PROBE = `(() => {
   return { state: marked ? marked.getAttribute("data-view-state") : null, drawn };
 })()`;
 
-// What scrolls sideways on the page: the page itself, or any box whose content is wider than it
-// and that scrolls, except the terminal's screen, which keeps its columns.
-const SIDEWAYS = `(() => {
-  const found = [];
+// A phone picture's layout faults, as { fail, warn } lists of what and where. It fails when
+// anything but the terminal's screen scrolls sideways, or when something sits past the bottom
+// of the page (above the tab bar) with nothing that scrolls to it: html and body clip, so only
+// a scrolling box reaches it. It warns when a box that clips sideways cuts its content.
+const PHONE_LAYOUT = `(() => {
+  const fail = [];
+  const warn = [];
+  const name = (el) => el.tagName.toLowerCase() + (el.getAttribute("aria-label") ? "[" + el.getAttribute("aria-label") + "]" : "." + String(el.className).split(" ")[0]);
   const page = document.scrollingElement;
-  if (page.scrollWidth > page.clientWidth + 1) found.push("the page");
+  if (page.scrollWidth > page.clientWidth + 1) fail.push("the page scrolls sideways");
+  const bar = document.querySelector('nav[aria-label="Views"]');
+  const floor = bar ? bar.getBoundingClientRect().top : innerHeight;
+  const scrolls = (el) => {
+    const y = getComputedStyle(el).overflowY;
+    return (y === "auto" || y === "scroll") && el.scrollHeight > el.clientHeight + 1;
+  };
+  const stranded = new Set();
   for (const el of document.querySelectorAll("body *")) {
-    if (el.matches("pre[aria-label=Screen]")) continue;
-    const x = getComputedStyle(el).overflowX;
-    if ((x === "auto" || x === "scroll") && el.scrollWidth > el.clientWidth + 1) {
-      found.push(el.tagName.toLowerCase() + (el.getAttribute("aria-label") ? "[" + el.getAttribute("aria-label") + "]" : "." + String(el.className).split(" ")[0]));
+    const css = getComputedStyle(el);
+    const x = css.overflowX;
+    if (el.scrollWidth > el.clientWidth + 1 && !el.matches("pre[aria-label=Screen]")) {
+      if (x === "auto" || x === "scroll") fail.push(name(el) + " scrolls sideways");
+      else if ((x === "hidden" || x === "clip") && css.textOverflow !== "ellipsis" && css.clip === "auto" && css.clipPath === "none") warn.push(name(el) + " clips its content sideways");
     }
+    if (el.children.length > 0 || !el.textContent.trim()) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0 || r.bottom <= floor + 1) continue;
+    // Text kept for screen readers only is clipped on purpose, and an overlay is fixed in place.
+    let reached = false;
+    for (let up = el; up; up = up.parentElement) {
+      const box = getComputedStyle(up);
+      if ((up !== el && scrolls(up)) || box.position === "fixed" || box.clip !== "auto" || box.clipPath !== "none") {
+        reached = true;
+        break;
+      }
+    }
+    if (!reached) stranded.add(name(el.parentElement ?? el));
   }
-  return found;
+  for (const s of stranded) fail.push(s + " sits under the tab bar with nothing to scroll to it");
+  return { fail, warn };
 })()`;
 
 async function main() {
@@ -201,6 +230,7 @@ async function main() {
   mkdirSync(out, { recursive: true });
 
   const failures = [];
+  const warnings = [];
   let count = 0;
   for (const c of cases()) {
     const want = c.want ?? expected(c.page, c.state);
@@ -229,14 +259,16 @@ async function main() {
         failures.push(`${name}: wanted ${want ?? "a ready view"}, saw ${seen?.state ?? (seen?.drawn ? "a ready view" : "nothing drawn")}`);
       }
       if (w < 640) {
-        const sideways = await page.evaluate(SIDEWAYS);
-        if (sideways.length) failures.push(`${name}: scrolls sideways: ${sideways.join(", ")}`);
+        const layout = await page.evaluate(PHONE_LAYOUT);
+        for (const f of layout.fail) failures.push(`${name}: ${f}`);
+        for (const x of layout.warn) warnings.push(`${name}: ${x}`);
       }
     }
   }
   page.close();
   await stop();
   console.log(`${count} screenshots in ${out}`);
+  if (warnings.length) console.warn(`${warnings.length} to look at:\n  ${[...new Set(warnings)].join("\n  ")}`);
   if (failures.length) {
     console.error(`${failures.length} did not show the state asked for:\n  ${failures.join("\n  ")}`);
     process.exit(1);

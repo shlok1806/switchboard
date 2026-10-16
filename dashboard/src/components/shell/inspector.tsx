@@ -22,7 +22,7 @@ export function InspectorFrame({ label, onClose, children }: { label: string; /*
   return (
     <DialogPrimitive.Root open onOpenChange={(next) => !next && onClose()}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/25 dark:bg-black/55" />
+        <DialogPrimitive.Overlay data-veil className="fixed inset-0 z-40 bg-black/25 dark:bg-black/55" />
         <DialogPrimitive.Content
           ref={content}
           aria-label={label}
@@ -53,7 +53,7 @@ export function InspectorFrame({ label, onClose, children }: { label: string; /*
 export function SheetClose({ onClose }: { onClose?: () => void }) {
   if (!onClose) return null;
   return (
-    <button type="button" onClick={onClose} aria-label="Close" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 shrink-0 px-0")}>
+    <button type="button" onClick={onClose} aria-label="Close" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 shrink-0 px-0 max-sm:size-11")}>
       <X className="size-4" aria-hidden />
     </button>
   );

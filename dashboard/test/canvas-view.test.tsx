@@ -138,10 +138,9 @@ describe("the canvas", () => {
       expect(container.querySelector("[role=application]")).toBeNull();
       const lanes = screen.getAllByRole("region");
       expect(lanes.map((l) => l.querySelector("h2")?.textContent)).toEqual(["terminalsshlok (you) · 2 Agents", "terminalsmaya · 1 Agent"]);
-      const rows = within(lanes[0]!).getAllByRole("button");
+      const rows = within(lanes[0]!).getAllByRole("link");
       expect(rows.map((r) => r.textContent)).toEqual([expect.stringMatching(/^planner/), expect.stringMatching(/^codex\/bbbb.*started by planner$/)]);
-      fireEvent.click(rows[1]!);
-      expect(window.location.hash).toBe(`#/canvas/${encodeURIComponent(child.id)}`);
+      expect(rows[1]!.getAttribute("href")).toBe(`#/canvas/${encodeURIComponent(child.id)}`);
     } finally {
       Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
     }

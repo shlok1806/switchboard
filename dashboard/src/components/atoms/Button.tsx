@@ -4,14 +4,14 @@ import { cn } from "@/lib/utils";
 
 /*
  * The Dashboard's one button voice (design.md): 30px, 13/500, radius 3, one verb, a label
- * that never wraps. `primary` is ink, one per region (`action` is the same, kept for the
+ * that never wraps; on a phone it is at least 44px tall, the smallest target a thumb hits. `primary` is ink, one per region (`action` is the same, kept for the
  * views that name it); `secondary` is a 1px outline; `ghost` is text only. A press moves
  * it down 1px. The signal colour is never a button.
  */
 export const buttonVariants = cva(
   `inline-flex items-center justify-center rounded-[var(--r)] border font-medium select-none whitespace-nowrap
    transition-[background-color,border-color,color] duration-[var(--dur)] ease-[var(--ease-out)]
-   active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none
+   active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none max-sm:min-h-11
   `,
   {
     variants: {

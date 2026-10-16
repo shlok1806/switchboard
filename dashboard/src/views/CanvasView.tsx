@@ -277,7 +277,6 @@ function Lanes({
   me,
   selected,
   shown,
-  onSelect,
 }: {
   groups: Group[];
   states: Map<string, AgentState>;
@@ -285,7 +284,6 @@ function Lanes({
   me: string;
   selected?: string;
   shown: (a: Agent) => boolean;
-  onSelect: (id: AgentId) => void;
 }) {
   const lanes = groups.map((g) => ({ group: g, agents: g.agents.filter(shown) })).filter((l) => l.agents.length > 0);
   if (lanes.length === 0) return <p className="pt-2 text-row text-ink-2">No Agent here passes the filter.</p>;
@@ -315,11 +313,10 @@ function Lanes({
                 const lead = agent.parent ? agents.find((p) => p.id === agent.parent) : undefined;
                 return (
                   <li key={agent.id} className="border-b border-rule" /* taste-skill-ignore: the phone list's row rule, as the fleet's */ style={{ paddingLeft: Math.min(depth, 3) * 20 }}>
-                    <button
-                      type="button"
-                      aria-pressed={selected === agent.id}
-                      onClick={() => onSelect(agent.id)}
-                      className="flex min-h-11 w-full flex-col gap-0.5 py-2.5 text-left hover:bg-paper-2"
+                    <a
+                      href={href({ view: "canvas", agent: agent.id })}
+                      aria-current={selected === agent.id ? "true" : undefined}
+                      className="flex min-h-11 w-full flex-col gap-0.5 py-2.5 text-left hover:bg-paper-2 hover:no-underline focus-visible:-outline-offset-2"
                     >
                       <span className="flex min-w-0 items-center gap-2">
                         <Glyph state={state} />
@@ -332,7 +329,7 @@ function Lanes({
                         {task ? `#${task.number} ${task.title}` : "No Claim"}
                         {lead && ` · started by ${shortName(lead)}`}
                       </span>
-                    </button>
+                    </a>
                   </li>
                 );
               })}
@@ -369,7 +366,7 @@ function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; stat
             {name(agent)}
             <State state={state} person={agent.person} glyph={false} className="text-small" />
           </h2>
-          <button type="button" onClick={onClose} aria-label="Close" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 px-0")}>
+          <button type="button" onClick={onClose} aria-label="Close" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 px-0 max-sm:size-11")}>
             <X className="size-4" aria-hidden />
           </button>
         </div>
@@ -636,7 +633,7 @@ export function CanvasView({ selected }: { selected?: string }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 px-[var(--gutter)] pt-4 pb-6">
+    <div className={cn("flex h-full min-h-0 flex-col gap-4 px-[var(--gutter)] pt-4 pb-6", mobile && "overflow-y-auto pb-12")}>
       <PageHead
         title="Canvas"
         facts={[
@@ -667,7 +664,7 @@ export function CanvasView({ selected }: { selected?: string }) {
         </div>
       </div>
       {mobile ? (
-        <Lanes groups={groupList} states={states} claims={claims} me={me} selected={selected} shown={shown} onSelect={(id) => select(id)} />
+        <Lanes groups={groupList} states={states} claims={claims} me={me} selected={selected} shown={shown} />
       ) : (
         <div className="relative flex min-h-[420px] flex-1 gap-6">
           <div className="relative min-w-0 flex-1 overflow-hidden rounded-[var(--r)] border border-rule">

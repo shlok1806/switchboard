@@ -62,7 +62,7 @@ export function Sheet({
               <DialogPrimitive.Close
                 disabled={locked}
                 aria-label="Close"
-                className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "-mt-0.5 -mr-1.5 size-7 shrink-0 px-0")}
+                className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "-mt-0.5 -mr-1.5 size-7 shrink-0 px-0 max-sm:size-11")}
               >
                 <X className="size-4" aria-hidden />
               </DialogPrimitive.Close>

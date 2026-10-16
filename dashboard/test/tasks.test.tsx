@@ -4,13 +4,14 @@
 // reads that Task without leaving the board; on a phone a tap opens the Task as a sheet. The
 // Task's page lists its Steps and posts an Update on it or a Directive to the Agent holding it.
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, PersonAction, Task } from "@shared/index";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { TaskDetail } from "@/views/TaskDetail";
+import { TabBar } from "@/components/shell/nav";
 import { TasksView } from "@/views/TasksView";
 
 const agent = (id: string, nickname: string, presence: Agent["presence"]) =>
@@ -72,12 +73,12 @@ const history = [
   { id: "e2", seq: 2, at: "2026-10-15T09:20:00.000Z", type: "file.edit", actor: { kind: "agent", agentId: quill.id }, capture: "hook", task: 14, payload: { path: "web/src/users.tsx" } },
 ] as unknown as ChannelEvent[];
 
-function channel(acted: PersonAction[] = []) {
+function channel(acted: PersonAction[] = [], board: Task[] = tasks) {
   const source = {
     me: "ana",
     capabilities: { claims: true, takeover: true, directives: true, agents: true },
     snapshot: async () =>
-      ({ channel: { repo: "ana/app" }, persons: [{ name: "ana" }], agents: [quill, moth], tasks, events: [], verdicts: [], relay: { interruptThreshold: 0.6 }, cursor: 0 }) as unknown as ChannelSnapshot,
+      ({ channel: { repo: "ana/app" }, persons: [{ name: "ana" }], agents: [quill, moth], tasks: board, events: [], verdicts: [], relay: { interruptThreshold: 0.6 }, cursor: 0 }) as unknown as ChannelSnapshot,
     hosts: async () => null,
     scopedEvents: async (scope: { task?: number }) => ({ events: scope.task === 14 ? history : [] }),
     act: async (a: PersonAction) => {
@@ -91,6 +92,13 @@ function channel(acted: PersonAction[] = []) {
 }
 
 afterEach(cleanup);
+
+describe("the phone's tab bar", () => {
+  it("counts the Stale Claims on the Tasks tab", async () => {
+    render(<TabBar route={{ view: "now" }} />, { wrapper: channel() });
+    expect(await screen.findByRole("link", { name: /^Tasks\s*1 stale$/ })).toBeTruthy();
+  });
+});
 
 describe("the Tasks board", () => {
   it("heads the Claimed column with the Stale Claim and opens it in the inspector first", async () => {
@@ -175,13 +183,33 @@ describe("the Tasks board", () => {
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
     try {
       render(<TasksView />, { wrapper: channel() });
-      const columns = await screen.findByRole("group", { name: "Column" });
-      expect(within(columns).getByRole("button", { name: /^Claimed/ }).getAttribute("aria-pressed")).toBe("true");
+      const columns = await screen.findByRole("tablist", { name: "Column" });
+      expect(within(columns).getByRole("tab", { name: /^Claimed/ }).getAttribute("aria-selected")).toBe("true");
       expect(await screen.findByText("Page the Users API by 50")).toBeTruthy();
       expect(screen.queryByText("Add the avatar upload")).toBeNull();
-      fireEvent.click(within(columns).getByRole("button", { name: /^Open/ }));
+      fireEvent.click(within(columns).getByRole("tab", { name: /^Open/ }));
       expect(await screen.findByText("Add the avatar upload")).toBeTruthy();
       expect(screen.queryByText("Page the Users API by 50")).toBeNull();
+      // The arrow keys move along the tabs, and focus goes with them.
+      fireEvent.keyDown(columns, { key: "ArrowRight" });
+      const claimed = within(columns).getByRole("tab", { name: /^Claimed/ });
+      expect(claimed.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(claimed);
+      expect(await screen.findByText("Page the Users API by 50")).toBeTruthy();
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    }
+  });
+
+  it("opens a phone on the first column that holds a card when nothing is claimed", async () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    try {
+      render(<TasksView />, { wrapper: channel([], tasks.filter((t) => !t.claim)) });
+      const columns = await screen.findByRole("tablist", { name: "Column" });
+      expect(within(columns).getByRole("tab", { name: /^Claimed/ }).getAttribute("aria-selected")).toBe("false");
+      expect(within(columns).getByRole("tab", { name: /^Open/ }).getAttribute("aria-selected")).toBe("true");
+      expect(await screen.findByText("Add the avatar upload")).toBeTruthy();
     } finally {
       Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
     }
@@ -193,13 +221,23 @@ describe("the Tasks board", () => {
     try {
       render(<TasksView />, { wrapper: channel() });
       // A phone shows one column at a time; this Task is in Open.
-      fireEvent.click(within(await screen.findByRole("group", { name: "Column" })).getByRole("button", { name: /^Open/ }));
+      fireEvent.click(within(await screen.findByRole("tablist", { name: "Column" })).getByRole("tab", { name: /^Open/ }));
       const card = await screen.findByText("Add the avatar upload");
       expect(screen.queryByRole("dialog")).toBeNull();
       fireEvent.click(card);
       const sheet = await screen.findByRole("dialog", { name: "#12 Add the avatar upload, in the inspector" });
       await waitFor(() => expect(document.activeElement).toBe(sheet));
       fireEvent.keyDown(sheet, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      // A press on the veil around the sheet closes it too.
+      fireEvent.click(await screen.findByText("Add the avatar upload"));
+      await screen.findByRole("dialog", { name: "#12 Add the avatar upload, in the inspector" });
+      // The sheet starts listening for presses outside it a tick after it opens.
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      const veil = document.querySelector("[data-veil]")!;
+      fireEvent.pointerDown(veil, { button: 0, pointerType: "mouse" });
+      fireEvent.pointerUp(veil, { button: 0, pointerType: "mouse" });
+      fireEvent.click(veil);
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     } finally {
       Object.defineProperty(window, "innerWidth", { value: width, configurable: true });

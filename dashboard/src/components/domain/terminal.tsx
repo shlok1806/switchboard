@@ -233,7 +233,7 @@ function TermButton({ quiet = false, pressed, onClick, children }: { quiet?: boo
       onClick={onClick}
       aria-pressed={pressed}
       className={cn(
-        "inline-flex h-7 shrink-0 items-center rounded-[var(--r)] border px-2.5 text-small font-medium whitespace-nowrap transition-colors duration-[var(--dur)] active:translate-y-px",
+        "inline-flex h-7 shrink-0 items-center rounded-[var(--r)] border max-sm:min-h-11 px-2.5 text-small font-medium whitespace-nowrap transition-colors duration-[var(--dur)] active:translate-y-px",
         quiet ? "border-transparent text-term-dim hover:text-term-fg" : "border-term-dim text-term-fg hover:border-term-fg hover:bg-term-bg-2",
       )}
     >
