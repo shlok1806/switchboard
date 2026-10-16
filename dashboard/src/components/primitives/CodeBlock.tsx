@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useState, type ReactNode } from "react";
 
 /* ─────────────────────────────────────────────────────────
  * CODE BLOCK
@@ -162,10 +162,22 @@ export default function CodeBlock({
   return (
     <div className={`${className} overflow-hidden rounded-md bg-panel`}>
       {/* header - file · (diff stat | copy) */}
-      <div className="flex h-11 items-center gap-2 bg-hover px-4 text-small">
+      <div className="flex min-h-11 items-center gap-2 bg-hover px-4 py-2 text-small">
         <span className="inline-flex min-w-0 items-center gap-[7px]">
           <FileIcon />
-          <code className="truncate font-mono leading-none text-ink">{filename}</code>{/* taste-skill-ignore: a file path */}
+          <code className="min-w-0 font-mono leading-snug break-words text-ink">
+            {/* A long path breaks after a slash, never inside a name. */}
+            {filename.split("/").map((part, i, all) => (
+              <Fragment key={i}>
+                {part}
+                {i < all.length - 1 && (
+                  <>
+                    /<wbr />
+                  </>
+                )}
+              </Fragment>
+            ))}
+          </code>
         </span>
 
         {isDiff ? (

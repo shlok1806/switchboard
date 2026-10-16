@@ -1,93 +1,86 @@
-import { useState } from "react";
+/*
+ * Activity's composer: post an Update everyone reads, or send one Agent a Directive. A
+ * Directive is labelled as from you and is the only message an Agent treats as instruction;
+ * the label over the field says which of the two this is and who hears it.
+ */
+import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import type { AgentId } from "@shared/index";
-import { Info } from "lucide-react";
-import ChatComposer from "@/components/primitives/ChatComposer";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/atoms/Button";
+import { Chip } from "@/components/atoms/Chip";
+import { shortName } from "@/components/domain/fleet";
 import { useCapabilities, useChannel, useStore } from "@/data/store";
 
-const MODES = ["Update", "Directive"] as const;
-type Mode = (typeof MODES)[number];
-const UPDATE_ONLY = ["Update"] as const;
+type Mode = "update" | "directive";
 
-/**
- * Post an Update to everyone, or send a Directive to one Agent.
- * A Directive is labelled as coming from you and is the only message with instruction weight.
- */
-export function Composer({ defaultAgent, task, className }: { defaultAgent?: AgentId; task?: number; className?: string }) {
+const FIELD =
+  "h-[30px] min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-[16px]";
+
+export function Composer({ task }: { task?: number }) {
   const store = useStore();
   const { agents } = useChannel();
   const can = useCapabilities();
-  const [mode, setMode] = useState<Mode>(defaultAgent && can.directives ? "Directive" : "Update");
+  const [mode, setMode] = useState<Mode>("update");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
   const reachable = agents.filter((a) => a.presence !== "gone");
-  const [picked, setTo] = useState<AgentId | "">(defaultAgent ?? "");
+  const [picked, setTo] = useState<AgentId | "">("");
   // Agents arrive after the first render, so an unpicked target follows the first reachable one.
   const to = picked && reachable.some((a) => a.id === picked) ? picked : (reachable[0]?.id ?? "");
+  const directive = mode === "directive" && can.directives;
+  const target = reachable.find((a) => a.id === to);
 
-  const send = async (text: string) => {
-    const result =
-      mode === "Update"
-        ? await store.source.act({ type: "update", text, task })
-        : to
-          ? await store.source.act({ type: "directive", to, text })
-          : { ok: false as const, reason: "No Agent is on the Channel to send a Directive to." };
-    if (!result.ok) {
-      toast.error(result.reason);
-      return false;
-    }
-    toast.success(mode === "Update" ? "Update posted" : `Directive sent to ${to}`);
-    return true;
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const said = text.trim();
+    if (!said) return;
+    if (directive && !to) return void toast.error("No Agent is on the Channel to send a Directive to.");
+    setBusy(true);
+    const r = directive ? await store.source.act({ type: "directive", to, text: said }) : await store.source.act({ type: "update", text: said, task });
+    setBusy(false);
+    if (!r.ok) return void toast.error(r.reason);
+    setText("");
+    toast.success(directive ? `Directive sent to ${target ? `${target.person}/${shortName(target)}` : to}` : "Update posted");
   };
 
   return (
-    <ChatComposer
-      className={className}
-      tabs={can.directives ? MODES : UPDATE_ONLY}
-      tab={mode}
-      onTabChange={setMode}
-      onSend={send}
-      labels={{
-        placeholder:
-          mode === "Update"
-            ? task
-              ? `Update on #${task}`
-              : "Post an Update"
-            : "Tell this Agent what to do",
-        inputLabel: mode === "Update" ? "Update" : "Directive",
-      }}
-      aside={
-        mode === "Directive" ? (
-          <label className="flex min-w-0 items-center gap-1.5 text-small text-ink-3" onClick={(e) => e.stopPropagation()}>
+    <form onSubmit={submit} className="flex flex-col gap-2">
+      {can.directives && (
+        <div role="group" aria-label="Say it as" className="flex gap-1.5">
+          <Chip on={mode === "update"} onClick={() => setMode("update")}>
+            Update
+          </Chip>
+          <Chip on={mode === "directive"} onClick={() => setMode("directive")}>
+            Directive
+          </Chip>
+        </div>
+      )}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1 text-small text-ink-3">
+          {directive ? "Directive: labelled as from you, read at the start of its next turn" : "Update: everyone reads it, and Agents hear it when the Relay says so"}
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={directive ? "Run the tests before pushing." : "Paging lands in users.tsx next."}
+            className={FIELD}
+          />
+        </label>
+        {directive && (
+          <label className="flex min-w-0 flex-col gap-1 text-small text-ink-3">
             To
-            <select
-              value={to}
-              onChange={(e) => setTo(e.target.value as AgentId)}
-              aria-label="Directive target Agent"
-              className="h-8 max-w-full min-w-0 truncate rounded-md border border-line-strong bg-field px-2 text-small text-ink tabular-nums"
-            >
+            <select value={to} onChange={(e) => setTo(e.target.value as AgentId)} className={`${FIELD} pr-7`}>
               {reachable.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {a.id}
+                  {a.person}/{shortName(a)}
                 </option>
               ))}
             </select>
           </label>
-        ) : null
-      }
-      footer={
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span tabIndex={0} className="inline-grid size-8 place-items-center rounded-md text-ink-3 transition-colors hover:text-ink" aria-label="Who hears this">
-              <Info className="size-4" aria-hidden />
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>
-            {mode === "Update"
-              ? "Everyone sees it. Agents hear it if the Relay says so."
-              : "Labelled as from you. The only message Agents treat as instruction."}
-          </TooltipContent>
-        </Tooltip>
-      }
-    />
+        )}
+        <Button type="submit" variant="primary" disabled={busy || !text.trim()}>
+          {busy ? "Sending" : directive ? "Send" : "Post"}
+        </Button>
+      </div>
+    </form>
   );
 }

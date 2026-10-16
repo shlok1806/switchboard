@@ -23,6 +23,13 @@ describe("the route", () => {
     expect(parse(href({ view: "now" }))).toEqual({ view: "now" });
   });
 
+  it("reads the log by model turn, and an old Compare link lands there", () => {
+    expect(parse(href({ view: "feed", by: "turn", turn: "t1" }))).toEqual({ view: "feed", by: "turn", turn: "t1" });
+    expect(parse(href({ view: "feed", by: "turn" }))).toEqual({ view: "feed", by: "turn", turn: undefined });
+    expect(parse("#/compare")).toEqual({ view: "feed", by: "turn", turn: undefined });
+    expect(parse("#/compare/t1")).toEqual({ view: "feed", by: "turn", turn: "t1" });
+  });
+
   it("reaches Memory, and a Host by its ID, which has a slash in it", () => {
     expect(parse(href({ view: "memory" }))).toEqual({ view: "memory" });
     expect(parse(href({ view: "hosts" }))).toEqual({ view: "hosts", host: undefined });
