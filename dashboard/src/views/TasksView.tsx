@@ -6,7 +6,7 @@
  * to the Task's page. Dragging a card claims or releases it. Below 640px the columns scroll
  * sideways one at a time, a card's menu moves it, and the inspector opens as a sheet.
  */
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { Agent, AgentId, ChannelEvent, Task } from "@shared/index";
 import { Button, buttonVariants } from "@/components/atoms/Button";
@@ -53,6 +53,8 @@ export function TasksView() {
   const [picked, setPicked] = useState<number | null>(null);
   // On a phone the picked Task opens as a sheet, and only when a card is tapped.
   const [sheet, setSheet] = useState<number | null>(null);
+  // A phone shows one column at a time, picked above the board; until one is picked, Claimed while it holds a card, else the first that does.
+  const [lane, setLane] = useState<Column | null>(null);
   // Moves the Channel has not answered yet: the card waits in its new column.
   const [pending, setPending] = useState<Map<number, Column>>(new Map());
 
@@ -140,6 +142,9 @@ export function TasksView() {
   const first = cards.find((c) => c.column === "stale") ?? cards.find((c) => c.column === "claimed") ?? cards[0];
   const selected = (picked !== null && taskByNumber.get(picked)) || first?.task;
   const sheetTask = sheet !== null ? taskByNumber.get(sheet) : undefined;
+  const laneTotal = (c: Column) => inColumn(c) + (c === "claimed" ? inColumn("stale") : 0);
+  const phoneLane = (lane !== null && columns.includes(lane) ? lane : null) ?? (columns.includes("claimed") && laneTotal("claimed") > 0 ? "claimed" : (columns.find((c) => laneTotal(c) > 0) ?? columns[0]!));
+  const boardColumns = mobile ? [phoneLane] : columns;
 
   const card = (c: Card) => {
     const waiting = pending.has(c.task.number);
@@ -183,7 +188,7 @@ export function TasksView() {
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col gap-5 px-[var(--gutter)] pt-5">
+      <div className={cn("flex min-w-0 flex-1 flex-col gap-5 px-[var(--gutter)] pt-5", mobile && "overflow-y-auto pb-12")}>
         <PageHead
           title="Tasks"
           facts={[
@@ -232,54 +237,101 @@ export function TasksView() {
           </p>
         )}
 
-        {filtered && shown.length === 0 && (
+        {filtered && shown.length === 0 ? (
           <EmptyState title="No Task matches these filters" action={<Button onClick={clearFilters}>Clear the filters</Button>}>
             {tasks.length} {tasks.length === 1 ? "Task is" : "Tasks are"} on the board, and none passes {[show !== "all", person !== "", agent !== ""].filter(Boolean).length === 1 ? "the filter" : "every filter"}.
           </EmptyState>
+        ) : (
+          // A phone scrolls the whole view, head and tabs with the cards; a desktop scrolls each column.
+          <div className={cn("flex flex-col gap-4", !mobile && "min-h-0 flex-1")}>
+            {mobile && <ColumnTabs columns={columns} current={phoneLane} count={laneTotal} onPick={setLane} />}
+            <div role={mobile ? "tabpanel" : undefined} aria-labelledby={mobile ? tabId(phoneLane) : undefined} className={cn(!mobile && "min-h-0 flex-1")}>
+            <KanbanProvider<Card>
+              columns={boardColumns.map((c) => ({ id: c, name: COLUMN_LABEL[c] }))}
+              data={cards}
+              onMove={move}
+              pointerDrag={!mobile}
+              className={cn(
+                "gap-4",
+                !mobile && "min-h-0",
+                // A phone shows the picked column across its width; a tablet too narrow for four columns scrolls sideways.
+                mobile ? "auto-cols-[100%]" : "auto-cols-[minmax(220px,1fr)] overflow-x-auto",
+              )}
+            >
+              {(column) => {
+                const id = column.id as Column;
+                const stale = id === "claimed" ? inColumn("stale") : 0;
+                return (
+                  <KanbanBoard key={id} id={id} className={cn("rounded-none bg-transparent", !mobile && "min-h-0")}>
+                    {/* On a phone the column's tab names it. */}
+                    {!mobile && (
+                      <KanbanHeader className="flex items-center gap-2 border-b border-rule-2 px-0 pt-0 pb-2">
+                        <Glyph state={COLUMN_GLYPH[id]} />
+                        <h2 className="text-title font-semibold text-ink">{column.name}</h2>
+                        <span className="text-small text-ink-3 tabular-nums">{inColumn(id) + stale}</span>
+                      </KanbanHeader>
+                    )}
+                    {stale > 0 && (
+                      <section aria-label="Stale Claims" className={cn("shrink-0 pb-3", inColumn(id) > 0 && "border-b border-rule")}>
+                        <p className="pt-3 pb-2 text-small text-ink-3">
+                          <State state="stale" word={`${stale} Stale ${stale === 1 ? "Claim" : "Claims"}`} className="text-small" />, held by a Gone Agent. Anyone may take it over.
+                        </p>
+                        <KanbanCards<Card> id="stale" className="min-h-0 px-0 pb-0">
+                          {card}
+                        </KanbanCards>
+                      </section>
+                    )}
+                    {/* Stale Claims above already fill the column: it says nothing under them. */}
+                    <KanbanCards<Card> id={id} className="px-0 pt-3 pb-6" empty={stale > 0 ? null : <p className="py-6 text-small text-ink-3">{filtered ? "None match." : "Nothing here."}</p>}>
+                      {card}
+                    </KanbanCards>
+                  </KanbanBoard>
+                );
+              }}
+            </KanbanProvider>
+            </div>
+          </div>
         )}
-        <div className="min-h-0 flex-1">
-          <KanbanProvider<Card>
-            columns={columns.map((c) => ({ id: c, name: COLUMN_LABEL[c] }))}
-            data={cards}
-            onMove={move}
-            pointerDrag={!mobile}
-            className={cn(
-              "min-h-0 gap-4",
-              // A phone shows one column at a time and scrolls sideways between them; a tablet too narrow for four columns scrolls as well.
-              mobile ? "snap-x snap-mandatory auto-cols-[calc(100%-40px)] overflow-x-auto" : "auto-cols-[minmax(220px,1fr)] overflow-x-auto",
-            )}
-          >
-            {(column) => {
-              const id = column.id as Column;
-              const stale = id === "claimed" ? inColumn("stale") : 0;
-              return (
-                <KanbanBoard key={id} id={id} className="min-h-0 snap-start rounded-none bg-transparent">
-                  <KanbanHeader className="flex items-center gap-2 border-b border-rule-2 px-0 pt-0 pb-2">
-                    <Glyph state={COLUMN_GLYPH[id]} />
-                    <h2 className="text-title font-semibold text-ink">{column.name}</h2>
-                    <span className="text-small text-ink-3 tabular-nums">{inColumn(id) + stale}</span>
-                  </KanbanHeader>
-                  {stale > 0 && (
-                    <section aria-label="Stale Claims" className="shrink-0 border-b border-rule pb-3">
-                      <p className="pt-3 pb-2 text-small text-ink-3">
-                        <State state="stale" word={`${stale} Stale ${stale === 1 ? "Claim" : "Claims"}`} className="text-small" />, held by a Gone Agent. Anyone may take it over.
-                      </p>
-                      <KanbanCards<Card> id="stale" className="min-h-0 px-0 pb-0">
-                        {card}
-                      </KanbanCards>
-                    </section>
-                  )}
-                  <KanbanCards<Card> id={id} className="px-0 pt-3 pb-6" empty={<p className="py-6 text-small text-ink-3">{filtered ? "None match." : "Nothing here."}</p>}>
-                    {card}
-                  </KanbanCards>
-                </KanbanBoard>
-              );
-            }}
-          </KanbanProvider>
-        </div>
       </div>
       {!mobile && selected && <TaskInspector key={selected.number} task={selected} />}
       {mobile && sheetTask && <TaskInspector key={sheetTask.number} task={sheetTask} onClose={() => setSheet(null)} />}
+    </div>
+  );
+}
+
+const tabId = (c: Column) => `tasks-column-${c}`;
+
+/** A phone's column picker: tabs over the one column it shows, moved between with the arrow keys. */
+function ColumnTabs({ columns, current, count, onPick }: { columns: Column[]; current: Column; count: (c: Column) => number; onPick: (c: Column) => void }) {
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = columns.indexOf(current);
+    const next =
+      e.key === "ArrowRight" ? columns[(i + 1) % columns.length] : e.key === "ArrowLeft" ? columns[(i - 1 + columns.length) % columns.length] : e.key === "Home" ? columns[0] : e.key === "End" ? columns.at(-1) : undefined;
+    if (!next) return;
+    e.preventDefault();
+    onPick(next);
+    document.getElementById(tabId(next))?.focus();
+  };
+  return (
+    <div role="tablist" aria-label="Column" onKeyDown={onKeyDown} className="grid grid-flow-col auto-cols-fr border-b border-rule-2" /* taste-skill-ignore: the rule the current tab's ink rule sits on */>
+      {columns.map((c) => (
+        <button
+          key={c}
+          id={tabId(c)}
+          type="button"
+          role="tab"
+          aria-selected={current === c}
+          tabIndex={current === c ? 0 : -1}
+          onClick={() => onPick(c)}
+          className={cn(
+            "-mb-px flex min-h-11 items-center justify-center gap-1.5 border-b-2 px-1 text-label font-medium whitespace-nowrap focus-visible:-outline-offset-2",
+            current === c ? "border-ink text-ink" : "border-transparent text-ink-2",
+          )}
+        >
+          {COLUMN_LABEL[c]}
+          <span className="text-ink-3 tabular-nums">{count(c)}</span>
+        </button>
+      ))}
     </div>
   );
 }

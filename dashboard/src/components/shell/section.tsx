@@ -14,7 +14,8 @@ export function SectionHead({ title, meta, action, as: H = "h2", id }: { title: 
         <span id={id}>{title}</span>
         {meta && <span className="ml-3 inline-block text-small font-normal text-ink-3">{meta}</span>}
       </H>
-      {action && <span className="shrink-0 text-small">{action}</span>}
+      {/* On a phone the link is a 44px target; its margins keep the head's height. */}
+      {action && <span className="shrink-0 text-small max-sm:[&>a,&>button]:-my-3.5 max-sm:[&>a,&>button]:inline-flex max-sm:[&>a,&>button]:min-h-11 max-sm:[&>a,&>button]:items-center">{action}</span>}
     </header>
   );
 }

@@ -39,7 +39,7 @@ function ChipBars({ n = 5 }: { n?: number }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {Array.from({ length: n }, (_, i) => (
-        <span key={i} aria-hidden className="h-[26px] w-16 rounded-[var(--r)] border border-rule" />
+        <span key={i} aria-hidden className="h-[26px] w-16 rounded-[var(--r)] border border-rule max-sm:h-11" />
       ))}
     </div>
   );
@@ -202,10 +202,16 @@ function Body({ view }: { view: Route["view"] }) {
       return (
         <>
           <ChipBars n={6} />
+          {/* A phone's board: the column tabs over one column. */}
+          <div className="grid h-11 grid-cols-4 items-center justify-items-center border-b border-rule-2 sm:hidden" /* taste-skill-ignore: the rule of the tabs it stands in for */>
+            {[0, 1, 2, 3].map((i) => (
+              <Bar key={i} w="3.5rem" />
+            ))}
+          </div>
           <div className="grid grid-cols-4 gap-4 max-lg:grid-cols-2 max-sm:grid-cols-1">
             {[3, 2, 1, 2].map((n, c) => (
-              <div key={c} className="flex flex-col gap-3">
-                <Bar w="5rem" h="h-3" />
+              <div key={c} className={cn("flex flex-col gap-3", c > 0 && "max-sm:hidden")}>
+                <Bar w="5rem" h="h-3" className="max-sm:hidden" />
                 {Array.from({ length: n }, (_, i) => (
                   <Card key={i} i={c + i} />
                 ))}

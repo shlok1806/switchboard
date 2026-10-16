@@ -313,7 +313,8 @@ function Log({ events, now }: { events: ChannelEvent[]; now: number }) {
                 <a
                   href={href({ view: "feed", event: e.id })}
                   aria-label={`${name}, ${recently ? "just now" : `${elapsed(e.at, now)} ago`}: open in Activity`}
-                  className="text-small text-ink-3 tabular-nums hover:text-ink"
+                  // A phone's target: the whole height of the row, at least 44px.
+                  className="text-small text-ink-3 tabular-nums hover:text-ink max-sm:-my-2 max-sm:min-h-11 max-sm:py-2"
                 >
                   <time dateTime={e.at}>{recently ? "now" : elapsed(e.at, now)}</time>
                 </a>

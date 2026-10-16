@@ -52,7 +52,7 @@ export function FilterSelect({
   return (
     <label
       className={cn(
-        "relative inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-[var(--r)] border pr-6 pl-2 text-label font-medium transition-colors duration-[var(--dur)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus",
+        "relative inline-flex h-[26px] shrink-0 items-center max-sm:min-h-11 gap-1.5 rounded-[var(--r)] border pr-6 pl-2 text-label font-medium transition-colors duration-[var(--dur)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus",
         on ? "border-ink text-ink" : "border-rule text-ink-2 hover:border-ink-3 hover:text-ink",
       )}
     >
