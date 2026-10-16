@@ -3670,6 +3670,8 @@ describe("switchboard host", () => {
 
   it("pauses an Agent, keeps it paused through a Host restart, and resumes the same session", async () => {
     const runs = async () => (await agentLog(agentId)).split("[host]").filter((r) => r.includes("FAKE-CLAUDE args="));
+    // The session after the Host's restart may still be printing: count once it has.
+    await waitFor("the session's output", async () => ((await runs()).length >= 4 ? true : undefined));
     const before = (await runs()).length;
 
     const { stdout } = await cli("pause", "builder", "--repo", github.repo);
