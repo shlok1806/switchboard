@@ -322,6 +322,9 @@ export const codex: CliAdapter = {
   wakes: false,
   // Codex may hide its dialog while a hook waits: not verified (ADR 0014).
   remoteDeny: false,
+  // Codex's Stop hook continues the turn with a block's reason (its 0.162 hook schema). Its
+  // PreCompact answer cannot hold a compaction back, and its compaction point is its own.
+  memoryNudges: ["stop"],
   proxy: true,
   sessionFromHooks: true,
 

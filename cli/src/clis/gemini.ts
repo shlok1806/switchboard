@@ -115,6 +115,8 @@ export const gemini: CliAdapter = {
   // Interrupts cannot be typed into it, so neither can a Wake (#63).
   wakes: false,
   remoteDeny: false,
+  // Not verified against its hooks: its AfterAgent answer is not known to continue a turn.
+  memoryNudges: [],
   proxy: true,
   sessionFromHooks: true,
 

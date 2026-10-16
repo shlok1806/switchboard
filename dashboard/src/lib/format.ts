@@ -167,6 +167,10 @@ export function summarize(e: ChannelEvent): string {
         ? `Read ${agent}'s transcript from entry ${from}: nothing new`
         : `Read ${agent}'s transcript, entries ${from} to ${from + entries - 1}`;
     }
+    case "terminal.read":
+      return `Read ${e.payload.agent}'s terminal, ${e.payload.rows} ${e.payload.rows === 1 ? "row" : "rows"}`;
+    case "agent.handoff":
+      return `Continues ${e.payload.from}`;
     case "directive.delivery":
       return e.payload.delivered === "interrupt"
         ? `Directive from ${e.payload.from} typed into the session right away`
@@ -294,6 +298,8 @@ export const EVENT_TYPE_LABEL: Record<ChannelEvent["type"], string> = {
   directive: "Directive",
   "memory.note": "Note",
   "transcript.read": "Transcript read",
+  "terminal.read": "Terminal read",
+  "agent.handoff": "Hand-off",
   "directive.delivery": "Directive delivery",
   wake: "Wake",
   takeover: "Takeover",
@@ -335,6 +341,10 @@ export function unrelayedReason(type: EventType): string | null {
       return "Not relayed: a note reaches every Agent in its next turn's digest.";
     case "transcript.read":
       return "Not relayed: who read whose transcript is on the Channel, for its Persons.";
+    case "terminal.read":
+      return "Not relayed: who read whose terminal is on the Channel, for its Persons.";
+    case "agent.handoff":
+      return "Not relayed: the successor starts with the Hand-off Brief; other Agents are not told.";
     default:
       return "Not relayed (lifecycle Event).";
   }

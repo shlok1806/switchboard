@@ -52,6 +52,8 @@ export interface AgentSession {
    */
   host?: string;
   spawn?: string;
+  /** The Agent whose work this session carries on (ADR 0024), from `--from`. */
+  continues?: AgentId;
 }
 
 export class AgentLink {
@@ -163,6 +165,7 @@ export class AgentLink {
       ...(this.session.host === undefined ? {} : { host: this.session.host }),
       // The spawn is answered once, by the first registration after the session started.
       ...(answersSpawn ? { spawn: this.session.spawn } : {}),
+      ...(this.session.continues === undefined ? {} : { continues: this.session.continues }),
       // Registered before in this session: the session goes on, it does not start again.
       ...(this.registered ? { rejoin: true } : {}),
     });

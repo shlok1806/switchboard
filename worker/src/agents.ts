@@ -61,6 +61,7 @@ type AgentRow = {
   host: string | null;
   role: string | null;
   parent: string | null;
+  continues: string | null;
   presence: string;
   proxy_mode: string;
   secret_masking: number;
@@ -85,6 +86,7 @@ export const AGENTS_SCHEMA = `
     host TEXT,
     role TEXT,
     parent TEXT,
+    continues TEXT,
     presence TEXT NOT NULL,
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
@@ -99,8 +101,19 @@ export function createAgentsTable(sql: SqlStorage): void {
   sql.exec(AGENTS_SCHEMA);
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
   // ADR 0012: context. ADR 0013: the pending approval. ADR 0015: the Host that runs it.
-  // ADR 0018: its role, and the lead that started it.
-  for (const column of ["account", "model", "effort", "usage", "context", "approval", "host", "role", "parent"]) {
+  // ADR 0018: its role, and the lead that started it. ADR 0024: the Agent it continues.
+  for (const column of [
+    "account",
+    "model",
+    "effort",
+    "usage",
+    "context",
+    "approval",
+    "host",
+    "role",
+    "parent",
+    "continues",
+  ]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
     } catch {
@@ -113,6 +126,7 @@ export function createAgentsTable(sql: SqlStorage): void {
     CREATE INDEX IF NOT EXISTS agents_by_last_seen ON agents (last_seen_at DESC, id);
     CREATE INDEX IF NOT EXISTS agents_live ON agents (last_seen_at) WHERE presence != 'gone';
     CREATE INDEX IF NOT EXISTS agents_by_parent ON agents (parent) WHERE parent IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS agents_by_continues ON agents (continues) WHERE continues IS NOT NULL;
   `);
 }
 
@@ -173,6 +187,7 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.host == null ? {} : { host: row.host as HostId }),
     ...(row.role != null && isAgentRole(row.role) ? { role: row.role } : {}),
     ...(row.parent == null ? {} : { parent: row.parent as AgentId }),
+    ...(row.continues == null ? {} : { continues: row.continues as AgentId }),
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
     canReceiveInterrupts: row.can_receive_interrupts === 1,
@@ -359,6 +374,30 @@ export class AgentRoster {
     this.host.sql.exec("UPDATE agents SET parent = ? WHERE id = ? AND parent IS NULL", parent, id);
     const agent = this.find(id);
     if (agent !== null) this.host.broadcast({ type: "agent", agent });
+  }
+
+  /**
+   * Agent `id` carries on Agent `from`'s work (ADR 0024). Set once: true when it was
+   * set now, false when the Agent continued one already.
+   */
+  setContinues(id: AgentId, from: AgentId): boolean {
+    const set = this.host.sql
+      .exec("UPDATE agents SET continues = ? WHERE id = ? AND continues IS NULL RETURNING id", from, id)
+      .toArray();
+    if (set.length === 0) return false;
+    this.host.broadcast({ type: "agent", agent: this.agent(id) });
+    return true;
+  }
+
+  /** The Agents that carry on Agent `id`'s work (ADR 0024), oldest first. */
+  successorsOf(id: AgentId): AgentId[] {
+    return this.host.sql
+      .exec<{ id: string }>(
+        "SELECT id FROM agents INDEXED BY agents_by_continues WHERE continues = ? ORDER BY started_at, id",
+        id,
+      )
+      .toArray()
+      .map((row) => row.id as AgentId);
   }
 
   /** Whether Agent `id` is in lead `lead`'s subtree: its chain of parents reaches `lead` (ADR 0018). */

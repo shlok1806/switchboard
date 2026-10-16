@@ -470,6 +470,9 @@ export class MockChannelSource implements ChannelSource {
     if (!permissionModeWithin(mode, host.maxPermissionMode)) {
       return { ok: false, reason: `${host.name} starts Agents in at most the "${host.maxPermissionMode}" permission mode.` };
     }
+    if (request.from && !this.agents.some((a) => a.id === request.from)) {
+      return { ok: false, reason: `No Agent ${request.from} on this Channel to continue.` };
+    }
     const at = new Date().toISOString();
     const me = person(this.me);
     const spawn = makeEvent(
@@ -484,6 +487,7 @@ export class MockChannelSource implements ChannelSource {
         ...(request.nickname ? { nickname: request.nickname } : {}),
         ...(request.model ? { model: request.model } : {}),
         ...(request.brief ? { brief: request.brief } : {}),
+        ...(request.from ? { from: request.from } : {}),
       },
       { at },
     );
@@ -502,6 +506,7 @@ export class MockChannelSource implements ChannelSource {
       host: host.id,
       ...(request.nickname ? { nickname: request.nickname } : {}),
       ...(request.model ? { model: request.model } : {}),
+      ...(request.from ? { continues: request.from } : {}),
       // What its session reports once it starts: the brief's first line is its task.
       context: {
         readAt: at,
@@ -516,6 +521,8 @@ export class MockChannelSource implements ChannelSource {
       undefined,
       true,
     );
+    // Its wrapper started with `--from`: the Channel records the Hand-off as it registers (ADR 0024).
+    if (request.from) this.record(makeEvent("agent.handoff", agentActor(agent.id), null, { from: request.from }, { at }), undefined, true);
     return { ok: true, answer: { ok: true, spawn: spawn.id, host: host.id, agent: clone(agent) } };
   }
 

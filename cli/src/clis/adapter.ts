@@ -97,6 +97,12 @@ export interface CliAdapter {
    * Code's was seen to.
    */
   remoteDeny: boolean;
+  /**
+   * Which memory nudges its hooks carry (ADR 0019, ADR 0024): `stop` asks for notes when a
+   * turn changed files and wrote none, by blocking its Stop hook once; `compaction` also
+   * asks before the session compacts. Only where the CLI's hook answers were checked.
+   */
+  memoryNudges: readonly ("stop" | "compaction")[];
   /** Whether the Proxy Capture can read this CLI's model traffic. */
   proxy: boolean;
   /**

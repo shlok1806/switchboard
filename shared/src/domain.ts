@@ -78,6 +78,11 @@ export interface Agent {
   role?: AgentRole;
   /** The lead that started it (ADR 0018). Absent for an Agent a Person started. */
   parent?: AgentId;
+  /**
+   * The Agent whose work it carries on: its session started from that one's Hand-off
+   * Brief (ADR 0024). Set once, when it first registers with `continues`.
+   */
+  continues?: AgentId;
   proxyMode: ProxyMode;
   /** Secret masking on Proxy Events. On by default. */
   secretMasking: boolean;
@@ -286,6 +291,8 @@ export interface EventPayloads {
     permissionMode: PermissionMode;
     brief?: string;
     parent?: AgentId;
+    /** The Agent the new one continues (ADR 0024). */
+    from?: AgentId;
   };
   /** The Agent spawn `spawn` asked for registered. The actor is the new Agent; `parent`, the lead that asked. */
   "agent.spawned": { spawn: string; host: HostId; agent: AgentId; parent?: AgentId };
@@ -318,6 +325,17 @@ export interface EventPayloads {
    * `entries` of them. The Channel keeps only that it was read, never the transcript.
    */
   "transcript.read": { agent: AgentId; from: number; entries: number };
+  /**
+   * The actor's session continues Agent `from`'s work: it started from `from`'s Hand-off
+   * Brief, information, never an instruction (ADR 0024). The Event's `task` is the Task
+   * `from` was on. Recorded once, when the successor first registers.
+   */
+  "agent.handoff": { from: AgentId };
+  /**
+   * The actor read Agent `agent`'s terminal screen (ADR 0024): `rows` rows, redacted by
+   * its wrapper. The Channel keeps only that it was read, never the screen.
+   */
+  "terminal.read": { agent: AgentId; rows: number };
   /** One tool call. `arg` is a short summary of its input (a path, a command, a pattern), never file contents. */
   "tool.call": { tool: string; arg: string; ok: boolean; durationMs?: number; output?: string };
   /** A file the Agent edited: its path, relative to the repo when inside it. Never its contents. */

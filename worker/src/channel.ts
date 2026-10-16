@@ -12,6 +12,7 @@ import type {
   AgentContext,
   AgentId,
   AgentRole,
+  AgentSummary,
   ApprovalDenyMessage,
   Capture,
   ChannelEvent,
@@ -31,6 +32,7 @@ import type {
   InterruptAttached,
   InterruptMessage,
   InterruptResult,
+  MemoryNote,
   MemoryQuery,
   PendingApproval,
   Person,
@@ -47,6 +49,8 @@ import type {
   Task,
   TaskNumber,
   TerminalInputFrame,
+  TerminalReadRequestMessage,
+  TerminalReadResponse,
   TerminalRefusedFrame,
   TerminalScreenFrame,
   TerminalWatchersMessage,
@@ -55,6 +59,8 @@ import type {
   TranscriptResponse,
 } from "../../shared/src/index";
 import {
+  agentIdFor,
+  cleanTerminalText,
   cleanTranscriptPage,
   DEFAULT_GONE_AFTER_SECONDS,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
@@ -64,6 +70,9 @@ import {
   LIVE_PING,
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
+  SUMMARY_MAX_FILES,
+  SUMMARY_MAX_NOTES,
+  SUMMARY_MAX_UPDATES,
   TRANSCRIPT_WAIT_MS,
 } from "../../shared/src/index";
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
@@ -293,6 +302,17 @@ export type TranscriptResult =
   | { ok: true; page: TranscriptResponse }
   | { ok: false; status: 400 | 403 | 404 | 409 | 429 | 502 | 503 | 504; reason: string };
 
+/** An Agent's screen, or why there is none: the same refusals as a transcript read (ADR 0024). */
+export type TerminalReadResult =
+  | { ok: true; screen: TerminalReadResponse }
+  | { ok: false; status: 400 | 403 | 404 | 409 | 429 | 502 | 503 | 504; reason: string };
+
+/** A read asked of a wrapper and not answered yet: whose, and how to hand back its answer or why not. */
+interface WrapperRead<T> {
+  agent: AgentId;
+  answer: (answer: T | string) => void;
+}
+
 export type IndexPending = { pending: HistoryIndex };
 
 /** The answer to a scoped history read whose index covers too many Events to build. */
@@ -372,10 +392,9 @@ export class Channel extends DurableObject<Env> {
   /** How long a transcript read waits for the wrapper's page: TRANSCRIPT_WAIT_MS, or shorter in tests. */
   private readonly transcriptWaitMs: number;
   /** Transcript reads waiting for their wrapper's page, by request ID. In memory: a read lasts one request. */
-  private readonly transcriptReads = new Map<
-    string,
-    { agent: AgentId; answer: (page: Omit<TranscriptResponse, "agent"> | string) => void }
-  >();
+  private readonly transcriptReads = new Map<string, WrapperRead<Omit<TranscriptResponse, "agent">>>();
+  /** Screen reads waiting for their wrapper's text (ADR 0024), the same way. */
+  private readonly terminalReads = new Map<string, WrapperRead<Omit<TerminalReadResponse, "agent">>>();
   /** The history indexes built so far (`buildHistoryIndexes`), and the UTC day they were last tried. */
   private historyIndexes: HistoryIndexes;
   private historyIndexesDay = utcDay();
@@ -671,14 +690,95 @@ export class Channel extends DurableObject<Env> {
     if (request.host !== undefined && this.hosts.find(person, request.host) === null) {
       return { ok: false, status: 409, reason: `You have no Host named ${request.host} on this Channel.` };
     }
+    if (request.continues !== undefined) {
+      if (request.continues === agentIdFor(person, request.cli, request.sessionId)) {
+        return { ok: false, status: 409, reason: "A session cannot continue its own Agent." };
+      }
+      if (!this.agents.has(request.continues)) {
+        return { ok: false, status: 404, reason: `No Agent ${request.continues} on this Channel to continue.` };
+      }
+    }
     this.join(person);
     const result = this.withNextTurn(await this.agents.register(person, request));
     if (!result.ok) return result;
+    const agent =
+      request.continues !== undefined && this.handOff(result.agent.id, request.continues)
+        ? (this.agents.find(result.agent.id) ?? result.agent)
+        : result.agent;
     if (request.usage !== undefined) this.recordUsage(request.usage);
     if (request.host !== undefined && request.spawn !== undefined) {
-      this.hosts.spawned(person, request.host, request.spawn, result.agent);
+      this.hosts.spawned(person, request.host, request.spawn, agent);
     }
-    return { ...result, token: await this.access.issueAgentToken(result.agent.id, person) };
+    return { ...result, agent, token: await this.access.issueAgentToken(agent.id, person) };
+  }
+
+  /**
+   * Agent `successor` carries on Agent `from`'s work (ADR 0024): set once, and recorded
+   * as an `agent.handoff` Event about the Task `from` works on, if any. Moves no Claim.
+   * False when `successor` continued an Agent already.
+   */
+  private handOff(successor: AgentId, from: AgentId): boolean {
+    if (!this.agents.setContinues(successor, from)) return false;
+    const task = this.currentTask(from);
+    this.append({
+      type: "agent.handoff",
+      actor: { kind: "agent", agentId: successor },
+      capture: null,
+      ...(task === null ? {} : { task }),
+      payload: { from },
+    });
+    return true;
+  }
+
+  /**
+   * What the Channel knows of Agent `id` (ADR 0024): the Agent, the Tasks it holds, its
+   * latest Updates, the files it edited, the notes that matter for it and the Agents
+   * that continue it. Read from indexed rows, for any Person or Agent, Gone or not;
+   * reading records nothing. Null when there is no such Agent.
+   */
+  agentSummary(id: AgentId): AgentSummary | null {
+    const agent = this.agents.find(id);
+    if (agent === null) return null;
+    const tasks = this.tasks
+      .held(id)
+      .filter((task) => task.status !== "done")
+      .sort((a, b) => (b.claim?.claimedAt ?? "").localeCompare(a.claim?.claimedAt ?? "") || b.number - a.number);
+    const updates = this.ctx.storage.sql
+      .exec<{ payload: string; at: string; seq: number; task: number | null }>(
+        `SELECT payload, at, seq, task FROM events INDEXED BY events_updates_by_actor
+         WHERE type = 'update' AND actor_kind = 'agent' AND actor_id = ? ORDER BY seq DESC LIMIT ?`,
+        id,
+        SUMMARY_MAX_UPDATES,
+      )
+      .toArray()
+      .map((row) => ({
+        seq: row.seq,
+        at: row.at,
+        text: (JSON.parse(row.payload) as { text: string }).text,
+        ...(row.task === null ? {} : { task: row.task as TaskNumber }),
+      }));
+    const files = this.hooks
+      .touchedFiles(id)
+      .slice(0, SUMMARY_MAX_FILES)
+      .map((file) => file.path);
+    // Its own notes, and the open questions and dead ends anyone wrote on its Tasks.
+    const notes = new Map<number, MemoryNote>();
+    const add = (result: MemoryReadResult) => {
+      if (result.ok) for (const note of result.notes) notes.set(note.seq, note);
+    };
+    add(this.memory.read({ author: id, limit: SUMMARY_MAX_NOTES }));
+    for (const task of tasks) {
+      add(this.memory.read({ task: task.number, tag: "question", limit: SUMMARY_MAX_NOTES }));
+      add(this.memory.read({ task: task.number, tag: "dead-end", limit: SUMMARY_MAX_NOTES }));
+    }
+    return {
+      agent,
+      tasks,
+      updates,
+      files,
+      notes: [...notes.values()].sort((a, b) => b.seq - a.seq).slice(0, SUMMARY_MAX_NOTES),
+      successors: this.agents.successorsOf(id),
+    };
   }
 
   async heartbeat(
@@ -942,51 +1042,27 @@ export class Channel extends DurableObject<Env> {
    * Channel (ADR 0019). Asked of its wrapper, which reads, condenses and redacts it; the
    * Channel keeps none of it, and records only that it was read.
    */
-  async readTranscript(caller: Caller, id: AgentId, from: number): Promise<TranscriptResult> {
-    const agent = this.agents.find(id);
-    if (agent === null) return { ok: false, status: 404, reason: `No Agent ${id} on this Channel.` };
-    if (agent.presence === "gone") {
-      return {
-        ok: false,
-        status: 409,
-        reason: `${id} is Gone. A transcript is read from its running session, so it can be read again once the session resumes.`,
-      };
-    }
-    const who = this.claims.resolve(caller);
-    if (!who.ok) return who;
-    // One read at a time per Agent: each makes its wrapper read and redact the whole session file.
-    if ([...this.transcriptReads.values()].some((read) => read.agent === id)) {
-      return {
-        ok: false,
-        status: 429,
-        reason: `${id}'s transcript is being read for someone else right now. Try again in a moment.`,
-      };
-    }
-    const request = crypto.randomUUID();
-    const answered = new Promise<Omit<TranscriptResponse, "agent"> | string | null>((resolve) => {
-      const timer = setTimeout(() => {
-        this.transcriptReads.delete(request);
-        resolve(null);
-      }, this.transcriptWaitMs);
-      this.transcriptReads.set(request, {
+  async readTranscript(caller: Caller, id: AgentId, from: number, latest = false): Promise<TranscriptResult> {
+    const ready = this.readable(caller, id, "transcript", this.transcriptReads);
+    if (!ready.ok) return ready;
+    const page = await this.askWrapper(
+      this.transcriptReads,
+      id,
+      (request): TranscriptRequestMessage => ({
+        type: "transcript.request",
         agent: id,
-        answer: (page) => {
-          clearTimeout(timer);
-          this.transcriptReads.delete(request);
-          resolve(page);
-        },
-      });
-    });
-    const message: TranscriptRequestMessage = { type: "transcript.request", agent: id, id: request, from };
-    if (!this.interruptTo(id, message)) {
-      this.transcriptReads.get(request)?.answer("");
+        id: request,
+        from,
+        ...(latest ? { latest } : {}),
+      }),
+    );
+    if (page === false) {
       return {
         ok: false,
         status: 503,
         reason: `${id}'s wrapper is not connected to the Channel, so its transcript cannot be read now.`,
       };
     }
-    const page = await answered;
     if (page === null) {
       return { ok: false, status: 504, reason: `${id}'s wrapper did not send its transcript in time.` };
     }
@@ -994,11 +1070,107 @@ export class Channel extends DurableObject<Env> {
       return { ok: false, status: 502, reason: `${id}'s wrapper could not read it: ${page}` };
     this.append({
       type: "transcript.read",
-      actor: who.acting.actor,
-      capture: who.acting.capture,
-      payload: { agent: id, from, entries: page.entries.length },
+      actor: ready.who.actor,
+      capture: ready.who.capture,
+      payload: { agent: id, from: page.from, entries: page.entries.length },
     });
     return { ok: true, page: { agent: id, ...page } };
+  }
+
+  /**
+   * Agent `id`'s screen as its wrapper shows watchers, redacted, for any Person or Agent
+   * on the Channel (ADR 0024). Asked of its wrapper; the Channel keeps none of it, and
+   * records only that it was read.
+   */
+  async readTerminal(caller: Caller, id: AgentId): Promise<TerminalReadResult> {
+    const ready = this.readable(caller, id, "terminal", this.terminalReads);
+    if (!ready.ok) return ready;
+    const screen = await this.askWrapper(
+      this.terminalReads,
+      id,
+      (request): TerminalReadRequestMessage => ({ type: "terminal.read.request", agent: id, id: request }),
+    );
+    if (screen === false) {
+      return {
+        ok: false,
+        status: 503,
+        reason: `${id}'s wrapper is not connected to the Channel, so its terminal cannot be read now.`,
+      };
+    }
+    if (screen === null) return { ok: false, status: 504, reason: `${id}'s wrapper did not send its screen in time.` };
+    if (typeof screen === "string")
+      return { ok: false, status: 502, reason: `${id}'s wrapper could not read it: ${screen}` };
+    this.append({
+      type: "terminal.read",
+      actor: ready.who.actor,
+      capture: ready.who.capture,
+      payload: { agent: id, rows: screen.lines.length },
+    });
+    return { ok: true, screen: { agent: id, ...screen } };
+  }
+
+  /**
+   * Whether Agent `id`'s running session can be read for `caller` now: it exists, is not
+   * Gone, and no other read of the same kind waits on its wrapper (each makes the wrapper
+   * read and redact). With who is reading, for the Event the read records.
+   */
+  private readable<T>(
+    caller: Caller,
+    id: AgentId,
+    what: "transcript" | "terminal",
+    reads: Map<string, WrapperRead<T>>,
+  ): { ok: true; who: { actor: Actor; capture: Capture | null } } | Extract<TranscriptResult, { ok: false }> {
+    const agent = this.agents.find(id);
+    if (agent === null) return { ok: false, status: 404, reason: `No Agent ${id} on this Channel.` };
+    if (agent.presence === "gone") {
+      return {
+        ok: false,
+        status: 409,
+        reason: `${id} is Gone. Its ${what} is read from its running session, so it can be read again once the session resumes.`,
+      };
+    }
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    if ([...reads.values()].some((read) => read.agent === id)) {
+      return {
+        ok: false,
+        status: 429,
+        reason: `${id}'s ${what} is being read for someone else right now. Try again in a moment.`,
+      };
+    }
+    return { ok: true, who: who.acting };
+  }
+
+  /**
+   * Sends Agent `id`'s wrapper the request `message` makes, and waits for its answer in
+   * `reads`: what it sent, a string saying why it could not, null when it did not answer
+   * in time, or false at once when no wrapper of it is connected.
+   */
+  private askWrapper<T>(
+    reads: Map<string, WrapperRead<T>>,
+    id: AgentId,
+    message: (request: string) => TranscriptRequestMessage | TerminalReadRequestMessage,
+  ): Promise<T | string | null> | false {
+    const request = crypto.randomUUID();
+    const answered = new Promise<T | string | null>((resolve) => {
+      const timer = setTimeout(() => {
+        reads.delete(request);
+        resolve(null);
+      }, this.transcriptWaitMs);
+      reads.set(request, {
+        agent: id,
+        answer: (answer) => {
+          clearTimeout(timer);
+          reads.delete(request);
+          resolve(answer);
+        },
+      });
+    });
+    if (!this.interruptTo(id, message(request))) {
+      reads.get(request)?.answer("");
+      return false;
+    }
+    return answered;
   }
 
   /** The Channel's notes, for any Person or Agent on it (ADR 0019). */
@@ -1203,6 +1375,7 @@ export class Channel extends DurableObject<Env> {
       type !== "wake" &&
       type !== "wake.capped" &&
       type !== "transcript.page" &&
+      type !== "terminal.text" &&
       type !== "host.spawn.failed" &&
       type !== "terminal.watch" &&
       type !== "terminal.input" &&
@@ -1284,6 +1457,17 @@ export class Channel extends DurableObject<Env> {
       read.answer(page ?? "its page was not one the Channel can read");
       return;
     }
+    if (type === "terminal.text") {
+      // Only the read Agent's own wrapper answers for its screen, and only what was asked of it.
+      const read = typeof body.id === "string" ? this.terminalReads.get(body.id) : undefined;
+      if (read === undefined || body.agent !== read.agent || body.agent !== socketAgent) return;
+      if (typeof body.error === "string") {
+        read.answer(body.error.slice(0, 300) || "no reason given");
+        return;
+      }
+      read.answer(cleanTerminalText(body) ?? "its screen was not one the Channel can read");
+      return;
+    }
     if (type === "wake" || type === "wake.capped") {
       // The wrapper woke its idle Agent, or stopped at the cap. Only the Agent's own wrapper may say so.
       const agent = body.agent;
@@ -1324,6 +1508,7 @@ export class Channel extends DurableObject<Env> {
       | DirectiveInterruptMessage
       | ApprovalDenyMessage
       | TranscriptRequestMessage
+      | TerminalReadRequestMessage
       | TerminalWatchersMessage
       | TerminalInputFrame,
   ): boolean {
@@ -1443,6 +1628,10 @@ export class Channel extends DurableObject<Env> {
 
   /** Starts an Agent on one of the caller's Person's Hosts (ADR 0015), for the Person or their lead (ADR 0018). */
   async spawnAgent(caller: Caller, request: SpawnAgentRequest): Promise<SpawnResult> {
+    // A hand-off names an Agent the Channel knows (ADR 0024); the new session reads its summary.
+    if (request.from !== undefined && !this.agents.has(request.from)) {
+      return { ok: false, status: 404, reason: `No Agent ${request.from} on this Channel to continue.` };
+    }
     if (caller.agent === undefined) {
       this.join(caller.person);
       return this.hosts.spawn({ person: caller.person }, request);
@@ -1572,6 +1761,7 @@ function send(
     | DirectiveInterruptMessage
     | ApprovalDenyMessage
     | TranscriptRequestMessage
+    | TerminalReadRequestMessage
     | HostSpawnMessage
     | HostSpawnedMessage
     | HostStopMessage

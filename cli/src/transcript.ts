@@ -223,6 +223,22 @@ function shown(raw: Raw): { text: string; count: number } {
   return { text: text.length > max ? `${text.slice(0, max - 1)}…` : text, count: first.count + second.count };
 }
 
+/**
+ * Where the page that ends at the newest entry begins (ADR 0024): as far back as
+ * TRANSCRIPT_PAGE_BYTES of text reach, and at least the newest entry.
+ */
+export function latestPageStart(entries: readonly Raw[]): number {
+  let bytes = 0;
+  let n = entries.length;
+  while (n > 0) {
+    const size = Buffer.byteLength(shown(entries[n - 1] as Raw).text);
+    if (n < entries.length && bytes + size > TRANSCRIPT_PAGE_BYTES) break;
+    bytes += size;
+    n--;
+  }
+  return n;
+}
+
 /** The page of `entries` from entry `from`, at most TRANSCRIPT_PAGE_BYTES of text. */
 export function transcriptPage(entries: readonly Raw[], from: number): Omit<TranscriptResponse, "agent"> {
   const page: TranscriptEntry[] = [];
@@ -252,9 +268,15 @@ export class TranscriptReader {
 
   constructor(private readonly cli: Cli) {}
 
-  /** A page of the session in `path` from entry `from`, after every read asked before it. */
-  page(path: string, from: number): Promise<Omit<TranscriptResponse, "agent">> {
-    const result = this.queue.then(async () => transcriptPage(await this.entries(path), from));
+  /**
+   * A page of the session in `path` from entry `from`, or with `latest` the page that
+   * ends at its newest entry, after every read asked before it.
+   */
+  page(path: string, from: number, latest = false): Promise<Omit<TranscriptResponse, "agent">> {
+    const result = this.queue.then(async () => {
+      const entries = await this.entries(path);
+      return transcriptPage(entries, latest ? latestPageStart(entries) : from);
+    });
     this.queue = result.catch(() => {});
     return result;
   }

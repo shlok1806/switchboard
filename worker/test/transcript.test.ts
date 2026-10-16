@@ -151,6 +151,22 @@ describe("Reading a transcript", () => {
     ]);
   });
 
+  it("asks for the page that ends at the newest entry, and records where that page began (ADR 0024)", async () => {
+    const agent = await register("alice");
+    const asked = await wrapper("alice", agent, (request) => ({
+      type: "transcript.page",
+      agent: request.agent,
+      id: request.id,
+      page: { from: 4, entries: ENTRIES, redacted: 0 },
+    }));
+    const response = await call(transcriptPath(agent, 0, true), "bob");
+    expect(response.status).toBe(200);
+    expect((await response.json<TranscriptResponse>()).from).toBe(4);
+    expect(asked[0]?.latest).toBe(true);
+    expect((await reads())[0]?.payload).toEqual({ agent, from: 4, entries: 3 });
+    expect((await call(`/api/agents/${encodeURIComponent(agent)}/transcript?latest=yes`, "bob")).status).toBe(400);
+  });
+
   it("passes on no control character, terminal escape or bidi control, and refuses a page that is not one", async () => {
     const agent = await register("alice");
     let entries: unknown[] = [

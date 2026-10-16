@@ -2,12 +2,12 @@
 // The Switchboard laptop CLI.
 //
 //   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
-//   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
-//   switchboard run codex|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
+//   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
+//   switchboard run codex|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
 //   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
 //   switchboard whoami
 //   switchboard host install|uninstall|run|status   (ADR 0015)
-//   switchboard spawn [--host <name>] [--cwd <folder>] [...] [brief]
+//   switchboard spawn [--host <name>] [--cwd <folder>] [--from <agent>] [...] [brief]
 //   switchboard stop <agent>
 //   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
 //   switchboard attach allow|revoke|list|prompts   (ADR 0021)
@@ -26,12 +26,12 @@ import { ATTACH_USAGE, attachCommand } from "./terminal/attach-keys";
 
 const USAGE = `Usage:
   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
-  switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
-  switchboard run codex [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
-  switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
+  switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
+  switchboard run codex [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
+  switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
   switchboard whoami
-  switchboard spawn [--host <name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--repo <owner>/<repo>] [brief...]
+  switchboard spawn [--host <name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--from <agent>] [--repo <owner>/<repo>] [brief...]
   switchboard stop <agent> [--repo <owner>/<repo>]
 ${HOST_USAGE.replace("Usage:\n", "")}
 ${ROLE_USAGE.replace("Usage:\n", "")}
@@ -58,6 +58,11 @@ running Agent holds is not set. --account-label (or $SWITCHBOARD_ACCOUNT_LABEL) 
 which login of the CLI the Agent runs under; without it, Claude Code and Gemini CLI
 sessions show their login's email address, masked (sh…@example.com).
 
+--from <agent> hands another Agent's work to this session: it starts with that Agent's
+summary from the Channel (its Tasks, branch, latest Updates, open questions, dead ends,
+notes and files) as information, never an instruction, and the Channel records the
+hand-off. It moves no Claim. Name the Agent by its ID, short ID or Nickname.
+
 \`run codex\` and \`run gemini\` do the same for Codex and Gemini CLI, with the same
 flags. Custom Codex providers and Gemini Vertex AI sessions run without the Proxy
 Capture, with a notice saying why. Codex runs Switchboard's hooks once you trust
@@ -73,7 +78,7 @@ starts and stops Claude Code Agents for the Channel with no window. --root names
 folders Agents may run in (repeat it); --max-permission-mode is the loosest mode they
 may run in (default "default"). \`spawn\` starts an Agent on one of your Hosts (--host,
 else the one you used last) in --cwd (else this folder), with the brief as its first
-prompt; \`stop\` stops one. Both work from any machine.
+prompt, and --from to hand it another Agent's work; \`stop\` stops one. Both work from any machine.
 
 \`role grant <agent> lead\` makes one of your Agents a lead: it may start Agents on your
 Hosts, and stop and send Directives to the Agents it starts, within the Channel's

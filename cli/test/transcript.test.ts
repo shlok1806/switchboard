@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { cleanTranscriptPage } from "../../shared/src/index";
-import { condense, redactTranscript, TranscriptReader, transcriptPage } from "../src/transcript";
+import { condense, latestPageStart, redactTranscript, TranscriptReader, transcriptPage } from "../src/transcript";
 
 const line = (entry: unknown) => JSON.stringify(entry);
 
@@ -160,6 +160,19 @@ describe("transcriptPage", () => {
     expect(last.entries).toHaveLength(10);
     expect(last.next).toBeUndefined();
     expect(transcriptPage(entries, 40)).toEqual({ from: 40, entries: [], redacted: 0 });
+  });
+
+  it("starts the latest page as far back as the cap reaches, ending at the newest entry (ADR 0024)", () => {
+    const entries = Array.from({ length: 30 }, (_, i) => ({ kind: "text" as const, text: `${i} ${"x".repeat(3000)}` }));
+    const latest = transcriptPage(entries, latestPageStart(entries));
+    expect(latest.entries.map((e) => e.n)).toEqual([20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    expect(latest.next).toBeUndefined();
+    // However long the newest entries are, the page from there reaches the end.
+    const longer = [...entries, { kind: "text" as const, text: "y".repeat(40_000) }];
+    const end = transcriptPage(longer, latestPageStart(longer));
+    expect(end.entries.at(-1)?.n).toBe(30);
+    expect(end.next).toBeUndefined();
+    expect(latestPageStart([])).toBe(0);
   });
 
   it("redacts before it cuts, strips escapes, and counts what it redacted", () => {
