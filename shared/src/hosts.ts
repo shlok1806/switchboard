@@ -79,6 +79,14 @@ export function underRoots(cwd: string, roots: readonly string[]): boolean {
   });
 }
 
+/**
+ * Why a Host will not start an Agent in `cwd`, a folder outside its roots: the Worker's refusal
+ * and the Dashboard's, before it asks, in the same words.
+ */
+export function notUnderRootsReason(cwd: string, host: string, roots: readonly string[]): string {
+  return `${cwd} is not under ${host}'s folders (${roots.join(", ") || "none"}). Add it with \`switchboard host install --root\`.`;
+}
+
 /** An absolute path with no `.` or `..` segments, or null when it is not one. */
 export function cleanAbsolutePath(value: unknown): string | null {
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_PATH_LENGTH) return null;

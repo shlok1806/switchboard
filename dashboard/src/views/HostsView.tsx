@@ -4,8 +4,8 @@
  * start and how loose they may run. The inspector at the right reads the selected Host;
  * below 640px the rows stack and carry all of it themselves.
  */
-import { useEffect, useMemo, useState } from "react";
-import type { Agent, Host, HostsResponse, Person } from "@shared/index";
+import { useState } from "react";
+import type { Agent, Host, Person } from "@shared/index";
 import { Chip } from "@/components/atoms/Chip";
 import { GroupLine, byPerson, shortName } from "@/components/domain/fleet";
 import { Pending } from "@/components/domain/pending";
@@ -14,7 +14,8 @@ import { Glyph, State, useAgentStates } from "@/components/domain/state";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
-import { useChannel, useMe, useStore } from "@/data/store";
+import { useHosts } from "@/data/hosts";
+import { useChannel, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ago } from "@/lib/format";
 import { go, href } from "@/lib/router";
@@ -31,36 +32,6 @@ const MODE_LABEL: Record<Host["maxPermissionMode"], string> = {
   auto: "Auto-approved",
   bypassPermissions: "No permission checks",
 };
-
-/**
- * The Channel's Hosts, read again whenever one comes online or goes offline, or an Agent starts
- * or stops on one. `undefined` while loading, `null` when the Channel's Worker has no Hosts.
- */
-export function useHosts(): { hosts?: HostsResponse | null; problem?: string } {
-  const store = useStore();
-  const { events, agents } = useChannel();
-  const lastHostEvent = useMemo(() => {
-    for (let i = events.length - 1; i >= 0; i--) if (events[i]!.type === "host.online" || events[i]!.type === "host.offline") return events[i]!.id;
-    return undefined;
-  }, [events]);
-  const onHosts = agents
-    .filter((a) => a.host)
-    .map((a) => `${a.id}:${a.presence}`)
-    .join(" ");
-  const [state, setState] = useState<{ hosts?: HostsResponse | null; problem?: string }>({});
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the Host event and the Agents on Hosts are what make a read stale.
-  useEffect(() => {
-    let live = true;
-    store.source.hosts().then(
-      (hosts) => live && setState({ hosts }),
-      (e: Error) => live && setState((s) => ({ hosts: s.hosts, problem: e.message })),
-    );
-    return () => {
-      live = false;
-    };
-  }, [store, lastHostEvent, onHosts]);
-  return state;
-}
 
 export function HostsView({ selected: selectedId }: { selected?: string }) {
   const { agents, snapshot } = useChannel();

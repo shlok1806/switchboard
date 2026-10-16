@@ -120,12 +120,27 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
   // State, so the "new Events" count renders from it; the ref is what layout effects read.
   const [followingNow, setFollowingNow] = useState(true);
   const following = useRef(true);
+  // The highest seq shown: what "read up to" means when the log stops following. Events are
+  // kept in arrival order, which is not always seq order, so it is the max, not the last.
+  const maxSeq = useMemo(() => shown.reduce((m, e) => Math.max(m, e.seq), 0), [shown]);
+  const maxSeqNow = useRef(maxSeq);
+  useLayoutEffect(() => {
+    maxSeqNow.current = maxSeq;
+  }, [maxSeq]);
+  const [readTo, setReadTo] = useState(0);
   const follow = (on: boolean) => {
+    // Everything on the log when it stops following has been read; only what comes after counts.
+    if (!on && following.current) setReadTo(maxSeqNow.current);
     following.current = on;
     setFollowingNow(on);
   };
   const fromBottom = useRef(0);
-  const [readTo, setReadTo] = useState(() => events.at(-1)?.seq ?? 0);
+  // A scroll the log made itself (to a turn) is not the Person scrolling: it must not turn
+  // following back on. Cleared after two frames in case the scroll moved nothing.
+  const ownScroll = useRef(false);
+  // The Person scrolled since the log last scrolled to a turn: a later change of the rows'
+  // shape (the window crossing 640px) leaves the log where they put it.
+  const movedSinceTurn = useRef(false);
   const newest = shown.at(-1);
   const oldestId = shown[0]?.id;
   const unread = followingNow ? 0 : shown.filter((e) => e.seq > readTo).length;
@@ -133,36 +148,56 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
     const el = scroller.current;
     if (el && following.current) {
       el.scrollTop = el.scrollHeight;
-      if (newest) setReadTo(newest.seq);
+      setReadTo(maxSeq);
     }
-  }, [newest]);
+  }, [newest, maxSeq]);
+  // Older Events loaded above: keep the rows being read where they were. Only a change of the
+  // oldest row counts, not React running the effect again.
+  const oldestSeen = useRef(oldestId);
   useLayoutEffect(() => {
+    if (oldestSeen.current === oldestId) return;
+    oldestSeen.current = oldestId;
     const el = scroller.current;
     if (el && !following.current) el.scrollTop = el.scrollHeight - fromBottom.current;
   }, [oldestId]);
-  // A new filter or grouping starts at the newest again.
+  // A new filter or grouping starts at the newest again. Only a change counts: on mount (and
+  // React's second run of it in development) the log is already at the newest, or at a turn.
+  const grouped = useRef<{ filters: FeedFilters; group: Group } | undefined>(undefined);
   useLayoutEffect(() => {
+    const was = grouped.current;
+    grouped.current = { filters, group };
+    if (!was || (was.filters === filters && was.group === group)) return;
     follow(true);
     setLimit(SHOW);
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [filters, group]);
   // A link to a turn scrolls to it once, when it names a new turn: picking an Event inside the
-  // turn, or new Events arriving, leaves the log where it is.
+  // turn, or new Events arriving, leaves the log where it is. On a phone the rows change shape
+  // once the width is known, so the turn is scrolled to again then, unless the Person has
+  // scrolled away from it.
   const shownTurn = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
-    if (!turn || turn === shownTurn.current) return;
+    const at = turn && `${turn}|${mobile}`;
+    if (!at || at === shownTurn.current) return;
     const target = document.getElementById(`turn-${turn}`);
     if (!target) return;
-    shownTurn.current = turn;
+    const sameTurn = shownTurn.current?.startsWith(`${turn}|`);
+    shownTurn.current = at;
+    if (sameTurn && movedSinceTurn.current) return;
+    movedSinceTurn.current = false;
     follow(false);
+    ownScroll.current = true;
     target.scrollIntoView({ block: "start" });
-  }, [turn, items]);
+    const el = scroller.current;
+    if (el) fromBottom.current = el.scrollHeight - el.scrollTop;
+    requestAnimationFrame(() => requestAnimationFrame(() => (ownScroll.current = false)));
+  }, [turn, items, mobile]);
   const toNewest = () => {
     const el = scroller.current;
     follow(true);
     if (el) el.scrollTop = el.scrollHeight;
-    if (newest) setReadTo(newest.seq);
+    setReadTo(maxSeq);
   };
 
   const showOlder = () => {
@@ -314,10 +349,15 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
             ref={scroller}
             onScroll={(e) => {
               const el = e.currentTarget;
+              fromBottom.current = el.scrollHeight - el.scrollTop;
+              if (ownScroll.current) {
+                ownScroll.current = false;
+                return;
+              }
+              movedSinceTurn.current = true;
               const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK;
               if (atBottom !== following.current) follow(atBottom);
-              fromBottom.current = el.scrollHeight - el.scrollTop;
-              if (atBottom && newest && newest.seq > readTo) setReadTo(newest.seq);
+              if (atBottom && maxSeq > readTo) setReadTo(maxSeq);
             }}
             className="absolute inset-0 overflow-y-auto px-[var(--gutter)]"
             aria-label="Events"

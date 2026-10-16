@@ -7,12 +7,12 @@
 // is being read; on a phone a row opens its Event as a sheet; an Agent's History uses the same rows.
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, StreamMessage, Verdict } from "@shared/index";
 import { TopBar } from "@/components/shell/nav";
 import type { ChannelSource } from "@/data/source";
-import { ChannelProvider, ChannelStore } from "@/data/store";
+import { ChannelProvider, ChannelStore, useChannel } from "@/data/store";
 import { parse } from "@/lib/router";
 import { ActivityView } from "@/views/ActivityView";
 import { AgentDetail } from "@/views/AgentDetail";
@@ -280,6 +280,80 @@ describe("new Events", () => {
     log.scrollTop = 1600;
     fireEvent.scroll(log);
     expect(screen.queryByRole("button", { name: /new Event/ })).toBeNull();
+  });
+});
+
+describe("new Events, on a turn link", () => {
+  it("count nothing on landing, and only what arrives after", async () => {
+    render(<ActivityView byTurn turn="t1" />, { wrapper: channel() });
+    await screen.findAllByText("Users page loads 50 at a time.");
+    expect(screen.queryByRole("button", { name: /new Event/ })).toBeNull();
+    act(() => push({ type: "event", event: ev("update", moth, { text: "Tests pass." }, { capture: "tool" }) }));
+    expect(screen.getByRole("button", { name: "1 new Event" })).toBeTruthy();
+  });
+
+  it("stay counted when the log's own scroll to the turn ends near the bottom", async () => {
+    // As a browser does: the turn's scrollIntoView scrolls the log, landing 40px from the
+    // bottom, and the scroll event follows before the next frame.
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {
+      const log = this.closest("[role=region]") as HTMLElement;
+      Object.defineProperty(log, "scrollHeight", { configurable: true, value: 2000 });
+      Object.defineProperty(log, "clientHeight", { configurable: true, value: 400 });
+      log.scrollTop = 1560;
+      queueMicrotask(() => fireEvent.scroll(log));
+    });
+    render(<ActivityView byTurn turn="t1" />, { wrapper: channel() });
+    const log = await screen.findByRole("region", { name: "Events" });
+    await screen.findAllByText("Users page loads 50 at a time.");
+    await act(async () => {});
+    expect(scrollIntoView).toHaveBeenCalled();
+    act(() => push({ type: "event", event: ev("update", moth, { text: "Tests pass." }, { capture: "tool" }) }));
+    expect(screen.getByRole("button", { name: "1 new Event" })).toBeTruthy();
+    expect(log.scrollTop).toBe(1560);
+    scrollIntoView.mockRestore();
+  });
+});
+
+describe("a turn link, under StrictMode", () => {
+  function Loaded() {
+    return useChannel().events.length > 0 ? <p>loaded</p> : null;
+  }
+
+  // React runs every effect twice in development. The log's effects that keep its place
+  // (older Events loaded above, a new filter or grouping) must act only on a real change, or
+  // the second run drops the log from the turn to its bottom.
+  it("stays on the turn when React runs its effects again", async () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {
+      const log = this.closest("[role=region]") as HTMLElement;
+      Object.defineProperty(log, "scrollHeight", { configurable: true, value: 2000 });
+      Object.defineProperty(log, "clientHeight", { configurable: true, value: 400 });
+      log.scrollTop = 600;
+    });
+    // The Channel is loaded before Activity mounts, as when the Person follows a link from
+    // another view, so React's second run of the mount effects meets the rows already there.
+    const Wrapper = channel();
+    const { rerender } = render(
+      <StrictMode>
+        <Wrapper>
+          <Loaded />
+        </Wrapper>
+      </StrictMode>,
+    );
+    await screen.findByText("loaded");
+    rerender(
+      <StrictMode>
+        <Wrapper>
+          <Loaded />
+          <ActivityView byTurn turn="t1" />
+        </Wrapper>
+      </StrictMode>,
+    );
+    const log = screen.getByRole("region", { name: "Events" });
+    await act(async () => {});
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(log.scrollTop).toBe(600);
+    expect(screen.queryByRole("button", { name: /new Event/ })).toBeNull();
+    scrollIntoView.mockRestore();
   });
 });
 
