@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Monitor, Moon, Plus, Sun } from "lucide-react";
+import { Monitor, Moon, Plus, Rows2, Rows3, Sun } from "lucide-react";
 import { VIEWS } from "@/components/shell/nav";
 import {
   CommandDialog,
@@ -10,9 +10,11 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command";
-import { openStartAgent, useHostsSupported } from "@/components/domain/start-agent";
+import { openStartAgent } from "@/components/domain/start-agent";
+import { useHostsSupported } from "@/data/hosts";
 import { useChannel } from "@/data/store";
 import { go, type Route } from "@/lib/router";
+import { setDensity, useDensity } from "@/lib/density";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { PRESENCE_LABEL } from "@/lib/format";
 
@@ -27,6 +29,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const { tasks, agents } = useChannel();
   const { choice, set } = useTheme();
   const hosts = useHostsSupported();
+  const density = useDensity();
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -81,6 +84,26 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             >
               <t.icon aria-hidden /> {t.label}
               {choice === t.id && <CommandShortcut>Current</CommandShortcut>}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+        <CommandGroup heading="Rows">
+          {(
+            [
+              { id: "comfortable", label: "Comfortable rows", icon: Rows2 },
+              { id: "compact", label: "Compact rows", icon: Rows3 },
+            ] as const
+          ).map((d) => (
+            <CommandItem
+              key={d.id}
+              value={`Density ${d.label}`}
+              onSelect={() => {
+                setDensity(d.id);
+                onOpenChange(false);
+              }}
+            >
+              <d.icon aria-hidden /> {d.label}
+              {density === d.id && <CommandShortcut>Current</CommandShortcut>}
             </CommandItem>
           ))}
         </CommandGroup>

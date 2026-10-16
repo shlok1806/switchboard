@@ -115,8 +115,8 @@ export default function App() {
             {route.view === "feed" && <ActivityView selected={route.event} byTurn={route.by === "turn"} turn={route.turn} />}
             {route.view === "tasks" && <TasksView />}
             {route.view === "task" && <TaskDetail number={route.number} />}
-            {route.view === "agents" && <AgentsView />}
-            {route.view === "agent" && <AgentDetail id={route.id} />}
+            {route.view === "agents" && <AgentsView selected={route.selected} />}
+            {route.view === "agent" && <AgentDetail id={route.id} focus={route.focus} />}
             {route.view === "canvas" && <CanvasView selected={route.agent} />}
             {route.view === "memory" && <MemoryView selected={route.note} />}
             {route.view === "hosts" && <HostsView selected={route.host} />}

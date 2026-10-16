@@ -208,6 +208,23 @@ describe("starting an Agent", () => {
     render(<StartAgentButton />, { wrapper });
     expect(await screen.findByRole("button", { name: "Start an Agent" })).toBeTruthy();
   });
+  it("reads the Hosts once when the button, the sheet and the palette arrive together", async () => {
+    const saved = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => saved.set(k, v) });
+    const hosts = vi.fn(async (): Promise<HostsResponse> => ({ hosts: [host], cap: 4, running: 0 }));
+    render(
+      <>
+        <StartAgentButton />
+        <StartAgentSheet />
+        <CommandPalette open onOpenChange={() => {}} />
+      </>,
+      { wrapper: withChannel(source({ hosts })) },
+    );
+    // The open palette hides the page behind it from the accessibility tree.
+    expect(await screen.findByRole("button", { name: "Start an Agent", hidden: true })).toBeTruthy();
+    expect(await screen.findByRole("option", { name: /Start an Agent/ })).toBeTruthy();
+    expect(hosts).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("stopping an Agent", () => {
@@ -258,5 +275,16 @@ describe("stopping an Agent", () => {
     // Its Host answered: the Agent went Gone, and there is nothing left to stop.
     rerender(<StopAgentButton agent={{ ...agent, presence: "gone" }} />);
     expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
+  });
+  it("lets the question go when the Agent goes Gone while it is asked", async () => {
+    const onAsking = vi.fn();
+    const wrapper = withChannel(source({}));
+    const { rerender } = render(<StopAgentButton agent={agent} onAsking={onAsking} />, { wrapper });
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(onAsking).toHaveBeenLastCalledWith(true);
+    // Stopped some other way (its terminal, another tab): the page gets its primary back.
+    rerender(<StopAgentButton agent={{ ...agent, presence: "gone" }} onAsking={onAsking} />);
+    expect(onAsking).toHaveBeenLastCalledWith(false);
+    expect(screen.queryByRole("group", { name: /^Stop / })).toBeNull();
   });
 });

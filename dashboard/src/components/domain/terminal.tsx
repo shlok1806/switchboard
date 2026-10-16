@@ -215,9 +215,11 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
       )}
       {refused && <p className="border-t border-term-rule px-4 py-2 text-small text-term-fg">{refused}</p>}
       <p className="border-t border-term-rule px-4 py-2 text-small text-term-dim">
-        Keys you type are signed with this browser's key, and {owner ? "your" : `${agent.person}'s`} wrapper takes them only once
-        that key is allowed. Secrets on the screen are masked on {owner ? "your" : `${agent.person}'s`} machine before it leaves.
-        {mine && " Others wait until you release the keyboard, or a minute passes without your keys."}
+        <span className="block max-w-[72ch]">
+          Keys you type are signed with this browser's key, and {owner ? "your" : `${agent.person}'s`} wrapper takes them only once
+          that key is allowed. Secrets on the screen are masked on {owner ? "your" : `${agent.person}'s`} machine before it leaves.
+          {mine && " Others wait until you release the keyboard, or a minute passes without your keys."}
+        </span>
       </p>
     </section>
   );

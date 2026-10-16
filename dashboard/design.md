@@ -142,6 +142,15 @@ selected `--paper-3`, focus the 2px ink outline inset by 2px. Name 14/600, a sec
 pressure in one 13px line over a `--rule-2`. Figures right-aligned and tabular. Cells
 wrap; they are never truncated with an ellipsis.
 
+Agents table. The column heads stay in view as the table scrolls. Each row ends in a menu
+(Open, Directive, Rename, Stop); an item that opens a question or a dialog puts focus in
+it, and Escape gives focus back to the menu's button. Compact rows (30px, one line, the
+secondary line and the note hidden) are a Compact chip in the toolbar and a palette
+command, kept per browser. The selected Agent is in the address (`#/agents/select/<id>`),
+so it survives a reload and a reconnect. Beside the inspector the table drops Host, then
+Context, as its own width narrows (a container query, not the window's width). Past 80
+rows only the rows near the screen are rendered.
+
 Chips (filters). 26px, 12.5/500, 1px `--rule` border; the current one has an ink border
 and ink text. Counts follow the word.
 

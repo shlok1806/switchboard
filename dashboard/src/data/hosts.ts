@@ -2,7 +2,50 @@
 
 import type { HostsResponse } from "@shared/index";
 import { useEffect, useMemo, useState } from "react";
-import { useChannel, useStore } from "./store";
+import { type ChannelStore, useChannel, useStore } from "./store";
+
+// One read at a time per Channel: views that mount together (the Start an Agent button, the
+// sheet, the Hosts page) share it instead of asking the Worker once each. A settled read is
+// not reused, so no view shows a list older than its own mount.
+const reading = new WeakMap<ChannelStore, Promise<HostsResponse | null>>();
+
+/** The Channel's Hosts, sharing a read already under way. */
+export function readHosts(store: ChannelStore): Promise<HostsResponse | null> {
+  const under = reading.get(store);
+  if (under) return under;
+  const read = store.source.hosts();
+  reading.set(store, read);
+  const done = () => {
+    if (reading.get(store) === read) reading.delete(store);
+  };
+  read.then(done, done);
+  return read;
+}
+
+// Whether a Channel's Worker has Hosts never changes while the page is open: its first answer is kept.
+const supported = new WeakMap<ChannelStore, boolean>();
+
+/** Whether this Channel's Worker has Hosts at all (ADR 0015): `null` while asking. */
+export function useHostsSupported(): boolean | null {
+  const store = useStore();
+  const [known, setKnown] = useState<boolean | null>(() => supported.get(store) ?? null);
+  useEffect(() => {
+    if (supported.has(store)) return setKnown(supported.get(store)!);
+    let live = true;
+    // A failed read is not an answer: the next button or view that mounts asks again.
+    readHosts(store).then(
+      (r) => {
+        supported.set(store, r !== null);
+        if (live) setKnown(r !== null);
+      },
+      () => live && setKnown(false),
+    );
+    return () => {
+      live = false;
+    };
+  }, [store]);
+  return known;
+}
 
 /**
  * The Channel's Hosts, read again whenever one comes online or goes offline, an Agent starts
@@ -24,8 +67,11 @@ export function useHosts(again?: unknown): { hosts?: HostsResponse | null; probl
   // biome-ignore lint/correctness/useExhaustiveDependencies: the Host event, the Agents on Hosts and `again` are what make a read stale.
   useEffect(() => {
     let live = true;
-    store.source.hosts().then(
-      (hosts) => live && setState({ hosts }),
+    readHosts(store).then(
+      (hosts) => {
+        supported.set(store, hosts !== null);
+        if (live) setState({ hosts });
+      },
       (e: Error) => live && setState((s) => ({ hosts: s.hosts, problem: e.message })),
     );
     return () => {

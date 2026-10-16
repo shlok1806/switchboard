@@ -57,7 +57,7 @@ export class MockChannelSource implements ChannelSource {
   readonly me = ME;
   readonly capabilities = ALL_CAPABILITIES;
   readonly isMock = true;
-  private agents: Agent[] = clone(seedAgents);
+  private agents: Agent[];
   /** The demo Person's one Host, as `switchboard host install` would register it. */
   private host: Host = {
     id: hostIdFor(ME, "studio"),
@@ -76,7 +76,8 @@ export class MockChannelSource implements ChannelSource {
   private timers: ReturnType<typeof setTimeout>[] = [];
   private started = false;
 
-  constructor(private readonly opts: { latencyMs?: number; speed?: number } = {}) {
+  constructor(private readonly opts: { latencyMs?: number; speed?: number; /** Pads the fleet to this many Agents (`?agents=200`). */ fleet?: number } = {}) {
+    this.agents = withFleet(clone(seedAgents), opts.fleet ?? 0);
     for (const b of HISTORY) this.apply(b, new Date(T0 + b.t * 60_000).toISOString(), false);
   }
 
@@ -549,4 +550,37 @@ export class MockChannelSource implements ChannelSource {
     );
     return { ok: true, task };
   }
+}
+
+// Words for the extra Agents' Nicknames, so a long fleet reads like one.
+const FLEET_WORDS = ["atlas", "birch", "cobalt", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper", "kestrel", "lumen", "meadow", "nimbus", "onyx", "pebble", "quartz", "raven", "sable", "tundra"];
+
+/**
+ * The seed Agents and generated ones up to `size`, spread over the three People, mostly Live,
+ * some Idle and a few Gone. The same every time, so screenshots and timings compare.
+ */
+function withFleet(seed: Agent[], size: number): Agent[] {
+  const out = [...seed];
+  const people = ["shlok", "maya", "dev"];
+  const at = (minutes: number) => new Date(T0 - minutes * 60_000).toISOString();
+  for (let i = out.length; out.length < size; i++) {
+    const person = people[i % people.length]!;
+    const codex = i % 5 === 4;
+    const presence: Agent["presence"] = i % 9 === 0 ? "gone" : i % 4 === 0 ? "idle" : "live";
+    out.push({
+      id: `${person}/${codex ? "codex" : "claude"}/${(0x2000 + i * 37).toString(16)}` as Agent["id"],
+      person,
+      cli: codex ? "codex" : "claude-code",
+      nickname: `${FLEET_WORDS[i % FLEET_WORDS.length]}-${i}`,
+      model: codex ? "gpt-5.3-codex" : "claude-opus-5-5",
+      presence,
+      proxyMode: "digest",
+      secretMasking: true,
+      canReceiveInterrupts: true,
+      lastSeenAt: at(i % 50),
+      startedAt: at(30 + ((i * 7) % 600)),
+      context: { readAt: at(i % 50), tokens: 40_000 + ((i * 7919) % 800_000), window: 1_000_000, activity: i % 3 === 0 ? "Running the tests" : "Reading the code" },
+    } as Agent);
+  }
+  return out;
 }

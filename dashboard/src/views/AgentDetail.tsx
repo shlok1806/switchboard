@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import type { Agent, AgentId, ChannelEvent } from "@shared/index";
-import { MAX_NICKNAME_LENGTH, modelLabel } from "@shared/index";
+import { modelLabel } from "@shared/index";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { LeadDialog, useSetLead } from "@/components/domain/agent-role";
@@ -19,13 +19,13 @@ import { contextPercent, shortName, useClaimsOf } from "@/components/domain/flee
 import { OlderRow } from "@/components/domain/older";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { IssueLink } from "@/components/domain/pending";
+import { RenameDialog } from "@/components/domain/rename";
 import { StopAgentButton } from "@/components/domain/start-agent";
 import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
 import { Glyph, State, useAgentState, useAgentStates } from "@/components/domain/state";
 import { TerminalPanel } from "@/components/domain/terminal";
 import { useNow } from "@/components/domain/usage";
 import { Section } from "@/components/shell/section";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
@@ -37,7 +37,7 @@ import { cn } from "@/lib/utils";
 const CAPTURES = ["All", "Proxy", "Hook", "Tool"] as const;
 type Part = "terminal" | "history";
 
-export function AgentDetail({ id }: { id: string }) {
+export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) {
   const { agentById } = useIndex();
   const agent = agentById.get(id as AgentId);
   if (!agent) {
@@ -50,10 +50,10 @@ export function AgentDetail({ id }: { id: string }) {
       </div>
     );
   }
-  return <AgentPage key={agent.id} agent={agent} />;
+  return <AgentPage key={agent.id} agent={agent} focus={focus} />;
 }
 
-function AgentPage({ agent }: { agent: Agent }) {
+function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
   const me = useMe();
   const can = useCapabilities();
   const { agents } = useChannel();
@@ -67,6 +67,12 @@ function AgentPage({ agent }: { agent: Agent }) {
   // Once Stop is asked for, focus lands on the Agent's name, which stays on the page.
   const heading = useRef<HTMLHeadingElement>(null);
   const directive = useRef<HTMLTextAreaElement>(null);
+  // Opened to send a Directive (the Agents row menu): the field is ready to type in.
+  useEffect(() => {
+    if (focus !== "directive") return;
+    directive.current?.focus();
+    directive.current?.scrollIntoView({ block: "center" });
+  }, [focus]);
 
   const aboutAgent = useCallback(
     (e: ChannelEvent) =>
@@ -426,66 +432,3 @@ function Relay({ agent, events, partial }: { agent: Agent; events: ChannelEvent[
   );
 }
 
-/**
- * Renames the Agent while it runs (ADR 0009). Anyone on the Channel may; the Agent ID
- * never changes, and the rename shows in the history as old → new.
- */
-function RenameDialog({ agent, open, onOpenChange }: { agent: Agent; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const store = useStore();
-  const [name, setName] = useState(agent.nickname ?? "");
-  const [busy, setBusy] = useState(false);
-  // Opened again, or someone else renamed it meanwhile: start from the Channel's name.
-  useEffect(() => setName(agent.nickname ?? ""), [agent.nickname, open]);
-  const changed = name.trim() !== (agent.nickname ?? "");
-
-  const save = async (nickname: string | null) => {
-    setBusy(true);
-    const r = await store.source.act({ type: "rename", agent: agent.id, nickname });
-    setBusy(false);
-    if (!r.ok) return toast.error(r.reason);
-    onOpenChange(false);
-    toast.success(nickname ? `${agent.id} is now ${nickname.trim()}` : `${agent.id} has no Nickname now`);
-  };
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (changed) void save(name.trim() || null);
-          }}
-          className="flex flex-col gap-4"
-        >
-          <DialogHeader>
-            <DialogTitle>Rename {agent.nickname ?? agent.id}</DialogTitle>
-            <DialogDescription>Anyone on the Channel can rename an Agent while it runs. Its Agent ID never changes, and Nicknames are unique.</DialogDescription>
-          </DialogHeader>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-small text-ink-3">Nickname</span>
-            <input
-              autoFocus
-              placeholder="api-client"
-              maxLength={MAX_NICKNAME_LENGTH}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="h-[30px] rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-[16px]"
-            />
-          </label>
-          <DialogFooter>
-            {agent.nickname && (
-              <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void save(null)} className="sm:mr-auto">
-                Clear the Nickname
-              </Button>
-            )}
-            <Button type="button" size="sm" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" size="sm" disabled={!changed || busy}>
-              Rename
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}

@@ -13,7 +13,7 @@ import {
 } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 import { Sheet } from "@/components/shell/sheet";
-import { useHosts } from "@/data/hosts";
+import { useHosts, useHostsSupported } from "@/data/hosts";
 import { useMe, useStore } from "@/data/store";
 import { hostName } from "@/lib/format";
 import { go } from "@/lib/router";
@@ -48,33 +48,6 @@ export function WithCode({ text }: { text: string }) {
       )}
     </>
   );
-}
-
-/** Per Channel's store, whether its Worker has Hosts: asked once, so every button and empty state agrees. */
-const hostsSupported = new WeakMap<object, Promise<boolean>>();
-
-/** Whether this Channel's Worker has Hosts at all (ADR 0015): `null` while asking. */
-export function useHostsSupported(): boolean | null {
-  const store = useStore();
-  const [supported, setSupported] = useState<boolean | null>(null);
-  useEffect(() => {
-    let live = true;
-    let asked = hostsSupported.get(store);
-    if (asked === undefined) {
-      // Only an answer is kept: a failed read is asked again by the next button or view that mounts.
-      asked = store.source.hosts().then((r) => r !== null);
-      hostsSupported.set(store, asked);
-      asked.catch(() => hostsSupported.delete(store));
-    }
-    asked.then(
-      (s) => live && setSupported(s),
-      () => live && setSupported(false),
-    );
-    return () => {
-      live = false;
-    };
-  }, [store]);
-  return supported;
 }
 
 /**
@@ -469,6 +442,11 @@ function FolderChoices({ host, value, onPick }: { host: Host; value: string; onP
   );
 }
 
+/** Whether this Person can stop the Agent: one of their Hosts runs it, and it is not Gone. */
+export function canStop(agent: Agent, me: string): boolean {
+  return agent.host !== undefined && agent.person === me && agent.presence !== "gone";
+}
+
 /** How long Stop waits for the Agent to go Gone before it may be asked again. */
 const STOP_WAIT_MS = 30_000;
 
@@ -477,13 +455,39 @@ const STOP_WAIT_MS = 30_000;
  * asks, `onAsking` lets the page take its own primary away, so the question holds the only
  * one; once asked, `onStopped` puts focus somewhere that stays, as the question goes.
  */
-export function StopAgentButton({ agent, onAsking, onStopped }: { agent: Agent; onAsking?: (asking: boolean) => void; onStopped?: () => void }) {
+export function StopAgentButton({
+  agent,
+  onAsking,
+  onStopped,
+  ask,
+}: {
+  agent: Agent;
+  onAsking?: (asking: boolean) => void;
+  onStopped?: () => void;
+  /** Changed to a new number, it asks at once: a menu's Stop item opens the question here. */
+  ask?: number;
+}) {
   const store = useStore();
   const me = useMe();
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
+    if (ask) setConfirming(true);
+  }, [ask]);
+  useEffect(() => {
     onAsking?.(confirming);
   }, [confirming, onAsking]);
+  // Gone (or no longer this Person's to stop) while the question is open: the question goes,
+  // and the page gets its actions back.
+  const stoppable = canStop(agent, me);
+  useEffect(() => {
+    if (!stoppable) setConfirming(false);
+  }, [stoppable]);
+  // Taken off the page mid-question, it says so too.
+  const asked = useRef(onAsking);
+  useEffect(() => {
+    asked.current = onAsking;
+  }, [onAsking]);
+  useEffect(() => () => asked.current?.(false), []);
   // Taking the question back puts focus on Stop again, where it was.
   const stopButton = useRef<HTMLButtonElement>(null);
   const backToStop = useRef(false);
@@ -507,7 +511,7 @@ export function StopAgentButton({ agent, onAsking, onStopped }: { agent: Agent; 
     const timer = setTimeout(() => setStopping(false), STOP_WAIT_MS);
     return () => clearTimeout(timer);
   }, [stopping]);
-  if (agent.host === undefined || agent.person !== me || agent.presence === "gone") return null;
+  if (!stoppable) return null;
   const name = agent.nickname ?? agent.id;
 
   const stop = async () => {
@@ -543,7 +547,7 @@ export function StopAgentButton({ agent, onAsking, onStopped }: { agent: Agent; 
         }}
       >
         <span className="text-small text-ink">
-          Stop {name}? {hostName(agent.host)} ends its session; a Claim it holds goes Stale.
+          Stop {name}? {hostName(agent.host ?? "")} ends its session; a Claim it holds goes Stale.
         </span>
         <Button type="button" variant="primary" busy={busy} onClick={stop}>
           Stop Agent
