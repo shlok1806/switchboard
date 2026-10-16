@@ -6,7 +6,7 @@
 
 import { env, reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentDeliverable,
   AgentId,
@@ -50,6 +50,11 @@ import { FakeGitHub, type WebhookDelivery } from "./fake-github";
 import { FakeJev } from "./fake-jev";
 
 const WEBHOOK_SECRET = "test-webhook-secret";
+
+// Each test drives the Channel through several round trips, and its helpers wait up to 8 s
+// for the Relay (`verdictsOn`). A test budget below that cuts a slow run short with a bare
+// timeout instead of the helper's own message, as happened under three suites at once.
+vi.setConfig({ testTimeout: 15_000 });
 
 let github: FakeGitHub;
 let jev: FakeJev;
