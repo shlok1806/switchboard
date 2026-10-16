@@ -220,19 +220,23 @@ stay as a line. The selected row keeps its paper-3 band. From 640 up the Agents 
 Host column and then the context meter by the width it has, not the window's (see Agents
 table). The queue keeps its actions.
 
-States. Every view has four, and `npm run shots` draws each one in both themes at 1440 and 390
-(`?mock=1&state=loading|empty|error`). Loading keeps the page head's title and draws the
+States. Every view has four, and `npm run shots` checks each one over the simulated Channel
+(`?mock=1&state=ready|loading|empty|error|read-error`, on a stopped clock): a ready view in
+both themes at 1440 and 390, the others once light at 1440 and once dark at 390. Loading keeps the page head's title and draws the
 view's own shape in `--rule` bars (rows for a table, cards for the board, boxes for the
 canvas, the dark box for a terminal) under one slow opacity pulse that reduced motion stops;
-it says "Loading Agents" to a screen reader, never on screen. Empty keeps the page head and
-puts, where the rows would start, a rule, a 15/600 line saying what is missing, one 13 ink-3
-sentence on how it fills, and exactly one action: the button that fills it (Start an Agent,
+it says "Loading Agents" to a screen reader, never on screen, through one status region that
+stays on the page and changes its words. A view whose code is still on its way waits 150ms
+before it draws a skeleton, so a fast load never flashes one. Empty keeps the page head and
+puts, where the rows would start, a rule, a 15/600 line saying what is missing, one 14 ink-2
+sentence on how it fills (running text, so not the muted ink), and exactly one action: the button that fills it (Start an Agent,
 New Task, Post an Update), or, when only a terminal can, the command shown whole in mono with
 Copy beside it. A filter or a search that matches nothing is empty too, and its action
 clears it. Error is a page, not a toast: a 20/600 line saying what failed, a sentence on
 what still works, the server's own reason in a `--paper-2` block when there is one, and its
 actions (Try again first, then a way back). An address with no page says "No such page", an
-unknown Agent or Task says so with a link back to its list, and an unknown note or Event in
+unknown Agent or Task says so with a link back to its list (not an alert: nothing failed, so
+focus goes to its title instead), and an unknown note or Event in
 the inspector says so with Close. Nothing reads "Loading" or "Reading" forever: a read that
 fails or finds nothing becomes one of these.
 

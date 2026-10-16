@@ -13,7 +13,7 @@ import type { Agent, Task } from "@shared/index";
 import { VIEWS } from "@/components/shell/nav";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
 import { canStop, openStartAgent } from "@/components/domain/start-agent";
-import { shortName } from "@/components/domain/fleet";
+import { ownedName } from "@/components/domain/fleet";
 import { useHostsSupported } from "@/data/hosts";
 import { useCapabilities, useChannel, useMe, useStore } from "@/data/store";
 import { channelBase, channelRepo, wantsMock } from "@/lib/session";
@@ -57,12 +57,25 @@ const PLACEHOLDER: Record<Step["kind"], string> = {
 /** The views whose page is a list: there `/` opens the palette, or the page's own Find. */
 const LISTS = new Set<Route["view"]>(["now", "agents", "tasks", "canvas", "feed", "memory", "hosts"]);
 
-const agentName = (a: Agent) => `${a.person}/${shortName(a)}`;
-
 /** Whether a key press is typing into a field, where `/` is a character and not a shortcut. */
 function typing(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.closest("[role=dialog]") !== null;
+}
+
+// The deployment's Channels, read once a session: they change only with a deploy.
+let channelsRead: Promise<string[]> | undefined;
+
+function readChannels(): Promise<string[]> {
+  channelsRead ??= fetch(`${channelBase()}/auth/config`, { credentials: "include" })
+    .then((r) => (r.ok ? (r.json() as Promise<{ repos?: string[] }>) : null))
+    .then((c) => c?.repos ?? [])
+    .catch(() => {
+      // Read again on the next opening.
+      channelsRead = undefined;
+      return [];
+    });
+  return channelsRead;
 }
 
 /** The other Channels this deployment serves, to switch to; none for the simulated one. */
@@ -71,13 +84,10 @@ function useOtherChannels(open: boolean): string[] {
   useEffect(() => {
     if (!open || wantsMock()) return;
     let live = true;
-    fetch(`${channelBase()}/auth/config`, { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((c: { repos?: string[] } | null) => {
-        const here = channelRepo();
-        if (live && c?.repos) setRepos(c.repos.filter((r) => r !== here));
-      })
-      .catch(() => {});
+    void readChannels().then((all) => {
+      const here = channelRepo();
+      if (live) setRepos(all.filter((r) => r !== here));
+    });
     return () => {
       live = false;
     };
@@ -164,8 +174,8 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
     setBusy(true);
     const r = await store.source.act({ type: "directive", to: a.id, text });
     setBusy(false);
-    if (!r.ok) return void toast.error(`Could not send the Directive to ${agentName(a)}`, { description: r.reason });
-    toast.success(`Directive sent to ${agentName(a)}`, { description: text });
+    if (!r.ok) return void toast.error(`Could not send the Directive to ${ownedName(a)}`, { description: r.reason });
+    toast.success(`Directive sent to ${ownedName(a)}`, { description: text });
     close();
   };
 
@@ -174,8 +184,8 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
     setBusy(true);
     const r = await store.source.stopAgent(a.id);
     setBusy(false);
-    if (!r.ok) return void toast.error(`Could not stop ${agentName(a)}`, { description: r.reason });
-    toast.success(`Asked ${agentName(a)} to stop`, { description: "It goes Gone when its Host ends the session." });
+    if (!r.ok) return void toast.error(`Could not stop ${ownedName(a)}`, { description: r.reason });
+    toast.success(`Asked ${ownedName(a)} to stop`, { description: "It goes Gone when its Host ends the session." });
     close();
   };
 
@@ -194,7 +204,7 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
     step.kind === "agent"
       ? [COMMAND_LABEL[step.command]]
       : step.kind === "directive" || step.kind === "stop"
-        ? [COMMAND_LABEL[step.kind], agentName(step.agent)]
+        ? [COMMAND_LABEL[step.kind], ownedName(step.agent)]
         : step.kind === "takeover"
           ? [COMMAND_LABEL.takeover]
           : [];
@@ -236,7 +246,7 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
   } else if (step.kind === "directive") {
     const text = search.trim();
     body = (
-      <CommandGroup heading={`Read by ${agentName(step.agent)} at the start of its next turn`}>
+      <CommandGroup heading={`Read by ${ownedName(step.agent)} at the start of its next turn`}>
         <CommandItem value="send" disabled={!text || busy} onSelect={() => void sendDirective(step.agent)}>
           <Send aria-hidden />
           {text ? (
@@ -254,7 +264,7 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
     body = (
       <CommandGroup heading={`Its session on ${step.agent.host ?? "its Host"} ends and it goes Gone`}>
         <CommandItem value="stop" disabled={busy} onSelect={() => void stop(step.agent)} className="font-medium">
-          <Square aria-hidden /> Stop {agentName(step.agent)}
+          <Square aria-hidden /> Stop {ownedName(step.agent)}
           {busy && <CommandShortcut>Stopping</CommandShortcut>}
         </CommandItem>
         <CommandItem value="keep" disabled={busy} onSelect={back}>

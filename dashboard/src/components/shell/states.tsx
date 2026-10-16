@@ -12,7 +12,7 @@
  *
  * The root of each carries `data-view-state`, which the screenshot tests read.
  */
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, useEffect, useId, useRef, useState, useSyncExternalStore, type ErrorInfo, type ReactNode } from "react";
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
@@ -283,16 +283,65 @@ function Body({ view }: { view: Route["view"] }) {
   }
 }
 
+// What is loading, for the one status region the app keeps on the page (LoadingStatus). A
+// region that mounts with its words already in it is often not read; one that stays and
+// changes its words is.
+let loading: string[] = [];
+const loadingListeners = new Set<() => void>();
+const changed = () => {
+  for (const l of loadingListeners) l();
+};
+
+/** While mounted, the status region says this is loading. */
+function useAnnounceLoading(what: string) {
+  useEffect(() => {
+    loading = [...loading, what];
+    changed();
+    return () => {
+      const at = loading.indexOf(what);
+      loading = loading.filter((_, i) => i !== at);
+      changed();
+    };
+  }, [what]);
+}
+
+/** The status region screen readers hear "Loading Agents" from. Mounted once, by the app. */
+export function LoadingStatus() {
+  const now = useSyncExternalStore(
+    (l) => {
+      loadingListeners.add(l);
+      return () => loadingListeners.delete(l);
+    },
+    () => loading.at(-1),
+  );
+  return (
+    <p role="status" className="sr-only">
+      {now ? `Loading ${now}` : ""}
+    </p>
+  );
+}
+
+/**
+ * The skeleton for a view whose code is still on its way: drawn only if the wait passes 150ms,
+ * so a chunk that arrives at once never flashes a whole skeleton page.
+ */
+export function LateSkeleton({ view, after = 150 }: { view: Route["view"]; after?: number }) {
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setLate(true), after);
+    return () => clearTimeout(timer);
+  }, [after]);
+  return late ? <ViewSkeleton view={view} /> : null;
+}
+
 /** The view's loading state: its page head, then placeholders shaped like its rows. */
 export function ViewSkeleton({ view }: { view: Route["view"] }) {
   const side = view === "agent" || view === "task";
+  useAnnounceLoading(VIEW_NAME[view]);
   return (
     <div data-view-state="loading" aria-busy="true" className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-hidden px-[var(--gutter)] pt-5 pb-12">
         <HeadBars title={VIEW_NAME[view]} />
-        <div role="status" className="sr-only">
-          Loading {VIEW_NAME[view]}
-        </div>
         <div className="loading-pulse flex flex-col gap-5">
           <Body view={view} />
         </div>
@@ -357,11 +406,29 @@ export function CopyCommand({ command }: { command: string }) {
 }
 
 /** A page that could not be drawn: what failed, why, and what to do about it. */
-export function ErrorPage({ title, reason, children, actions }: { title: string; reason?: string; children?: ReactNode; actions: ReactNode }) {
+export function ErrorPage({
+  title,
+  reason,
+  children,
+  actions,
+  missing = false,
+}: {
+  title: string;
+  reason?: string;
+  children?: ReactNode;
+  actions: ReactNode;
+  /** Nothing failed: the address names nothing. Said plainly, with focus on the title, not as an alert. */
+  missing?: boolean;
+}) {
+  const id = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (missing) heading.current?.focus({ preventScroll: true });
+  }, [missing]);
   return (
     <div data-view-state="error" className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[var(--gutter)] pt-5 pb-12">
-      <section role="alert" aria-labelledby="error-title" className="flex max-w-[34rem] flex-col items-start gap-2">
-        <h1 id="error-title" className="text-head font-semibold text-ink">
+      <section role={missing ? undefined : "alert"} aria-labelledby={id} className="flex max-w-[34rem] flex-col items-start gap-2">
+        <h1 ref={heading} id={id} tabIndex={missing ? -1 : undefined} className="text-head font-semibold text-ink outline-none">
           {title}
         </h1>
         {children && <p className="text-row text-ink-2">{children}</p>}

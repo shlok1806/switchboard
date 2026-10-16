@@ -79,20 +79,23 @@ function Root() {
       const params = new URLSearchParams(window.location.search);
       const speed = Number(params.get("speed") ?? "1");
       const fleet = Number(params.get("agents") ?? "0");
-      // `?state=loading|empty|error` draws a Channel in that state, for the screenshot tests.
-      const MOCK_STATES = ["loading", "empty", "error"] as const;
-      void import("@/data/mock/mockSource").then(({ MockChannelSource }) =>
+      // `?state=` draws a Channel in that state for the screenshot tests, on a stopped clock.
+      const MOCK_STATES = ["ready", "loading", "empty", "error", "read-error"] as const;
+      const state = MOCK_STATES.find((s) => s === params.get("state"));
+      void (async () => {
+        if (state) (await import("@/data/mock/clock")).freezeClock("2026-10-15T10:00:00.000Z");
+        const { MockChannelSource } = await import("@/data/mock/mockSource");
         setBoot({
           kind: "ready",
           store: new ChannelStore(
             new MockChannelSource({
               speed: Number.isFinite(speed) && speed > 0 ? speed : 1,
               fleet: Number.isFinite(fleet) ? Math.min(fleet, 1000) : 0,
-              state: MOCK_STATES.find((s) => s === params.get("state")),
+              state,
             }),
           ),
-        }),
-      );
+        });
+      })();
       return;
     }
     const problem = takeSignInProblem();

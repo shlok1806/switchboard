@@ -60,7 +60,7 @@ export function InspectorMissing({ title, children, onClose, sheet }: { title: s
     <InspectorFrame label={`${title}, in the inspector`} onClose={sheet ? onClose : undefined}>
       <section data-view-state="missing" className="flex flex-col items-start gap-1.5">
         <h2 className="text-title font-semibold text-ink">{title}</h2>
-        <p className="text-row text-ink-3">{children}</p>
+        <p className="text-row text-ink-2">{children}</p>
         <div className="pt-3">
           <Button onClick={onClose}>Close</Button>
         </div>

@@ -16,8 +16,8 @@ import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { PendingApproval } from "@/components/domain/approval";
 import { ContextWindow } from "@/components/domain/context";
-import { IssueLink } from "@/components/domain/pending";
-import { EmptyView } from "@/components/shell/states";
+import { IssueButton } from "@/components/domain/pending";
+import { EmptyState, EmptyView } from "@/components/shell/states";
 import { RenameDialog } from "@/components/domain/rename";
 import { FirstAgentAction, StartAgentButton, StopAgentButton, canStop } from "@/components/domain/start-agent";
 import { GroupLine, Secondary, StackedRow, agentName, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
@@ -113,7 +113,7 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
         An Agent joins when someone runs it with <code className="text-ink-2">switchboard run</code>, or starts it on one of their Hosts.
       </EmptyView>
     ) : (
-      <EmptyView view="Agents" title="Agents are not on this Channel yet" action={<IssueLink capability="agents" label="Follow the issue" />}>
+      <EmptyView view="Agents" title="Agents are not on this Channel yet" action={<IssueButton capability="agents" label="Follow the issue" />}>
         This Channel's Worker does not serve Agents. They appear once its issue lands.
       </EmptyView>
     );
@@ -180,7 +180,21 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
         </div>
 
         {shown.length === 0 ? (
-          <p className="border-t border-rule py-6 text-row text-ink-3">No Agent matches.</p>
+          <EmptyState
+            title="No Agent matches"
+            action={
+              <Button
+                onClick={() => {
+                  setFilter("all");
+                  setFind("");
+                }}
+              >
+                {find.trim() ? "Clear the search" : "Clear the filter"}
+              </Button>
+            }
+          >
+            {find.trim() ? <>No Agent{filter !== "all" ? " in this filter" : ""} has “{find.trim()}” in its name, Task or Host.</> : <>None of the {lines.length} Agents is in this filter.</>}
+          </EmptyState>
         ) : mobile ? (
           <ul className="flex flex-col">
             {byPerson.map(([person, group]) => (

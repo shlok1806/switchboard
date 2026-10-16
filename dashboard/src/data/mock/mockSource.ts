@@ -53,7 +53,13 @@ const clone = <T,>(v: T): T => structuredClone(v);
  * A simulated Channel. It replays a scripted history, then plays live Events on a
  * timer and answers Person actions the way the Worker will, including refusals.
  */
-export type MockState = "loading" | "empty" | "error";
+/**
+ * The states every view must draw (`?state=`), for the screenshot tests. Any of them also
+ * stops the timed live Events, so two runs draw the same page (the clock is frozen in main.tsx).
+ */
+export type MockState = "ready" | "loading" | "empty" | "error" | "read-error";
+
+const READ_FAILED = "The Channel's Worker answered 500 to this read.";
 
 export class MockChannelSource implements ChannelSource {
   readonly me = ME;
@@ -76,6 +82,7 @@ export class MockChannelSource implements ChannelSource {
   private verdicts: Verdict[] = [];
   private listeners = new Set<(m: StreamMessage) => void>();
   private timers: ReturnType<typeof setTimeout>[] = [];
+
   private started = false;
 
   constructor(
@@ -85,8 +92,10 @@ export class MockChannelSource implements ChannelSource {
       /** Pads the fleet to this many Agents (`?agents=200`). */
       fleet?: number;
       /**
-       * A Channel in one of the states every view must draw (`?state=`): still loading (the
-       * snapshot never comes), empty (no Agents, Tasks, Events or Hosts), or unreachable.
+       * A Channel in one of the states every view must draw (`?state=`): as usual but still
+       * (ready), still loading (the snapshot never comes), empty (no Agents, Tasks, Events or
+       * Hosts), unreachable, or reachable with every read of its Hosts, notes and Events by ID
+       * failing (read-error).
        */
       state?: MockState;
     } = {},
@@ -128,6 +137,7 @@ export class MockChannelSource implements ChannelSource {
   }
 
   async eventsById(): Promise<ChannelEvent[]> {
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
     return [];
   }
 
@@ -139,7 +149,7 @@ export class MockChannelSource implements ChannelSource {
     this.listeners.add(onMessage);
     onState("connecting");
     const ready = setTimeout(() => onState("live"), 250);
-    if (!this.started && this.opts.state !== "empty") {
+    if (!this.started && this.opts.state === undefined) {
       this.started = true;
       this.play();
     }
@@ -403,6 +413,7 @@ export class MockChannelSource implements ChannelSource {
 
   async hosts(): Promise<HostsResponse> {
     await new Promise((r) => setTimeout(r, 120));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
     const running = this.agents.filter((a) => a.host !== undefined && a.presence !== "gone").length;
     // The other Persons' Hosts the demo Agents run on (a Person starts Agents only on their
     // own), and a laptop of shlok's that has been Offline for two days.
@@ -423,6 +434,7 @@ export class MockChannelSource implements ChannelSource {
    */
   async memory(query: MemoryQuery): Promise<MemoryResponse> {
     await new Promise((r) => setTimeout(r, 120));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
     const tokens = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
     const words = query.q === undefined ? [] : tokens(query.q);
     const limit = Math.min(query.limit ?? 20, MAX_MEMORY_LIMIT);

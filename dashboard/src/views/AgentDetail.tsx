@@ -45,6 +45,7 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
   if (!agent) {
     return (
       <ErrorPage
+        missing
         title="No such Agent"
         reason={id}
         actions={

@@ -75,6 +75,7 @@ export function TaskDetail({ number }: { number: number }) {
   if (!task) {
     return (
       <ErrorPage
+        missing
         title={`No Task #${number}`}
         actions={
           <a href={href({ view: "tasks" })} className={buttonVariants({ variant: "primary" })}>

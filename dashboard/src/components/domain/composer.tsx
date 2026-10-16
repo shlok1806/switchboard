@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import type { AgentId } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
-import { shortName } from "@/components/domain/fleet";
+import { ownedName, shortName } from "@/components/domain/fleet";
 import { useCapabilities, useChannel, useStore } from "@/data/store";
 
 type Mode = "update" | "directive";
@@ -40,7 +40,7 @@ export function Composer({ task }: { task?: number }) {
     setBusy(false);
     if (!r.ok) return void toast.error(r.reason);
     setText("");
-    toast.success(directive ? `Directive sent to ${target ? `${target.person}/${shortName(target)}` : to}` : "Update posted");
+    toast.success(directive ? `Directive sent to ${target ? ownedName(target) : to}` : "Update posted");
   };
 
   return (

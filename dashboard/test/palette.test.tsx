@@ -35,6 +35,7 @@ function Harness({ route }: { route: Route }) {
   return (
     <>
       <button type="button">On the page</button>
+      {route.view === "memory" && <input aria-label="Find" data-slash-find />}
       <CommandPalette open={open} onOpenChange={setOpen} route={route} />
     </>
   );
@@ -69,6 +70,13 @@ describe("the command palette", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
+  it("puts / into Memory's own Find instead", async () => {
+    await show({ view: "memory" });
+    fireEvent.keyDown(document, { key: "/" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Find" }));
+  });
+
   it("does not take / on a page that is not a list", async () => {
     await show({ view: "task", number: 12 });
     fireEvent.keyDown(document, { key: "/" });
@@ -89,6 +97,18 @@ describe("the command palette", () => {
     await choose(/Send “Run the tests before pushing”/);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(act).toHaveBeenCalledWith({ type: "directive", to: "shlok/claude/7f3a", text: "Run the tests before pushing" });
+  });
+
+  it("sends the Directive with Enter", async () => {
+    await show();
+    const act = vi.spyOn(source, "act");
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    await choose(/Directive to/);
+    await choose(/shlok\/claude\/7f3a/);
+    typeIn("Rebase before the review");
+    press("Enter");
+    await waitFor(() => expect(act).toHaveBeenCalledWith({ type: "directive", to: "shlok/claude/7f3a", text: "Rebase before the review" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("goes back a step with Backspace in an empty input, and with Escape", async () => {
@@ -140,6 +160,7 @@ describe("the command palette", () => {
     fireEvent.keyDown(document, { key: "k", metaKey: true });
     await choose(/Directive to/);
     const recent = within(palette()).getByRole("group", { name: "Recent" });
-    expect(within(recent).getAllByRole("option").map((o) => o.textContent?.split(" ")[0])).toEqual(["maya/claude/2b8dusers-pageLive"]);
+    expect(within(recent).getAllByRole("option")).toHaveLength(1);
+    expect(within(recent).getByText("maya/claude/2b8d")).toBeTruthy();
   });
 });

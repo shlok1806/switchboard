@@ -14,7 +14,7 @@ import { Chip } from "@/components/atoms/Chip";
 import { Composer } from "@/components/domain/composer";
 import { EventDetail } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
-import { shortName } from "@/components/domain/fleet";
+import { ownedName } from "@/components/domain/fleet";
 import { CAPTURES, EventRow, InterruptRow, LogHead, TurnRow, type TurnItem } from "@/components/domain/log";
 import { HolderLabel } from "@/components/domain/task";
 import { InspectorFrame, InspectorMissing } from "@/components/shell/inspector";
@@ -305,7 +305,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                 value={filters.agent}
                 onChange={set("agent")}
                 allLabel="Any Agent"
-                options={agents.map((a) => ({ value: a.id, label: a.nickname ? `${a.id} (${a.nickname})` : a.id, short: `${a.person}/${shortName(a)}` }))}
+                options={agents.map((a) => ({ value: a.id, label: a.nickname ? `${a.id} (${a.nickname})` : a.id, short: ownedName(a) }))}
               />
               <FilterSelect
                 label="Task"

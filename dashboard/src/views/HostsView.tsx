@@ -14,7 +14,7 @@ import { Glyph, State, useAgentStates } from "@/components/domain/state";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
-import { CopyCommand, EmptyView, ErrorPage, ViewSkeleton } from "@/components/shell/states";
+import { CopyCommand, EmptyState, EmptyView, ErrorPage, ViewSkeleton } from "@/components/shell/states";
 import { useHosts } from "@/data/hosts";
 import { useChannel, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -128,7 +128,9 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
           </p>
         )}
         {shown.length === 0 ? (
-          <p className="border-t border-rule py-6 text-row text-ink-3">No Host matches.</p>
+          <EmptyState title="No Host matches" action={<Button onClick={() => setFilter("all")}>Clear the filter</Button>}>
+            None of the {all.length} Hosts is in this filter.
+          </EmptyState>
         ) : mobile ? (
           <ul className="flex flex-col">
             {byPerson.map(([person, group]) => (

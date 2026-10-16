@@ -1,18 +1,11 @@
-import type { ReactNode } from "react";
 import { buttonVariants } from "@/components/atoms/Button";
 import { CAPABILITY_ISSUE, type Capabilities } from "@/data/source";
 
 const REPO_ISSUES = "https://github.com/shlok1806/switchboard/issues/";
 
-/** Links the issue that will bring a missing capability. */
-export function IssueLink({ capability, label }: { capability: keyof Capabilities; label?: string }) {
+/** Links the issue that will bring a missing capability, inside a sentence: `#14`. */
+export function IssueLink({ capability }: { capability: keyof Capabilities }) {
   const n = CAPABILITY_ISSUE[capability];
-  if (label)
-    return (
-      <a href={`${REPO_ISSUES}${n}`} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "secondary" })}>
-        {label} <span className="text-ink-3 tabular-nums">#{n}</span>
-      </a>
-    );
   return (
     <a href={`${REPO_ISSUES}${n}`} target="_blank" rel="noreferrer" className="text-ink tabular-nums underline-offset-4 hover:underline">
       #{n}
@@ -20,12 +13,12 @@ export function IssueLink({ capability, label }: { capability: keyof Capabilitie
   );
 }
 
-/** A calm empty state for a part of the Dashboard the Channel does not serve yet. */
-export function Pending({ title, children, className = "" }: { title: string; children: ReactNode; className?: string }) {
+/** The same issue as an empty state's one action: a link that looks like a button. */
+export function IssueButton({ capability, label }: { capability: keyof Capabilities; label: string }) {
+  const n = CAPABILITY_ISSUE[capability];
   return (
-    <div className={`flex flex-col items-center justify-center gap-1.5 px-6 py-10 text-center ${className}`}>
-      <p className="text-body font-medium text-ink">{title}</p>
-      <p className="max-w-sm text-small leading-relaxed text-ink-3">{children}</p>
-    </div>
+    <a href={`${REPO_ISSUES}${n}`} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "secondary" })}>
+      {label} <span className="text-ink-3 tabular-nums">#{n}</span>
+    </a>
   );
 }

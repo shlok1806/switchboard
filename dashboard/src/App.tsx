@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { PhoneBar, TabBar, TopBar } from "@/components/shell/nav";
-import { ErrorPage, ViewErrorBoundary, ViewSkeleton } from "@/components/shell/states";
+import { ErrorPage, LateSkeleton, LoadingStatus, ViewErrorBoundary, ViewSkeleton } from "@/components/shell/states";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button, buttonVariants } from "@/components/atoms/Button";
@@ -106,7 +106,7 @@ export default function App() {
       </ErrorPage>
     ) : (
       <ViewErrorBoundary key={page}>
-        <Suspense fallback={<ViewSkeleton view={route.view} />}>
+        <Suspense fallback={<LateSkeleton view={route.view} />}>
           {route.view === "now" && <NowView />}
           {route.view === "feed" && <ActivityView selected={route.event} byTurn={route.by === "turn"} turn={route.turn} />}
           {route.view === "tasks" && <TasksView />}
@@ -117,7 +117,7 @@ export default function App() {
           {route.view === "memory" && <MemoryView selected={route.note} />}
           {route.view === "hosts" && <HostsView selected={route.host} />}
           {route.view === "missing" && (
-            <ErrorPage
+            <ErrorPage missing
               title="No such page"
               actions={
                 <a href={href({ view: "now" })} className={buttonVariants({ variant: "primary" })}>
@@ -135,6 +135,7 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={500}>
       <div className="flex h-dvh flex-col bg-page">
+        <LoadingStatus />
         <a
           href="#main"
           onClick={(e) => {
