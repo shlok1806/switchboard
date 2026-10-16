@@ -616,10 +616,18 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       child?.kill();
       return false;
     }
-    log(
-      `session ${sessionId} continues ${(predecessor as AgentSummary).agent.id}${decided === "briefed" ? ", briefed already" : ""}`,
-    );
-    if (decided === "brief") nextTurn.handOff((max) => handoffBrief(predecessor as AgentSummary, max));
+    const from = predecessor as AgentSummary;
+    if (decided === "briefed") {
+      // Said in the terminal, as a known session's is before its CLI starts.
+      notify(
+        `this session continues ${summaryName(from.agent)}; it was told what the Channel knows of it when it started.`,
+      );
+      return true;
+    }
+    log(`session ${sessionId} continues ${from.agent.id}`);
+    nextTurn.handOff((max) => handoffBrief(from, max));
+    // Hooks seen not to run left what they held for the read_channel tool already: the brief joins it.
+    heldForTools();
     return true;
   };
   // False once a CLI whose hooks need the Person's trust is seen not to run them:

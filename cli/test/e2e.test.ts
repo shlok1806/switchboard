@@ -59,11 +59,12 @@ let scratch = "";
 let env: Record<string, string> = {};
 let cwd = "";
 /**
- * The temp dir of every wrapper and Host this suite starts. A wrapper removes its session
- * dirs when it ends, but the tests that SIGKILL one leave them, Agent secret included.
- * Not inside `scratch`: a wrapper's hook socket path must stay under 104 bytes on macOS.
+ * The temp dir of every wrapper, Host and `wrangler dev` this suite starts, removed when
+ * it ends. A wrapper removes its session dirs when it ends, but the tests that SIGKILL one
+ * leave them, Agent secret included. Not inside `scratch`: a wrapper's hook socket path
+ * must stay under 104 bytes on macOS (test/short-tmpdir.ts).
  */
-let wrapperTmp = "";
+let suiteTmp = "";
 const terminals: pty.IPty[] = [];
 const github = new GitHubApi("e2e/repo");
 /** The Relay's Interrupt rate limit in this test: at most one per Agent this often. */
@@ -312,7 +313,7 @@ beforeAll(async () => {
   await isolateGit();
   // By default the Person runs the wrapper in a clone of the Channel's repo, whose origin is a local stand-in.
   cwd = await realpath(await mkdtemp(join(tmpdir(), "switchboard-repo-")));
-  wrapperTmp = await mkdtemp(join(tmpdir(), "sb-tmp-"));
+  suiteTmp = await mkdtemp(join(tmpdir(), "sb-tmp-"));
   const origin = join(scratch, "default-origin.git");
   await git(scratch, "init", "--quiet", "--bare", "-b", "main", origin);
   await cloneChannel(origin, cwd);
@@ -364,7 +365,7 @@ beforeAll(async () => {
     ],
     {
       cwd: WORKER_DIR,
-      env: { ...process.env, ...secrets, WRANGLER_SEND_METRICS: "false" },
+      env: { ...process.env, ...secrets, WRANGLER_SEND_METRICS: "false", TMPDIR: suiteTmp },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -390,7 +391,7 @@ beforeAll(async () => {
     SWITCHBOARD_IDLE_AFTER_SECONDS: "1",
     SWITCHBOARD_HEARTBEAT_SECONDS: "0.5",
     CLAUDE_CONFIG_DIR: join(scratch, "claude"),
-    TMPDIR: wrapperTmp,
+    TMPDIR: suiteTmp,
   };
 }, 90_000);
 
@@ -412,7 +413,7 @@ afterAll(async () => {
   // Retries: a terminal a failed test left behind may still be writing its config.
   if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 5 });
   if (cwd) await rm(cwd, { recursive: true, force: true });
-  if (wrapperTmp) await rm(wrapperTmp, { recursive: true, force: true, maxRetries: 5 });
+  if (suiteTmp) await rm(suiteTmp, { recursive: true, force: true, maxRetries: 5 });
 });
 
 describe("switchboard run claude", () => {
@@ -2902,6 +2903,7 @@ describe("switchboard run codex and gemini", () => {
     const again = await sessionStart(resumed);
     expect(again).toContain("[Switchboard] Standing rule");
     expect(again).not.toContain("continues the work of");
+    await resumed.waitForOutput(/it was told what the Channel knows of it when it started/);
     await waitForPresence(successorId as AgentId, "live");
     await quit(resumed);
 
@@ -3003,6 +3005,30 @@ describe("switchboard run codex and gemini", () => {
     term.type("quit\r");
     expect(await term.exited).toBe(0);
     expect(term.output.slice(ran)).toMatch(/Open \/hooks in Codex and trust the switchboard hooks/);
+  }, 90_000);
+
+  it("hands the Hand-off Brief over through read_channel while Codex's hooks are untrusted (ADR 0024)", async () => {
+    const giver = new Terminal(["run", "codex", "--nickname", "hand-giver"], { ...fakeEnv, FAKE_CODEX_TRUSTED: "1" });
+    const giverId = `e2e/codex/${(await startedAs(giver, "FAKE-CODEX")).sessionId.slice(-4)}`;
+    giver.type("prompt hello\r");
+    await waitFor("the Agent to continue", async () => (await agents()).find((a) => a.id === giverId));
+    giver.type("quit\r");
+    expect(await giver.exited).toBe(0);
+
+    const term = new Terminal(["run", "codex", "--from", "hand-giver"], fakeEnv);
+    const id = `e2e/codex/${(await startedAs(term, "FAKE-CODEX")).sessionId.slice(-4)}`;
+    // No hook runs: the session is found from its file once the wrapper stops waiting for them.
+    term.type("prompt hello\r");
+    await waitFor("the successor", async () => (await agents()).find((a) => a.id === id && a.continues === giverId));
+    const answer = await waitFor("read_channel to hand the brief over", async () => {
+      const text = await callFakeTool(term, "FAKE-CODEX", "read_channel", { limit: 3 });
+      return text.includes("continues the work of") ? text : undefined;
+    });
+    expect(answer).toContain(`this session continues the work of ${giverId} "hand-giver"`);
+    // Handed over once.
+    expect(await callFakeTool(term, "FAKE-CODEX", "read_channel", { limit: 3 })).not.toContain("continues the work of");
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
   }, 90_000);
 
   it("registers a Gemini CLI session from its hooks, and labels its Interrupts downgraded", async () => {
