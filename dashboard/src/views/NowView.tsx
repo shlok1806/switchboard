@@ -11,6 +11,7 @@ import { buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { PendingApproval } from "@/components/domain/approval";
 import { GroupLine, Secondary, StackedRow, contextPercent, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
+import { RowFrame } from "@/components/domain/log";
 import { State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { useNow } from "@/components/domain/usage";
@@ -20,7 +21,7 @@ import { useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { TAG_LABEL, actorName, elapsed, holderName, localTime, summarize, zoneCity } from "@/lib/format";
 import { isMine, needsQueue, type QueueItem } from "@/lib/queue";
-import { href } from "@/lib/router";
+import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
 /** What the log leaves out: the machine's own bookkeeping, which Activity still shows. */
@@ -499,7 +500,8 @@ function Memory({ events, now }: { events: ChannelEvent[]; now: number }) {
       ) : (
         <ol>
           {notes.slice(0, 3).map((n) => (
-            <li key={n.id} className="border-b border-rule py-3">
+            // A note opens in Memory, with the Events around it.
+            <RowFrame key={n.id} selected={false} onPick={() => go({ view: "memory", note: n.id })} className="px-1 py-3">
               <p className="max-w-[72ch] text-row break-words text-ink">{n.text}</p>
               <p className="mt-1 text-small text-ink-3">
                 <span className="font-semibold text-ink-2">{n.tags.map((t) => TAG_LABEL[t]).join(", ")}</span>
@@ -510,7 +512,7 @@ function Memory({ events, now }: { events: ChannelEvent[]; now: number }) {
                 })()}
                 {n.task !== undefined && ` on #${n.task}`} · {elapsed(n.at, now)}
               </p>
-            </li>
+            </RowFrame>
           ))}
         </ol>
       )}

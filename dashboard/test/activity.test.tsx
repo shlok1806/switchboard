@@ -283,6 +283,37 @@ describe("new Events", () => {
   });
 });
 
+describe("new Events, on a turn link", () => {
+  it("count nothing on landing, and only what arrives after", async () => {
+    render(<ActivityView byTurn turn="t1" />, { wrapper: channel() });
+    await screen.findAllByText("Users page loads 50 at a time.");
+    expect(screen.queryByRole("button", { name: /new Event/ })).toBeNull();
+    act(() => push({ type: "event", event: ev("update", moth, { text: "Tests pass." }, { capture: "tool" }) }));
+    expect(screen.getByRole("button", { name: "1 new Event" })).toBeTruthy();
+  });
+
+  it("stay counted when the log's own scroll to the turn ends near the bottom", async () => {
+    // As a browser does: the turn's scrollIntoView scrolls the log, landing 40px from the
+    // bottom, and the scroll event follows before the next frame.
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {
+      const log = this.closest("[role=region]") as HTMLElement;
+      Object.defineProperty(log, "scrollHeight", { configurable: true, value: 2000 });
+      Object.defineProperty(log, "clientHeight", { configurable: true, value: 400 });
+      log.scrollTop = 1560;
+      queueMicrotask(() => fireEvent.scroll(log));
+    });
+    render(<ActivityView byTurn turn="t1" />, { wrapper: channel() });
+    const log = await screen.findByRole("region", { name: "Events" });
+    await screen.findAllByText("Users page loads 50 at a time.");
+    await act(async () => {});
+    expect(scrollIntoView).toHaveBeenCalled();
+    act(() => push({ type: "event", event: ev("update", moth, { text: "Tests pass." }, { capture: "tool" }) }));
+    expect(screen.getByRole("button", { name: "1 new Event" })).toBeTruthy();
+    expect(log.scrollTop).toBe(1560);
+    scrollIntoView.mockRestore();
+  });
+});
+
 describe("new Events, regrouped", () => {
   it("are cleared when a new grouping starts the log at the newest again", async () => {
     render(<ActivityView />, { wrapper: channel() });

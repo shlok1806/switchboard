@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, Ref } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
@@ -42,7 +42,7 @@ export function Button({
   disabled,
   children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants> & { busy?: boolean }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants> & { busy?: boolean; ref?: Ref<HTMLButtonElement> }) {
   return (
     <button className={cn(buttonVariants({ variant, size }), className)} disabled={disabled || busy} aria-busy={busy || undefined} {...props}>
       {busy && <span aria-hidden className="size-3 shrink-0 rounded-full border-[1.5px] border-current border-r-transparent motion-safe:animate-spin" />}

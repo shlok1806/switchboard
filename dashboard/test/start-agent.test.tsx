@@ -5,11 +5,15 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActionResult, Agent, Host, HostsResponse } from "@shared/index";
-import { StartAgentButton, StopAgentButton } from "@/components/domain/start-agent";
+import { CommandPalette } from "@/components/domain/palette";
+import { StartAgentButton, StartAgentSheet, StopAgentButton } from "@/components/domain/start-agent";
 import type { ChannelSource, SpawnResult } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const host: Host = {
   id: "shlok/studio",
@@ -46,21 +50,29 @@ function pending<T>() {
   return { promise, settle };
 }
 
-async function openStartDialog(src: ChannelSource) {
-  render(<StartAgentButton />, { wrapper: withChannel(src) });
+async function openStartSheet(src: ChannelSource) {
+  render(
+    <>
+      <StartAgentButton />
+      <StartAgentSheet />
+    </>,
+    { wrapper: withChannel(src) },
+  );
   fireEvent.click(await screen.findByRole("button", { name: "Start an Agent" }));
-  return screen.findByRole("button", { name: "Start Agent" });
+  const start = (await screen.findByRole("button", { name: "Start Agent" })) as HTMLButtonElement;
+  await waitFor(() => expect(start.disabled).toBe(false));
+  return start;
 }
 
 describe("starting an Agent", () => {
-  it("shows the Channel's refusal in the dialog, with its command as code", async () => {
+  it("shows the Channel's refusal in the sheet, with its command as code", async () => {
     const spawnAgent = vi.fn(
       async (): Promise<SpawnResult> => ({
         ok: false,
         reason: "/tmp is not under studio's folders. Run `switchboard host install` again to add it.",
       }),
     );
-    const start = await openStartDialog(source({ spawnAgent }));
+    const start = await openStartSheet(source({ spawnAgent }));
     fireEvent.click(start);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("is not under studio's folders");
@@ -71,19 +83,68 @@ describe("starting an Agent", () => {
   it("starts one Agent however often Start is pressed, and cannot be closed while it starts", async () => {
     const answer = pending<SpawnResult>();
     const spawnAgent = vi.fn(() => answer.promise);
-    const start = await openStartDialog(source({ spawnAgent }));
-    const form = start.closest("form") as HTMLFormElement;
+    const start = await openStartSheet(source({ spawnAgent }));
+    const form = document.getElementById(start.getAttribute("form") ?? "") as HTMLFormElement;
     fireEvent.submit(form);
     fireEvent.submit(form);
     expect(spawnAgent).toHaveBeenCalledTimes(1);
 
-    await screen.findByRole("button", { name: "Starting" });
+    // Start keeps its label and spins while it waits; nothing closes the sheet meanwhile.
+    await waitFor(() => expect(start.getAttribute("aria-busy")).toBe("true"));
     expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-    expect(screen.getByRole("button", { name: "Starting" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Start an Agent" })).toBeTruthy();
 
     await act(async () => answer.settle({ ok: false, reason: "studio is Offline." }));
     expect((await screen.findByRole("alert")).textContent).toBe("studio is Offline.");
+  });
+
+  it("refuses a folder outside the Host's roots with the Host's reason, before asking", async () => {
+    const spawnAgent = vi.fn();
+    const start = await openStartSheet(source({ spawnAgent }));
+    const folder = screen.getByRole("textbox", { name: "Folder" });
+    fireEvent.change(folder, { target: { value: "/Users/shlok/code/other" } });
+    expect(folder.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText(/^\/Users\/shlok\/code\/other is not under studio's folders \(\/Users\/shlok\/code\/app\)/)).toBeTruthy();
+    expect(start.disabled).toBe(true);
+    fireEvent.submit(document.getElementById("start-agent") as HTMLFormElement);
+    expect(spawnAgent).not.toHaveBeenCalled();
+
+    // A folder under a root is fine.
+    fireEvent.change(folder, { target: { value: "/Users/shlok/code/app/web" } });
+    expect(folder.getAttribute("aria-invalid")).toBeNull();
+    expect(start.disabled).toBe(false);
+  });
+
+  it("shows the Channel's cap before Start, and will not start past it", async () => {
+    render(
+      <>
+        <StartAgentButton />
+        <StartAgentSheet />
+      </>,
+      { wrapper: withChannel(source({ hosts: async () => ({ hosts: [host], cap: 4, running: 4 }) })) },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Start an Agent" }));
+    expect((await screen.findByRole("meter", { name: "Agents running on Hosts" })).getAttribute("aria-valuenow")).toBe("4");
+    expect(screen.getByText("4 of 4 Agents running on Hosts")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Start Agent" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("opens from the palette's Start an Agent command", async () => {
+    // The palette reads the saved theme; Node 26's own localStorage warns, so a Map stands in.
+    const saved = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => saved.set(k, v) });
+    const onOpenChange = vi.fn();
+    render(
+      <>
+        <CommandPalette open onOpenChange={onOpenChange} />
+        <StartAgentSheet />
+      </>,
+      { wrapper: withChannel(source({})) },
+    );
+    fireEvent.click(await screen.findByRole("option", { name: /Start an Agent/ }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(await screen.findByRole("dialog", { name: "Start an Agent" })).toBeTruthy();
   });
 
   it("asks the Channel again after it could not say whether it has Hosts", async () => {
@@ -118,17 +179,28 @@ describe("stopping an Agent", () => {
     host: "shlok/studio",
   };
 
+  it("asks once, in place, and Escape takes the question back to Stop", async () => {
+    const stopAgent = vi.fn(async (): Promise<ActionResult> => ({ ok: true }));
+    render(<StopAgentButton agent={agent} />, { wrapper: withChannel(source({ stopAgent })) });
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    const question = screen.getByRole("group", { name: "Stop shlok/claude/7f3a?" });
+    expect(question.textContent).toContain("a Claim it holds goes Stale");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("button", { name: "Cancel" }), { key: "Escape" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Stop" }));
+    expect(stopAgent).not.toHaveBeenCalled();
+  });
+
   it("cannot be asked twice: Stop waits, disabled, until the Agent is Gone", async () => {
     const stopAgent = vi.fn(async (): Promise<ActionResult> => ({ ok: true }));
     const wrapper = withChannel(source({ stopAgent }));
     const { rerender } = render(<StopAgentButton agent={agent} />, { wrapper });
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop Agent" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const stopping = screen.getByRole("button", { name: "Stopping" }) as HTMLButtonElement;
+    const stopping = (await screen.findByRole("button", { name: "Stopping" })) as HTMLButtonElement;
     expect(stopping.disabled).toBe(true);
     fireEvent.click(stopping);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("group", { name: /^Stop / })).toBeNull();
     expect(stopAgent).toHaveBeenCalledTimes(1);
 
     // Its session going Idle on the way out is not the answer: Stop stays off.

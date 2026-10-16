@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Monitor, Moon, Plus, Sun } from "lucide-react";
 import { VIEWS } from "@/components/shell/nav";
 import {
   CommandDialog,
@@ -10,6 +10,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command";
+import { openStartAgent, useHostsSupported } from "@/components/domain/start-agent";
 import { useChannel } from "@/data/store";
 import { go, type Route } from "@/lib/router";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
@@ -25,6 +26,7 @@ const THEMES: { id: ThemeChoice; label: string; icon: typeof Sun }[] = [
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { tasks, agents } = useChannel();
   const { choice, set } = useTheme();
+  const hosts = useHostsSupported();
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -47,6 +49,19 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       <CommandInput placeholder="Search views, Tasks and Agents" />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
+        {hosts && (
+          <CommandGroup heading="Commands">
+            <CommandItem
+              value="Start an Agent on a Host"
+              onSelect={() => {
+                onOpenChange(false);
+                openStartAgent();
+              }}
+            >
+              <Plus aria-hidden /> Start an Agent
+            </CommandItem>
+          </CommandGroup>
+        )}
         <CommandGroup heading="Views">
           {VIEWS.map((v) => (
             <CommandItem key={v.id} onSelect={() => run({ view: v.id })}>

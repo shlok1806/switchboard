@@ -85,6 +85,43 @@ describe("the Memory view", () => {
     expect(screen.queryByText("Users API pages by 50.")).toBeNull();
   });
 
+  it("opens a note in the inspector with its author's Events around it", async () => {
+    const at = (m: number) => `2026-10-15T09:${String(m).padStart(2, "0")}:00.000Z`;
+    const other = "bo/claude/bbbb" as AgentId;
+    const events = [
+      { id: "e1", seq: 1, at: at(1), type: "command", actor: { kind: "agent", agentId: scout.id }, capture: "hook", payload: { command: "npm test" } },
+      { id: "e2", seq: 2, at: at(2), type: "command", actor: { kind: "agent", agentId: other }, capture: "hook", payload: { command: "make lint" } },
+      { id: "e3", seq: 3, at: at(3), type: "memory.note", actor: { kind: "agent", agentId: scout.id }, capture: null, payload: { text: "Users API pages by 50.", tags: ["fact"] } },
+      { id: "e4", seq: 4, at: at(4), type: "file.edit", actor: { kind: "agent", agentId: scout.id }, capture: "hook", payload: { path: "web/src/users.tsx", additions: 3, deletions: 0 } },
+    ] as unknown as ChannelEvent[];
+    const memory = async (): Promise<MemoryResponse> => ({ notes: [note(3, "Users API pages by 50.")] });
+    const snapshot = async () =>
+      ({ channel: { repo: "shlok1806/app" }, persons: [], agents: [scout], tasks: [], events, verdicts: [], cursor: 0 }) as unknown as ChannelSnapshot;
+    const Wrapper = channel({ memory, snapshot });
+    const { rerender } = render(
+      <Wrapper>
+        <MemoryView />
+      </Wrapper>,
+    );
+    fireEvent.click(await screen.findByText("Users API pages by 50."));
+    expect(window.location.hash).toBe("#/memory/e3");
+
+    rerender(
+      <Wrapper>
+        <MemoryView selected="e3" />
+      </Wrapper>,
+    );
+    const inspector = await screen.findByRole("complementary", { name: "Note, in the inspector" });
+    const around = within(inspector).getByRole("region", { name: /^Around it/ });
+    const rows = within(around).getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain("npm test");
+    expect(rows[1]).toMatch(/^This note/);
+    expect(rows[2]).toContain("web/src/users.tsx");
+    // Another Agent's Event, not on the note's Task, is not around it.
+    expect(within(around).queryByText(/make lint/)).toBeNull();
+  });
+
   it("asks once a search settles, ranks it as the Worker does, and offers no older page of it", async () => {
     const asked: MemoryQuery[] = [];
     const memory = async (q: MemoryQuery): Promise<MemoryResponse> => {

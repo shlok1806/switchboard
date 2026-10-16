@@ -3,13 +3,13 @@
  * optional link or control at the right, and a 1px rule under the whole row. The title
  * takes the free width and wraps, so the meta and the link stay on the first line.
  */
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export function SectionHead({ title, meta, action, as: H = "h2" }: { title: ReactNode; meta?: ReactNode; action?: ReactNode; as?: "h2" | "h3" }) {
+export function SectionHead({ title, meta, action, as: H = "h2", id }: { title: ReactNode; meta?: ReactNode; action?: ReactNode; as?: "h2" | "h3"; id?: string }) {
   return (
     <header className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule-2 pb-2">
-      <H className="min-w-0 flex-[1_1_160px] text-title font-semibold text-ink [overflow-wrap:anywhere]">
+      <H id={id} className="min-w-0 flex-[1_1_160px] text-title font-semibold text-ink [overflow-wrap:anywhere]">
         {title}
         {meta && <span className="ml-3 inline-block text-small font-normal text-ink-3">{meta}</span>}
       </H>
@@ -36,9 +36,11 @@ export function Section({
   /** The heading level, so a section inside another titled region never skips one. */
   as?: "h2" | "h3";
 }) {
+  // Named by its title, so assistive tech lists it as a region by that name.
+  const titleId = useId();
   return (
-    <section className={cn("flex min-w-0 flex-col", className)}>
-      <SectionHead title={title} meta={meta} action={action} as={as} />
+    <section aria-labelledby={titleId} className={cn("flex min-w-0 flex-col", className)}>
+      <SectionHead id={titleId} title={title} meta={meta} action={action} as={as} />
       <div className={cn("pt-3", bodyClassName)}>{children}</div>
     </section>
   );

@@ -26,6 +26,7 @@ import {
   holderName,
   hostIdFor,
   noteFromEvent,
+  notUnderRootsReason,
   MAX_MEMORY_LIMIT,
   permissionModeWithin,
   sameNickname,
@@ -428,7 +429,7 @@ export class MockChannelSource implements ChannelSource {
       return { ok: false, reason: `You have no Host named ${request.host}. Run \`switchboard host install\` on it.` };
     }
     if (!underRoots(request.cwd, host.roots)) {
-      return { ok: false, reason: `${request.cwd} is not under ${host.name}'s folders (${host.roots.join(", ")}).` };
+      return { ok: false, reason: notUnderRootsReason(request.cwd, host.name, host.roots) };
     }
     const mode = request.permissionMode ?? DEFAULT_PERMISSION_MODE;
     if (!permissionModeWithin(mode, host.maxPermissionMode)) {

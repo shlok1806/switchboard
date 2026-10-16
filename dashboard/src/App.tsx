@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import LoadingState from "@/components/primitives/LoadingState";
 import { Button } from "@/components/atoms/Button";
 import { CommandPalette } from "@/components/domain/palette";
+import { StartAgentSheet } from "@/components/domain/start-agent";
 import { useChannel, useIndex } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { href, useRoute, type Route } from "@/lib/router";
@@ -117,13 +118,14 @@ export default function App() {
             {route.view === "agents" && <AgentsView />}
             {route.view === "agent" && <AgentDetail id={route.id} />}
             {route.view === "canvas" && <CanvasView selected={route.agent} />}
-            {route.view === "memory" && <MemoryView />}
+            {route.view === "memory" && <MemoryView selected={route.note} />}
             {route.view === "hosts" && <HostsView selected={route.host} />}
           </Suspense>
         </main>
         {mobile && <TabBar route={route} />}
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />
+      <StartAgentSheet />
       {/* On a phone toasts come in from the top, so they never cover the composer or the tab bar. */}
       <Toaster
         position={mobile ? "top-center" : "bottom-right"}

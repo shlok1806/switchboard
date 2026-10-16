@@ -32,7 +32,7 @@ export function LogHead() {
 const GRID = "grid grid-cols-[4.75rem_minmax(0,12rem)_8rem_minmax(0,1fr)_auto] items-baseline gap-x-3 px-3";
 
 /** A clickable row: a button to assistive tech, Enter or Space opens it; a link inside it keeps its own click. */
-function RowFrame({
+export function RowFrame({
   selected,
   fresh,
   onPick,

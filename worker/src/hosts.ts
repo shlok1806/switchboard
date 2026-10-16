@@ -48,6 +48,7 @@ import {
   DEFAULT_PERMISSION_MODE,
   hostIdFor,
   isPermissionMode,
+  notUnderRootsReason,
   permissionModeWithin,
   underRoots,
 } from "../../shared/src/index";
@@ -287,7 +288,7 @@ export class Hosts {
       return {
         ok: false,
         status: 403,
-        reason: `${request.cwd} is not under ${name}'s folders (${roots.join(", ") || "none"}). Add it with \`switchboard host install --root\`.`,
+        reason: notUnderRootsReason(request.cwd, name, roots),
       };
     }
     const mode: PermissionMode = request.permissionMode ?? DEFAULT_PERMISSION_MODE;
