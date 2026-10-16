@@ -376,3 +376,66 @@ describe("pausing and resuming an Agent", () => {
     expect((await hosts()).running).toBe(before);
   });
 });
+
+describe("sharing a Host from the Dashboard (ADR 0028)", () => {
+  const change = (allow: string[] = ["bob"], allowChannel = false) => ({
+    allow,
+    allowChannel,
+    key: "a2V5",
+    at: Date.now(),
+    seq: 1,
+    sig: "c2ln",
+  });
+  const answerWith = async (host: FakeHost, result: { ok: boolean; reason?: string }) => {
+    const frame = await waitFor(() => host.frames.find((f) => f.type === "host.allow"));
+    host.send({ type: "host.allow.result", id: frame.id, ...result });
+    return frame;
+  };
+
+  it("passes the signed change to the Host untouched and answers once the Host says it applied it", async () => {
+    const laptop = await aliceHost({});
+    const asking = post("/api/hosts/laptop/allow", "alice", change());
+    const frame = await answerWith(laptop, { ok: true });
+    expect(frame).toMatchObject({
+      type: "host.allow",
+      allow: ["bob"],
+      allowChannel: false,
+      key: "a2V5",
+      seq: 1,
+      sig: "c2ln",
+    });
+    expect((await asking).status).toBe(200);
+  });
+
+  it("shows the Host's reason when it refuses, and never changes the Channel's copy itself", async () => {
+    const laptop = await aliceHost({});
+    const asking = post("/api/hosts/laptop/allow", "alice", change());
+    await answerWith(laptop, { ok: false, reason: "key AAAA-BBBB is not trusted on this machine" });
+    const response = await asking;
+    expect(response.status).toBe(403);
+    expect(await reason(response)).toContain("is not trusted on this machine");
+    expect((await hosts()).hosts[0]).toMatchObject({ allow: [] });
+  });
+
+  it("is for the Host's own Person, and needs the Host running", async () => {
+    const laptop = await aliceHost({});
+    expect((await post("/api/hosts/laptop/allow", "bob", change())).status).toBe(404);
+    expect((await post("/api/hosts/laptop/allow", "alice", { allow: ["bob"] })).status).toBe(400);
+    laptop.close();
+    await waitFor(async () => ((await hosts()).hosts[0]?.live === false ? true : undefined));
+    const offline = await post("/api/hosts/laptop/allow", "alice", change());
+    expect(offline.status).toBe(409);
+    expect(await reason(offline)).toContain("Offline");
+  });
+
+  it("ignores an answer from a different Host", async () => {
+    const laptop = await aliceHost({});
+    const other = await FakeHost.registered("bob", "desk");
+    await other.connect();
+    const asking = post("/api/hosts/laptop/allow", "alice", change());
+    const frame = await waitFor(() => laptop.frames.find((f) => f.type === "host.allow"));
+    other.send({ type: "host.allow.result", id: frame.id, ok: true });
+    laptop.send({ type: "host.allow.result", id: frame.id, ok: false, reason: "no" });
+    expect((await asking).status).toBe(403);
+  });
+});

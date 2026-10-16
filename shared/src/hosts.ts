@@ -90,7 +90,8 @@ export interface Host {
  * asks the same question of its own file.
  */
 export function hostAllows(host: Pick<Host, "person" | "allow" | "allowChannel">, person: PersonName): boolean {
-  return host.person === person || host.allowChannel || host.allow.includes(person);
+  // A Worker from before the allow-list sends neither field: only the owner then.
+  return host.person === person || host.allowChannel === true || (host.allow ?? []).includes(person);
 }
 
 /** True when `cwd` is one of `roots` or inside one. Paths are absolute, with no `..` or `.` segments. */
@@ -263,3 +264,58 @@ export interface HostSpawnFailedFrame {
 
 /** The longest reason a Host gives for a failed spawn. */
 export const MAX_SPAWN_FAILURE_LENGTH = 500;
+
+/* ── Sharing a Host from the Dashboard (ADR 0028) ───────────────────────────── */
+
+/** A signed allow-list change is no good this long after the time it was signed. */
+export const HOST_ALLOW_FRESH_MS = 5 * 60_000;
+/** How long `POST /api/hosts/:name/allow` waits for the Host's answer. */
+export const HOST_ALLOW_WAIT_MS = 15_000;
+
+/**
+ * The exact text a browser's attach key signs to change what Host `host` allows: one field
+ * per line. The repo is in it, so a change signed for one Channel is no good in another;
+ * `at` (ms since the epoch) and `seq` keep an old change from being replayed.
+ */
+export function signedAllowChange(
+  repo: string,
+  host: string,
+  at: number,
+  seq: number,
+  allow: readonly string[],
+  allowChannel: boolean,
+): string {
+  return `switchboard-host-allow\n${repo}\n${host}\n${at}\n${seq}\n${allowChannel ? "channel" : "list"}\n${[...allow].sort().join(",")}`;
+}
+
+/** `POST /api/hosts/:name/allow`: the new allow-list, signed by the owner's browser attach key. */
+export interface SetHostAllowRequest {
+  allow: PersonName[];
+  allowChannel: boolean;
+  /** The attach key's public key, SPKI, base64. */
+  key: string;
+  at: number;
+  seq: number;
+  /** ECDSA P-256 with SHA-256 over {@link signedAllowChange}, IEEE P1363, base64. */
+  sig: string;
+}
+
+/** The Channel carries a signed change to the Host, which decides alone. `id` names the request. */
+export interface HostAllowMessage extends SetHostAllowRequest {
+  type: "host.allow";
+  id: string;
+}
+
+/** The Host's answer: applied (and republished), or why not. */
+export interface HostAllowResultFrame {
+  type: "host.allow.result";
+  id: string;
+  ok: boolean;
+  reason?: string;
+}
+
+/** `POST /api/hosts/:name/allow` answers with the Host as the Channel has it once the Host republished. */
+export interface SetHostAllowResponse {
+  ok: true;
+  host: Host;
+}

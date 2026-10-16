@@ -18,6 +18,7 @@ import type {
   ControlAgentResponse,
   HostResponse,
   HostsResponse,
+  SetHostAllowResponse,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StopAgentResponse,
@@ -44,6 +45,7 @@ export type HostRoute =
   | { kind: "list" }
   | { kind: "register" }
   | { kind: "remove"; name: string }
+  | { kind: "allow"; name: string }
   | { kind: "spawn" }
   | { kind: "stop"; id: AgentId }
   | { kind: "pause"; id: AgentId }
@@ -51,6 +53,7 @@ export type HostRoute =
 
 const CONTROL = /^\/api\/agents\/([^/]+)\/(stop|pause|resume)$/;
 const HOST = /^\/api\/hosts\/([^/]+)$/;
+const ALLOW = /^\/api\/hosts\/([^/]+)\/allow$/;
 
 /** Returns the Host route a request is for, or null when it is not one. */
 export function matchHostRoute(method: string, pathname: string): HostRoute | null {
@@ -60,6 +63,8 @@ export function matchHostRoute(method: string, pathname: string): HostRoute | nu
     return null;
   }
   if (pathname === "/api/agents/spawn") return method === "POST" ? { kind: "spawn" } : null;
+  const allow = ALLOW.exec(pathname);
+  if (allow?.[1] !== undefined) return method === "POST" ? { kind: "allow", name: allow[1] } : null;
   const host = HOST.exec(pathname);
   if (host?.[1] !== undefined) return method === "DELETE" ? { kind: "remove", name: host[1] } : null;
   const control = CONTROL.exec(pathname);
@@ -183,6 +188,35 @@ export async function handleHostRoute(
         ...(allowChannel === undefined ? {} : { allowChannel }),
       });
       return json<HostResponse>({ ok: true, host });
+    }
+    case "allow": {
+      const body = await readJson(request);
+      const { allow, allowChannel, key, at, seq, sig } = body;
+      if (
+        !Array.isArray(allow) ||
+        allow.length > MAX_HOST_ALLOW ||
+        !allow.every((l) => typeof l === "string" && LOGIN_PATTERN.test(l)) ||
+        typeof allowChannel !== "boolean" ||
+        typeof key !== "string" ||
+        typeof sig !== "string" ||
+        key.length > 400 ||
+        sig.length > 400 ||
+        !Number.isSafeInteger(at) ||
+        !Number.isSafeInteger(seq)
+      ) {
+        return fail(400, "A signed allow-list change needs allow, allowChannel, key, at, seq and sig.");
+      }
+      const result = await channel.setHostAllow(person, route.name, {
+        allow: allow as string[],
+        allowChannel,
+        key,
+        at: at as number,
+        seq: seq as number,
+        sig,
+      });
+      return result.ok
+        ? json<SetHostAllowResponse>({ ok: true, host: result.host })
+        : fail(result.status, result.reason);
     }
     case "remove":
       return (await channel.removeHost(person, route.name))

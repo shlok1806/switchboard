@@ -41,6 +41,7 @@ import type {
   EventPayloads,
   EventType,
   Host,
+  HostAllowMessage,
   HostId,
   HostPauseMessage,
   HostResumeMessage,
@@ -50,10 +51,12 @@ import type {
   PermissionMode,
   PersonName,
   RegisterHostRequest,
+  SetHostAllowRequest,
   SpawnAgentRequest,
 } from "../../shared/src/index";
 import {
   DEFAULT_PERMISSION_MODE,
+  HOST_ALLOW_WAIT_MS,
   hostAllows,
   hostIdFor,
   isPermissionMode,
@@ -155,7 +158,13 @@ export interface HostsDeps {
   /** Sends `message` to Host `id`'s newest socket. False when it has none. */
   sendTo(
     id: HostId,
-    message: HostSpawnMessage | HostSpawnedMessage | HostStopMessage | HostPauseMessage | HostResumeMessage,
+    message:
+      | HostSpawnMessage
+      | HostSpawnedMessage
+      | HostStopMessage
+      | HostPauseMessage
+      | HostResumeMessage
+      | HostAllowMessage,
   ): boolean;
   /** Closes Host `id`'s sockets, for a Host that was removed. */
   close(id: HostId): void;
@@ -211,6 +220,11 @@ function rowToHost(row: HostRow, live: boolean): Host {
 export class Hosts {
   /** Requests waiting on their spawn, by spawn ID. In memory: the waiting request keeps the object alive. */
   private readonly waiting = new Map<string, (end: SpawnEnd) => void>();
+  /** Signed allow-list changes waiting on their Host's answer, by request ID. */
+  private readonly allowing = new Map<
+    string,
+    { host: HostId; resolve: (answer: { ok: boolean; reason?: string } | null) => void }
+  >();
 
   constructor(private readonly deps: HostsDeps) {
     deps.sql.exec(HOSTS_SCHEMA);
@@ -273,6 +287,57 @@ export class Hosts {
     this.deps.sql.exec("DELETE FROM hosts WHERE person = ? AND name = ?", person, name);
     this.deps.close(hostIdFor(person, name));
     return true;
+  }
+
+  /**
+   * Passes a signed allow-list change from `person` to their Host `name` and waits for the
+   * Host's answer: it applies the change to its own file only for a key its Person trusts
+   * there, and republishes (ADR 0028). The Channel verifies nothing itself.
+   */
+  async setAllow(
+    person: PersonName,
+    name: string,
+    request: SetHostAllowRequest,
+    waitMs = HOST_ALLOW_WAIT_MS,
+  ): Promise<{ ok: true; host: Host } | HostRefusal> {
+    if (this.row(person, name) === undefined) {
+      return { ok: false, status: 404, reason: `You have no Host named ${name}.` };
+    }
+    const id = hostIdFor(person, name);
+    if (!this.deps.attached(id)) {
+      return {
+        ok: false,
+        status: 409,
+        reason: `${name} is Offline: its allow-list changes only on the machine, so it has to be running. Start \`switchboard host run\` there.`,
+      };
+    }
+    const requestId = crypto.randomUUID();
+    const answered = new Promise<{ ok: boolean; reason?: string } | null>((resolve) => {
+      this.allowing.set(requestId, { host: id, resolve });
+      setTimeout(() => resolve(null), waitMs);
+    });
+    if (!this.deps.sendTo(id, { type: "host.allow", id: requestId, ...request })) {
+      this.allowing.delete(requestId);
+      return { ok: false, status: 409, reason: `${name} went Offline before the request reached it.` };
+    }
+    const answer = await answered;
+    this.allowing.delete(requestId);
+    if (answer === null) {
+      return {
+        ok: false,
+        status: 502,
+        reason: `${name} did not answer. Is \`switchboard host run\` still running there?`,
+      };
+    }
+    if (!answer.ok) return { ok: false, status: 403, reason: `${name} refused: ${answer.reason ?? "no reason given"}` };
+    return { ok: true, host: this.find(person, name) as Host };
+  }
+
+  /** Host `host` answered signed change `id`. Ignored unless it is that Host's. */
+  allowAnswered(host: HostId, id: string, ok: boolean, reason?: string): void {
+    const waiting = this.allowing.get(id);
+    if (waiting === undefined || waiting.host !== host) return;
+    waiting.resolve({ ok, ...(reason === undefined ? {} : { reason }) });
   }
 
   /** The Agents Hosts run now, and the spawns still starting. */

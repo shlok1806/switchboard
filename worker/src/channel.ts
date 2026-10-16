@@ -25,6 +25,7 @@ import type {
   Holder,
   HookCaptureReply,
   Host,
+  HostAllowMessage,
   HostId,
   HostPauseMessage,
   HostResumeMessage,
@@ -46,6 +47,7 @@ import type {
   RegisterHostRequest,
   ReportedPresence,
   ReportedUsage,
+  SetHostAllowRequest,
   SpawnAgentRequest,
   StreamMessage,
   Task,
@@ -1430,6 +1432,7 @@ export class Channel extends DurableObject<Env> {
       type !== "host.spawn.failed" &&
       type !== "host.control.failed" &&
       type !== "host.paused" &&
+      type !== "host.allow.result" &&
       type !== "terminal.watch" &&
       type !== "terminal.input" &&
       type !== "terminal.screen" &&
@@ -1446,6 +1449,14 @@ export class Channel extends DurableObject<Env> {
       const { spawn, reason } = frame as { spawn?: unknown; reason?: unknown };
       if (host === null || typeof spawn !== "string" || typeof reason !== "string") return;
       this.hosts.hostFailed(person, host, spawn, reason.slice(0, MAX_SPAWN_FAILURE_LENGTH) || "no reason given");
+      return;
+    }
+    if (type === "host.allow.result") {
+      const host = tag?.startsWith(HOST_TAG) ? tag.slice(HOST_TAG.length + person.length + 1) : null;
+      const { id, ok, reason } = frame as Record<string, unknown>;
+      if (host === null || typeof id !== "string" || typeof ok !== "boolean") return;
+      const why = typeof reason === "string" ? reason.slice(0, MAX_SPAWN_FAILURE_LENGTH) : undefined;
+      this.hosts.allowAnswered(hostIdFor(person, host), id, ok, why);
       return;
     }
     if (type === "host.control.failed" || type === "host.paused") {
@@ -1697,6 +1708,12 @@ export class Channel extends DurableObject<Env> {
     return this.hosts.register(person, request);
   }
 
+  /** A signed allow-list change for one of `person`'s Hosts, passed on to the Host to judge (ADR 0028). */
+  setHostAllow(person: PersonName, name: string, request: SetHostAllowRequest) {
+    this.join(person);
+    return this.hosts.setAllow(person, name, request);
+  }
+
   removeHost(person: PersonName, name: string): boolean {
     return this.hosts.remove(person, name);
   }
@@ -1854,6 +1871,7 @@ function send(
     | HostStopMessage
     | HostPauseMessage
     | HostResumeMessage
+    | HostAllowMessage
     | TerminalWatchersMessage
     | TerminalInputFrame
     | TerminalScreenFrame
