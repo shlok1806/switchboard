@@ -123,6 +123,7 @@
   --cli-claude: var(--ink-3);
   --cli-codex: var(--ink-3);
   --cli-gemini: var(--ink-3);
+  --cli-cursor: var(--ink-3);
   --cli-other: var(--ink-3);
   --canvas-bg: var(--paper);
   --canvas-dot: var(--rule);
@@ -270,6 +271,7 @@
   --color-cli-claude: var(--cli-claude);
   --color-cli-codex: var(--cli-codex);
   --color-cli-gemini: var(--cli-gemini);
+  --color-cli-cursor: var(--cli-cursor);
   --color-cli-other: var(--cli-other);
   --color-canvas-bg: var(--canvas-bg);
   --color-canvas-dot: var(--canvas-dot);

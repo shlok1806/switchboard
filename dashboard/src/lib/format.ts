@@ -18,6 +18,7 @@ import { UNRELAYED_EVENT_TYPES } from "@shared/index";
 export const CLI_LABEL: Record<Cli, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
   gemini: "Gemini",
 };
 

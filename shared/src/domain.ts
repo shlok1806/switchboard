@@ -23,7 +23,7 @@ export interface Person {
 }
 
 /** The agent CLIs Switchboard supports. */
-export type Cli = "claude-code" | "codex" | "gemini";
+export type Cli = "claude-code" | "codex" | "cursor" | "gemini";
 
 /**
  * The permanent name of an Agent: `<person>/<cli>/<short session id>`,

@@ -3,6 +3,7 @@
 import type { CliAdapter } from "./adapter";
 import { claude } from "./claude";
 import { codex } from "./codex";
+import { cursor } from "./cursor";
 import { gemini } from "./gemini";
 
-export const ADAPTERS: Record<string, CliAdapter> = { claude, codex, gemini };
+export const ADAPTERS: Record<string, CliAdapter> = { claude, codex, cursor, gemini };

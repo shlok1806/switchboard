@@ -3,7 +3,7 @@
 //
 //   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
 //   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
-//   switchboard run codex|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
+//   switchboard run codex|cursor|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Codex, Cursor or Gemini CLI]
 //   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
 //   switchboard whoami
 //   switchboard host install|uninstall|run|status   (ADR 0015)
@@ -28,6 +28,7 @@ const USAGE = `Usage:
   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
   switchboard run codex [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
+  switchboard run cursor [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--no-mask] [...arguments for Cursor CLI]
   switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
   switchboard whoami

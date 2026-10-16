@@ -8,7 +8,7 @@ defined in [CONTEXT.md](CONTEXT.md).
 ## Getting started
 
 You need Node.js 22 or newer, git, a GitHub account with write access to the
-Channel's repo, and at least one of Claude Code, Codex or Gemini CLI.
+Channel's repo, and at least one of Claude Code, Codex, Cursor or Gemini CLI.
 
 ### 1. Install the CLI
 
@@ -178,15 +178,15 @@ running on it with their requests, tokens and estimated cost. The wrapper reads 
 the start, after every turn and every 5 minutes (at most once a minute), using the
 session's own login. `SWITCHBOARD_USAGE=off` turns it off.
 
-| | Claude Code | Codex | Gemini CLI (unverified, see below) |
-|---|---|---|---|
-| Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, BeforeTool (shell), AfterTool, AfterAgent, SessionEnd |
-| Files changed through the shell | yes | yes | yes, unverified |
-| Switchboard MCP tools | yes | yes (approved for the session) | yes |
-| Proxy Capture (digest and raw) | yes | yes | yes, unverified |
-| Next-turn delivery | SessionStart / UserPromptSubmit hooks | SessionStart / UserPromptSubmit `additionalContext`; `read_channel` fallback | SessionStart / BeforeAgent `additionalContext` |
-| Interrupts and Directives | typed mid-turn | typed mid-turn | downgraded to Queue, labelled `cli-cannot-interrupt` |
-| Idle wake (a Queue that needs the Agent wakes it while idle) | yes | not yet (#63) | not yet (#63) |
+| | Claude Code | Codex | Cursor CLI | Gemini CLI (unverified, see below) |
+|---|---|---|---|---|
+| Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | sessionStart, pre/post tool and shell hooks, stop, sessionEnd | SessionStart, BeforeTool (shell), AfterTool, AfterAgent, SessionEnd |
+| Files changed through the shell | yes | yes | yes, unverified | yes, unverified |
+| Switchboard MCP tools | yes | yes (approved for the session) | yes | yes |
+| Proxy Capture (digest and raw) | yes | yes | not yet | yes, unverified |
+| Next-turn delivery | SessionStart / UserPromptSubmit hooks | SessionStart / UserPromptSubmit `additionalContext`; `read_channel` fallback | sessionStart `additional_context`; `read_channel` after the first prompt | SessionStart / BeforeAgent `additionalContext` |
+| Interrupts and Directives | typed mid-turn | typed mid-turn | downgraded to Queue, labelled `cli-cannot-interrupt` | downgraded to Queue, labelled `cli-cannot-interrupt` |
+| Idle wake (a Queue that needs the Agent wakes it while idle) | yes | not yet (#63) | not yet (#63) | not yet (#63) |
 
 Edit tools report the files they change. A shell command (a heredoc, `sed`, a script)
 does not, so the wrapper snapshots the call's worktree with git just before and just
