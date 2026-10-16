@@ -14,9 +14,10 @@ export type Route =
   | { view: "hosts"; host?: string };
 
 export function parse(hash: string): Route {
-  const [, view = "now", arg, arg2] = hash.replace(/^#/, "").split("/");
+  const [, view = "now", arg, arg2, arg3] = hash.replace(/^#/, "").split("/");
   const a = arg ? decodeURIComponent(arg) : undefined;
   const b = arg2 ? decodeURIComponent(arg2) : undefined;
+  const c = arg3 ? decodeURIComponent(arg3) : undefined;
   switch (view) {
     case "tasks":
       return a ? { view: "task", number: Number(a) } : { view: "tasks" };
@@ -28,7 +29,9 @@ export function parse(hash: string): Route {
     case "canvas":
       return { view: "canvas", agent: a };
     case "feed":
-      return a === "turn" ? { view: "feed", by: "turn", turn: b } : { view: "feed", event: a };
+      // #/feed/turn/<turn>/<event>: an Event picked inside an open turn keeps the turn.
+      if (a === "turn") return c ? { view: "feed", by: "turn", turn: b, event: c } : { view: "feed", by: "turn", turn: b };
+      return { view: "feed", event: a };
     case "memory":
       return { view: "memory" };
     case "hosts":
@@ -43,7 +46,11 @@ export function href(route: Route): string {
     case "now":
       return "#/now";
     case "feed":
-      if (route.by === "turn") return route.turn ? `#/feed/turn/${encodeURIComponent(route.turn)}` : "#/feed/turn";
+      if (route.by === "turn") {
+        if (!route.turn) return "#/feed/turn";
+        const t = `#/feed/turn/${encodeURIComponent(route.turn)}`;
+        return route.event ? `${t}/${encodeURIComponent(route.event)}` : t;
+      }
       return route.event ? `#/feed/${route.event}` : "#/feed";
     case "tasks":
       return "#/tasks";

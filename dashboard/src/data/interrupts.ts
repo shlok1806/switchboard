@@ -1,44 +1,74 @@
 // Interrupts, as rows instead of toasts (plan slice 9). When the Relay decides to type an
 // Event into an Agent's running session, that Verdict is a row in Activity and a count on the
-// Activity key until this viewer has seen it. What was seen is kept per browser: it is a
-// reading position, not Channel state.
+// Activity key until this viewer has seen its row. What was seen is kept per browser and per
+// Channel: it is a reading position, not Channel state. Only a row Activity actually showed
+// counts as seen, so a filter or an unloaded page never clears an Interrupt nobody read.
 
 import type { Verdict } from "@shared/index";
 import { useMemo, useSyncExternalStore } from "react";
 import { useChannel } from "./store";
 
-const KEY = "switchboard.activity.seen";
+// Seen keys kept per Channel; older ones fall off.
+const KEEP = 500;
 
-function read(): string {
+type Seen = { since: string; keys: string[] };
+
+/** The key of one Interrupt: the Event it typed in and the Agent it was typed into. */
+export const interruptKey = (v: Verdict) => `${v.event}:${v.agent}`;
+
+const storageKey = (channel: string) => `switchboard.activity.seen:${channel}`;
+const cache = new Map<string, Seen>();
+const listeners = new Set<() => void>();
+// Before the snapshot names the Channel nothing counts and nothing is stored.
+const NONE: Seen = { since: "\uffff", keys: [] };
+
+function load(channel: string): Seen {
+  if (!channel) return NONE;
+  const hit = cache.get(channel);
+  if (hit) return hit;
+  let seen: Seen | undefined;
   try {
-    return localStorage.getItem(KEY) ?? "";
+    const raw = localStorage.getItem(storageKey(channel));
+    if (raw) seen = JSON.parse(raw) as Seen;
   } catch {
-    return "";
+    // Unreadable or blocked storage: start fresh.
   }
+  // A first visit counts only Interrupts from now on, not the Channel's whole history.
+  if (!seen || typeof seen.since !== "string" || !Array.isArray(seen.keys)) {
+    seen = { since: new Date().toISOString(), keys: [] };
+    save(channel, seen);
+  }
+  cache.set(channel, seen);
+  return seen;
 }
 
-let seen = read();
-const listeners = new Set<() => void>();
-
-/** Everything up to `at` has been seen in Activity. */
-export function markSeen(at: string) {
-  if (at <= seen) return;
-  seen = at;
+function save(channel: string, seen: Seen) {
   try {
-    localStorage.setItem(KEY, at);
+    localStorage.setItem(storageKey(channel), JSON.stringify(seen));
   } catch {
     // A private window keeps it for this page only.
   }
+}
+
+/** These Interrupts' rows were shown in Activity. */
+export function markSeen(channel: string, keys: string[]) {
+  if (!channel) return;
+  const seen = load(channel);
+  const add = keys.filter((k) => !seen.keys.includes(k));
+  if (add.length === 0) return;
+  const next = { since: seen.since, keys: [...seen.keys, ...add].slice(-KEEP) };
+  cache.set(channel, next);
+  save(channel, next);
   for (const l of listeners) l();
 }
 
-function useSeen(): string {
+function useSeen(channel: string): Seen {
   return useSyncExternalStore(
     (l) => {
       listeners.add(l);
       return () => listeners.delete(l);
     },
-    () => seen,
+    () => load(channel),
   );
 }
 
@@ -55,9 +85,10 @@ export function useInterrupts(): Verdict[] {
   }, [verdictsByEvent]);
 }
 
-/** How many Interrupts arrived since this viewer last read Activity. */
+/** How many Interrupts arrived that this viewer has not seen as a row in Activity. */
 export function useUnseenInterrupts(): number {
   const all = useInterrupts();
-  const at = useSeen();
-  return all.filter((v) => v.at > at).length;
+  const { snapshot } = useChannel();
+  const seen = useSeen(snapshot?.channel.repo ?? "");
+  return all.filter((v) => v.at > seen.since && !seen.keys.includes(interruptKey(v))).length;
 }

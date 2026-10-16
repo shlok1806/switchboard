@@ -14,7 +14,7 @@ import { useCapabilities, useChannel, useStore } from "@/data/store";
 type Mode = "update" | "directive";
 
 const FIELD =
-  "h-[30px] min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-[16px]";
+  "h-[30px] min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-[16px]";
 
 export function Composer({ task }: { task?: number }) {
   const store = useStore();
@@ -77,8 +77,8 @@ export function Composer({ task }: { task?: number }) {
             </select>
           </label>
         )}
-        <Button type="submit" variant="primary" disabled={busy || !text.trim()}>
-          {busy ? "Sending" : directive ? "Send" : "Post"}
+        <Button type="submit" variant="primary" busy={busy} disabled={!text.trim()}>
+          {directive ? "Send" : "Post"}
         </Button>
       </div>
     </form>

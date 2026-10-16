@@ -9,6 +9,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentId, ChannelEvent, Verdict } from "@shared/index";
+import { Button } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { Composer } from "@/components/domain/composer";
 import { EventDetail } from "@/components/domain/event";
@@ -19,7 +20,7 @@ import { HolderLabel } from "@/components/domain/task";
 import { InspectorFrame } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { useEventDetail } from "@/data/history";
-import { isInterrupt, markSeen, useInterrupts } from "@/data/interrupts";
+import { interruptKey, isInterrupt, markSeen, useInterrupts } from "@/data/interrupts";
 import { useCapabilities, useChannel, useIndex, useStore } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { CAPTURE_LABEL, EVENT_TYPE_LABEL, VERDICT_LABEL, VERDICT_OPTIONS } from "@/lib/format";
@@ -105,21 +106,29 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
     return [...by.entries()].sort((a, b) => a[1].at(-1)!.seq - b[1].at(-1)!.seq);
   }, [items, group]);
 
-  // Read here means read: the Activity key stops counting these Interrupts.
+  // Read here means read: the Activity key stops counting the Interrupts shown as rows, and
+  // only those, so one a filter hides or that is not loaded still counts.
   const interrupts = useInterrupts();
+  const channel = snapshot?.channel.repo ?? "";
+  const shownInterrupts = items.flatMap((it) => (it.kind === "interrupt" ? [interruptKey(it.verdict)] : [])).join(" ");
   useEffect(() => {
-    const last = interrupts.at(-1);
-    if (last) markSeen(last.at);
-  }, [interrupts]);
+    if (shownInterrupts) markSeen(channel, shownInterrupts.split(" "));
+  }, [channel, shownInterrupts]);
 
   // Follow the newest while the log is at its bottom; otherwise count what arrives under a button.
   const scroller = useRef<HTMLDivElement>(null);
+  // State, so the "new Events" count renders from it; the ref is what layout effects read.
+  const [followingNow, setFollowingNow] = useState(true);
   const following = useRef(true);
+  const follow = (on: boolean) => {
+    following.current = on;
+    setFollowingNow(on);
+  };
   const fromBottom = useRef(0);
   const [readTo, setReadTo] = useState(() => events.at(-1)?.seq ?? 0);
   const newest = shown.at(-1);
   const oldestId = shown[0]?.id;
-  const unread = following.current ? 0 : shown.filter((e) => e.seq > readTo).length;
+  const unread = followingNow ? 0 : shown.filter((e) => e.seq > readTo).length;
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && following.current) {
@@ -131,21 +140,27 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
     const el = scroller.current;
     if (el && !following.current) el.scrollTop = el.scrollHeight - fromBottom.current;
   }, [oldestId]);
-  // A new filter or grouping starts at the newest again, unless a turn link asks to be shown.
+  // A new filter or grouping starts at the newest again.
   useLayoutEffect(() => {
-    following.current = true;
+    follow(true);
     setLimit(SHOW);
     const el = scroller.current;
-    if (!el) return;
-    const target = turn ? document.getElementById(`turn-${turn}`) : null;
-    if (target) {
-      following.current = false;
-      target.scrollIntoView({ block: "start" });
-    } else el.scrollTop = el.scrollHeight;
-  }, [filters, group, turn]);
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [filters, group]);
+  // A link to a turn scrolls to it once, when it names a new turn: picking an Event inside the
+  // turn, or new Events arriving, leaves the log where it is.
+  const shownTurn = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!turn || turn === shownTurn.current) return;
+    const target = document.getElementById(`turn-${turn}`);
+    if (!target) return;
+    shownTurn.current = turn;
+    follow(false);
+    target.scrollIntoView({ block: "start" });
+  }, [turn, items]);
   const toNewest = () => {
     const el = scroller.current;
-    following.current = true;
+    follow(true);
     if (el) el.scrollTop = el.scrollHeight;
     if (newest) setReadTo(newest.seq);
   };
@@ -159,14 +174,17 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
   const { event: selectedEvent, woken, loaded: selectedLoaded } = useEventDetail(selected);
   const set = (k: keyof FeedFilters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
   const filtered = activeCount(filters) > 0;
-  const pick = (id: string) => go({ view: "feed", event: id });
+  // Inside a turn link, the picked Event stays under that turn.
+  const pick = (id: string) => go(turn ? { view: "feed", by: "turn", turn, event: id } : { view: "feed", event: id });
+  const close = () => go(turn ? { view: "feed", by: "turn", turn } : { view: "feed" });
   const toggle = (t: string) =>
     setOpen((o) => {
       const next = new Set(o);
       if (!next.delete(t)) next.add(t);
       return next;
     });
-  const missingTurn = turn !== undefined && group === "turn" && !items.some((it) => it.kind === "turn" && it.turn === turn);
+  const noTurns = group === "turn" && shown.length > 0 && !items.some((it) => it.kind === "turn");
+  const missingTurn = !noTurns && turn !== undefined && group === "turn" && !items.some((it) => it.kind === "turn" && it.turn === turn);
 
   const live = agents.filter((a) => a.presence === "live").length;
   const turnCount = new Set(shown.filter((e) => e.turn).map((e) => e.turn)).size;
@@ -188,31 +206,30 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
     );
 
   const detail = selectedEvent && (
-    <InspectorFrame label={`${EVENT_TYPE_LABEL[selectedEvent.type]}, in the inspector`} onClose={mobile ? () => go({ view: "feed" }) : undefined}>
+    <InspectorFrame label={`${EVENT_TYPE_LABEL[selectedEvent.type]}, in the inspector`} onClose={mobile ? close : undefined}>
       <EventDetail
         key={selectedEvent.id}
         event={selectedEvent}
         verdicts={verdictsByEvent.get(selectedEvent.id) ?? []}
         woken={woken}
-        agentById={agentById}
         taskByNumber={taskByNumber}
         threshold={threshold}
         verdictsLive={can.verdicts}
         verdictsLoaded={selectedLoaded}
-        onClose={() => go({ view: "feed" })}
+        onClose={close}
       />
     </InspectorFrame>
   );
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 flex-col gap-4 px-[var(--gutter)] pt-5 pb-3">
           <PageHead
             title="Activity"
             facts={[
               `${events.length} Events`,
-              group === "turn" ? `${turnCount} model ${turnCount === 1 ? "turn" : "turns"}` : `${live} ${live === 1 ? "Agent" : "Agents"} live`,
+              group === "turn" && turnCount > 0 ? `${turnCount} model ${turnCount === 1 ? "turn" : "turns"}` : `${live} ${live === 1 ? "Agent" : "Agents"} live`,
               interrupts.length > 0 && `${interrupts.length} ${interrupts.length === 1 ? "Interrupt" : "Interrupts"}`,
             ]}
           />
@@ -275,6 +292,11 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
               )}
             </div>
           </div>
+          {noTurns && (
+            <p role="status" className="text-small text-ink-3">
+              No model turn among the {shown.length} newest Events{filtered ? " that match" : ""}, so the rows below are Events outside any turn.
+            </p>
+          )}
           {missingTurn && (
             <p role="status" className="text-small text-ink-3">
               Model turn <code className="text-ink-2">{turn}</code> is not among the loaded Events.
@@ -293,11 +315,11 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
             onScroll={(e) => {
               const el = e.currentTarget;
               const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK;
-              following.current = atBottom;
+              if (atBottom !== following.current) follow(atBottom);
               fromBottom.current = el.scrollHeight - el.scrollTop;
               if (atBottom && newest && newest.seq > readTo) setReadTo(newest.seq);
             }}
-            className="h-full overflow-y-auto px-[var(--gutter)]"
+            className="absolute inset-0 overflow-y-auto px-[var(--gutter)]"
             aria-label="Events"
             role="region"
           >
@@ -329,16 +351,13 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                 )}
               </>
             )}
-            <div className="h-4" />
+            {/* Room under the last row, so the "new Events" button never covers it. */}
+            <div className={unread > 0 ? "h-14" : "h-4"} />
           </div>
           {unread > 0 && (
-            <button
-              type="button"
-              onClick={toNewest}
-              className="absolute bottom-3 left-1/2 inline-flex h-[30px] -translate-x-1/2 items-center rounded-[var(--r)] border border-ink bg-paper px-3 text-small font-medium text-ink hover:bg-paper-2 active:translate-y-px"
-            >
+            <Button onClick={toNewest} className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-paper">
               {unread} new {unread === 1 ? "Event" : "Events"}
-            </button>
+            </Button>
           )}
         </div>
 

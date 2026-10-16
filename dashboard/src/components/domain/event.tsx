@@ -4,12 +4,13 @@
  * the Event by type; then what the Relay did with it for each Agent.
  */
 import { useMemo } from "react";
-import type { Agent, AgentId, ChannelEvent, Task, ToolCall, Verdict } from "@shared/index";
+import type { AgentId, ChannelEvent, Task, ToolCall, Verdict } from "@shared/index";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
 import { useEventsById } from "@/data/history";
 import { EVENT_TYPE_LABEL, TASK_FIELD_LABEL, ago, captureOrOrigin, clock, compact, holderName, summarize, unrelayedReason } from "@/lib/format";
 import { href } from "@/lib/router";
 import { FileDiff } from "./diff";
+import { Who } from "./log";
 import { IssueLink } from "./pending";
 import { HolderLabel } from "./task";
 import { VerdictTable } from "./verdict";
@@ -216,18 +217,9 @@ export function EventBody({ event }: { event: ChannelEvent }) {
   }
 }
 
-/** Who an Event names, as a link when it is an Agent. */
-function Actor({ event }: { event: ChannelEvent }) {
-  const a = event.actor;
-  if (a.kind === "agent") return <HolderLabel holder={{ kind: "agent", agentId: a.agentId }} />;
-  if (a.kind === "person") return <span className="text-ink">{a.person}</span>;
-  return <span>{a.kind === "github" ? "GitHub" : "the Relay"}</span>;
-}
-
 export function EventDetail({
   event,
   verdicts,
-  agentById,
   taskByNumber,
   threshold,
   verdictsLive = true,
@@ -237,7 +229,6 @@ export function EventDetail({
 }: {
   event: ChannelEvent;
   verdicts: Verdict[];
-  agentById: Map<AgentId, Agent>;
   taskByNumber: Map<number, Task>;
   threshold: number;
   verdictsLive?: boolean;
@@ -260,7 +251,7 @@ export function EventDetail({
           <SheetClose onClose={onClose} />
         </div>
         <p className="text-small text-ink-3">
-          <Actor event={event} /> ·{" "}
+          <Who event={event} /> ·{" "}
           <time dateTime={event.at} className="tabular-nums">
             {clock(event.at)}, {ago(event.at)}
           </time>{" "}
@@ -285,7 +276,7 @@ export function EventDetail({
         ) : verdictsLive && !verdictsLoaded ? (
           <p className="text-small text-ink-3">This Event is older than the ones loaded, so its Verdicts are not shown.</p>
         ) : verdictsLive ? (
-          <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} woken={woken} />
+          <VerdictTable verdicts={verdicts} threshold={threshold} woken={woken} />
         ) : (
           <p className="text-small text-ink-3">
             Arrives with the Relay (<IssueLink capability="verdicts" />).

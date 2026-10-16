@@ -37,14 +37,12 @@ function RowFrame({
   fresh,
   onPick,
   className,
-  label,
   children,
 }: {
   selected: boolean;
   fresh?: boolean;
   onPick: () => void;
   className?: string;
-  label: string;
   children: ReactNode;
 }) {
   return (
@@ -54,7 +52,6 @@ function RowFrame({
         role="button"
         tabIndex={0}
         aria-pressed={selected}
-        aria-label={label}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("a,button")) return;
           onPick();
@@ -78,7 +75,8 @@ function RowFrame({
   );
 }
 
-function Who({ event }: { event: ChannelEvent }) {
+/** Who an Event names: an Agent as a link to it, a Person, GitHub or the Relay. */
+export function Who({ event }: { event: ChannelEvent }) {
   const a = event.actor;
   if (a.kind === "agent") return <HolderLabel holder={{ kind: "agent", agentId: a.agentId }} />;
   if (a.kind === "person") return <span className="text-ink">{a.person}</span>;
@@ -125,10 +123,9 @@ export function EventRow({
   onPick: () => void;
   mobile: boolean;
 }) {
-  const label = `${EVENT_TYPE_LABEL[e.type]} at ${clock(e.at)}`;
   if (mobile)
     return (
-      <RowFrame selected={selected} fresh={fresh} onPick={onPick} label={label} className="flex flex-col gap-1 px-1">
+      <RowFrame selected={selected} fresh={fresh} onPick={onPick} className="flex flex-col gap-1 px-1">
         <span className="flex items-baseline gap-2 text-small">
           <span className="min-w-0 flex-1">
             <Who event={e} /> <span className="text-ink-3">· {EVENT_TYPE_LABEL[e.type]}</span>
@@ -144,7 +141,7 @@ export function EventRow({
       </RowFrame>
     );
   return (
-    <RowFrame selected={selected} fresh={fresh} onPick={onPick} label={label} className={GRID}>
+    <RowFrame selected={selected} fresh={fresh} onPick={onPick} className={GRID}>
       <time dateTime={e.at} title={ago(e.at)} className="text-small text-ink-3 tabular-nums">
         {clock(e.at)}
       </time>
@@ -166,10 +163,9 @@ export function InterruptRow({ verdict: v, event: e, selected, onPick, mobile }:
   const what = v.downgraded
     ? `Queued ${said} instead of typing it in: ${DOWNGRADE_LABEL[v.downgraded.reason].replace(/^./, (c) => c.toLowerCase())}.`
     : `Typed ${said} into its running session.`;
-  const label = `${kind} for ${v.agent} at ${clock(v.at)}`;
   if (mobile)
     return (
-      <RowFrame selected={selected} onPick={onPick} label={label} className="flex flex-col gap-1 px-1">
+      <RowFrame selected={selected} onPick={onPick} className="flex flex-col gap-1 px-1">
         <span className="flex items-baseline gap-2 text-small">
           <span className="min-w-0 flex-1">
             <HolderLabel holder={{ kind: "agent", agentId: v.agent }} /> <span className="font-semibold text-ink">· {kind}</span>
@@ -183,7 +179,7 @@ export function InterruptRow({ verdict: v, event: e, selected, onPick, mobile }:
       </RowFrame>
     );
   return (
-    <RowFrame selected={selected} onPick={onPick} label={label} className={GRID}>
+    <RowFrame selected={selected} onPick={onPick} className={GRID}>
       <time dateTime={v.at} title={ago(v.at)} className="text-small text-ink-3 tabular-nums">
         {clock(v.at)}
       </time>
@@ -227,7 +223,13 @@ export function TurnRow({
   const said = [...item.events].reverse().find((e) => e.type === "update" || e.type === "proxy.digest" || e.type === "proxy.raw");
   const what = said ? summarize(said) : summarize(item.events.at(-1)!);
   const toggle = (
-    <button type="button" onClick={onToggle} aria-expanded={open} className="text-small font-medium whitespace-nowrap text-ink hover:underline">
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      // On a phone the word is a 44px thumb target; the row keeps its height.
+      className={cn("text-small font-medium whitespace-nowrap text-ink hover:underline", mobile && "-my-3 -mr-1 inline-flex min-h-11 items-center px-1")}
+    >
       {open ? "Close" : "Compare"}
     </button>
   );
@@ -269,6 +271,10 @@ export function TurnRow({
         </div>
       )}
       {open && (
+        <>
+          <h2 className="sr-only">
+            Model turn {item.turn}, by its Capture
+          </h2>
         <div className="grid gap-x-4 gap-y-3 pb-3 sm:grid-cols-3 sm:pl-[calc(4.75rem+0.75rem+0.75rem)]">
           {CAPTURES.map((c) => (
             <section key={c} aria-label={`${CAPTURE_LABEL[c]} Capture`} className="min-w-0">
@@ -280,7 +286,7 @@ export function TurnRow({
               ) : (
                 <ol>
                   {by(c).map((e) => (
-                    <RowFrame key={e.id} selected={e.id === selected} onPick={() => onPick(e.id)} label={`${EVENT_TYPE_LABEL[e.type]} at ${clock(e.at)}`} className="flex flex-col gap-0.5 px-1.5">
+                    <RowFrame key={e.id} selected={e.id === selected} onPick={() => onPick(e.id)} className="flex flex-col gap-0.5 px-1.5">
                       <span className="text-small font-medium text-ink-2">{EVENT_TYPE_LABEL[e.type]}</span>
                       <What event={e} />
                     </RowFrame>
@@ -290,6 +296,7 @@ export function TurnRow({
             </section>
           ))}
         </div>
+        </>
       )}
     </li>
   );

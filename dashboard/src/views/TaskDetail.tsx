@@ -423,7 +423,6 @@ function Said({
 
 function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold: number }) {
   const { verdictsByEvent } = useChannel();
-  const { agentById } = useIndex();
   const verdicts = verdictsByEvent.get(e.id) ?? [];
   const asked = verdicts.filter((v) => v.source === "jev");
   const files = e.type === "push" || e.type === "merge" ? e.payload.files.length : 0;
@@ -454,7 +453,7 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
             {asked.length} {asked.length === 1 ? "Verdict" : "Verdicts"}
           </ReasoningTrigger>
           <ReasoningContent contentClassName="mt-2 max-w-none">
-            <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
+            <VerdictTable verdicts={verdicts} threshold={threshold} />
           </ReasoningContent>
         </Reasoning>
       )}

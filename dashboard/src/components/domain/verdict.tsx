@@ -3,7 +3,7 @@
  * probabilities as one meter with the threshold an Interrupt must clear, the overlap that
  * made it ask, and anything that changed the delivery on the way.
  */
-import type { Agent, AgentId, Verdict, VerdictOption } from "@shared/index";
+import type { AgentId, Verdict, VerdictOption } from "@shared/index";
 import { DOWNGRADE_LABEL, VERDICT_LABEL, prob } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { HolderLabel } from "./task";
@@ -53,7 +53,6 @@ export function VerdictTable({
   woken = new Set(),
 }: {
   verdicts: Verdict[];
-  agentById?: Map<AgentId, Agent>;
   threshold: number;
   /** The Agents whose Queue Verdict on this Event a Wake delivered. */
   woken?: ReadonlySet<AgentId>;

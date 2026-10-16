@@ -33,11 +33,20 @@ export const buttonVariants = cva(
 
 export type ButtonVariant = NonNullable<VariantProps<typeof buttonVariants>["variant"]>;
 
+/** While `busy`, the button keeps its label, spins a ring beside it and takes no clicks. */
 export function Button({
   variant,
   size,
   className,
+  busy = false,
+  disabled,
+  children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants>) {
-  return <button className={cn(buttonVariants({ variant, size }), className)} {...props} />;
+}: ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants> & { busy?: boolean }) {
+  return (
+    <button className={cn(buttonVariants({ variant, size }), className)} disabled={disabled || busy} aria-busy={busy || undefined} {...props}>
+      {busy && <span aria-hidden className="size-3 shrink-0 rounded-full border-[1.5px] border-current border-r-transparent motion-safe:animate-spin" />}
+      {children}
+    </button>
+  );
 }

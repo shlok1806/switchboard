@@ -28,6 +28,8 @@ describe("the route", () => {
     expect(parse(href({ view: "feed", by: "turn" }))).toEqual({ view: "feed", by: "turn", turn: undefined });
     expect(parse("#/compare")).toEqual({ view: "feed", by: "turn", turn: undefined });
     expect(parse("#/compare/t1")).toEqual({ view: "feed", by: "turn", turn: "t1" });
+    // An Event picked inside an open turn keeps the turn.
+    expect(parse(href({ view: "feed", by: "turn", turn: "t1", event: "e2" }))).toEqual({ view: "feed", by: "turn", turn: "t1", event: "e2" });
   });
 
   it("reaches Memory, and a Host by its ID, which has a slash in it", () => {
