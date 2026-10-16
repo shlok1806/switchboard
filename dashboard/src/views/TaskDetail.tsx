@@ -1,32 +1,31 @@
-import { useCallback, useMemo, useState } from "react";
-import { taskGlyph } from "@/components/domain/moves";
-import { ExternalLink, GitBranch, GitPullRequest } from "lucide-react";
-import type { ChannelEvent, EventType } from "@shared/index";
-import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
-import { IssueLink } from "@/components/domain/pending";
-import { IssueBody } from "@/components/domain/issue-body";
-import { SegmentedControl } from "@/components/atoms/SegmentedControl";
-import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
-import {
-  Snippet,
-  SnippetCopyButton,
-  SnippetHeader,
-  SnippetTabsContent,
-} from "@/components/kibo-ui/snippet";
-import { AgentLink, CaptureIcon, PresencePill, TaskLink, VerdictTally } from "@/components/domain/pills";
-import { COLUMN_LABEL, Progress, columnOf, stepProgress, subtaskProgress } from "@/components/domain/task";
+/*
+ * A Task's page (design.md): where it stands and who holds it, then what it asks, its Steps
+ * and its Timeline at reading width. The aside is what a Person does about it: claim it or
+ * take a Stale Claim over, switch to its branch, post an Update on it, or send its Agent a
+ * Directive. Below 640px the aside follows the Task, except a Stale Claim, which leads.
+ */
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { toast } from "sonner";
+import type { Agent, ChannelEvent, EventType, Task } from "@shared/index";
+import { Button } from "@/components/atoms/Button";
+import { Chip } from "@/components/atoms/Chip";
 import { ClaimAction } from "@/components/domain/claim";
-import { TakeoverAction } from "@/components/domain/takeover";
 import { EventBody } from "@/components/domain/event";
+import { IssueBody } from "@/components/domain/issue-body";
+import { taskGlyph } from "@/components/domain/moves";
 import { OlderRow } from "@/components/domain/older";
-import { useScopedHistory } from "@/data/history";
+import { IssueLink } from "@/components/domain/pending";
+import { Glyph, State } from "@/components/domain/state";
+import { TakeoverAction } from "@/components/domain/takeover";
+import { COLUMN_LABEL, HolderLabel, columnOf, currentStep, openBlockers, shownLabels } from "@/components/domain/task";
 import { VerdictTable } from "@/components/domain/verdict";
-import { Composer } from "@/components/domain/composer";
+import { Section } from "@/components/shell/section";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
+import { useScopedHistory } from "@/data/history";
+import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
 import { EVENT_TYPE_LABEL, ago, clock, summarize } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
-import { Section } from "@/components/shell/section";
-import { State, Glyph } from "@/components/domain/state";
 
 const WORK: EventType[] = [
   "claim",
@@ -49,26 +48,24 @@ const WORK: EventType[] = [
   "mirror.failed",
 ];
 
-const SCOPES = ["Work", "All"] as const;
-
-/* Work that moved the Task is an ink disc on the timeline; everything else is a ring. */
-const WORK_MARK = new Set<EventType>(["claim", "takeover", "push", "merge", "task.review", "update", "step.complete", "claim.refused"]);
+type Scope = "work" | "all";
 
 export function TaskDetail({ number }: { number: number }) {
   const { snapshot } = useChannel();
   const can = useCapabilities();
   const { agentById, taskByNumber } = useIndex();
   const me = useMe();
-  const [scope, setScope] = useState<(typeof SCOPES)[number]>("Work");
+  const [scope, setScope] = useState<Scope>("work");
   const task = taskByNumber.get(number);
   const threshold = snapshot?.relay.interruptThreshold ?? 0.6;
 
   const onTask = useCallback((e: ChannelEvent) => e.task === number, [number]);
   const scoped = useScopedHistory({ task: number }, onTask);
+  const work = useMemo(() => scoped.events.filter((e) => WORK.includes(e.type)).length, [scoped.events]);
   const timeline = useMemo(
     () =>
       scoped.events
-        .filter((e) => scope === "All" || WORK.includes(e.type))
+        .filter((e) => scope === "all" || WORK.includes(e.type))
         .slice()
         .reverse(),
     [scoped.events, scope],
@@ -76,182 +73,351 @@ export function TaskDetail({ number }: { number: number }) {
 
   if (!task) {
     return (
-      <div className="p-6 text-body text-ink-2">
-        No Task #{number}. <a href={href({ view: "tasks" })} className="text-ink underline-offset-4 hover:underline">Back to the Board</a>
+      <div className="px-[var(--gutter)] pt-5 text-row text-ink-2">
+        No Task #{number}.{" "}
+        <a href={href({ view: "tasks" })} className="text-ink underline">
+          Back to the Tasks
+        </a>
       </div>
     );
   }
 
-  const steps = stepProgress(task);
-  const subs = subtaskProgress(task);
   const col = columnOf(task);
-  const holderAgent = task.claim?.holder.kind === "agent" ? agentById.get(task.claim.holder.agentId) : undefined;
-  // `status:*` labels mirror the status pill above (ADR 0001), so they are left out, as on the board.
-  const labels = task.labels.filter((l) => !l.startsWith("status:"));
-  const blocked = task.blockedBy.map((n) => taskByNumber.get(n)).filter(Boolean);
+  const claim = task.claim;
+  const holder = claim?.holder.kind === "agent" ? agentById.get(claim.holder.agentId) : undefined;
+  const labels = shownLabels(task);
+  const blockers = openBlockers(task, taskByNumber);
+  const parent = task.parent !== undefined ? taskByNumber.get(task.parent) : undefined;
+  const facts = [
+    `#${task.number}`,
+    task.steps.length > 0 && `${task.stepsDone} of ${task.steps.length} Steps done`,
+    task.subtasks.length > 0 && `${task.subtasksDone} of ${task.subtasks.length} Subtasks`,
+    task.pr !== undefined && `PR #${task.pr}`,
+    `updated ${ago(task.updatedAt)}`,
+  ].filter(Boolean);
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-6xl gap-8 px-[var(--gutter)] pt-6 pb-12 sm:pt-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-12">
-        <div className="flex min-w-0 flex-col gap-8">
-          <header className="flex flex-col gap-4">
-            <h1 className="max-w-[var(--column)] text-title font-semibold text-ink [overflow-wrap:anywhere] sm:text-display">{task.title}</h1>
-            <div className="flex flex-wrap items-center gap-2 text-small text-ink-3">
-              <State state={taskGlyph(task, me, agentById)} word={COLUMN_LABEL[col]} className="text-small" />
-              <span className="tabular-nums">#{task.number}</span>
-              {task.parent && (
-                <span className="inline-flex min-w-0 items-center gap-1">
-                  in <TaskLink number={task.parent} title={taskByNumber.get(task.parent)?.title} className="min-w-0 text-ink-2" />
-                </span>
+    <div key={number} className="h-full overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-[var(--gutter)] pt-3 pb-10">
+        <header className="flex flex-wrap items-start gap-x-6 gap-y-3">
+          <div className="flex min-w-0 flex-[1_1_420px] flex-col gap-1">
+            {/* Inline, not flex: a long title wraps under itself and keeps its glyph and state on its lines. */}
+            <h1 className="min-w-0 text-head font-semibold [overflow-wrap:anywhere] text-ink">
+              <Glyph state={taskGlyph(task, me, agentById)} className="relative -top-0.5 mr-2.5" />
+              {task.title}
+              <State state={taskGlyph(task, me, agentById)} word={COLUMN_LABEL[col]} glyph={false} className="ml-2.5 text-row whitespace-nowrap" />
+            </h1>
+            <p className="text-small text-ink-3">
+              {facts.join(" · ")}
+              {parent && (
+                <>
+                  {" · in "}
+                  <a href={href({ view: "task", number: parent.number })} className="text-ink hover:underline">
+                    #{parent.number} {parent.title}
+                  </a>
+                </>
               )}
-              <a href={task.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-ink-3 hover:text-ink underline-offset-4">
-                GitHub <ExternalLink className="size-3.5" aria-hidden />
+              {" · "}
+              <a href={task.url} target="_blank" rel="noreferrer" className="text-ink hover:underline">
+                Open on GitHub
               </a>
-            </div>
-            <IssueBody text={task.description} />
-            {labels.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {labels.map((l) => (
-                  <span key={l} className="rounded-[var(--r)] border border-rule px-2 text-label leading-[22px] text-ink-2">
-                    {l}
-                  </span>
-                ))}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {claim?.stale ? <TakeoverAction task={task} size="md" compact /> : <span className="w-28 empty:hidden"><ClaimAction task={task} /></span>}
+          </div>
+        </header>
+
+        <div className="flex flex-wrap items-start gap-x-8 gap-y-6">
+          <div className="flex min-w-0 flex-[7_1_560px] flex-col gap-6">
+            {task.description.trim() ? (
+              <div className="max-w-[72ch]">
+                <IssueBody text={task.description} />
               </div>
+            ) : (
+              <p className="text-row text-ink-3">No description on the Issue.</p>
             )}
-          </header>
+            {labels.length > 0 && (
+              <p className="text-small text-ink-3">
+                Labelled <span className="text-ink-2">{labels.join(", ")}</span>
+              </p>
+            )}
 
-          {task.steps.length > 0 && (
-            <Section title="Steps" action={<Progress done={steps.done} total={steps.total} noun="" />}>
-              <ul className="flex flex-col gap-2">
-                {task.steps.map((s) => (
-                  <li key={s.index} className="flex items-start gap-2.5 text-body">
-                    <Glyph state={s.done ? "done" : "idle"} className="mt-1" />
-                    <span className="sr-only">{s.done ? "Done:" : "Not done:"}</span>
-                    <span className={s.done ? "text-ink-2" : "text-ink"}>{s.text}</span>
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          )}
+            {task.steps.length > 0 && <StepList task={task} holder={claim ? <HolderLabel holder={claim.holder} /> : null} />}
 
-          {task.subtasks.length > 0 && (
-            <Section title="Subtasks" action={<Progress done={subs.done} total={subs.total} noun="" />} bodyClassName="px-1.5 pb-1.5">
-              <ul>
-                {task.subtasks.map((n) => {
-                  const s = taskByNumber.get(n);
-                  if (!s) return null;
-                  const sp = stepProgress(s);
-                  return (
-                    <li key={n}>
-                      <a
-                        href={href({ view: "task", number: n })}
-                        className="flex min-h-10 items-center gap-3 rounded-md px-2.5 hover:bg-hover"
-                      >
-                        <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere] text-ink">
-                          <span className="text-small text-ink-3 tabular-nums">#{n}</span> {s.title}
-                        </span>
-                        {sp.total > 0 && <Progress done={sp.done} total={sp.total} noun="" />}
+            {task.subtasks.length > 0 && (
+              <Section title="Subtasks" meta={`${task.subtasksDone} of ${task.subtasks.length} done`} bodyClassName="pt-0">
+                <ul>
+                  {task.subtasks.map((n) => {
+                    const s = taskByNumber.get(n);
+                    if (!s) return null;
+                    return (
+                      <li key={n} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-rule py-2.5">
+                        <a href={href({ view: "task", number: n })} className="min-w-0 flex-1 text-row [overflow-wrap:anywhere] text-ink hover:underline">
+                          <span className="text-ink-3 tabular-nums">#{n}</span> {s.title}
+                        </a>
+                        {s.steps.length > 0 && (
+                          <span className="text-small text-ink-3 tabular-nums">
+                            {s.stepsDone}/{s.steps.length} Steps
+                          </span>
+                        )}
                         <State state={taskGlyph(s, me, agentById)} word={COLUMN_LABEL[columnOf(s)]} className="text-small" />
-                      </a>
-                    </li>
-                  );
-                })}
-              </ul>
-            </Section>
-          )}
-
-          <section className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lead font-semibold text-ink">Timeline</h2>
-              <SegmentedControl options={SCOPES} value={scope} onChange={setScope} />
-            </div>
-            {timeline.length === 0 && !scoped.more ? (
-              <p className="text-body text-ink-3">{scoped.loading ? "Loading" : "Nothing yet"}</p>
-            ) : (
-              <ol className="relative flex flex-col">
-                <span aria-hidden className="absolute top-3 bottom-3 left-[4px] w-px bg-rule" />
-                {timeline.map((e) => (
-                  <TimelineItem key={e.id} event={e} threshold={threshold} />
-                ))}
-                {/* At the line's end, under the items' text (the dot's 9px and the gap's 12px). */}
-                {scoped.more && <OlderRow loading={scoped.loading} onClick={scoped.loadOlder} className="pl-[21px]" />}
-              </ol>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Section>
             )}
-          </section>
-        </div>
 
-        {/* On a phone the aside's parts join the page's column, so the Claim card alone
-            leads when a Stale Claim needs a Takeover; the rest stays after the Task. */}
-        <aside className="flex min-w-0 flex-col gap-4 max-lg:contents lg:sticky lg:top-8 lg:self-start">
-          <Section
-            title={task.claim?.stale ? "Stale Claim" : "Claim"}
-            className={cn(task.claim?.stale && "max-lg:order-first")}
-            bodyClassName="flex flex-col gap-3"
-          >
-            {task.claim ? (
-              <>
-                <div className="flex flex-wrap items-center gap-2">
-                  {task.claim.holder.kind === "agent" ? (
-                    <AgentLink id={task.claim.holder.agentId} agent={holderAgent} />
-                  ) : (
-                    <span className="text-body font-medium text-ink">{task.claim.holder.person}</span>
-                  )}
-                  {holderAgent && <PresencePill presence={holderAgent.presence} />}
+            <section className="flex min-w-0 flex-col" aria-labelledby="timeline">
+              <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-rule-2 pb-2">
+                <h2 id="timeline" className="flex-1 text-title font-semibold text-ink">
+                  Timeline
+                </h2>
+                <div role="group" aria-label="Show" className="flex gap-1.5">
+                  <Chip on={scope === "work"} onClick={() => setScope("work")} count={work}>
+                    Work
+                  </Chip>
+                  <Chip on={scope === "all"} onClick={() => setScope("all")} count={scoped.events.length}>
+                    All
+                  </Chip>
                 </div>
-                <p className="text-small text-ink-3">Claimed {ago(task.claim.claimedAt)}</p>
-                <TakeoverAction task={task} />
-              </>
-            ) : (
-              <>
-                <p className="text-small text-ink-3">
-                  {task.status === "done" ? (
-                    "Done"
-                  ) : can.claims ? (
-                    "Unclaimed"
-                  ) : (
-                    <>Claims arrive with <IssueLink capability="claims" />.</>
-                  )}
-                </p>
-                <ClaimAction task={task} />
-              </>
-            )}
-          </Section>
-
-          {blocked.length > 0 && (
-            <Section title="Blocked by" bodyClassName="flex flex-col gap-2">
-              {blocked.map((b) => (
-                <TaskLink key={b!.number} number={b!.number} title={b!.title} className="text-body text-ink" />
-              ))}
-            </Section>
-          )}
-
-          {(task.branch || task.pr) && (
-            <section className="flex flex-col gap-2">
-              {task.branch && (
-                <Snippet defaultValue="switch">
-                  <SnippetHeader>
-                    <span className="flex items-center gap-1.5 text-small font-medium">
-                      <GitBranch className="size-3.5" aria-hidden /> Branch
-                    </span>
-                    <SnippetCopyButton value={`git fetch && git switch ${task.branch}`} aria-label="Copy command" />
-                  </SnippetHeader>
-                  <SnippetTabsContent value="switch">
-                    git switch {task.branch}
-                  </SnippetTabsContent>
-                </Snippet>
-              )}
-              {task.pr && (
-                <p className="flex items-center gap-1.5 text-small text-ink-2">
-                  <GitPullRequest className="size-3.5" aria-hidden /> PR <span className="tabular-nums">#{task.pr}</span>
-                </p>
+              </header>
+              {timeline.length === 0 && !scoped.more ? (
+                <p className="py-4 text-row text-ink-3">{scoped.loading ? "Reading the Timeline" : "Nothing on the Channel about it yet."}</p>
+              ) : (
+                <ol>
+                  {timeline.map((e) => (
+                    <TimelineItem key={e.id} event={e} threshold={threshold} />
+                  ))}
+                  {scoped.more && <OlderRow loading={scoped.loading} onClick={scoped.loadOlder} what="events" />}
+                </ol>
               )}
             </section>
-          )}
+          </div>
 
-          {task.status !== "done" && <Composer task={task.number} />}
-        </aside>
+          <aside aria-label="Work on it" className="flex min-w-0 flex-[4_1_320px] flex-col gap-6 max-sm:contents max-sm:[&>*]:basis-full">
+            <Section title={claim?.stale ? "Stale Claim" : "Claim"} className={cn(claim?.stale && "max-sm:order-first")} bodyClassName="flex flex-col gap-2">
+              {claim ? (
+                <>
+                  <p className="text-row text-ink">
+                    <HolderLabel holder={claim.holder} />
+                  </p>
+                  <p className="text-small text-ink-3">
+                    {claim.stale ? "Its holder is Gone, so anyone may take it over. " : ""}Claimed {ago(claim.claimedAt)}.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-small text-ink-3">
+                    {task.status === "done" ? (
+                      "Done, so nobody holds it."
+                    ) : can.claims ? (
+                      "Nobody holds it."
+                    ) : (
+                      <>
+                        Claims arrive with <IssueLink capability="claims" />.
+                      </>
+                    )}
+                  </p>
+                </>
+              )}
+            </Section>
+
+            {blockers.length > 0 && (
+              <Section title="Blocked by" bodyClassName="pt-0">
+                <ul>
+                  {blockers.map((n) => (
+                    <li key={n} className="border-b border-rule py-2 text-row">
+                      <a href={href({ view: "task", number: n })} className="text-ink hover:underline">
+                        <span className="tabular-nums">#{n}</span> {taskByNumber.get(n)?.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            {task.branch && <Branch branch={task.branch} />}
+
+            {task.pr !== undefined && (
+              <Section title="Pull request">
+                <p className="text-row text-ink">
+                  <span className="tabular-nums">PR #{task.pr}</span>
+                  <span className="text-ink-3">{task.status === "review" ? ", in review" : task.status === "done" ? ", merged" : ""}</span>
+                </p>
+              </Section>
+            )}
+
+            {task.status !== "done" && <UpdateForm task={task} />}
+            {task.status !== "done" && holder && <DirectiveForm agent={holder} />}
+          </aside>
+        </div>
       </div>
     </div>
+  );
+}
+
+/** The Steps as a checklist: done, the one its holder is on, and the rest. */
+function StepList({ task, holder }: { task: Task; holder: React.ReactNode }) {
+  const current = currentStep(task);
+  return (
+    <Section title="Steps" meta={`${task.stepsDone} of ${task.steps.length} done`} bodyClassName="pt-0">
+      <ol>
+        {task.steps.map((s, i) => {
+          const next = i === current;
+          return (
+            <li key={s.index} className={cn("flex flex-wrap items-baseline gap-x-2.5 border-b border-rule py-2.5 text-row", s.done || next ? "text-ink" : "text-ink-3")}>
+              <Glyph state={s.done ? "done" : next ? "running" : "idle"} className="relative top-px" />
+              <span className="sr-only">{s.done ? "Done:" : next ? "In progress:" : "To do:"}</span>
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{s.text}</span>
+              {next && holder && <span className="text-small text-ink-2">{holder}</span>}
+            </li>
+          );
+        })}
+      </ol>
+    </Section>
+  );
+}
+
+/** The command that puts a checkout on the Task's branch, with a Copy. */
+function Branch({ branch }: { branch: string }) {
+  const command = `git fetch && git switch ${branch}`;
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+    } catch {
+      toast.error("Could not copy the command");
+    }
+  };
+  return (
+    <Section
+      title="Branch"
+      action={
+        <button type="button" onClick={() => void copy()} className="text-ink hover:underline">
+          {copied ? "Copied" : "Copy"}
+        </button>
+      }
+    >
+      <code className="block rounded-[var(--r)] bg-paper-2 px-2.5 py-1.5 text-small [overflow-wrap:anywhere] text-ink">{command}</code>
+    </Section>
+  );
+}
+
+const FIELD =
+  "min-h-[76px] resize-y rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 py-2 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-[16px]";
+
+/** Post an Update on the Task: everyone on the Channel reads it, nobody has to act on it. */
+function UpdateForm({ task }: { task: Task }) {
+  const store = useStore();
+  return (
+    <Said
+      title="Update"
+      meta="everyone reads it"
+      id="update"
+      label={`Update on #${task.number}`}
+      placeholder="The login test passes on Safari now."
+      send={(text) => store.source.act({ type: "update", text, task: task.number })}
+      done="Update posted"
+    />
+  );
+}
+
+/** Tell the Agent holding the Task what to do: a Directive is read at the start of its next turn. */
+function DirectiveForm({ agent }: { agent: Agent }) {
+  const store = useStore();
+  const can = useCapabilities();
+  const name = agent.nickname ?? agent.id;
+  if (!can.directives) {
+    return (
+      <Section title="Directive">
+        <p className="text-small text-ink-3">
+          Directives arrive with <IssueLink capability="directives" />.
+        </p>
+      </Section>
+    );
+  }
+  if (agent.presence === "gone") {
+    return (
+      <Section title="Directive">
+        <p className="text-small text-ink-3">{name} is Gone. A Directive waits until it resumes.</p>
+      </Section>
+    );
+  }
+  return (
+    <Said
+      title="Directive"
+      meta={`to ${name}`}
+      id="directive"
+      label={`Directive to ${name}`}
+      placeholder="Run the tests before touching web/src/pages."
+      send={(text) => store.source.act({ type: "directive", to: agent.id, text })}
+      done={`Directive sent to ${name}`}
+    />
+  );
+}
+
+function Said({
+  title,
+  meta,
+  id,
+  label,
+  placeholder,
+  send,
+  done,
+}: {
+  title: string;
+  meta: string;
+  id: string;
+  label: string;
+  placeholder: string;
+  send: (text: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  done: string;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const said = text.trim();
+    if (!said) return;
+    setBusy(true);
+    const r = await send(said);
+    setBusy(false);
+    if (!r.ok) return void toast.error(r.reason);
+    setText("");
+    toast.success(done);
+  };
+  return (
+    <Section title={title} meta={meta}>
+      <form onSubmit={submit} className="flex flex-col gap-2">
+        <label htmlFor={id} className="sr-only">
+          {label}
+        </label>
+        <textarea
+          id={id}
+          rows={3}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit(e);
+          }}
+          placeholder={placeholder}
+          className={FIELD}
+        />
+        <div>
+          <Button type="submit" variant="primary" size="sm" disabled={busy || !text.trim()}>
+            {busy ? "Sending" : "Send"}
+          </Button>
+        </div>
+      </form>
+    </Section>
   );
 }
 
@@ -260,53 +426,38 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
   const { agentById } = useIndex();
   const verdicts = verdictsByEvent.get(e.id) ?? [];
   const asked = verdicts.filter((v) => v.source === "jev");
+  const files = e.type === "push" || e.type === "merge" ? e.payload.files.length : 0;
   return (
-    <li className="relative grid grid-cols-[9px_minmax(0,1fr)] gap-3 py-2">
-      <span
-        aria-hidden
-        className={cn("relative z-10 mt-1.5 size-[9px] rounded-full ring-4 ring-paper", WORK_MARK.has(e.type) ? "bg-ink" : "border-[1.5px] border-ink-3 bg-paper")}
-      />
-      <div className="flex min-w-0 flex-col gap-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-body font-medium text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
-          {e.actor.kind === "agent" ? (
-            <AgentLink id={e.actor.agentId} agent={agentById.get(e.actor.agentId)} />
-          ) : (
-            <span className="text-small text-ink-2">{e.actor.kind === "person" ? e.actor.person : "GitHub"}</span>
-          )}
-          <CaptureIcon event={e} />
-          <time className="ml-auto text-small text-ink-3 tabular-nums" title={clock(e.at)}>
-            {ago(e.at)}
-          </time>
-        </div>
-        {e.type === "push" || e.type === "merge" || e.type === "takeover" ? (
-          <>
-            <p className="max-w-[60ch] text-body text-ink-2">{summarize(e)}</p>
-            <Reasoning>
-              <ReasoningTrigger className="text-small text-ink-3">
-                {e.type === "push" || e.type === "merge" ? `${e.payload.files.length} ${e.payload.files.length === 1 ? "file" : "files"}` : "Hand-off"}
-              </ReasoningTrigger>
-              <ReasoningContent contentClassName="mt-2 max-w-none">
-                <EventBody event={e} />
-              </ReasoningContent>
-            </Reasoning>
-          </>
-        ) : (
-          <p className={cn("max-w-[60ch] text-body leading-snug", e.type === "update" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
-        )}
-        {asked.length > 0 && (
-          <Reasoning>
-            <ReasoningTrigger className="text-small text-ink-3">
-              <span className="flex items-center gap-2">
-                Verdicts <VerdictTally verdicts={verdicts} />
-              </span>
-            </ReasoningTrigger>
-            <ReasoningContent contentClassName="mt-2 max-w-none">
-              <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
-            </ReasoningContent>
-          </Reasoning>
-        )}
+    <li className="flex flex-col gap-1 border-b border-rule py-3">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-small">
+        <span className="font-semibold text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
+        <span className="text-ink-3">·</span>
+        <span className="min-w-0 text-ink-2">
+          {e.actor.kind === "agent" ? <HolderLabel holder={{ kind: "agent", agentId: e.actor.agentId }} /> : e.actor.kind === "person" ? e.actor.person : "GitHub"}
+        </span>
+        <time dateTime={e.at} className="ml-auto text-ink-3 tabular-nums" title={clock(e.at)}>
+          {ago(e.at)}
+        </time>
       </div>
+      <p className={cn("max-w-[72ch] text-row [overflow-wrap:anywhere]", e.type === "update" || e.type === "directive" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
+      {(e.type === "push" || e.type === "merge" || e.type === "takeover") && (
+        <Reasoning>
+          <ReasoningTrigger className="text-small text-ink-3">{files > 0 ? `${files} ${files === 1 ? "file" : "files"}` : "The hand-off"}</ReasoningTrigger>
+          <ReasoningContent contentClassName="mt-2 max-w-none">
+            <EventBody event={e} />
+          </ReasoningContent>
+        </Reasoning>
+      )}
+      {asked.length > 0 && (
+        <Reasoning>
+          <ReasoningTrigger className="text-small text-ink-3">
+            {asked.length} {asked.length === 1 ? "Verdict" : "Verdicts"}
+          </ReasoningTrigger>
+          <ReasoningContent contentClassName="mt-2 max-w-none">
+            <VerdictTable verdicts={verdicts} agentById={agentById} threshold={threshold} />
+          </ReasoningContent>
+        </Reasoning>
+      )}
     </li>
   );
 }

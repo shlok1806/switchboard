@@ -162,6 +162,7 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
           if (idle()) onOpen?.();
         }}
         aria-roledescription="Task card"
+        aria-label={name}
         ref={setNodeRef}
         className="rounded-md"
       >

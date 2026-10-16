@@ -275,16 +275,16 @@ function StackedHost({ host: h, agents }: { host: Host; agents: Agent[] }) {
         onClick={() => go({ view: "hosts", host: h.id })}
         className="flex w-full flex-col gap-1.5 border-b border-rule px-3 py-3 text-left hover:bg-paper-2 focus-visible:-outline-offset-2"
       >
-      <span className="flex w-full items-center justify-between gap-3 text-row">
-        <HostState host={h} />
-        <span className="text-ink-3 tabular-nums">{h.live ? "now" : ago(h.lastSeenAt)}</span>
-      </span>
-      <span>
-        <span className={cn("block text-row font-semibold [overflow-wrap:anywhere]", h.live ? "text-ink" : "text-ink-2")}>{h.name}</span>
-        <span className="block text-small text-ink-3">{MODE_LABEL[h.maxPermissionMode]}</span>
-      </span>
-      <span className={cn("text-row [overflow-wrap:anywhere]", agents.length ? "text-ink" : "text-ink-3")}>{agents.length ? agents.map(shortName).join(", ") : "No Agents"}</span>
-      <Folders roots={h.roots} />
+        <span className="flex w-full items-center justify-between gap-3 text-row">
+          <HostState host={h} />
+          <span className="text-ink-3 tabular-nums">{h.live ? "now" : ago(h.lastSeenAt)}</span>
+        </span>
+        <span>
+          <span className={cn("block text-row font-semibold [overflow-wrap:anywhere]", h.live ? "text-ink" : "text-ink-2")}>{h.name}</span>
+          <span className="block text-small text-ink-3">{MODE_LABEL[h.maxPermissionMode]}</span>
+        </span>
+        <span className={cn("text-row [overflow-wrap:anywhere]", agents.length ? "text-ink" : "text-ink-3")}>{agents.length ? agents.map(shortName).join(", ") : "No Agents"}</span>
+        <Folders roots={h.roots} />
       </button>
     </li>
   );

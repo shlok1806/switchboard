@@ -14,8 +14,8 @@ components are re-skinned through those tokens only.
 
 | Project | Licence | Copyright | Files |
 | --- | --- | --- | --- |
-| Kibo UI (github.com/shadcnblocks/kibo, registry item `kanban` at kibo-ui.com/r/kanban.json) | MIT | (c) 2023 - present shadcnblocks | `src/components/kibo-ui/kanban` (the Tasks board), `relative-time`, `snippet`, `banner` |
-| Beautiful UI (github.com/slev12397/beautiful-ui, registry beautifului.dev) | MIT | (c) 2026 Shane Levine | `src/components/atoms/*` (Button, SegmentedControl, StatusPill), `src/components/primitives/*` (ChatComposer, CodeBlock, LoadingState, ToolChips) |
+| Kibo UI (github.com/shadcnblocks/kibo, registry item `kanban` at kibo-ui.com/r/kanban.json) | MIT | (c) 2023 - present shadcnblocks | `src/components/kibo-ui/kanban` (the Tasks board), `banner` |
+| Beautiful UI (github.com/slev12397/beautiful-ui, registry beautifului.dev) | MIT | (c) 2026 Shane Levine | `src/components/atoms/*` (Button), `src/components/primitives/*` (ChatComposer, CodeBlock, LoadingState, ToolChips) |
 | shadcn/ui (github.com/shadcn-ui/ui) | MIT | (c) 2023 shadcn | `src/components/ui/*` except the prompt-kit files below, `src/hooks/use-mobile.ts` |
 | prompt-kit (github.com/ibelick/prompt-kit) | MIT | (c) 2025 Julien Thibeaut | `src/components/ui/tool.tsx`, `reasoning.tsx` |
 
