@@ -6,7 +6,7 @@ import type { AuthConfigResponse, SignInProblem } from "@shared/index";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { HttpChannelSource } from "@/data/http";
 import { NoChannelScreen, SignInScreen } from "@/components/domain/join";
-import { apiBase, channelBase, channelRepo, devSignIn, signIn, wantsMock } from "@/lib/session";
+import { apiBase, channelBase, channelRepo, deviceSignIn, devSignIn, signIn, wantsMock } from "@/lib/session";
 import { initDensity } from "@/lib/density";
 import { initTheme } from "@/lib/theme";
 
@@ -43,6 +43,14 @@ const SIGN_IN_PROBLEM: Record<SignInProblem, string> = {
   expired: "The sign-in took too long. Try again.",
   failed: "GitHub sign-in did not work. Try again.",
   "not-allowed": "This Switchboard has no Channel for that repo.",
+  "bad-state":
+    "The sign-in link back from GitHub was not one this Switchboard made, or it was damaged. Try again, or use Sign in with a code.",
+  "no-cookie":
+    "The sign-in finished in a different browser, or your browser blocked the cookie. Use Sign in with a code.",
+  "no-code": "GitHub did not send back a sign-in code. Try again, or use Sign in with a code.",
+  "exchange-failed": "GitHub refused the sign-in code. Try again, or use Sign in with a code.",
+  "login-failed": "GitHub would not say which account signed in. Try again, or use Sign in with a code.",
+  "login-unusable": "That GitHub account name is not one Switchboard can use.",
 };
 
 /** Reads `?signin=` once and takes it off the URL, so a reload does not show it again. */
@@ -141,6 +149,8 @@ function Root() {
         problem={boot.problem}
         notConfigured={boot.notConfigured}
         onSignIn={() => signIn(repo)}
+        device={deviceSignIn}
+        onSignedIn={() => window.location.reload()}
         onDevSignIn={boot.devSignIn ? (login) => devSignIn(repo, login) : undefined}
       />
     );

@@ -1,5 +1,7 @@
-import { useState, type FormEvent } from "react";
-import { AlertTriangle } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { AlertTriangle, Check, Copy, ExternalLink } from "lucide-react";
+import type { DeviceCodeResponse } from "@shared/index";
+import type { DeviceSignIn } from "@/lib/session";
 import { Mark } from "@/components/shell/nav";
 import { Button } from "@/components/atoms/Button";
 
@@ -24,12 +26,17 @@ export function SignInScreen({
   problem,
   notConfigured,
   onSignIn,
+  device,
+  onSignedIn,
   onDevSignIn,
 }: {
   repo: string;
   problem?: string;
   notConfigured?: string;
   onSignIn: () => void;
+  /** "Sign in with a code": GitHub's device flow, for when its redirect back does not work. */
+  device?: DeviceSignIn;
+  onSignedIn?: () => void;
   onDevSignIn?: (login: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -84,6 +91,9 @@ export function SignInScreen({
             <GitHubMark className="size-4" />
             {busy ? "Opening GitHub" : "Sign in with GitHub"}
           </Button>
+          {device && onSignedIn && (
+            <DeviceCodeSignIn repo={repo} device={device} onSignedIn={onSignedIn} disabled={Boolean(notConfigured)} />
+          )}
         </div>
         {onDevSignIn && (
           <form
@@ -112,6 +122,157 @@ export function SignInScreen({
         )}
       </div>
     </main>
+  );
+}
+
+type DeviceState =
+  | { kind: "idle" }
+  | { kind: "starting" }
+  | { kind: "waiting"; code: DeviceCodeResponse }
+  | { kind: "stopped"; reason: string };
+
+/**
+ * "Sign in with a code": shows GitHub's user code, and polls until the Person has approved it
+ * at github.com/login/device, the code expired, or it was refused. The session arrives as a
+ * cookie from the Worker, so nothing here holds it.
+ */
+function DeviceCodeSignIn({
+  repo,
+  device,
+  onSignedIn,
+  disabled,
+}: {
+  repo: string;
+  device: DeviceSignIn;
+  onSignedIn: () => void;
+  disabled: boolean;
+}) {
+  const [state, setState] = useState<DeviceState>({ kind: "idle" });
+  const [copied, setCopied] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const run = useRef(0);
+
+  // Leaving the screen, or starting over, ends the poll of the run before.
+  useEffect(() => () => void (run.current += 1), []);
+
+  const cancel = () => {
+    run.current += 1;
+    setState({ kind: "idle" });
+  };
+
+  const start = async () => {
+    const mine = ++run.current;
+    const live = () => run.current === mine;
+    setState({ kind: "starting" });
+    setCopied(false);
+    setSlow(false);
+    let code: DeviceCodeResponse;
+    try {
+      code = await device.start();
+    } catch (error) {
+      if (live()) setState({ kind: "stopped", reason: `Could not start the sign-in: ${(error as Error).message}` });
+      return;
+    }
+    if (!live()) return;
+    setState({ kind: "waiting", code });
+
+    let interval = Math.max(1, code.interval) * 1000;
+    const deadline = Date.now() + code.expiresIn * 1000;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, interval));
+      if (!live()) return;
+      if (Date.now() > deadline) {
+        setState({ kind: "stopped", reason: "The code expired before it was approved. Get a new code." });
+        return;
+      }
+      let poll;
+      try {
+        poll = await device.poll(code.deviceCode, repo);
+      } catch {
+        // Offline for a moment: keep waiting until the code runs out.
+        setSlow(true);
+        continue;
+      }
+      if (!live()) return;
+      setSlow(false);
+      if (poll.kind === "signed-in") {
+        onSignedIn();
+        return;
+      }
+      if (poll.kind === "failed") {
+        setState({ kind: "stopped", reason: poll.reason });
+        return;
+      }
+      if (poll.slowDown) interval += 5000;
+    }
+  };
+
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch {
+      setCopied(false); // the code is on screen to read out
+    }
+  };
+
+  if (state.kind === "waiting") {
+    const { code } = state;
+    return (
+      <div className="flex flex-col gap-3 border-t border-rule pt-4" aria-label="Sign in with a code">
+        <p className="text-small text-ink-2">Enter this code on GitHub to sign in:</p>
+        <p
+          aria-label={`Your code is ${code.userCode}`}
+          className="text-center font-mono text-[28px] leading-none font-semibold tracking-[0.08em] text-ink select-all"
+        >
+          {code.userCode}
+        </p>
+        <div className="flex gap-2">
+          <Button type="button" variant="secondary" size="md" className="flex-1" onClick={() => void copy(code.userCode)}>
+            {copied ? <Check className="size-4" aria-hidden /> : <Copy className="size-4" aria-hidden />}
+            {copied ? "Copied" : "Copy code"}
+          </Button>
+          <a
+            href={code.verificationUri}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-md border border-rule-2 bg-transparent px-3 text-body font-medium text-ink transition-colors hover:border-ink-3 hover:bg-paper-2"
+          >
+            <ExternalLink className="size-4" aria-hidden />
+            Open GitHub
+          </a>
+        </div>
+        <p role="status" className="text-small text-ink-3">
+          {slow
+            ? "Cannot reach Switchboard right now. Still waiting."
+            : "Waiting for you to approve it on GitHub. This page signs you in by itself."}
+        </p>
+        <Button type="button" variant="ghost" size="sm" className="self-start" onClick={cancel}>
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {state.kind === "stopped" && (
+        <p role="alert" className="flex items-start gap-2 text-small text-ink">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+          {state.reason}
+        </p>
+      )}
+      <Button
+        type="button"
+        variant="secondary"
+        size="md"
+        className="w-full"
+        disabled={disabled || state.kind === "starting"}
+        onClick={() => void start()}
+      >
+        {state.kind === "starting" ? "Getting a code" : state.kind === "stopped" ? "Get a new code" : "Sign in with a code"}
+      </Button>
+    </div>
   );
 }
 

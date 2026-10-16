@@ -1,4 +1,4 @@
-import { channelApiBase, channelKey } from "@shared/index";
+import { channelApiBase, channelKey, type DeviceCodeResponse, type DeviceSessionResponse } from "@shared/index";
 
 /**
  * The Channel this page is for (ADR 0007): the Dashboard lives at `/<owner>/<repo>`.
@@ -23,6 +23,47 @@ export function apiBase(repo: string): string {
 export function signIn(repo: string): void {
   window.location.assign(`${channelBase()}/auth/github/start?repo=${encodeURIComponent(repo)}`);
 }
+
+/** What one poll of the device flow came back with. */
+export type DevicePollResult =
+  | { kind: "pending"; slowDown: boolean }
+  | { kind: "signed-in" }
+  | { kind: "failed"; reason: string };
+
+/** The two calls behind "Sign in with a code"; the sign-in screen takes them as a prop. */
+export interface DeviceSignIn {
+  start(): Promise<DeviceCodeResponse>;
+  poll(deviceCode: string, repo: string): Promise<DevicePollResult>;
+}
+
+async function reasonOf(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { reason?: unknown };
+    if (typeof body.reason === "string" && body.reason) return body.reason;
+  } catch {
+    // not JSON: fall through to the status
+  }
+  return `Switchboard answered ${res.status}.`;
+}
+
+/** GitHub's device flow, with no redirect back: the session arrives as this response's cookie. */
+export const deviceSignIn: DeviceSignIn = {
+  async start() {
+    const res = await fetch(`${channelBase()}/auth/device/code`, { method: "POST", credentials: "include" });
+    if (!res.ok) throw new Error(await reasonOf(res));
+    return (await res.json()) as DeviceCodeResponse;
+  },
+  async poll(deviceCode, repo) {
+    const res = await fetch(`${channelBase()}/auth/device/session`, {
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({ deviceCode, repo }),
+    });
+    if (!res.ok) return { kind: "failed", reason: await reasonOf(res) };
+    const body = (await res.json()) as DeviceSessionResponse;
+    return body.ok ? { kind: "signed-in" } : { kind: "pending", slowDown: body.slowDown === true };
+  },
+};
 
 /** The dev-only fake sign-in (`wrangler dev` with DEV_FAKE_GITHUB): signs in as `login`. */
 export function devSignIn(repo: string, login: string): void {
