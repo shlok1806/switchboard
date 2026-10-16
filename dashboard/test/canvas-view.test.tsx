@@ -30,6 +30,7 @@ function agent(id: string, extra: Partial<Agent> = {}): Agent {
 const lead = agent("shlok/claude/aaaa", { nickname: "planner", role: "lead" });
 const child = agent("shlok/codex/bbbb", { cli: "codex", parent: lead.id, startedAt: "2026-10-15T09:05:00.000Z" });
 const maya = agent("maya/claude/cccc", { presence: "gone" });
+const mayaIdle = agent("maya/claude/dddd", { presence: "idle" });
 const login: Task = {
   number: 12,
   title: "Fix the login redirect",
@@ -131,7 +132,7 @@ describe("the canvas", () => {
     const width = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
     try {
-      const { container } = render(<CanvasView />, { wrapper: channel([maya, child, lead]) });
+      const { container } = render(<CanvasView />, { wrapper: channel([mayaIdle, child, lead]) });
       await screen.findByText("planner");
       // No canvas to pan on a phone: the frames are lanes, yours first.
       expect(container.querySelector("[role=application]")).toBeNull();
