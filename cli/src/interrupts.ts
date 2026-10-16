@@ -640,6 +640,14 @@ export class InterruptTyper {
     }
   }
 
+  /**
+   * The wrapper blocked the Stop hook that just arrived: the CLI continues its turn
+   * instead of waiting at its prompt, until its next Stop (ADR 0027).
+   */
+  stopBlocked(): void {
+    this.line.setIdle(false);
+  }
+
   /** The open permission prompt was answered from the Channel (a deny, ADR 0014): it closes. */
   permissionAnswered(): void {
     if (this.permission !== null) this.closeDialog();

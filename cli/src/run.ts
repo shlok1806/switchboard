@@ -901,7 +901,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         context: (hook) => nextTurn.take(hook),
         ...(nudges === null
           ? {}
-          : { decide: (input) => nudges.decide(input), onEvents: (events) => nudges.events(events) }),
+          : {
+              decide: async (input) => {
+                const answer = await nudges.decide(input);
+                // A blocked Stop does not end the turn: the CLI carries on with it.
+                if (answer !== null && input.hook_event_name === "Stop") typer.stopBlocked();
+                return answer;
+              },
+              onEvents: (events) => nudges.events(events),
+            }),
         onHook: (input) => {
           nudges?.hook(input);
           if (input.hook_event_name === "SessionStart") {

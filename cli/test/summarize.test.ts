@@ -70,4 +70,16 @@ describe("HookSummarizer", () => {
     });
     expect(events).toContainEqual({ type: "file.edit", payload: { path: "src/greet.ts", additions: 1, deletions: 1 } });
   });
+
+  it("ends a turn once when a Stop hook blocked its first stop and the CLI carried on", () => {
+    const summarizer = new HookSummarizer(root);
+    expect(summarizer.summarize({ hook_event_name: "Stop", stop_hook_active: false })).toEqual([
+      { type: "turn.end", payload: { turn: 1 } },
+    ]);
+    // The same turn, continued because a hook blocked that Stop, ends again.
+    expect(summarizer.summarize({ hook_event_name: "Stop", stop_hook_active: true })).toEqual([]);
+    expect(summarizer.summarize({ hook_event_name: "Stop", stop_hook_active: false })).toEqual([
+      { type: "turn.end", payload: { turn: 2 } },
+    ]);
+  });
 });
