@@ -233,6 +233,36 @@ describe("the log by model turn", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("names the tools a model call only asked for, and sums its turn up by what the model said", async () => {
+    const digest = (reply: string, toolCalls: { name: string; arg: string }[]) =>
+      ev("proxy.digest", quill, { model: "claude-opus", inputTokens: 900, outputTokens: 40, reply, toolCalls, maskedSecrets: 0 }, { capture: "proxy", turn: "t2" });
+    const events = [
+      digest("Checking the users page.", []),
+      digest("", [
+        { name: "Bash", arg: "seq 1 600" },
+        { name: "Bash", arg: "seq 601 1200" },
+        { name: "Read", arg: "web/src/users.tsx" },
+      ]),
+    ];
+    const Wrapper = channel(events);
+    const { unmount } = render(
+      <Wrapper>
+        <ActivityView />
+      </Wrapper>,
+    );
+    await screen.findByText("Called Bash (2 times), Read");
+    expect(rowWith("Called Bash (2 times), Read")).toBeTruthy();
+    unmount();
+
+    render(
+      <Wrapper>
+        <ActivityView byTurn />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(document.getElementById("turn-t2")).not.toBeNull());
+    expect(within(document.getElementById("turn-t2")!).getByText("Checking the users page.")).toBeTruthy();
+  });
+
   it("says so when no model turn is among the loaded Events", async () => {
     render(<ActivityView byTurn />, { wrapper: channel([ev("command", moth, { command: "npm test" })]) });
     expect((await screen.findByRole("status")).textContent).toMatch(/^No model turn among the 1 newest Events/);

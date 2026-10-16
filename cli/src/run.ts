@@ -153,14 +153,21 @@ export function takeFrom(args: string[]): { from?: string; rest: string[] } {
 
 /**
  * The summary of the one Agent `name` names on the Channel (ADR 0024), read as the
- * Person, or why there is none.
+ * Person, or why there is none. `briefed` is true when `self`, the Agent a resumed
+ * session already is, continues it already: that session has its Hand-off Brief.
  */
-async function predecessorOf(client: ChannelClient, name: string): Promise<AgentSummary | string> {
+async function predecessorOf(
+  client: ChannelClient,
+  name: string,
+  self: AgentId | null,
+): Promise<{ summary: AgentSummary; briefed: boolean } | string> {
   const { agents } = await client.request<AgentsResponse>("/api/agents");
   const found = matchAgents(agents, name);
   if (found.length === 0) return `no Agent on this Channel is called ${name}, so this session cannot continue it.`;
   if (found.length > 1) return `${name} could be ${found.map((a) => a.id).join(", ")}; use the full Agent ID.`;
-  return client.request<AgentSummary>(summaryPath((found[0] as Agent).id));
+  const predecessor = found[0] as Agent;
+  const briefed = self !== null && agents.some((a) => a.id === self && a.continues === predecessor.id);
+  return { summary: await client.request<AgentSummary>(summaryPath(predecessor.id)), briefed };
 }
 
 export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<number> {
@@ -257,22 +264,29 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // `--from` (ADR 0024): the session carries on another Agent's work, and starts with
   // what the Channel knows of it. One that cannot be read stops here, before the CLI runs.
   let predecessor: AgentSummary | null = null;
+  // A resumed session that continues it already has its brief in its context: it is not
+  // given again, as a Host does not pass --from to a resume (ADR 0024).
+  let briefed = false;
   if (fromFlag !== undefined && plan.kind !== "none") {
+    const self = plan.kind === "known" && plan.resumed ? agentIdFor(config.person, adapter.cli, plan.sessionId) : null;
     try {
-      const found = await predecessorOf(client, fromFlag);
+      const found = await predecessorOf(client, fromFlag, self);
       if (typeof found === "string") {
         console.error(`switchboard: ${found}`);
         return 2;
       }
-      predecessor = found;
+      predecessor = found.summary;
+      briefed = found.briefed;
     } catch (error) {
       console.error(`switchboard: could not read ${fromFlag} from the Channel: ${(error as Error).message}`);
       return 1;
     }
-    log(`continues ${predecessor.agent.id}`);
+    log(`continues ${predecessor.agent.id}${briefed ? ", briefed already" : ""}`);
     console.error(
       dim(
-        `switchboard: this session continues ${summaryName(predecessor.agent)}; it starts with what the Channel knows of it.`,
+        briefed
+          ? `switchboard: this session continues ${summaryName(predecessor.agent)}; it was told what the Channel knows of it when it started.`
+          : `switchboard: this session continues ${summaryName(predecessor.agent)}; it starts with what the Channel knows of it.`,
       ),
     );
   }
@@ -560,7 +574,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // rule at SessionStart.
   const nextTurn = new NextTurn(memory);
   if (predecessor !== null) {
-    nextTurn.handOff((max) => handoffBrief(predecessor, max));
+    if (!briefed) nextTurn.handOff((max) => handoffBrief(predecessor, max));
     // Notes on its predecessor's Tasks and files matter to it too.
     memory.focus({ tasks: predecessor.tasks.map((task) => task.number), files: predecessor.files });
   }
