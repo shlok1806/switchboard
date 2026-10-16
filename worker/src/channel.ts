@@ -81,7 +81,7 @@ import { Alarms } from "./alarms";
 import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
-import { DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
+import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { DEFAULT_SPAWN_WAIT_MS, type HostRefusal, Hosts, type SpawnResult } from "./hosts";
@@ -506,6 +506,7 @@ export class Channel extends DurableObject<Env> {
       interruptTo: (agent, message) => this.interruptTo(agent, message),
       waitUntil: (work) => this.ctx.waitUntil(work),
     });
+    const attachWait = Number(env.DIRECTIVE_ATTACH_WAIT_SECONDS);
     this.directives = new Directives({
       sql: ctx.storage.sql,
       findAgent: (id) => this.agents.find(id),
@@ -515,6 +516,8 @@ export class Channel extends DurableObject<Env> {
       },
       interruptTo: (agent, message) => this.interruptTo(agent, message),
       waitUntil: (work) => this.ctx.waitUntil(work),
+      schedule: (at) => this.alarms.set("directives", at),
+      attachWaitMs: attachWait > 0 ? attachWait * 1000 : DEFAULT_ATTACH_WAIT_MS,
     });
     this.wakes = new Wakes({ sql: ctx.storage.sql, append: (event) => this.append(event) });
     const transcriptWait = Number(env.TRANSCRIPT_WAIT_SECONDS);
@@ -551,6 +554,7 @@ export class Channel extends DurableObject<Env> {
       if (due.has("presence")) await this.agents.expireSilent();
       if (due.has("members")) await this.recheckMembers();
       if (due.has("hosts")) await this.hosts.alarm();
+      if (due.has("directives")) await this.directives.alarm();
     } finally {
       await this.alarms.arm();
     }
@@ -1437,6 +1441,8 @@ export class Channel extends DurableObject<Env> {
         send(ws, { type: "interrupt.attached", agent: agent as AgentId });
         // And whether anyone watches its terminal, so a new run of the wrapper starts streaming.
         send(ws, this.watchersMessage(agent as AgentId));
+        // Directives sent before it attached are typed now (ADR 0025).
+        this.directives.attached(agent as AgentId);
         return;
       }
       const result = parseInterruptResult(body);

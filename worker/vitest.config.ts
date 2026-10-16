@@ -38,6 +38,8 @@ const vars = {
   HOST_SPAWN_WAIT_SECONDS: "2",
   // Short, so a transcript read its wrapper never answers fails quickly.
   TRANSCRIPT_WAIT_SECONDS: "1",
+  // Short, so a Directive held for a wrapper that never attaches falls back to Queue quickly.
+  DIRECTIVE_ATTACH_WAIT_SECONDS: "1",
   // Small, so a test reaches the daily cap on notes with a few of them.
   MEMORY_NOTES_PER_DAY: "5",
   GITHUB_API_URL: "",

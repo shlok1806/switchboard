@@ -562,7 +562,8 @@ export interface RelayState {
  * Why an Interrupt reached the Agent as a Queue.
  * - `below-threshold`: Jev was less sure than the threshold, so the Verdict's `option` is "queue".
  * - `cli-cannot-interrupt`: the Agent's CLI cannot receive Interrupts.
- * - `wrapper-offline`: the Agent's wrapper was not connected to the Channel.
+ * - `wrapper-offline`: the Agent's wrapper was not connected to the Channel. A Directive first waits
+ *   a few seconds for it to attach (ADR 0025).
  * - `rate-limited`: the Agent had an Interrupt too recently.
  * - `person-typing`: the Agent's Person kept typing, and the wrapper never types over them.
  * - `dialog-open`: the session was showing a permission prompt or a question, which typing would answer.

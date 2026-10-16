@@ -2,11 +2,12 @@
 // wake up on their own schedule: the Task reconcile (every few minutes), the
 // Presence check (when the quietest Agent would go Gone) and, while streams are
 // open, the re-check of their Persons' access to the repo; and the Hosts' check for a
-// Host that stayed away or a spawn nobody answered. Each keeps its own deadline here,
+// Host that stayed away or a spawn nobody answered; and a Directive whose wrapper did
+// not attach in time (ADR 0025). Each keeps its own deadline here,
 // and the one real alarm is always set to the earliest of them.
 
 /** The parts of the Channel that wake up on a timer. */
-export type AlarmJob = "tasks" | "presence" | "members" | "hosts";
+export type AlarmJob = "tasks" | "presence" | "members" | "hosts" | "directives";
 
 type DeadlineRow = { job: string; at: number };
 
