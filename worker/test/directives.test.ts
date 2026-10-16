@@ -6,7 +6,7 @@
 
 import { reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentId,
   AgentResponse,
@@ -25,6 +25,9 @@ import { agentPath, deliveriesNotice, directivesNotice, STANDING_RULE } from "..
 import { installJev } from "../src/relay/jev";
 import { bearer, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeJev } from "./fake-jev";
+
+// waitFor waits up to 4 s and the attach tests sleep past the bound on top, above vitest's 5 s default.
+vi.setConfig({ testTimeout: 15_000 });
 
 let jev: FakeJev;
 
@@ -278,17 +281,89 @@ describe("Delivering right away", () => {
     expect(held?.id).toBe(event.id);
   });
 
-  it("holds it for the next turn when the wrapper can type but is not connected", async () => {
-    const agent = await FakeAgent.start("alice", false, { typed: true });
-    const { event } = await (await direct("shlok", agent.id, "Pick up #7.")).json<SendDirectiveResponse>();
-    expect((await deliveryOf(event.id)).payload).toMatchObject({ delivered: "queue", reason: "wrapper-offline" });
-    expect((await agent.heartbeat()).directives?.map((d) => d.id)).toEqual([event.id]);
-  });
-
   it("holds it for the next turn when the CLI cannot be typed into", async () => {
     const agent = await FakeAgent.start("alice");
     const { event } = await (await direct("shlok", agent.id, "Pick up #7.")).json<SendDirectiveResponse>();
     expect((await deliveryOf(event.id)).payload).toMatchObject({ delivered: "queue", reason: "cli-cannot-interrupt" });
+  });
+});
+
+/** Sleeps `ms`: the wrapper's socket reopening slowly after it registered, or reconnecting. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** DIRECTIVE_ATTACH_WAIT_SECONDS in vitest.config.ts. */
+const ATTACH_WAIT_MS = 1000;
+
+describe("Before the wrapper attaches (ADR 0025)", () => {
+  it("types a Directive sent between registering and attaching once the wrapper attaches", async () => {
+    const agent = await FakeAgent.start("alice", false, { typed: true });
+    const { event } = await (await direct("shlok", agent.id, "Pick up #7.")).json<SendDirectiveResponse>();
+    await delay(300);
+    await agent.connect();
+    expect((await deliveryOf(event.id)).payload).toEqual({
+      directive: event.id,
+      from: "shlok",
+      delivered: "interrupt",
+    });
+    expect(agent.typed.map((d) => d.id)).toEqual([event.id]);
+    // Typed, so nothing waits for the next turn, even after the bound.
+    await delay(ATTACH_WAIT_MS);
+    expect(agent.directives).toEqual([]);
+    expect((await agent.heartbeat()).directives).toBeUndefined();
+    const deliveries = (await events()).filter(
+      (e) => e.type === "directive.delivery" && e.payload.directive === event.id,
+    );
+    expect(deliveries).toHaveLength(1);
+  });
+
+  it("types several held Directives in the order they were sent", async () => {
+    const agent = await FakeAgent.start("alice", false, { typed: true });
+    const sent: string[] = [];
+    for (const text of ["One.", "Two.", "Three."]) {
+      sent.push((await (await direct("shlok", agent.id, text)).json<SendDirectiveResponse>()).event.id);
+    }
+    await delay(200);
+    await agent.connect();
+    for (const id of sent) expect((await deliveryOf(id)).payload.delivered).toBe("interrupt");
+    expect(agent.typed.map((d) => d.text)).toEqual(["One.", "Two.", "Three."]);
+  });
+
+  it("queues a held Directive with the reason the wrapper gives when it cannot type it on attach", async () => {
+    const agent = await FakeAgent.start("alice", false, { typed: false, reason: "session-not-ready" });
+    const { event } = await (await direct("shlok", agent.id, "Pick up #7.")).json<SendDirectiveResponse>();
+    await delay(200);
+    await agent.connect();
+    expect((await deliveryOf(event.id)).payload).toMatchObject({ delivered: "queue", reason: "session-not-ready" });
+    const [held] = await waitFor(() => (agent.directives.length > 0 ? agent.directives : undefined));
+    expect(held?.id).toBe(event.id);
+  });
+
+  it("falls back to the next turn as wrapper-offline when the wrapper does not attach within the bound", async () => {
+    const agent = await FakeAgent.start("alice", false, { typed: true });
+    const { event } = await (await direct("shlok", agent.id, "Pick up #7.")).json<SendDirectiveResponse>();
+    expect((await deliveryOf(event.id)).payload).toEqual({
+      directive: event.id,
+      from: "shlok",
+      delivered: "queue",
+      reason: "wrapper-offline",
+    });
+    expect((await agent.heartbeat()).directives?.map((d) => d.id)).toEqual([event.id]);
+    // A wrapper attaching after the bound is not asked to type it as well.
+    await agent.connect();
+    await delay(200);
+    expect(agent.typed).toEqual([]);
+  });
+
+  it("queues a Directive to a Gone Agent at once, since its wrapper is not about to attach", async () => {
+    const agent = await FakeAgent.start("alice", false, { typed: true });
+    expect((await post(`${agentPath(agent.id)}/end`, "alice")).status).toBe(200);
+    const { event } = await (await direct("shlok", agent.id, "Pick up #7.")).json<SendDirectiveResponse>();
+    const recorded = (await events()).find(
+      (e): e is EventOf<"directive.delivery"> => e.type === "directive.delivery" && e.payload.directive === event.id,
+    );
+    expect(recorded?.payload).toMatchObject({ delivered: "queue", reason: "wrapper-offline" });
   });
 });
 

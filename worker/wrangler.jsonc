@@ -41,7 +41,9 @@
     // A transcript read waits this many seconds for the wrapper's page (ADR 0019).
     "TRANSCRIPT_WAIT_SECONDS": "10",
     // `POST /api/agents/spawn` waits this many seconds for the spawned Agent (ADR 0015).
-    "HOST_SPAWN_WAIT_SECONDS": "45"
+    "HOST_SPAWN_WAIT_SECONDS": "45",
+    // A Directive waits this many seconds for its Agent's wrapper to attach before it is Queued (ADR 0025).
+    "DIRECTIVE_ATTACH_WAIT_SECONDS": "5"
   },
   // Set with `wrangler secret put` (docs/github-app-setup.md). JEV_API_KEY calls Jev
   // for the Relay's Verdicts (ADR 0003); GITHUB_WEBHOOK_SECRET verifies deliveries to
