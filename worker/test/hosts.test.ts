@@ -169,6 +169,27 @@ describe("starting an Agent", () => {
     expect(await hosts()).toMatchObject({ running: 1 });
   });
 
+  it("passes on the Agent a spawn continues, and refuses one the Channel does not know (ADR 0024)", async () => {
+    const studio = await FakeHost.registered("shlok", "studio");
+    await studio.connect();
+    const before = await wrapperRegisters("shlok");
+    const { spawn, response } = await spawnAndStart(studio, { from: before.agent.id });
+    expect(response.status).toBe(201);
+    expect(spawn.from).toBe(before.agent.id);
+    expect((await events()).find((e) => e.type === "agent.spawn")?.payload).toMatchObject({ from: before.agent.id });
+
+    const unknown = await post("/api/agents/spawn", "shlok", {
+      cli: "claude-code",
+      cwd: "/work/app",
+      from: "shlok/claude/zzzz",
+    });
+    expect(unknown.status).toBe(404);
+    expect((await unknown.json<ErrorResponse>()).reason).toMatch(/No Agent shlok\/claude\/zzzz/);
+    const malformed = await post("/api/agents/spawn", "shlok", { cli: "claude-code", cwd: "/work/app", from: 7 });
+    expect(malformed.status).toBe(400);
+    expect(studio.spawns()).toHaveLength(1);
+  });
+
   it("goes to the Person's most recently seen Live Host when none is named", async () => {
     const old = await FakeHost.registered("shlok", "old");
     const studio = await FakeHost.registered("shlok", "studio");

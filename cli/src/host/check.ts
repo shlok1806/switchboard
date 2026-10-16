@@ -38,6 +38,8 @@ export interface CheckedSpawn {
   by: string;
   /** The lead that asked, for a lead's spawn (ADR 0018). */
   lead?: AgentId;
+  /** The Agent it continues (ADR 0024): the wrapper starts with `--from`. */
+  from?: AgentId;
 }
 
 type Refused = { ok: false; reason: string };
@@ -104,8 +106,10 @@ export function checkSpawn(
   if (typeof frame.by !== "string" || !LOGIN_PATTERN.test(frame.by)) return refuse("the request names no Person");
   // An Agent ID is `<person>/<cli>/<suffix>`; the Host only names it in the brief.
   const lead = frame.lead;
-  if (lead !== undefined && (typeof lead !== "string" || !/^[^/\s]+\/[^/\s]+\/[^/\s]+$/.test(lead)))
-    return refuse("the lead is not an Agent ID");
+  if (lead !== undefined && !isAgentId(lead)) return refuse("the lead is not an Agent ID");
+  // Given to the wrapper as `--from`, so an Agent ID and nothing that reads as an option.
+  const from = frame.from;
+  if (from !== undefined && !isAgentId(from)) return refuse("the Agent it continues is not an Agent ID");
   const nickname = optionalText(frame.nickname, MAX_NICKNAME_LENGTH);
   const model = optionalText(frame.model, MAX_MODEL_LENGTH);
   const brief =
@@ -130,6 +134,12 @@ export function checkSpawn(
       permissionMode: place.permissionMode,
       by: frame.by,
       ...(lead === undefined ? {} : { lead: lead as AgentId }),
+      ...(from === undefined ? {} : { from: from as AgentId }),
     },
   };
+}
+
+/** An Agent ID: `<person>/<cli>/<suffix>`, none of it starting with "-". */
+function isAgentId(value: unknown): value is AgentId {
+  return typeof value === "string" && /^[^/\s-][^/\s]*\/[^/\s]+\/[^/\s]+$/.test(value);
 }

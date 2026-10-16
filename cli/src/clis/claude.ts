@@ -26,6 +26,7 @@ export const claude: CliAdapter = {
   idleClears: true,
   wakes: true,
   remoteDeny: true,
+  memoryNudges: ["stop", "compaction"],
   proxy: true,
   // Claude Code 2.1.300 sets these in its tools' environment. Inherited, they make the
   // new session a child of that one: CLAUDE_CODE_CHILD_SESSION turns its transcript

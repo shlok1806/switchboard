@@ -338,6 +338,7 @@ export class Hosts {
         permissionMode: mode,
         ...(request.brief === undefined ? {} : { brief: request.brief }),
         ...(lead === undefined ? {} : { parent: lead }),
+        ...(request.from === undefined ? {} : { from: request.from }),
       },
     });
     const spawn = event.id;
@@ -362,6 +363,7 @@ export class Hosts {
       permissionMode: mode,
       by: person,
       ...(lead === undefined ? {} : { lead }),
+      ...(request.from === undefined ? {} : { from: request.from }),
     });
     if (!sent) this.failed(spawn, `${name} went Offline before the request reached it.`);
     await this.reschedule();

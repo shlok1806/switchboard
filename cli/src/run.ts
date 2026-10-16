@@ -14,6 +14,8 @@ import * as pty from "@lydell/node-pty";
 import type {
   Agent,
   AgentId,
+  AgentSummary,
+  AgentsResponse,
   DeliveryAck,
   DirectiveAck,
   DirectiveInterruptMessage,
@@ -26,8 +28,10 @@ import type {
   SetModelRequest,
   TerminalAttachedFrame,
   TerminalInputFrame,
+  TerminalReadRequestMessage,
   TerminalRefusedFrame,
   TerminalScreenFrame,
+  TerminalTextFrame,
   TranscriptPageFrame,
   TranscriptRequestMessage,
   TranscriptResponse,
@@ -42,9 +46,12 @@ import {
   denyReason,
   directivesNotice,
   HEARTBEAT_INTERVAL_MS,
+  handoffBrief,
   interruptNotice,
   modelPath,
   STANDING_RULE,
+  summaryName,
+  summaryPath,
   TERMINAL_HOLD_IDLE_MS,
 } from "../../shared/src/index";
 import { accountLabel } from "./account-label";
@@ -64,6 +71,7 @@ import { NextTurn, type NextTurnItems } from "./next-turn";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
+import { matchAgents } from "./rename";
 import { SessionContextReader } from "./session-context";
 import { channelCheckout, GitError } from "./task-worktree";
 import { cachedAttachList } from "./terminal/attach-keys";
@@ -137,6 +145,24 @@ export function takeRepo(args: string[]): { repo?: string; rest: string[] } {
   return value === undefined ? { rest } : { repo: value, rest };
 }
 
+/** Takes the wrapper's own `--from`, the Agent this session continues (ADR 0024), out of the agent CLI's arguments. */
+export function takeFrom(args: string[]): { from?: string; rest: string[] } {
+  const { value, rest } = takeOption(args, "from");
+  return value === undefined ? { rest } : { from: value, rest };
+}
+
+/**
+ * The summary of the one Agent `name` names on the Channel (ADR 0024), read as the
+ * Person, or why there is none.
+ */
+async function predecessorOf(client: ChannelClient, name: string): Promise<AgentSummary | string> {
+  const { agents } = await client.request<AgentsResponse>("/api/agents");
+  const found = matchAgents(agents, name);
+  if (found.length === 0) return `no Agent on this Channel is called ${name}, so this session cannot continue it.`;
+  if (found.length > 1) return `${name} could be ${found.map((a) => a.id).join(", ")}; use the full Agent ID.`;
+  return client.request<AgentSummary>(summaryPath((found[0] as Agent).id));
+}
+
 export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<number> {
   const env = process.env;
   const config = await readConfig();
@@ -158,9 +184,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const { nickname, rest: afterNickname } = takeNickname(rawArgs);
   const { accountLabel: accountFlag, rest: afterAccount } = takeAccountLabel(afterNickname);
   const { repo: repoFlag, rest: afterRepo } = takeRepo(afterAccount);
+  const { from: fromFlag, rest: afterFrom } = takeFrom(afterRepo);
   let proxyFlags: ProxyFlags;
   try {
-    proxyFlags = takeProxyFlags(afterRepo);
+    proxyFlags = takeProxyFlags(afterFrom);
   } catch (error) {
     console.error(`switchboard: ${(error as Error).message}`);
     return 2;
@@ -227,6 +254,28 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
     log(`could not reach the Channel for ${repo}: ${error.message}`);
   }
+  // `--from` (ADR 0024): the session carries on another Agent's work, and starts with
+  // what the Channel knows of it. One that cannot be read stops here, before the CLI runs.
+  let predecessor: AgentSummary | null = null;
+  if (fromFlag !== undefined && plan.kind !== "none") {
+    try {
+      const found = await predecessorOf(client, fromFlag);
+      if (typeof found === "string") {
+        console.error(`switchboard: ${found}`);
+        return 2;
+      }
+      predecessor = found;
+    } catch (error) {
+      console.error(`switchboard: could not read ${fromFlag} from the Channel: ${(error as Error).message}`);
+      return 1;
+    }
+    log(`continues ${predecessor.agent.id}`);
+    console.error(
+      dim(
+        `switchboard: this session continues ${summaryName(predecessor.agent)}; it starts with what the Channel knows of it.`,
+      ),
+    );
+  }
   // Which login of the CLI this Agent runs under, shown beside it on the Channel (ADR 0009).
   const account = await accountLabel(adapter.cli, accountFlag, env);
   // The model until the Proxy Capture sees the CLI ask for one (ADR 0010).
@@ -250,6 +299,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     // A Host started this wrapper (ADR 0015): the Agent runs on it, and answers its spawn.
     ...(env.SWITCHBOARD_HOST ? { host: env.SWITCHBOARD_HOST } : {}),
     ...(env.SWITCHBOARD_HOST && env.SWITCHBOARD_SPAWN ? { spawn: env.SWITCHBOARD_SPAWN } : {}),
+    ...(predecessor === null ? {} : { continues: predecessor.agent.id }),
   });
 
   // The Channel stream stays open for the whole session. It carries the Hook
@@ -435,13 +485,31 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         reply({ error: "The session has not written its transcript yet." });
         return;
       }
-      const page = await transcripts.page(path, message.from);
-      log(`sent transcript entries ${message.from}+${page.entries.length}, ${page.redacted} redacted`);
+      const page = await transcripts.page(path, message.from, message.latest === true);
+      log(`sent transcript entries ${page.from}+${page.entries.length}, ${page.redacted} redacted`);
       reply({ page });
     } catch (error) {
       log(`could not read the transcript: ${(error as Error).message}`);
       reply({ error: "The session's transcript could not be read." });
     }
+  };
+  // Another session on the Channel reads this one's screen (ADR 0024): the same redacted
+  // text watchers get, now, once.
+  const screenRead = (message: TerminalReadRequestMessage) => {
+    const shot = screen?.snapshot();
+    const frame: TerminalTextFrame =
+      shot === undefined
+        ? { type: "terminal.text", agent: message.agent, id: message.id, error: "The session has not started yet." }
+        : {
+            type: "terminal.text",
+            agent: message.agent,
+            id: message.id,
+            cols: shot.cols,
+            rows: shot.rows,
+            lines: shot.lines,
+          };
+    stream.send(JSON.stringify(frame));
+    log("sent the screen for a terminal read");
   };
   const interrupted = async (message: InterruptMessage) => {
     log(`Interrupt ${message.delivery.id} from the Relay`);
@@ -484,11 +552,18 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const memory = new MemoryInbox({
     dir: join(configDir(), "memory"),
     read: (path) => client.request<MemoryResponse>(path),
+    summary: (id) => client.request<AgentSummary>(summaryPath(id)),
     log,
   });
   // What the Agent is told at its next turn: Claims it lost to a Takeover while it
-  // was Gone, Queued Events, Directives, notes, and the standing rule at SessionStart.
+  // was Gone, Queued Events, Directives, notes, the Hand-off Brief, and the standing
+  // rule at SessionStart.
   const nextTurn = new NextTurn(memory);
+  if (predecessor !== null) {
+    nextTurn.handOff(handoffBrief(predecessor));
+    // Notes on its predecessor's Tasks and files matter to it too.
+    memory.focus({ tasks: predecessor.tasks.map((task) => task.number), files: predecessor.files });
+  }
   // False once a CLI whose hooks need the Person's trust is seen not to run them:
   // what the Agent must be told then goes to the read_channel tool instead of a hook.
   let hooksRunning = true;
@@ -580,6 +655,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       }
       if (message.type === "directive.interrupt" && message.agent === agentId) void directed(message);
       if (message.type === "transcript.request" && message.agent === agentId) void transcribed(message);
+      if (message.type === "terminal.read.request" && message.agent === agentId) screenRead(message);
       if (message.type === "approval.deny" && message.agent === agentId) {
         const { person } = message;
         const denied = denyGate?.deny(message.id, denyReason(person, message.message)) ?? Promise.resolve(false);
@@ -713,15 +789,16 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     const reader = contextReader;
     if (link) link.readContext = () => readContext(reader);
   };
-  // Asks the model for memory notes when a turn changed files, and before compaction (ADR 0019).
-  const nudges =
-    adapter.cli === "claude-code"
-      ? new MemoryNudges({
-          context: async () => (contextReader === null ? undefined : (await readContext(contextReader)).context),
-          env,
-          log,
-        })
-      : null;
+  // Asks the model for memory notes when a turn changed files, and before compaction
+  // (ADR 0019), where the CLI's hooks were checked to carry each ask (ADR 0024).
+  const nudges = adapter.memoryNudges.includes("stop")
+    ? new MemoryNudges({
+        context: async () => (contextReader === null ? undefined : (await readContext(contextReader)).context),
+        env,
+        log,
+        compaction: adapter.memoryNudges.includes("compaction"),
+      })
+    : null;
   const onRegistered = (agent: Agent, token: string | undefined) => {
     agentId = agent.id;
     hooks?.setAgent(agent.id);

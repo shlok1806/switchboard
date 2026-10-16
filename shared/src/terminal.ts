@@ -4,6 +4,7 @@
 // the owning wrapper checks every keystroke.
 
 import type { AgentId } from "./domain";
+import { cleanTranscriptText } from "./transcript";
 
 /** The most often a wrapper sends its screen while watched. */
 export const TERMINAL_FRAME_MS = 125;
@@ -138,6 +139,59 @@ export function normalizeFingerprint(raw: string): string | null {
   const plain = raw.toUpperCase().replace(/[\s-]/g, "");
   if (!/^[A-Z2-7]{20}$/.test(plain)) return null;
   return plain.match(/.{4}/g)?.join("-") ?? null;
+}
+
+/**
+ * `GET /api/agents/:id/terminal` (ADR 0024): Agent `agent`'s screen as its wrapper sends
+ * watchers, plain text with every secret it recognises masked. Any Person or Agent on the
+ * Channel may read it while the Agent runs; the Channel records a `terminal.read` Event.
+ */
+export interface TerminalReadResponse {
+  agent: AgentId;
+  cols: number;
+  rows: number;
+  lines: string[];
+}
+
+/** The path that reads an Agent's screen. */
+export function terminalReadPath(id: AgentId): string {
+  return `/api/agents/${encodeURIComponent(id)}/terminal`;
+}
+
+/** Channel to wrapper: send Agent `agent`'s screen, answering with `id`. */
+export interface TerminalReadRequestMessage {
+  type: "terminal.read.request";
+  agent: AgentId;
+  id: string;
+}
+
+/** Wrapper to Channel: the screen asked for as `id`, or why there is none. */
+export type TerminalTextFrame = {
+  type: "terminal.text";
+  agent: AgentId;
+  id: string;
+} & ({ cols: number; rows: number; lines: string[] } | { error: string });
+
+/** The most rows and columns a screen read carries: anything past them is not a screen. */
+export const TERMINAL_READ_MAX_ROWS = 300;
+export const TERMINAL_READ_MAX_COLS = 1000;
+
+/** A screen as it came off a wrapper's socket, cleaned, or null when it is not one. */
+export function cleanTerminalText(raw: Record<string, unknown>): Omit<TerminalReadResponse, "agent"> | null {
+  const { cols, rows, lines } = raw;
+  const count = (value: unknown, max: number) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= max;
+  if (!count(cols, TERMINAL_READ_MAX_COLS) || !count(rows, TERMINAL_READ_MAX_ROWS) || !Array.isArray(lines)) {
+    return null;
+  }
+  if (lines.length > TERMINAL_READ_MAX_ROWS || !lines.every((l) => typeof l === "string")) return null;
+  const width = cols as number;
+  return {
+    cols: width,
+    rows: rows as number,
+    // Text only: no escape sequence or control character, one row a line, cut to its width.
+    lines: (lines as string[]).map((l) => cleanTranscriptText(l).replace(/\n/g, " ").slice(0, width)),
+  };
 }
 
 export function toBase64(bytes: Uint8Array): string {

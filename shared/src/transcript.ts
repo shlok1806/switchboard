@@ -33,17 +33,25 @@ export interface TranscriptResponse {
   redacted: number;
 }
 
-/** The path that reads an Agent's transcript. */
-export function transcriptPath(id: AgentId, from = 0): string {
-  return `/api/agents/${encodeURIComponent(id)}/transcript${from > 0 ? `?from=${from}` : ""}`;
+/**
+ * The path that reads an Agent's transcript: from entry `from`, or, with `latest`, the
+ * page that ends at its newest entry (ADR 0024).
+ */
+export function transcriptPath(id: AgentId, from = 0, latest = false): string {
+  const query = latest ? "?latest=1" : from > 0 ? `?from=${from}` : "";
+  return `/api/agents/${encodeURIComponent(id)}/transcript${query}`;
 }
 
-/** Channel to wrapper: read a page of Agent `agent`'s transcript from entry `from`, and answer with `id`. */
+/**
+ * Channel to wrapper: read a page of Agent `agent`'s transcript from entry `from`, and
+ * answer with `id`. With `latest`, the page that ends at the newest entry instead.
+ */
 export interface TranscriptRequestMessage {
   type: "transcript.request";
   agent: AgentId;
   id: string;
   from: number;
+  latest?: boolean;
 }
 
 /** Wrapper to Channel: the page asked for as `id`, or why there is none. */

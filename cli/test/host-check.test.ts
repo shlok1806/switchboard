@@ -104,6 +104,12 @@ describe("the Host's check of a spawn frame", () => {
       expect(spawn({ lead })).toMatchObject({ ok: false, spawn: "sp_1" });
   });
 
+  it("keeps the Agent a spawn continues, and refuses one the wrapper could read as anything else (ADR 0024)", () => {
+    expect(spawn({ from: "maya/claude/2b8d" })).toMatchObject({ ok: true, request: { from: "maya/claude/2b8d" } });
+    for (const from of [7, "maya", "--help/claude/2b8d", "-x", "a/b/c d"])
+      expect(spawn({ from }), String(from)).toMatchObject({ ok: false, spawn: "sp_1" });
+  });
+
   it("refuses a model or nickname `switchboard run claude` would read as a flag, and a Person that is not a name", () => {
     for (const fields of [
       { model: "--help" },

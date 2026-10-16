@@ -324,12 +324,18 @@ export function spawnCommand(args: string[]): Promise<number> {
         model: { type: "string" },
         "permission-mode": { type: "string" },
         repo: { type: "string" },
+        from: { type: "string" },
       },
     });
     const config = await signedIn();
     const { client } = await channelFor(config, values.repo);
     const permissionMode = mode(values["permission-mode"], "--permission-mode");
     const brief = positionals.join(" ").trim();
+    // A hand-off (ADR 0024): the new Agent starts with what the Channel knows of this one.
+    const from =
+      values.from === undefined
+        ? undefined
+        : oneAgent((await client.request<AgentsResponse>("/api/agents")).agents, values.from).id;
     const answer = await client.request<SpawnAgentResponse>(
       "/api/agents/spawn",
       {
@@ -342,6 +348,7 @@ export function spawnCommand(args: string[]): Promise<number> {
           ...(values.model === undefined ? {} : { model: values.model }),
           ...(brief === "" ? {} : { brief }),
           ...(permissionMode === undefined ? {} : { permissionMode }),
+          ...(from === undefined ? {} : { from }),
         }),
       },
       60_000,

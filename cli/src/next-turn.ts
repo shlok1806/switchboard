@@ -17,6 +17,9 @@
 //   register or heartbeat answer, like Deliveries.
 // - Notes other Agents wrote to the Channel's shared memory (ADR 0019): a digest, from
 //   the memory inbox (memory.ts). Notes never wake an Agent.
+// - The Hand-off Brief (ADR 0024): what the Channel knows of the Agent this session
+//   continues, once, at its first hook that can add to the context. The notes digest
+//   waits a turn then, so the two stay under the hook's cap.
 //
 // Everything from the Channel is short structured facts, framed as information,
 // never as instructions (ADR 0005). The one exception is a Directive, framed as
@@ -77,6 +80,13 @@ export class NextTurn {
   private readonly directives = new Map<string, DirectiveDelivery>();
   /** Delivery and Directive IDs already kept, oldest first. */
   private readonly seen = new Set<string>();
+  /** The Hand-off Brief not shown yet (ADR 0024). */
+  private brief: string | null = null;
+
+  /** Shows `brief`, a Hand-off Brief, at the next hook that can add to the context, once. */
+  handOff(brief: string): void {
+    this.brief = brief;
+  }
 
   /** Keeps what the Channel handed over. Returns the IDs of Deliveries and Directives kept for the first time. */
   add(items: NextTurnItems): string[] {
@@ -129,6 +139,11 @@ export class NextTurn {
     if (!(CONTEXT_HOOKS as readonly (string | undefined)[]).includes(hook)) return "";
     const parts: string[] = [];
     if (hook === "SessionStart") parts.push(STANDING_RULE);
+    const brief = this.brief;
+    if (brief !== null) {
+      parts.push(brief);
+      this.brief = null;
+    }
     if (this.lostClaims.size > 0) {
       parts.push(lostClaimsNotice([...this.lostClaims.values()]));
       this.lostClaims.clear();
@@ -141,7 +156,8 @@ export class NextTurn {
       parts.push(directivesNotice([...this.directives.values()].sort((a, b) => a.seq - b.seq)));
       this.directives.clear();
     }
-    const notes = this.memory?.take() ?? "";
+    // With a brief, the digest waits for the next turn: both at once could pass the hook's cap.
+    const notes = brief === null ? (this.memory?.take() ?? "") : "";
     if (notes !== "") parts.push(notes);
     return parts.length === 0 ? "" : `${parts.join("\n\n")}\n`;
   }

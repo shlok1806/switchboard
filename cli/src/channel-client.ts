@@ -27,6 +27,7 @@ import type {
   ReportedUsage,
   StreamMessage,
   TerminalInputFrame,
+  TerminalReadRequestMessage,
   TerminalWatchersMessage,
   TranscriptRequestMessage,
 } from "../../shared/src/index";
@@ -61,6 +62,7 @@ export type ChannelMessage =
   | ApprovalDenyMessage
   | TerminalWatchersMessage
   | TerminalInputFrame
+  | TerminalReadRequestMessage
   | TranscriptRequestMessage;
 
 export class ChannelError extends Error {

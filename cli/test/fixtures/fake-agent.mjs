@@ -141,15 +141,21 @@ export async function runFake(dialect) {
         });
         const out = `${result.stdout ?? ""}`.trim();
         let context = "";
+        // A Stop hook's block: the CLI would continue the turn with its reason.
+        let decision = "";
         if (out) {
           try {
-            context = JSON.parse(out).hookSpecificOutput?.additionalContext ?? "";
+            const parsed = JSON.parse(out);
+            context = parsed.hookSpecificOutput?.additionalContext ?? "";
+            if (parsed.decision !== undefined) {
+              decision = JSON.stringify({ decision: parsed.decision, reason: parsed.reason });
+            }
           } catch {
             context = `UNPARSEABLE ${out}`;
           }
         }
         say(
-          `hook ${event}${tool ? `:${tool}` : ""} exit=${result.status}${context ? ` context=${JSON.stringify(context)}` : ""}`,
+          `hook ${event}${tool ? `:${tool}` : ""} exit=${result.status}${context ? ` context=${JSON.stringify(context)}` : ""}${decision ? ` decision=${decision}` : ""}`,
         );
       }
     }

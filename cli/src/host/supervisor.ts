@@ -116,12 +116,16 @@ export function briefPrompt(by: string, host: string, brief: string, lead?: Agen
   ].join("\n");
 }
 
-/** The arguments `switchboard run claude` gets for an Agent: a new session, or `--resume`. */
-export function wrapperArgs(entry: HostedAgent, resume: boolean, prompt?: string): string[] {
+/**
+ * The arguments `switchboard run claude` gets for an Agent: a new session, or `--resume`.
+ * `from` names the Agent a new session continues (ADR 0024); a resume has its brief already.
+ */
+export function wrapperArgs(entry: HostedAgent, resume: boolean, prompt?: string, from?: AgentId): string[] {
   return [
     "run",
     "claude",
     ...(entry.nickname === undefined ? [] : ["--nickname", entry.nickname]),
+    ...(from === undefined || resume ? [] : ["--from", from]),
     ...(entry.model === undefined ? [] : ["--model", entry.model]),
     // Always given, so the Person's own default mode never applies to a Host's Agent.
     "--permission-mode",
@@ -288,6 +292,7 @@ export class HostSupervisor {
     this.launch(entry, {
       resume: false,
       spawn: request.spawn,
+      ...(request.from === undefined ? {} : { from: request.from }),
       ...(request.brief === undefined
         ? {}
         : { prompt: briefPrompt(request.by, this.hostId, request.brief, request.lead) }),
@@ -328,7 +333,7 @@ export class HostSupervisor {
     }
   }
 
-  private launch(entry: HostedAgent, how: { resume: boolean; spawn?: string; prompt?: string }): void {
+  private launch(entry: HostedAgent, how: { resume: boolean; spawn?: string; prompt?: string; from?: AgentId }): void {
     const { env, settings } = this.options;
     // A resume is checked again: the folder or the Host's own limits may have changed since.
     const allowed = checkFolderAndMode(entry.cwd, entry.permissionMode, this.limits);
@@ -340,18 +345,22 @@ export class HostSupervisor {
     }
     const log = new CappedLog(agentLogPath(entry.agent, env));
     log.append(`\n[host] ${new Date().toISOString()} ${how.resume ? "resuming" : "starting"} ${entry.agent}\n`);
-    const term = pty.spawn(this.options.node, [this.options.cli, ...wrapperArgs(entry, how.resume, how.prompt)], {
-      name: "xterm-256color",
-      cols: COLUMNS,
-      rows: ROWS,
-      // The folder as just resolved and allowed, not as recorded: a link may have changed since.
-      cwd: allowed.cwd,
-      env: {
-        ...(env as Record<string, string>),
-        SWITCHBOARD_HOST: settings.name,
-        ...(how.spawn === undefined ? {} : { SWITCHBOARD_SPAWN: how.spawn }),
+    const term = pty.spawn(
+      this.options.node,
+      [this.options.cli, ...wrapperArgs(entry, how.resume, how.prompt, how.from)],
+      {
+        name: "xterm-256color",
+        cols: COLUMNS,
+        rows: ROWS,
+        // The folder as just resolved and allowed, not as recorded: a link may have changed since.
+        cwd: allowed.cwd,
+        env: {
+          ...(env as Record<string, string>),
+          SWITCHBOARD_HOST: settings.name,
+          ...(how.spawn === undefined ? {} : { SWITCHBOARD_SPAWN: how.spawn }),
+        },
       },
-    });
+    );
     const running: Running = {
       entry,
       term,

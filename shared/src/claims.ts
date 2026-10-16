@@ -77,6 +77,9 @@ export const SWITCHBOARD_TOOLS = [
   "memory_search",
   // ADR 0019: another session's transcript, pulled from its wrapper and redacted there.
   "agent_transcript",
+  // ADR 0024: what the Channel knows of an Agent, and its screen, redacted by its wrapper.
+  "agent_summary",
+  "agent_terminal",
 ] as const;
 
 export type SwitchboardTool = (typeof SWITCHBOARD_TOOLS)[number];
