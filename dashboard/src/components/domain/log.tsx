@@ -220,7 +220,10 @@ export function TurnRow({
   const counts = CAPTURES.filter((c) => by(c).length > 0)
     .map((c) => `${by(c).length} ${CAPTURE_LABEL[c]}`)
     .join(", ");
-  const said = [...item.events].reverse().find((e) => e.type === "update" || e.type === "proxy.digest" || e.type === "proxy.raw");
+  // What the turn said: its Update, or its model's last reply. A model call that only asked for tools said nothing.
+  const said = [...item.events]
+    .reverse()
+    .find((e) => e.type === "update" || ((e.type === "proxy.digest" || e.type === "proxy.raw") && e.payload.reply !== ""));
   const what = said ? summarize(said) : summarize(item.events.at(-1)!);
   const toggle = (
     <button

@@ -132,6 +132,14 @@ CLI signs in with `switchboard login --url http://localhost:8787/shlok1806/switc
 --dev-login <any login>`. Without the App, the Channel has no GitHub, so Tasks are
 empty and membership is not checked.
 
+To work on the Dashboard against that Worker, run its dev server with the Worker's
+address; it proxies the Channel's API, its stream and sign-in there:
+
+```sh
+cd dashboard
+SWITCHBOARD_WORKER=http://localhost:8787 VITE_CHANNEL_URL=/ VITE_LIVE=1 npm run dev
+```
+
 ## Checking it works
 
 1. Open `https://switchboard.switchboard-worker.workers.dev/`; it goes to

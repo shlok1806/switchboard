@@ -10,6 +10,7 @@ import type {
   Presence,
   TaskField,
   TaskSyncVia,
+  ToolCall,
   VerdictOption,
 } from "@shared/index";
 import { UNRELAYED_EVENT_TYPES } from "@shared/index";
@@ -115,6 +116,14 @@ export function compact(n: number): string {
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 }
 
+/** The tools a model turn asked for, each once, with how many times when more than once. */
+function calledTools(calls: readonly ToolCall[]): string {
+  const counts = new Map<string, number>();
+  for (const call of calls) counts.set(call.name, (counts.get(call.name) ?? 0) + 1);
+  if (counts.size === 0) return "Replied with nothing";
+  return `Called ${[...counts].map(([name, n]) => (n > 1 ? `${name} (${n} times)` : name)).join(", ")}`;
+}
+
 /** A one-line human summary of an Event, used in feeds and timelines. */
 export function summarize(e: ChannelEvent): string {
   switch (e.type) {
@@ -133,9 +142,9 @@ export function summarize(e: ChannelEvent): string {
     case "turn.end":
       return `Turn ${e.payload.turn} ended`;
     case "proxy.digest":
-      return e.payload.reply;
     case "proxy.raw":
-      return e.payload.reply;
+      // A turn that only asks for tools has no reply: what it asked for is what it said.
+      return e.payload.reply || calledTools(e.payload.toolCalls);
     case "claim":
       // A Person claiming for one of their own Agents names the Agent that holds it.
       return e.payload.holder.kind === "agent" && !(e.actor.kind === "agent" && e.actor.agentId === e.payload.holder.agentId)
