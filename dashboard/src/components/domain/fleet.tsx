@@ -51,6 +51,8 @@ export function HostLabel({ host }: { host: string }) {
 export const agentName = (a: Agent) => a.nickname ?? a.id;
 /** Inside a Person's group the Person is already named: `codex/c91e`, not `shlok/codex/c91e`. */
 export const shortName = (a: Agent) => a.nickname ?? a.id.split("/").slice(1).join("/");
+/** The Agent with its Person, as a line names it to anyone: `shlok/api-client`. */
+export const ownedName = (a: Agent) => `${a.person}/${shortName(a)}`;
 /** The CLI's short name, as the Agent ID spells it. */
 const cliShort = (a: Agent) => a.id.split("/")[1] ?? CLI_LABEL[a.cli];
 

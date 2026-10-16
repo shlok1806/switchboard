@@ -26,10 +26,12 @@ import { Glyph, State, useAgentState, useAgentStates } from "@/components/domain
 import { TerminalPanel } from "@/components/domain/terminal";
 import { useNow } from "@/components/domain/usage";
 import { Section } from "@/components/shell/section";
+import { ErrorPage } from "@/components/shell/states";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
 import { CAPTURE_LABEL, CLI_LABEL, ago, hostName } from "@/lib/format";
+import { scrollMotion } from "@/lib/motion";
 import { go, href } from "@/lib/router";
 import { isStale, limitsFor, resetText } from "@/lib/usage";
 import { cn } from "@/lib/utils";
@@ -42,12 +44,18 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
   const agent = agentById.get(id as AgentId);
   if (!agent) {
     return (
-      <div className="px-[var(--gutter)] py-6 text-row text-ink-2">
-        No Agent {id}.{" "}
-        <a href={href({ view: "agents" })} className="text-ink underline underline-offset-4">
-          Back to Agents
-        </a>
-      </div>
+      <ErrorPage
+        missing
+        title="No such Agent"
+        reason={id}
+        actions={
+          <a href={href({ view: "agents" })} className={buttonVariants({ variant: "primary" })}>
+            Back to Agents
+          </a>
+        }
+      >
+        No Agent on this Channel has that ID. A stopped Agent leaves the list once its Person clears it.
+      </ErrorPage>
     );
   }
   return <AgentPage key={agent.id} agent={agent} focus={focus} />;
@@ -168,8 +176,8 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
               <Button
                 variant="primary"
                 onClick={() => {
-                  directive.current?.focus();
-                  directive.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+                  directive.current?.focus({ preventScroll: true });
+                  directive.current?.scrollIntoView({ block: "center", behavior: scrollMotion() });
                 }}
               >
                 Directive
@@ -202,7 +210,7 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
                       heading="h2"
                       onOpenTerminal={() => {
                         const t = document.getElementById("terminal");
-                        t?.scrollIntoView({ block: "start", behavior: "smooth" });
+                        t?.scrollIntoView({ block: "start", behavior: scrollMotion() });
                         t?.focus({ preventScroll: true });
                       }}
                     />
@@ -256,8 +264,8 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
 
 /** An Agent's short name, in mono where it is an ID rather than a Nickname (design.md). */
 function AgentName({ agent }: { agent: Agent | AgentId }) {
-  if (typeof agent === "string") return <span className="font-mono">{agent}</span>;
-  return agent.nickname === undefined ? <span className="font-mono">{shortName(agent)}</span> : <>{shortName(agent)}</>;
+  if (typeof agent === "string") return <code>{agent}</code>;
+  return agent.nickname === undefined ? <code>{shortName(agent)}</code> : <>{shortName(agent)}</>;
 }
 
 /** Agents' short names, comma separated, each a link to its page when `link` says so. */

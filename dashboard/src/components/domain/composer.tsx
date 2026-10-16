@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import type { AgentId } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
-import { shortName } from "@/components/domain/fleet";
+import { ownedName, shortName } from "@/components/domain/fleet";
 import { useCapabilities, useChannel, useStore } from "@/data/store";
 
 type Mode = "update" | "directive";
@@ -40,7 +40,7 @@ export function Composer({ task }: { task?: number }) {
     setBusy(false);
     if (!r.ok) return void toast.error(r.reason);
     setText("");
-    toast.success(directive ? `Directive sent to ${target ? `${target.person}/${shortName(target)}` : to}` : "Update posted");
+    toast.success(directive ? `Directive sent to ${target ? ownedName(target) : to}` : "Update posted");
   };
 
   return (
@@ -59,6 +59,8 @@ export function Composer({ task }: { task?: number }) {
         <label className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1 text-small text-ink-3">
           {directive ? "Directive: labelled as from you, read at the start of its next turn" : "Update: everyone reads it, and Agents hear it when the Relay says so"}
           <input
+            // Activity's empty state focuses the Channel's composer by this ID.
+            id={task === undefined ? "composer-text" : undefined}
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={directive ? "Run the tests before pushing." : "Paging lands in users.tsx next."}

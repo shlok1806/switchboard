@@ -14,8 +14,8 @@ import { Chip } from "@/components/atoms/Chip";
 import { Facts, Steps } from "@/components/domain/agent-sections";
 import { DenyAction, PendingApproval } from "@/components/domain/approval";
 import { contextPercent, shortName } from "@/components/domain/fleet";
-import { Pending } from "@/components/domain/pending";
-import { StartAgentButton } from "@/components/domain/start-agent";
+import { EmptyView } from "@/components/shell/states";
+import { FirstAgentAction, StartAgentButton } from "@/components/domain/start-agent";
 import { Glyph, State, useAgentStates, useNeedsYou } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { PageHead } from "@/components/shell/page-head";
@@ -553,9 +553,9 @@ export function CanvasView({ selected }: { selected?: string }) {
 
   if (agents.length === 0) {
     return (
-      <Pending title="No Agents on the canvas yet" className="h-full">
-        Run <code className="font-mono text-ink-2">switchboard run claude</code> and its Agent appears here.
-      </Pending>
+      <EmptyView view="Canvas" title="No Agents on the canvas yet" action={<FirstAgentAction />}>
+        Each Agent is a box here, grouped by its Host, with a line to the Agent that started it.
+      </EmptyView>
     );
   }
 

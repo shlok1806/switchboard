@@ -15,7 +15,8 @@ import { ClaimAction, ClaimForAgentItems, ClaimForLabel, ClaimForMeItem, claimab
 import { FilterSelect } from "@/components/domain/filters";
 import { decideMove, taskGlyph } from "@/components/domain/moves";
 import { NewTaskButton } from "@/components/domain/new-task";
-import { IssueLink, Pending } from "@/components/domain/pending";
+import { IssueLink } from "@/components/domain/pending";
+import { EmptyState, EmptyView } from "@/components/shell/states";
 import { Glyph, State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { COLUMN_GLYPH, COLUMN_LABEL, HolderLabel, columnOf, currentStep, holderPerson, openBlockers, shownLabels, type Column } from "@/components/domain/task";
@@ -115,16 +116,20 @@ export function TasksView() {
 
   if (tasks.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3">
-        <Pending title="No Tasks yet">Open GitHub Issues show up here.</Pending>
-        <NewTaskButton />
-      </div>
+      <EmptyView view="Tasks" title="No Tasks yet" action={<NewTaskButton />}>
+        Every open GitHub Issue in {snapshot?.channel.repo ?? "the Channel's repository"} is a Task here. Open one and it shows up in Ready.
+      </EmptyView>
     );
   }
 
   const count = (c: Column) => tasks.filter((t) => columnOf(t) === c).length;
   const inColumn = (c: Column) => cards.filter((x) => x.column === c).length;
   const filtered = show !== "all" || person !== "" || agent !== "";
+  const clearFilters = () => {
+    setShow("all");
+    setPerson("");
+    setAgent("");
+  };
   const chips: { id: Show; label: string; n: number }[] = [
     { id: "all", label: "All", n: tasks.length },
     { id: "mine", label: "Mine", n: tasks.filter(mine).length },
@@ -227,6 +232,11 @@ export function TasksView() {
           </p>
         )}
 
+        {filtered && shown.length === 0 && (
+          <EmptyState title="No Task matches these filters" action={<Button onClick={clearFilters}>Clear the filters</Button>}>
+            {tasks.length} {tasks.length === 1 ? "Task is" : "Tasks are"} on the board, and none passes {[show !== "all", person !== "", agent !== ""].filter(Boolean).length === 1 ? "the filter" : "every filter"}.
+          </EmptyState>
+        )}
         <div className="min-h-0 flex-1">
           <KanbanProvider<Card>
             columns={columns.map((c) => ({ id: c, name: COLUMN_LABEL[c] }))}
@@ -259,7 +269,7 @@ export function TasksView() {
                       </KanbanCards>
                     </section>
                   )}
-                  <KanbanCards<Card> id={id} className="px-0 pt-3 pb-6" empty={<p className="py-6 text-small text-ink-3">{filtered ? "Nothing matches." : "Nothing here."}</p>}>
+                  <KanbanCards<Card> id={id} className="px-0 pt-3 pb-6" empty={<p className="py-6 text-small text-ink-3">{filtered ? "None match." : "Nothing here."}</p>}>
                     {card}
                   </KanbanCards>
                 </KanbanBoard>

@@ -14,10 +14,11 @@ import { Chip } from "@/components/atoms/Chip";
 import { Composer } from "@/components/domain/composer";
 import { EventDetail } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
-import { shortName } from "@/components/domain/fleet";
+import { ownedName } from "@/components/domain/fleet";
 import { CAPTURES, EventRow, InterruptRow, LogHead, TurnRow, type TurnItem } from "@/components/domain/log";
 import { HolderLabel } from "@/components/domain/task";
-import { InspectorFrame } from "@/components/shell/inspector";
+import { InspectorFrame, InspectorMissing } from "@/components/shell/inspector";
+import { EmptyState } from "@/components/shell/states";
 import { PageHead } from "@/components/shell/page-head";
 import { useEventDetail } from "@/data/history";
 import { interruptKey, isInterrupt, markSeen, useInterrupts } from "@/data/interrupts";
@@ -25,6 +26,7 @@ import { useCapabilities, useChannel, useIndex, useStore } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { CAPTURE_LABEL, EVENT_TYPE_LABEL, VERDICT_LABEL, VERDICT_OPTIONS } from "@/lib/format";
 import { go } from "@/lib/router";
+import { cn } from "@/lib/utils";
 
 // How many more Events each "Show older" adds.
 const SHOW = 250;
@@ -206,9 +208,10 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
     if (all) void store.loadOlder();
   };
 
-  const { event: selectedEvent, woken, loaded: selectedLoaded } = useEventDetail(selected);
+  const { event: selectedEvent, woken, loaded: selectedLoaded, status: selectedStatus } = useEventDetail(selected);
   const set = (k: keyof FeedFilters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
   const filtered = activeCount(filters) > 0;
+  const bare = events.length === 0 && !filtered;
   // Inside a turn link, the picked Event stays under that turn.
   const pick = (id: string) => go(turn ? { view: "feed", by: "turn", turn, event: id } : { view: "feed", event: id });
   const close = () => go(turn ? { view: "feed", by: "turn", turn } : { view: "feed" });
@@ -240,7 +243,15 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
       />
     );
 
-  const detail = selectedEvent && (
+  const detail = selectedStatus === "missing" ? (
+    <InspectorMissing title="No such Event" sheet={mobile} onClose={close}>
+      This Channel has no Event with that address. It may be from another Channel, or the link was cut short.
+    </InspectorMissing>
+  ) : selectedStatus === "failed" ? (
+    <InspectorMissing title="Could not read the Event" sheet={mobile} onClose={close}>
+      The Channel did not answer. The Event is still there; open it again in a moment.
+    </InspectorMissing>
+  ) : selectedEvent && (
     <InspectorFrame label={`${EVENT_TYPE_LABEL[selectedEvent.type]}, in the inspector`} onClose={mobile ? close : undefined}>
       <EventDetail
         key={selectedEvent.id}
@@ -262,13 +273,14 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
         <div className="flex shrink-0 flex-col gap-4 px-[var(--gutter)] pt-5 pb-3">
           <PageHead
             title="Activity"
-            facts={[
+            facts={bare ? [] : [
               `${events.length} Events`,
               group === "turn" && turnCount > 0 ? `${turnCount} model ${turnCount === 1 ? "turn" : "turns"}` : `${live} ${live === 1 ? "Agent" : "Agents"} live`,
               interrupts.length > 0 && `${interrupts.length} ${interrupts.length === 1 ? "Interrupt" : "Interrupts"}`,
             ]}
           />
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5">
+          {/* A Channel with no Events has nothing to group or filter. */}
+          <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-2.5", bare && "hidden")}>
             <div role="group" aria-label="Group" className="flex gap-1.5">
               <Chip on={group === "flat"} onClick={() => setGroup("flat")}>
                 Flat
@@ -293,7 +305,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                 value={filters.agent}
                 onChange={set("agent")}
                 allLabel="Any Agent"
-                options={agents.map((a) => ({ value: a.id, label: a.nickname ? `${a.id} (${a.nickname})` : a.id, short: `${a.person}/${shortName(a)}` }))}
+                options={agents.map((a) => ({ value: a.id, label: a.nickname ? `${a.id} (${a.nickname})` : a.id, short: ownedName(a) }))}
               />
               <FilterSelect
                 label="Task"
@@ -371,7 +383,27 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
               </div>
             )}
             {items.length === 0 ? (
-              <p className="border-t border-rule py-6 text-row text-ink-3">{filtered ? "No Event matches these filters." : "No Events on the Channel yet."}</p>
+              filtered ? (
+                <EmptyState
+                  title="No Event matches these filters"
+                  action={<Button onClick={() => setFilters(EMPTY_FILTERS)}>Clear the filters</Button>}
+                  className="mt-2"
+                >
+                  {activeCount(filters) === 1 ? "One filter is" : `${activeCount(filters)} filters are`} on, and no Event on the Channel passes {activeCount(filters) === 1 ? "it" : "them all"}.
+                </EmptyState>
+              ) : (
+                <EmptyState
+                  title="No Events yet"
+                  action={
+                    <Button variant="primary" onClick={() => document.getElementById("composer-text")?.focus()}>
+                      Post an Update
+                    </Button>
+                  }
+                  className="mt-2"
+                >
+                  Every Update, Directive, claim and Verdict on the Channel lands here as a row, newest at the bottom.
+                </EmptyState>
+              )
             ) : (
               <>
                 {group === "agent" ? (

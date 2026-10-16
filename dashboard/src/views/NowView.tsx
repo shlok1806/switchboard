@@ -10,6 +10,7 @@ import { noteFromEvent } from "@shared/index";
 import { buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { PendingApproval } from "@/components/domain/approval";
+import { FirstAgentAction } from "@/components/domain/start-agent";
 import { GroupLine, Secondary, StackedRow, contextPercent, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
 import { RowFrame } from "@/components/domain/log";
 import { State } from "@/components/domain/state";
@@ -17,6 +18,7 @@ import { TakeoverAction } from "@/components/domain/takeover";
 import { useNow } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
 import { SectionHead } from "@/components/shell/section";
+import { EmptyView } from "@/components/shell/states";
 import { useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { TAG_LABEL, actorName, elapsed, holderName, localTime, summarize, zoneCity } from "@/lib/format";
@@ -67,6 +69,15 @@ export function NowView() {
   const count = (p: Agent["presence"]) => agents.filter((a) => a.presence === p).length;
   const open = tasks.filter((t) => t.status !== "done").length;
   const shown = mineOnly ? queue.filter(isMine) : queue;
+
+  // A Channel nobody has used yet: no Agent, no Task and nothing said.
+  if (snapshot && agents.length === 0 && tasks.length === 0 && events.length === 0) {
+    return (
+      <EmptyView view="Now" title="Nothing on this Channel yet" action={<FirstAgentAction />}>
+        Now fills in as Agents join, take Tasks and ask for you. Start with one Agent; the Channel's Tasks come from its repository's open Issues.
+      </EmptyView>
+    );
+  }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">

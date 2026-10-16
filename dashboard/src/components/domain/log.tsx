@@ -5,7 +5,7 @@
  */
 import type { ReactNode } from "react";
 import type { AgentId, Capture, ChannelEvent, Verdict } from "@shared/index";
-import { shortName } from "@/components/domain/fleet";
+import { ownedName } from "@/components/domain/fleet";
 import { HolderLabel } from "@/components/domain/task";
 import { useIndex } from "@/data/store";
 import { CAPTURE_LABEL, DOWNGRADE_LABEL, EVENT_TYPE_LABEL, ago, clock, prob, summarize } from "@/lib/format";
@@ -92,7 +92,7 @@ function What({ event }: { event: ChannelEvent }) {
     const to = agentById.get(event.payload.to);
     return (
       <span className="max-w-[72ch] [overflow-wrap:anywhere] text-ink">
-        <span className="text-ink-3">to {to ? `${to.person}/${shortName(to)}` : event.payload.to}: </span>
+        <span className="text-ink-3">to {to ? ownedName(to) : event.payload.to}: </span>
         {event.payload.text}
       </span>
     );

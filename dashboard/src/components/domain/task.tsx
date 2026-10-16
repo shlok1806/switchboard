@@ -1,6 +1,6 @@
 import type { Agent, AgentId, Holder, Task } from "@shared/index";
 import { Glyph, useAgentStates } from "@/components/domain/state";
-import { shortName } from "@/components/domain/fleet";
+import { ownedName } from "@/components/domain/fleet";
 import { useIndex } from "@/data/store";
 import { href } from "@/lib/router";
 import { stateWord, type GlyphState } from "@/lib/state";
@@ -70,7 +70,7 @@ export function HolderLabel({ holder, link = true, className }: { holder: Holder
   const states = useAgentStates();
   if (holder.kind === "person") return <span className={className}>{holder.person}</span>;
   const agent = agentById.get(holder.agentId);
-  const name = agent ? `${agent.person}/${shortName(agent)}` : holder.agentId;
+  const name = agent ? ownedName(agent) : holder.agentId;
   const state = states.get(holder.agentId) ?? "gone";
   return (
     <span className={`inline-flex min-w-0 items-center gap-1.5 ${className ?? ""}`}>

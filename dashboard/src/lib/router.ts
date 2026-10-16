@@ -13,16 +13,20 @@ export type Route =
   | { view: "agent"; id: string; focus?: "directive" }
   | { view: "canvas"; agent?: string }
   | { view: "memory"; note?: string }
-  | { view: "hosts"; host?: string };
+  | { view: "hosts"; host?: string }
+  /** An address that is no page of the Dashboard: the error page says so. */
+  | { view: "missing"; path: string };
 
 export function parse(hash: string): Route {
-  const [, view = "now", arg, arg2, arg3] = hash.replace(/^#/, "").split("/");
+  const path = hash.replace(/^#/, "");
+  const [, view = "now", arg, arg2, arg3] = path.split("/");
   const a = arg ? decodeURIComponent(arg) : undefined;
   const b = arg2 ? decodeURIComponent(arg2) : undefined;
   const c = arg3 ? decodeURIComponent(arg3) : undefined;
   switch (view) {
     case "tasks":
-      return a ? { view: "task", number: Number(a) } : { view: "tasks" };
+      if (!a) return { view: "tasks" };
+      return /^[1-9]\d*$/.test(a) ? { view: "task", number: Number(a) } : { view: "missing", path };
     case "agents":
       // #/agents/select/<id> selects a row; no Agent ID is "select" (they are person/cli/hex).
       if (a === "select") return b ? { view: "agents", selected: b } : { view: "agents" };
@@ -41,8 +45,11 @@ export function parse(hash: string): Route {
       return a ? { view: "memory", note: a } : { view: "memory" };
     case "hosts":
       return { view: "hosts", host: a };
-    default:
+    case "now":
+    case "":
       return { view: "now" };
+    default:
+      return { view: "missing", path };
   }
 }
 
@@ -71,6 +78,8 @@ export function href(route: Route): string {
       return route.note ? `#/memory/${encodeURIComponent(route.note)}` : "#/memory";
     case "hosts":
       return route.host ? `#/hosts/${encodeURIComponent(route.host)}` : "#/hosts";
+    case "missing":
+      return `#${route.path}`;
   }
 }
 

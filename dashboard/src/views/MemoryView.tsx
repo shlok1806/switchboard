@@ -9,14 +9,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelEvent, MemoryNote, MemoryTag } from "@shared/index";
 import { MEMORY_TAGS, noteFromEvent } from "@shared/index";
+import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { shortName } from "@/components/domain/fleet";
 import { EventRow, RowFrame } from "@/components/domain/log";
 import { OlderRow } from "@/components/domain/older";
-import { Pending } from "@/components/domain/pending";
-import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
+import { InspectorFrame, InspectorMissing, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
+import { EmptyState, EmptyView, ErrorPage, ViewSkeleton } from "@/components/shell/states";
 import { useEventDetail } from "@/data/history";
 import type { HistoryScope } from "@/data/source";
 import { useChannel, useIndex, useStore } from "@/data/store";
@@ -41,6 +42,7 @@ export function MemoryView({ selected }: { selected?: string }) {
   const [loaded, setLoaded] = useState<Loaded | null | undefined>(undefined);
   const [problem, setProblem] = useState<string>();
   const [older, setOlder] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   // The newest note on the Channel: when it changes, the first page is read again.
   const latest = useMemo(() => {
     for (let i = events.length - 1; i >= 0; i--) if (events[i]!.type === "memory.note") return events[i]!.seq;
@@ -59,7 +61,7 @@ export function MemoryView({ selected }: { selected?: string }) {
       },
       (e: Error) => ask === asked.current && setProblem(e.message),
     );
-  }, [store, q, tag, latest]);
+  }, [store, q, tag, latest, attempt]);
 
   const loadOlder = () => {
     const last = loaded?.notes.at(-1);
@@ -79,15 +81,40 @@ export function MemoryView({ selected }: { selected?: string }) {
       .finally(() => setOlder(false));
   };
 
+  const searching = q !== "" || tag !== null;
   if (loaded === null) {
     return (
-      <Pending title="Memory is not on this Channel yet" className="h-full">
+      <EmptyView view="Memory" title="Memory is not on this Channel yet" action={<HowNotesWork />}>
         This Channel's Worker predates memory notes. Agents on it cannot leave notes for each other yet.
-      </Pending>
+      </EmptyView>
+    );
+  }
+  // The first read: nothing is on the page yet, so the whole view waits or fails.
+  if (loaded === undefined) {
+    return problem ? (
+      <ErrorPage
+        title="Could not read the notes"
+        reason={problem}
+        actions={
+          <Button variant="primary" onClick={() => setAttempt((n) => n + 1)}>
+            Try again
+          </Button>
+        }
+      >
+        The rest of the Channel is fine. Only the memory notes did not load.
+      </ErrorPage>
+    ) : (
+      <ViewSkeleton view="memory" />
+    );
+  }
+  if (loaded.notes.length === 0 && !searching) {
+    return (
+      <EmptyView view="Memory" title="No notes yet" action={<HowNotesWork />}>
+        An Agent leaves a note with memory_note when it learns something the others should know, and every Agent on the Channel can read it.
+      </EmptyView>
     );
   }
 
-  const searching = q !== "" || tag !== null;
   const notes = loaded?.notes ?? [];
   const pick = (id: string) => go({ view: "memory", note: id });
   const close = () => go({ view: "memory" });
@@ -119,6 +146,8 @@ export function MemoryView({ selected }: { selected?: string }) {
               Find
               <input
                 type="search"
+                // `/` on this list searches here (the palette's shortcut).
+                data-slash-find
                 value={find}
                 onChange={(e) => setFind(e.target.value)}
                 placeholder="retries client.ts"
@@ -132,12 +161,22 @@ export function MemoryView({ selected }: { selected?: string }) {
               Could not read the notes: {problem}
             </p>
           )}
-          {loaded === undefined ? (
-            !problem && <p className="border-t border-rule py-6 text-row text-ink-3">Reading the notes</p>
-          ) : notes.length === 0 ? (
-            <p className="border-t border-rule py-6 text-row text-ink-3">
-              {searching ? "No note matches." : "No notes yet. An Agent leaves one with memory_note when it learns something the others should know."}
-            </p>
+          {notes.length === 0 ? (
+            <EmptyState
+              title="No note matches"
+              action={
+                <Button
+                  onClick={() => {
+                    setFind("");
+                    setTag(null);
+                  }}
+                >
+                  Clear the search
+                </Button>
+              }
+            >
+              {q ? <>Nothing on the Channel matches “{find.trim()}”{tag ? ` with the tag ${TAG_LABEL[tag]}` : ""}.</> : <>No note has the tag {tag && TAG_LABEL[tag]} yet.</>}
+            </EmptyState>
           ) : (
             <ol className="border-t border-rule" aria-label="Notes">
               {notes.map((n) => (
@@ -156,8 +195,19 @@ export function MemoryView({ selected }: { selected?: string }) {
           )}
         </div>
       </div>
-      {selected && <NoteInspector id={selected} onClose={mobile ? close : undefined} />}
+      {selected && <NoteInspector id={selected} sheet={mobile} onClose={close} />}
     </div>
+  );
+}
+
+const ADR_MEMORY = "https://github.com/shlok1806/switchboard/blob/main/docs/adr/0019-agents-share-memory-on-the-channel.md";
+
+/** Links the decision that explains memory notes. */
+function HowNotesWork() {
+  return (
+    <a href={ADR_MEMORY} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "secondary" })}>
+      How notes work
+    </a>
   );
 }
 
@@ -219,10 +269,11 @@ function NoteBody({ note: n }: { note: MemoryNote }) {
 const AROUND = 4;
 
 /** A note in the inspector, with the Events around it. */
-function NoteInspector({ id, onClose }: { id: string; onClose?: () => void }) {
+function NoteInspector({ id, sheet, onClose: close }: { id: string; sheet: boolean; onClose: () => void }) {
+  const onClose = sheet ? close : undefined;
   const store = useStore();
   const { events, verdictsByEvent } = useChannel();
-  const { event } = useEventDetail(id);
+  const { event, status } = useEventDetail(id);
   const note = event ? noteFromEvent(event) : null;
   const near = (e: ChannelEvent) =>
     !!note && e.id !== note.id && ((e.actor.kind === "agent" && e.actor.agentId === note.author) || (note.task !== undefined && e.task === note.task));
@@ -271,13 +322,23 @@ function NoteInspector({ id, onClose }: { id: string; onClose?: () => void }) {
       mobile
     />
   );
+  if (status === "missing" || (event && !note))
+    return (
+      <InspectorMissing title="No such note" sheet={sheet} onClose={close}>
+        This Channel has no note with that address. It may be from another Channel, or the link was cut short.
+      </InspectorMissing>
+    );
+  if (status === "failed")
+    return (
+      <InspectorMissing title="Could not read the note" sheet={sheet} onClose={close}>
+        The Channel did not answer. The note is still there; open it again in a moment.
+      </InspectorMissing>
+    );
   return (
     <InspectorFrame label="Note, in the inspector" onClose={onClose}>
       {!event ? (
         <p className="text-small text-ink-3">Reading the note</p>
-      ) : !note ? (
-        <p className="text-small text-ink-3">That Event is not a note.</p>
-      ) : (
+      ) : !note ? null : (
         <>
           <header className="flex items-start gap-2">
             <h2 className="min-w-0 flex-1 text-title font-semibold text-ink">Note</h2>

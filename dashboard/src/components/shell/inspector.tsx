@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { buttonVariants } from "@/components/atoms/Button";
+import { Button, buttonVariants } from "@/components/atoms/Button";
 import { cn } from "@/lib/utils";
 
 export function InspectorFrame({ label, onClose, children }: { label: string; /** Set on a phone, where the frame is a sheet. */ onClose?: () => void; children: ReactNode }) {
@@ -48,5 +48,23 @@ export function SheetClose({ onClose }: { onClose?: () => void }) {
     <button type="button" onClick={onClose} aria-label="Close" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 shrink-0 px-0")}>
       <X className="size-4" aria-hidden />
     </button>
+  );
+}
+
+/**
+ * The inspector for an address naming something it cannot show: not on the Channel, or the
+ * Channel did not answer. One line on why, and Close, which goes back to the plain list.
+ */
+export function InspectorMissing({ title, children, onClose, sheet }: { title: string; children: ReactNode; onClose: () => void; sheet: boolean }) {
+  return (
+    <InspectorFrame label={`${title}, in the inspector`} onClose={sheet ? onClose : undefined}>
+      <section data-view-state="missing" className="flex flex-col items-start gap-1.5">
+        <h2 className="text-title font-semibold text-ink">{title}</h2>
+        <p className="text-row text-ink-2">{children}</p>
+        <div className="pt-3">
+          <Button onClick={onClose}>Close</Button>
+        </div>
+      </section>
+    </InspectorFrame>
   );
 }

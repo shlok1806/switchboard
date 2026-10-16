@@ -16,9 +16,10 @@ import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { PendingApproval } from "@/components/domain/approval";
 import { ContextWindow } from "@/components/domain/context";
-import { IssueLink, Pending } from "@/components/domain/pending";
+import { IssueButton } from "@/components/domain/pending";
+import { EmptyState, EmptyView } from "@/components/shell/states";
 import { RenameDialog } from "@/components/domain/rename";
-import { StartAgentButton, StopAgentButton, canStop } from "@/components/domain/start-agent";
+import { FirstAgentAction, StartAgentButton, StopAgentButton, canStop } from "@/components/domain/start-agent";
 import { GroupLine, Secondary, StackedRow, agentName, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
 import { Glyph, State, useNeedsYou } from "@/components/domain/state";
 import { AgentUsage } from "@/components/domain/usage";
@@ -26,7 +27,6 @@ import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { useHostsSupported } from "@/data/hosts";
 import { useCapabilities, useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { setDensity, useDensity } from "@/lib/density";
@@ -55,7 +55,6 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   const { agents, snapshot } = useChannel();
   const me = useMe();
   const can = useCapabilities();
-  const hosts = useHostsSupported();
   const mobile = useIsMobile();
   const density = useDensity();
   const [filter, setFilter] = useState<Filter>("all");
@@ -109,27 +108,14 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   }, [unknown]);
 
   if (agents.length === 0) {
-    return (
-      <Pending title={can.agents ? "No Agents yet" : "Agents are not on this Channel yet"} className="h-full">
-        {can.agents ? (
-          // Shown once the Channel says whether it has Hosts, so the text never changes under the reader.
-          hosts !== null && (
-            <>
-              Run <code className="text-ink-2">switchboard run claude</code> to add one
-              {hosts ? <>, or start one on a&nbsp;Host.</> : "."}
-              {hosts && (
-                <span className="mt-4 flex justify-center">
-                  <StartAgentButton />
-                </span>
-              )}
-            </>
-          )
-        ) : (
-          <>
-            Agents appear once <IssueLink capability="agents" /> lands.
-          </>
-        )}
-      </Pending>
+    return can.agents ? (
+      <EmptyView view="Agents" title="No Agents yet" action={<FirstAgentAction />}>
+        An Agent joins when someone runs it with <code className="text-ink-2">switchboard run</code>, or starts it on one of their Hosts.
+      </EmptyView>
+    ) : (
+      <EmptyView view="Agents" title="Agents are not on this Channel yet" action={<IssueButton capability="agents" label="Follow the issue" />}>
+        This Channel's Worker does not serve Agents. They appear once its issue lands.
+      </EmptyView>
     );
   }
 
@@ -194,7 +180,21 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
         </div>
 
         {shown.length === 0 ? (
-          <p className="border-t border-rule py-6 text-row text-ink-3">No Agent matches.</p>
+          <EmptyState
+            title="No Agent matches"
+            action={
+              <Button
+                onClick={() => {
+                  setFilter("all");
+                  setFind("");
+                }}
+              >
+                {find.trim() ? "Clear the search" : "Clear the filter"}
+              </Button>
+            }
+          >
+            {find.trim() ? <>No Agent{filter !== "all" ? " in this filter" : ""} has “{find.trim()}” in its name, Task or Host.</> : <>None of the {lines.length} Agents is in this filter.</>}
+          </EmptyState>
         ) : mobile ? (
           <ul className="flex flex-col">
             {byPerson.map(([person, group]) => (
