@@ -95,8 +95,25 @@ function freePort() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function waitFor(url, what, tries = 100) {
+// Tries of 100 ms that a server or a browser gets to start answering: 30 seconds, since a
+// cold CI runner can be slow to start either.
+const STARTUP = 300;
+
+/** Sends `signal` to every process of the group `pgid`; false once there is none left. */
+function signalGroup(pgid, signal) {
+  try {
+    process.kill(-pgid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Polls `url` until it answers. `died` says why the thing that should answer is gone, if it is, which ends the wait at once. */
+async function waitFor(url, what, tries = 100, died = () => null) {
   for (let i = 0; i < tries; i++) {
+    const why = died();
+    if (why) throw new Error(`${what} ${why}; it never answered at ${url}`);
     try {
       const r = await fetch(url);
       if (r.ok) return r;
@@ -109,8 +126,8 @@ async function waitFor(url, what, tries = 100) {
 }
 
 /** One CDP connection to a page target. */
-async function connect(port) {
-  const targets = await (await waitFor(`http://127.0.0.1:${port}/json`, "Chrome")).json();
+async function connect(port, died) {
+  const targets = await (await waitFor(`http://127.0.0.1:${port}/json`, "Chrome", STARTUP, died)).json();
   const ws = new WebSocket(targets.find((t) => t.type === "page").webSocketDebuggerUrl);
   await new Promise((r, j) => {
     ws.onopen = r;
@@ -196,29 +213,47 @@ async function main() {
   const preview = spawn("npx", ["vite", "preview", "--host", "127.0.0.1", "--port", String(previewPort), "--strictPort"], { cwd: root, stdio: "ignore" });
   const debugPort = await freePort();
   const profile = mkdtempSync(join(tmpdir(), "shots-"));
+  // Detached, Chrome leads a process group of its own, which its helpers join: the group is
+  // what gets killed, so no helper is left to write into the profile.
   const chrome = spawn(
     chromePath(),
     ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-sandbox", `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`, "about:blank"],
-    { stdio: "ignore" },
+    { stdio: "ignore", detached: true },
   );
-  // On any way out the browser and the server go; the profile goes once Chrome has let go of it.
+  // How Chrome ended, once it has: startup stops waiting for a browser that is gone.
+  let ended = null;
+  chrome.once("exit", (code, signal) => {
+    ended = signal ? `was killed by signal ${signal}` : `exited with code ${code}`;
+  });
+  chrome.once("error", (e) => {
+    ended = `could not be started (${e.message})`;
+  });
+  const killChrome = () => signalGroup(chrome.pid, "SIGKILL");
+  // On any way out the browser and the server go. The group no longer shares this run's
+  // Ctrl-C, so the signals are turned into an exit, which runs this.
   process.on("exit", () => {
-    chrome.kill();
+    killChrome();
     preview.kill();
   });
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(1));
+  // The profile goes once the whole group has let go of it. A leftover temp dir is not a
+  // failed run, so neither the wait nor the removal can fail it.
   const stop = async () => {
-    const gone = new Promise((r) => chrome.once("exit", r));
-    chrome.kill();
+    killChrome();
     preview.kill();
-    await gone;
-    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    for (let i = 0; i < 100 && signalGroup(chrome.pid, 0); i++) await sleep(50);
+    try {
+      rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (e) {
+      console.warn(`Left ${profile} behind, it could not be removed (${e.code ?? e.message})`);
+    }
   };
 
   const base = `http://127.0.0.1:${previewPort}/`;
   let page;
   try {
-    await waitFor(base, "vite preview", 300);
-    page = await connect(debugPort);
+    await waitFor(base, "vite preview", STARTUP);
+    page = await connect(debugPort, () => ended);
   } catch (e) {
     await stop();
     throw e;
