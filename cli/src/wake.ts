@@ -48,6 +48,8 @@ export class Waker {
   private wakes: number[] = [];
   /** Whether the cap was reported since it was last reset. */
   private capReported = false;
+  /** How many times the count was reset: a reset while a Wake is typed comes after that Wake. */
+  private resets = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private trying = false;
   private stopped = false;
@@ -74,6 +76,7 @@ export class Waker {
     if (this.wakes.length > 0 || this.capReported) this.options.log(`wakes counted afresh: ${why}`);
     this.wakes = [];
     this.capReported = false;
+    this.resets += 1;
     this.poke();
   }
 
@@ -108,10 +111,13 @@ export class Waker {
       return;
     }
     this.trying = true;
+    /** The count's resets when the prompt was made: one after that came while it was typed. */
+    let resets = this.resets;
     let batch: WakeBatch | null = null;
     let outcome: WakeOutcome;
     try {
       outcome = await this.options.type(() => {
+        resets = this.resets;
         batch = this.options.take();
         return batch === null ? null : wakeNotice(batch.text);
       });
@@ -120,7 +126,8 @@ export class Waker {
     }
     const taken = batch as WakeBatch | null;
     if (outcome.typed && taken !== null) {
-      this.wakes.push(this.now());
+      // The Person prompted while it was typed, after it: it is not in the fresh count.
+      if (this.resets === resets) this.wakes.push(this.now());
       this.options.log(`woke the Agent: ${taken.deliveries.length} Queued, ${taken.directives.length} Directive(s)`);
       this.options.woke(taken);
       return;

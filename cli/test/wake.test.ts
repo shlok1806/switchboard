@@ -74,7 +74,12 @@ describe("what deserves a Wake", () => {
 /** A Waker over a fake session; `state.answer` says how each try to type goes. */
 function waker({ cap = 3, windowMs = 60_000 } = {}) {
   const clock = { now: 0 };
-  const state = { pending: true, answer: { typed: true } as WakeOutcome };
+  const state = {
+    pending: true,
+    answer: { typed: true } as WakeOutcome,
+    /** What happens while the prompt is being typed. */
+    whileTyping: undefined as (() => void) | undefined,
+  };
   const typed: string[] = [];
   const woke: WakeBatch[] = [];
   let capped = 0;
@@ -84,6 +89,7 @@ function waker({ cap = 3, windowMs = 60_000 } = {}) {
       const text = produce();
       if (text === null) return { typed: false, reason: "empty" };
       typed.push(text);
+      state.whileTyping?.();
       return { typed: true };
     },
     pending: () => state.pending,
@@ -158,6 +164,27 @@ describe("Waker", () => {
     w.reset("the Person sent a prompt");
     await sleep(60);
     expect(typed).toHaveLength(4);
+    w.stop();
+  });
+
+  it("counts a Wake before a prompt the Person submitted while it was being typed", async () => {
+    const { w, clock, state, typed, capped } = waker({ cap: 2 });
+    w.poke();
+    await sleep(60);
+    // The Person submits a prompt just after the second Wake's: theirs comes later.
+    state.whileTyping = () => w.reset("the Person sent a prompt");
+    clock.now += 1000;
+    w.poke();
+    await sleep(60);
+    state.whileTyping = undefined;
+    // So both Wakes were before it, and the Agent may be woken twice more.
+    for (let i = 0; i < 2; i++) {
+      clock.now += 1000;
+      w.poke();
+      await sleep(60);
+    }
+    expect(typed).toHaveLength(4);
+    expect(capped()).toBe(0);
     w.stop();
   });
 

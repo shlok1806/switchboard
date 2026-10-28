@@ -16,6 +16,7 @@
 // Then it answers typed lines:
 //   work              -> prints some output
 //   turn              -> one model turn: a shell command and a file edit, then the turn ends
+//   end               -> the turn the Person's last line started ends (the stop hook)
 //   shell <command>   -> one shell tool call, the command run for real in the
 //                        current directory (`\n` is a line break), between its
 //                        PreToolUse and PostToolUse hooks (Gemini CLI: BeforeTool and AfterTool)
@@ -33,7 +34,14 @@
 //   permission <tool> -> an approval dialog: the next line answers it
 //   quit              -> exits 0, after the SessionEnd hook
 // Like Codex, it turns bracketed paste on; a paste then Enter is one prompt, printed as
-// `<TAG> pasted prompt=<json> during=<what it was doing>`.
+// `<TAG> pasted prompt=<json> during=<what it was doing>`. A prompt pasted while it was
+// doing nothing starts a turn of its own: it runs the lines in the file FAKE_AGENT_REPLY_FILE
+// names, if any (such as `call post_update {...}`), then ends the turn (the stop hook) and
+// prints `<TAG> pasted turn done`.
+//
+// When a hook blocks its stop hook, it continues the turn as the real CLI does: for
+// FAKE_AGENT_CONTINUE_SECONDS (0 by default), then the stop hook again, with
+// `stop_hook_active`.
 
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -128,9 +136,13 @@ export async function runFake(dialect) {
     resumed = at !== -1;
   }
 
-  /** Runs every command hook configured for `event` (matching `tool`), the way the CLI does. */
+  /**
+   * Runs every command hook configured for `event` (matching `tool`), the way the CLI does.
+   * Returns whether one blocked it (a stop hook's block continues the turn).
+   */
   function runHooks(event, input, tool) {
-    if (!trusted) return;
+    let blocked = false;
+    if (!trusted) return blocked;
     for (const group of hooks[event] ?? []) {
       const matcher = group.matcher ?? "";
       if (tool !== undefined && matcher !== "" && matcher !== "*" && !new RegExp(`^(${matcher})$`).test(tool)) continue;
@@ -157,6 +169,7 @@ export async function runFake(dialect) {
             context = parsed.hookSpecificOutput?.additionalContext ?? "";
             if (parsed.decision !== undefined) {
               decision = JSON.stringify({ decision: parsed.decision, reason: parsed.reason });
+              if (parsed.decision === "block") blocked = true;
             }
           } catch {
             context = `UNPARSEABLE ${out}`;
@@ -167,6 +180,7 @@ export async function runFake(dialect) {
         );
       }
     }
+    return blocked;
   }
 
   const EVENTS =
@@ -176,6 +190,27 @@ export async function runFake(dialect) {
 
   function toolUse(tool_name, tool_input, tool_response) {
     runHooks(EVENTS.after, { tool_name, tool_input, tool_response }, tool_name);
+  }
+
+  /** Ends the turn: the stop hook, and once more after continuing if a hook blocked it. */
+  async function endTurn() {
+    if (!runHooks(EVENTS.stop, { prompt: "turn", prompt_response: "done", stop_hook_active: false })) return;
+    doing = "continuing";
+    say("continuing the turn");
+    await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_AGENT_CONTINUE_SECONDS ?? 0) * 1000));
+    doing = "nothing";
+    runHooks(EVENTS.stop, { prompt: "turn", prompt_response: "done", stop_hook_active: true });
+  }
+
+  /** The turn a prompt pasted at the idle prompt starts: the reply file's lines, then the turn's end. */
+  async function pastedTurn() {
+    const file = process.env.FAKE_AGENT_REPLY_FILE;
+    const reply = file ? readFileSync(file, "utf8") : "";
+    for (const line of reply.split("\n")) {
+      if (line.trim() !== "") await answer(line.trim());
+    }
+    await endTurn();
+    say("pasted turn done");
   }
 
   const clients = new Map();
@@ -237,9 +272,11 @@ export async function runFake(dialect) {
       pasted = null;
       const prompt = text.slice(text.indexOf(PASTE_START) + PASTE_START.length, text.lastIndexOf(PASTE_END));
       say(`pasted prompt=${JSON.stringify(prompt)} during=${doing}`);
-      queue = queue.then(() => {
+      const idle = doing === "nothing";
+      queue = queue.then(async () => {
         writeSessionFile();
         runHooks(EVENTS.prompt, { prompt });
+        if (idle) await pastedTurn();
       });
       return;
     }
@@ -332,6 +369,10 @@ export async function runFake(dialect) {
       say("prompted");
     }
     if (command === "work") say("working on it");
+    if (command === "end") {
+      await endTurn();
+      say("turn ended");
+    }
     const shell = /^shell (.+)$/.exec(command);
     if (shell && dialect === "codex") {
       // A shell tool call the way Codex makes one: PreToolUse, the command for real, PostToolUse.
@@ -408,7 +449,7 @@ export async function runFake(dialect) {
         );
         toolUse("write_file", { file_path: join(cwd, "src/new.ts"), content: "export const b = 2;\n" }, {});
       }
-      runHooks(EVENTS.stop, { prompt: "turn", prompt_response: "done" });
+      await endTurn();
       say("turn done");
     }
   }
