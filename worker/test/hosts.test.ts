@@ -338,7 +338,7 @@ describe("stopping an Agent", () => {
     expect(response.status).toBe(200);
     expect(await response.json<StopAgentResponse>()).toEqual({ ok: true, agent: id, host: "shlok/studio" });
     const stop = await waitFor(() => studio.frames.find((f) => f.type === "host.stop") as HostStopMessage | undefined);
-    expect(stop).toEqual({ type: "host.stop", agent: id });
+    expect(stop).toEqual({ type: "host.stop", agent: id, by: "shlok" });
     expect((await events()).find((e) => e.type === "agent.stop")).toMatchObject({
       actor: { kind: "person", person: "shlok" },
       payload: { agent: id, host: "shlok/studio" },

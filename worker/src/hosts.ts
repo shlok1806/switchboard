@@ -2,8 +2,9 @@
 // The Channel Durable Object owns the sockets and the Event stream; this module owns
 // the rules:
 //
-// - A Host belongs to one Person, who registers it with the folders Agents may run in
-//   and the loosest permission mode they may run in. Only that Person may use it.
+// - A Host belongs to one Person, who registers it with the folders Agents may run in,
+//   the loosest permission mode they may run in, and the other Persons who may use it
+//   (`allow`, `allowChannel`, ADR 0028). Without an allow-list only that Person may.
 // - A Host is Live while its socket is attached. `host.online` and `host.offline` are
 //   recorded only when that changes and stays changed: a Host that reconnects within
 //   `OFFLINE_GRACE_MS` records nothing, so a flapping connection does not flood the
@@ -13,13 +14,18 @@
 //   reports it could not start it, or after `SPAWN_EXPIRES_MS` without either
 //   (`agent.spawn.failed`). The caller waits for the end, up to `spawnWaitMs`.
 // - The Agents Hosts run, and the spawns still starting, are capped per Channel.
-// - A stop is recorded (`agent.stop`) and sent to the Host that runs the Agent. The
-//   Agent goes Gone the usual way, when its wrapper ends the session.
+// - A stop, pause or resume (ADR 0028) is recorded (`agent.stop`, `agent.pause`,
+//   `agent.resume`: the requester is the actor, the Agent's Person is named) and sent to
+//   the Host that runs the Agent. A stopped Agent goes Gone the usual way, when its
+//   wrapper ends the session. A pause marks the Agent Paused at once, so its wrapper
+//   ending the session does not make it Gone; the Host confirms with `host.paused` and
+//   the Agent's token is revoked then. A resume is a ticket: the Paused Agent's wrapper
+//   may register again only while one stands, so nothing else brings it back.
 // - A lead (ADR 0018) spawns and stops for its Person: on that Person's Hosts, and
 //   only Agents in its own subtree, within `leadCap`. The Agent a lead's spawn starts
 //   gets the lead as its parent. Whether the caller holds the role is the Channel's check.
 //
-// The folders and mode kept here are advisory (ADR 0017). The same Person's session
+// The folders, mode and allow-list kept here are advisory (ADR 0017, ADR 0028). The same Person's session
 // that spawns can re-register the Host with wider ones, so a stolen session could
 // widen them first. `switchboard host run` MUST re-check every spawn against its own
 // install-time configuration on the machine (the folder after realpath, under its
@@ -35,17 +41,23 @@ import type {
   EventPayloads,
   EventType,
   Host,
+  HostAllowMessage,
   HostId,
+  HostPauseMessage,
+  HostResumeMessage,
   HostSpawnedMessage,
   HostSpawnMessage,
   HostStopMessage,
   PermissionMode,
   PersonName,
   RegisterHostRequest,
+  SetHostAllowRequest,
   SpawnAgentRequest,
 } from "../../shared/src/index";
 import {
   DEFAULT_PERMISSION_MODE,
+  HOST_ALLOW_WAIT_MS,
+  hostAllows,
   hostIdFor,
   isPermissionMode,
   notUnderRootsReason,
@@ -57,6 +69,8 @@ import {
 export const OFFLINE_GRACE_MS = 30_000;
 /** A spawn the Host has not answered after this long failed. */
 export const SPAWN_EXPIRES_MS = 120_000;
+/** A resume the Host has not answered after this long is void: the Paused Agent may not register for it. */
+export const RESUME_EXPIRES_MS = 120_000;
 /** How long `POST /api/agents/spawn` waits for the Agent, unless HOST_SPAWN_WAIT_SECONDS says otherwise. */
 export const DEFAULT_SPAWN_WAIT_MS = 45_000;
 
@@ -70,7 +84,13 @@ export const HOSTS_SCHEMA = `
     last_seen_at INTEGER NOT NULL,
     recorded TEXT NOT NULL DEFAULT 'offline',
     offline_since INTEGER,
+    allow TEXT NOT NULL DEFAULT '[]',
+    allow_channel INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (person, name)
+  );
+  CREATE TABLE IF NOT EXISTS host_resumes (
+    agent TEXT PRIMARY KEY,
+    requested_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS host_spawns (
     id TEXT PRIMARY KEY,
@@ -96,6 +116,8 @@ type HostRow = {
   recorded: string;
   /** When its last socket closed, while that is not recorded yet. */
   offline_since: number | null;
+  allow: string;
+  allow_channel: number;
 };
 
 type SpawnRow = {
@@ -110,7 +132,10 @@ type SpawnRow = {
   agent: string | null;
 };
 
-/** Who asks a Host for something: a Person, or a lead for its Person (ADR 0018). */
+/**
+ * Who asks a Host for something: a Person, or a lead for its Person (ADR 0018). The Person
+ * may be someone other than the Host's owner, if the Host allows them (ADR 0028).
+ */
 export type HostActing = { person: PersonName; lead?: AgentId };
 
 function actorOf(acting: HostActing): Extract<Actor, { kind: "agent" | "person" }> {
@@ -131,10 +156,27 @@ export interface HostsDeps {
   /** Whether Host `id` has a socket attached now. */
   attached(id: HostId): boolean;
   /** Sends `message` to Host `id`'s newest socket. False when it has none. */
-  sendTo(id: HostId, message: HostSpawnMessage | HostSpawnedMessage | HostStopMessage): boolean;
+  sendTo(
+    id: HostId,
+    message:
+      | HostSpawnMessage
+      | HostSpawnedMessage
+      | HostStopMessage
+      | HostPauseMessage
+      | HostResumeMessage
+      | HostAllowMessage,
+  ): boolean;
   /** Closes Host `id`'s sockets, for a Host that was removed. */
   close(id: HostId): void;
   findAgent(id: AgentId): Agent | null;
+  /** Agent `id` is Paused (ADR 0028): its Presence, until the Host confirms or refuses. */
+  pauseAgent(id: AgentId): void;
+  /** A refused pause: Agent `id` is Idle again. */
+  unpauseAgent(id: AgentId): void;
+  /** A Paused Agent was stopped: it is Gone, and no process remains to end its session. */
+  endPausedAgent(id: AgentId): void;
+  /** The Host confirmed the pause: Agent `id`'s token stops working and its wrapper's sockets close. */
+  revokeAgent(id: AgentId): void;
   /** Whether Agent `id` is in lead `lead`'s subtree (ADR 0018). */
   inSubtree(lead: AgentId, id: AgentId): boolean;
   /** How many Agents in lead `lead`'s subtree are not Gone. */
@@ -155,6 +197,9 @@ export type HostRefusal = { ok: false; status: 403 | 404 | 409 | 502; reason: st
 /** How a spawn ended, for the request waiting on it. */
 type SpawnEnd = { agent: Agent } | { reason: string };
 
+/** A stop, pause or resume asked for: the Host it went to, and the Agent's Presence now. */
+export type ControlResult = { ok: true; host: HostId; presence: Agent["presence"] } | HostRefusal;
+
 export type SpawnResult = { ok: true; spawn: string; host: HostId; agent?: Agent } | HostRefusal;
 
 function rowToHost(row: HostRow, live: boolean): Host {
@@ -164,6 +209,8 @@ function rowToHost(row: HostRow, live: boolean): Host {
     name: row.name,
     roots: JSON.parse(row.roots) as string[],
     maxPermissionMode: isPermissionMode(row.max_mode) ? row.max_mode : DEFAULT_PERMISSION_MODE,
+    allow: JSON.parse(row.allow) as string[],
+    allowChannel: row.allow_channel === 1,
     live,
     registeredAt: row.registered_at,
     lastSeenAt: new Date(row.last_seen_at).toISOString(),
@@ -173,9 +220,22 @@ function rowToHost(row: HostRow, live: boolean): Host {
 export class Hosts {
   /** Requests waiting on their spawn, by spawn ID. In memory: the waiting request keeps the object alive. */
   private readonly waiting = new Map<string, (end: SpawnEnd) => void>();
+  /** Signed allow-list changes waiting on their Host's answer, by request ID. */
+  private readonly allowing = new Map<
+    string,
+    { host: HostId; resolve: (answer: { ok: boolean; reason?: string } | null) => void }
+  >();
 
   constructor(private readonly deps: HostsDeps) {
     deps.sql.exec(HOSTS_SCHEMA);
+    // ADR 0028: the allow-list, on a table made before it.
+    for (const column of ["allow TEXT NOT NULL DEFAULT '[]'", "allow_channel INTEGER NOT NULL DEFAULT 0"]) {
+      try {
+        deps.sql.exec(`ALTER TABLE hosts ADD COLUMN ${column}`);
+      } catch {
+        // The column is there already.
+      }
+    }
     // ADR 0018: the lead that asked, the mode and the Agent started, on a table made before them.
     for (const column of ["lead", "mode", "agent"]) {
       try {
@@ -199,18 +259,24 @@ export class Hosts {
     return row === undefined ? null : this.toHost(row);
   }
 
-  /** Registers one of `person`'s Hosts, or updates its folders and mode. */
+  /** Registers one of `person`'s Hosts, or updates its folders, mode and allow-list. */
   register(person: PersonName, request: RegisterHostRequest): Host {
     const now = Date.now();
+    // The owner needs no entry of their own.
+    const allow = [...new Set(request.allow ?? [])].filter((login) => login !== person).sort();
     this.deps.sql.exec(
-      `INSERT INTO hosts (person, name, roots, max_mode, registered_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT (person, name) DO UPDATE SET roots = excluded.roots, max_mode = excluded.max_mode`,
+      `INSERT INTO hosts (person, name, roots, max_mode, registered_at, last_seen_at, allow, allow_channel)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (person, name) DO UPDATE SET roots = excluded.roots, max_mode = excluded.max_mode,
+         allow = excluded.allow, allow_channel = excluded.allow_channel`,
       person,
       request.name,
       JSON.stringify(request.roots),
       request.maxPermissionMode ?? DEFAULT_PERMISSION_MODE,
       new Date(now).toISOString(),
       now,
+      JSON.stringify(allow),
+      request.allowChannel === true ? 1 : 0,
     );
     return this.find(person, request.name) as Host;
   }
@@ -223,11 +289,62 @@ export class Hosts {
     return true;
   }
 
+  /**
+   * Passes a signed allow-list change from `person` to their Host `name` and waits for the
+   * Host's answer: it applies the change to its own file only for a key its Person trusts
+   * there, and republishes (ADR 0028). The Channel verifies nothing itself.
+   */
+  async setAllow(
+    person: PersonName,
+    name: string,
+    request: SetHostAllowRequest,
+    waitMs = HOST_ALLOW_WAIT_MS,
+  ): Promise<{ ok: true; host: Host } | HostRefusal> {
+    if (this.row(person, name) === undefined) {
+      return { ok: false, status: 404, reason: `You have no Host named ${name}.` };
+    }
+    const id = hostIdFor(person, name);
+    if (!this.deps.attached(id)) {
+      return {
+        ok: false,
+        status: 409,
+        reason: `${name} is Offline: its allow-list changes only on the machine, so it has to be running. Start \`switchboard host run\` there.`,
+      };
+    }
+    const requestId = crypto.randomUUID();
+    const answered = new Promise<{ ok: boolean; reason?: string } | null>((resolve) => {
+      this.allowing.set(requestId, { host: id, resolve });
+      setTimeout(() => resolve(null), waitMs);
+    });
+    if (!this.deps.sendTo(id, { type: "host.allow", id: requestId, ...request })) {
+      this.allowing.delete(requestId);
+      return { ok: false, status: 409, reason: `${name} went Offline before the request reached it.` };
+    }
+    const answer = await answered;
+    this.allowing.delete(requestId);
+    if (answer === null) {
+      return {
+        ok: false,
+        status: 502,
+        reason: `${name} did not answer. Is \`switchboard host run\` still running there?`,
+      };
+    }
+    if (!answer.ok) return { ok: false, status: 403, reason: `${name} refused: ${answer.reason ?? "no reason given"}` };
+    return { ok: true, host: this.find(person, name) as Host };
+  }
+
+  /** Host `host` answered signed change `id`. Ignored unless it is that Host's. */
+  allowAnswered(host: HostId, id: string, ok: boolean, reason?: string): void {
+    const waiting = this.allowing.get(id);
+    if (waiting === undefined || waiting.host !== host) return;
+    waiting.resolve({ ok, ...(reason === undefined ? {} : { reason }) });
+  }
+
   /** The Agents Hosts run now, and the spawns still starting. */
   running(): number {
     const agents = this.deps.sql
       .exec<{ n: number }>(
-        "SELECT COUNT(*) AS n FROM agents INDEXED BY agents_live WHERE presence != 'gone' AND host IS NOT NULL",
+        "SELECT COUNT(*) AS n FROM agents INDEXED BY agents_live WHERE presence != 'gone' AND presence != 'paused' AND host IS NOT NULL",
       )
       .one().n;
     const starting = this.deps.sql
@@ -272,17 +389,19 @@ export class Hosts {
   }
 
   /**
-   * Asks one of `acting.person`'s Hosts to start an Agent, and waits up to `spawnWaitMs`
-   * for it to register. `request` is already clean, apart from what only a Host can judge.
+   * Asks a Host to start an Agent, and waits up to `spawnWaitMs` for it to register: one of
+   * `acting.person`'s own, or another Person's that allows them (ADR 0028). The Agent
+   * belongs to the Host's Person. `request` is already clean, apart from what only a Host can judge.
    */
   async spawn(acting: HostActing, request: SpawnAgentRequest): Promise<SpawnResult> {
     const { person, lead } = acting;
-    const host = this.pick(person, request.host);
+    const host = this.pick(acting, request.host);
     if (!host.ok) return host;
     const { row } = host;
-    const id = hostIdFor(person, row.name);
-    // Only a Host's own Person starts Agents on it, so its refusals call it by its name.
-    const name = row.name;
+    const owner = row.person;
+    const id = hostIdFor(owner, row.name);
+    // Its own Person calls it by its name; anyone else by its ID.
+    const name = owner === person ? row.name : id;
     const roots = JSON.parse(row.roots) as string[];
     if (!underRoots(request.cwd, roots)) {
       return {
@@ -331,6 +450,7 @@ export class Hosts {
       capture: lead === undefined ? null : "tool",
       payload: {
         host: id,
+        owner,
         cli: request.cli,
         cwd: request.cwd,
         ...(request.nickname === undefined ? {} : { nickname: request.nickname }),
@@ -345,7 +465,7 @@ export class Hosts {
     this.deps.sql.exec(
       "INSERT INTO host_spawns (id, person, host, state, requested_at, lead, mode) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
       spawn,
-      person,
+      owner,
       row.name,
       Date.now(),
       lead ?? null,
@@ -412,50 +532,142 @@ export class Hosts {
   }
 
   /**
-   * Asks the Host that runs Agent `agent` to stop it. Only the Agent's own Person may,
-   * or a lead for an Agent in its subtree.
+   * Asks the Host that runs Agent `agentId` to stop, pause or resume it (ADR 0028). Allowed
+   * for the Agent's own Person, for another Person its Host allows, and, for a stop only,
+   * for a lead over an Agent in its subtree (ADR 0018). The Host checks again against its own file.
    */
-  stop(acting: HostActing, agentId: AgentId): { ok: true; host: HostId } | HostRefusal {
+  control(acting: HostActing, agentId: AgentId, action: "stop" | "pause" | "resume"): ControlResult {
     const { person, lead } = acting;
     const agent = this.deps.findAgent(agentId);
     if (agent === null) return { ok: false, status: 404, reason: `No Agent ${agentId} on this Channel.` };
-    if (lead !== undefined && !this.deps.inSubtree(lead, agentId)) {
-      return {
-        ok: false,
-        status: 403,
-        reason: `${agentId} is not one of the Agents ${lead} started. A lead stops only Agents in its own subtree.`,
-      };
-    }
-    if (agent.person !== person) {
-      return {
-        ok: false,
-        status: 403,
-        reason: `${agentId} is ${agent.person}'s Agent. Only its own Person may stop it.`,
-      };
+    if (lead !== undefined) {
+      if (!this.deps.inSubtree(lead, agentId)) {
+        return {
+          ok: false,
+          status: 403,
+          reason: `${agentId} is not one of the Agents ${lead} started. A lead stops only Agents in its own subtree.`,
+        };
+      }
+      if (agent.person !== person) {
+        return {
+          ok: false,
+          status: 403,
+          reason: `${agentId} is ${agent.person}'s Agent. A lead acts only for its own Person.`,
+        };
+      }
     }
     if (agent.host === undefined) {
       return {
         ok: false,
         status: 409,
-        reason: `${agentId} runs in a terminal, not on a Host. Stop it there.`,
+        reason: `${agentId} runs in a terminal, not on a Host. ${action === "stop" ? "Stop" : "Pause"} it there.`,
       };
     }
-    if (agent.presence === "gone") return { ok: false, status: 409, reason: `${agentId} is Gone already.` };
     const host = agent.host;
     const name = host.slice(host.indexOf("/") + 1);
-    if (!this.deps.attached(host)) {
-      return { ok: false, status: 409, reason: `${name} is Offline, so it cannot stop ${agentId} now.` };
+    // Its Person always may; anyone else only if the Host allows them.
+    if (agent.person !== person) {
+      const row = this.row(agent.person, name);
+      if (row === undefined || !hostAllows(rowToHost(row, false), person)) {
+        return {
+          ok: false,
+          status: 403,
+          reason: `${host} does not accept ${action} requests from ${person}. Its owner can allow you with \`switchboard host install --allow ${person}\`.`,
+        };
+      }
     }
+    if (agent.presence === "gone") return { ok: false, status: 409, reason: `${agentId} is Gone already.` };
+    if (action === "pause" && agent.presence === "paused") {
+      return { ok: false, status: 409, reason: `${agentId} is Paused already.` };
+    }
+    if (action === "resume" && agent.presence !== "paused") {
+      return { ok: false, status: 409, reason: `${agentId} is not Paused, so there is nothing to resume.` };
+    }
+    const attached = this.deps.attached(host);
+    // A Paused Agent whose Host never comes back would hold its Claims for good: its own Person may end it.
+    const orphan = !attached && action === "stop" && agent.presence === "paused" && agent.person === person;
+    if (!attached && !orphan) {
+      return { ok: false, status: 409, reason: `${name} is Offline, so it cannot ${action} ${agentId} now.` };
+    }
+    if (action === "resume" && this.running() >= this.deps.cap) {
+      return {
+        ok: false,
+        status: 409,
+        reason: `Hosts on this Channel already run or are starting ${this.deps.cap} Agents, the most allowed.`,
+      };
+    }
+
     this.deps.append({
-      type: "agent.stop",
+      type: action === "stop" ? "agent.stop" : action === "pause" ? "agent.pause" : "agent.resume",
       actor: actorOf(acting),
       capture: lead === undefined ? null : "tool",
-      payload: { agent: agentId, host },
+      payload: { agent: agentId, host, owner: agent.person },
     });
-    if (!this.deps.sendTo(host, { type: "host.stop", agent: agentId })) {
+    const wasPaused = agent.presence === "paused";
+    // Before the frame, so the wrapper ending its session as the Host stops it finds the Agent Paused.
+    if (action === "pause") this.deps.pauseAgent(agentId);
+    if (action === "resume") {
+      this.deps.sql.exec(
+        "INSERT INTO host_resumes (agent, requested_at) VALUES (?, ?) ON CONFLICT (agent) DO UPDATE SET requested_at = excluded.requested_at",
+        agentId,
+        Date.now(),
+      );
+    }
+    if (orphan) {
+      this.deps.endPausedAgent(agentId);
+      return { ok: true, host, presence: "gone" };
+    }
+    if (!this.deps.sendTo(host, { type: `host.${action}`, agent: agentId, by: person })) {
+      if (action === "pause") this.deps.unpauseAgent(agentId);
+      if (action === "resume") this.deps.sql.exec("DELETE FROM host_resumes WHERE agent = ?", agentId);
       return { ok: false, status: 409, reason: `${name} went Offline before the request reached it.` };
     }
-    return { ok: true, host };
+    // No process is left to end a Paused Agent's session when the Host stops it.
+    if (action === "stop" && wasPaused) this.deps.endPausedAgent(agentId);
+    return { ok: true, host, presence: this.deps.findAgent(agentId)?.presence ?? agent.presence };
+  }
+
+  /** `person`'s Host `name` could not do what `action` asked for Agent `agent` for `by`: record it, undo what the request assumed. */
+  controlFailed(
+    person: PersonName,
+    name: string,
+    failure: { action: "stop" | "pause" | "resume"; agent: AgentId; by: PersonName; reason: string },
+  ): void {
+    const { action, agent: id, by, reason } = failure;
+    const agent = this.deps.findAgent(id);
+    // Only the Host that runs the Agent answers for it.
+    if (agent === null || agent.host !== hostIdFor(person, name)) return;
+    if (action === "pause" && agent.presence === "paused") this.deps.unpauseAgent(id);
+    if (action === "resume") this.deps.sql.exec("DELETE FROM host_resumes WHERE agent = ?", id);
+    this.deps.append({
+      type: "agent.control.failed",
+      actor: { kind: "person", person },
+      capture: null,
+      payload: { action, agent: id, host: hostIdFor(person, name), owner: agent.person, by, reason },
+    });
+  }
+
+  /** `person`'s Host `name` ended Agent `agent`'s process for a pause: its token and sockets go. */
+  hostPaused(person: PersonName, name: string, agent: AgentId): void {
+    const found = this.deps.findAgent(agent);
+    if (found === null || found.host !== hostIdFor(person, name) || found.presence !== "paused") return;
+    this.deps.revokeAgent(agent);
+  }
+
+  /**
+   * Whether Paused Agent `agent` may register now: only while a resume stands, which this
+   * uses up. Anything else that finds it Paused (a stale wrapper, a terminal) is refused.
+   */
+  takeResume(agent: AgentId, now = Date.now()): boolean {
+    return (
+      this.deps.sql
+        .exec(
+          "DELETE FROM host_resumes WHERE agent = ? AND requested_at > ? RETURNING agent",
+          agent,
+          now - RESUME_EXPIRES_MS,
+        )
+        .toArray().length > 0
+    );
   }
 
   /** The alarm: records Hosts that stayed away Offline, and fails spawns nobody answered. */
@@ -526,30 +738,53 @@ export class Hosts {
     return this.deps.liveInSubtree(lead) + starting;
   }
 
-  /** The Host a spawn goes to: the one named, or the Person's most recently seen Live Host. */
-  private pick(person: PersonName, name: string | undefined): { ok: true; row: HostRow } | HostRefusal {
-    if (name !== undefined) {
-      const row = this.row(person, name);
-      if (row === undefined) {
+  /**
+   * The Host a spawn goes to: `ref` names it (`name` for the caller's own, `<person>/<name>`
+   * for anyone's), or else the caller's most recently seen Live Host. Another Person's Host
+   * must allow the caller (ADR 0028), and no lead reaches past its own Person (ADR 0018).
+   */
+  private pick(acting: HostActing, ref: string | undefined): { ok: true; row: HostRow } | HostRefusal {
+    const { person, lead } = acting;
+    if (ref === undefined) {
+      const live = this.deps.sql
+        .exec<HostRow>("SELECT * FROM hosts WHERE person = ? ORDER BY last_seen_at DESC", person)
+        .toArray()
+        .find((row) => this.deps.attached(hostIdFor(person, row.name)));
+      if (live === undefined) {
+        return { ok: false, status: 409, reason: "None of your Hosts is Live. Run `switchboard host install` on one." };
+      }
+      return { ok: true, row: live };
+    }
+    const slash = ref.indexOf("/");
+    const owner = slash < 0 ? person : ref.slice(0, slash);
+    const name = slash < 0 ? ref : ref.slice(slash + 1);
+    const own = owner === person;
+    const row = this.row(owner, name);
+    if (row === undefined) {
+      return own
+        ? { ok: false, status: 404, reason: `You have no Host named ${name}. Run \`switchboard host install\` on it.` }
+        : { ok: false, status: 404, reason: `No Host ${ref} on this Channel.` };
+    }
+    if (!own) {
+      if (lead !== undefined) {
         return {
           ok: false,
-          status: 404,
-          reason: `You have no Host named ${name}. Run \`switchboard host install\` on it.`,
+          status: 403,
+          reason: `${lead} starts Agents only on its own Person's Hosts, not ${ref}.`,
         };
       }
-      if (!this.deps.attached(hostIdFor(person, name))) {
-        return { ok: false, status: 409, reason: `${name} is Offline.` };
+      if (!hostAllows(rowToHost(row, false), person)) {
+        return {
+          ok: false,
+          status: 403,
+          reason: `${ref} does not accept requests from ${person}. Its owner can allow you with \`switchboard host install --allow ${person}\`.`,
+        };
       }
-      return { ok: true, row };
     }
-    const live = this.deps.sql
-      .exec<HostRow>("SELECT * FROM hosts WHERE person = ? ORDER BY last_seen_at DESC", person)
-      .toArray()
-      .find((row) => this.deps.attached(hostIdFor(person, row.name)));
-    if (live === undefined) {
-      return { ok: false, status: 409, reason: "None of your Hosts is Live. Run `switchboard host install` on one." };
+    if (!this.deps.attached(hostIdFor(owner, name))) {
+      return { ok: false, status: 409, reason: `${own ? name : ref} is Offline.` };
     }
-    return { ok: true, row: live };
+    return { ok: true, row };
   }
 
   /** Ends a pending spawn as failed: records it and tells the request waiting on it. */

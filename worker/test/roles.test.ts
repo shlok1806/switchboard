@@ -244,7 +244,7 @@ describe("a lead", () => {
     const stopped = await post(`${agentPath(child.id)}/stop`, "shlok", {}, lead);
     expect(stopped.status).toBe(200);
     const stop = await waitFor(() => studio.frames.find((f) => f.type === "host.stop") as HostStopMessage | undefined);
-    expect(stop).toEqual({ type: "host.stop", agent: child.id });
+    expect(stop).toEqual({ type: "host.stop", agent: child.id, by: "shlok" });
     expect((await events()).find((e) => e.type === "agent.stop")).toMatchObject({
       actor: { kind: "agent", agentId: lead },
       payload: { agent: child.id, host: "shlok/studio" },

@@ -104,3 +104,7 @@ The first ten are about pictures, a hero and scroll motion, which an app screen 
 - `@fontsource-variable/spline-sans` and `@fontsource-variable/spline-sans-mono` replace Geist and Geist Mono, and `THIRD_PARTY_NOTICES.md` lists them.
 - The favicon is the jack mark in ink.
 - design.md names views the Channel does not have yet (Now, Memory, Hosts). Until they exist the keys are Agents, Tasks, Canvas, Activity and Compare, and the needs-a-Person chip sits on Agents.
+
+## Amendment, 2026-10-16
+
+The owner added green for Running: `--running` (light oklch(48% 0.14 150), dark oklch(76% 0.17 150)), used as `border-running` and `text-running`. A running Agent gets a green border on its Canvas card and a green glyph in every view. The pink needs-a-Person and Stale borders keep priority when both apply. Idle, Paused and Gone stay ink. Signal still means only that a Person is needed.

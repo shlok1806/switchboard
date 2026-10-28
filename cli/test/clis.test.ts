@@ -13,6 +13,7 @@ import {
   planCodexSession,
   translateCodexHook,
 } from "../src/clis/codex";
+import { cursorHookAnswer, planCursorSession, translateCursorHook } from "../src/clis/cursor";
 import { geminiHookAnswer, planGeminiSession, translateGeminiHook } from "../src/clis/gemini";
 
 const ID = "01a0f2bb-063c-7f33-be98-906c8b79d278";
@@ -123,6 +124,39 @@ describe("findCodexSession", () => {
     expect(await findCodexSession(home, "/repo", since, false)).toBeNull();
     await write(ID, "/repo");
     expect(await findCodexSession(home, "/repo", since, false)).toBe(ID);
+  });
+});
+
+describe("Cursor CLI", () => {
+  it("plans sessions from --resume and create-chat for new ones", async () => {
+    const uuid = "c1988a69-bfb7-4b17-acbd-9d77d2fe1f68";
+    expect(await planCursorSession(["--resume", uuid], { env: {} })).toEqual({
+      kind: "known",
+      args: ["--resume", uuid],
+      sessionId: uuid,
+      resumed: true,
+    });
+    expect(await planCursorSession(["--continue"], { env: {} })).toMatchObject({ kind: "discover", resumed: true });
+    expect(await planCursorSession(["login"], { env: {} })).toMatchObject({ kind: "none" });
+  });
+
+  it("reads Cursor hooks as Claude Code's and answers sessionStart", () => {
+    expect(
+      translateCursorHook({
+        hook_event_name: "postToolUse",
+        conversation_id: "c1988a69-bfb7-4b17-acbd-9d77d2fe1f68",
+        tool_name: "Shell",
+        tool_input: { command: "npm test" },
+        tool_output: '{"exitCode":1}',
+      }),
+    ).toMatchObject({
+      hook_event_name: "PostToolUse",
+      session_id: "c1988a69-bfb7-4b17-acbd-9d77d2fe1f68",
+      tool_name: "Bash",
+      tool_response: { exit_code: 1 },
+    });
+    expect(JSON.parse(cursorHookAnswer("SessionStart", "brief"))).toEqual({ additional_context: "brief" });
+    expect(cursorHookAnswer("UserPromptSubmit", "brief")).toBe("");
   });
 });
 

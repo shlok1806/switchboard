@@ -23,7 +23,7 @@ export interface Person {
 }
 
 /** The agent CLIs Switchboard supports. */
-export type Cli = "claude-code" | "codex" | "gemini";
+export type Cli = "claude-code" | "codex" | "cursor" | "gemini";
 
 /**
  * The permanent name of an Agent: `<person>/<cli>/<short session id>`,
@@ -31,8 +31,11 @@ export type Cli = "claude-code" | "codex" | "gemini";
  */
 export type AgentId = `${string}/${string}/${string}`;
 
-/** Live (recently active), Idle (waiting on its Person) or Gone (silent ~10 min, or session ended). */
-export type Presence = "live" | "idle" | "gone";
+/**
+ * Live (recently active), Idle (waiting on its Person), Paused (a Host ended its process
+ * and kept its session, ADR 0028) or Gone (silent ~10 min, or session ended).
+ */
+export type Presence = "live" | "idle" | "paused" | "gone";
 
 /** Per-Agent Proxy mode, set by its Person. */
 export type ProxyMode = "raw" | "digest";
@@ -284,6 +287,8 @@ export interface EventPayloads {
    */
   "agent.spawn": {
     host: HostId;
+    /** The Person the Host belongs to, and so the new Agent (ADR 0028). The actor is who asked. */
+    owner?: PersonName;
     cli: Cli;
     cwd: string;
     nickname?: string;
@@ -298,8 +303,28 @@ export interface EventPayloads {
   "agent.spawned": { spawn: string; host: HostId; agent: AgentId; parent?: AgentId };
   /** Host `host` could not start what spawn `spawn` asked for, or never answered. The actor is its Person. */
   "agent.spawn.failed": { spawn: string; host: HostId; reason: string };
-  /** A Person, or the lead over it (ADR 0018), asked Host `host` to stop Agent `agent`, which it runs. */
-  "agent.stop": { agent: AgentId; host: HostId };
+  /**
+   * A Person, or the lead over it (ADR 0018), asked Host `host` to stop Agent `agent`, which it runs.
+   * The actor is who asked; `owner` is the Agent's Person, which may be someone else (ADR 0028).
+   */
+  "agent.stop": { agent: AgentId; host: HostId; owner?: PersonName };
+  /** A Person asked Host `host` to pause Agent `agent`: end its process, keep its session (ADR 0028). */
+  "agent.pause": { agent: AgentId; host: HostId; owner: PersonName };
+  /** A Person asked Host `host` to resume Paused Agent `agent` from its saved session (ADR 0028). */
+  "agent.resume": { agent: AgentId; host: HostId; owner: PersonName };
+  /**
+   * Host `host` refused, or could not do, what `action` asked for Agent `agent` (ADR 0028).
+   * The actor is the Host's Person; a refused pause or resume leaves the Agent as it was.
+   */
+  "agent.control.failed": {
+    action: "stop" | "pause" | "resume";
+    agent: AgentId;
+    host: HostId;
+    owner: PersonName;
+    /** Who asked. */
+    by: PersonName;
+    reason: string;
+  };
   /** Agent `agent`'s own Person granted it `role` (ADR 0018). The actor is that Person. */
   "agent.role.granted": { agent: AgentId; role: AgentRole };
   /** Agent `agent`'s own Person took `role` back (ADR 0018). The actor is that Person. */
@@ -572,6 +597,7 @@ export interface RelayState {
  * - `dialog-open`: the session was showing a permission prompt or a question, which typing would answer.
  * - `session-not-ready`: the session was not ready for typed input yet.
  * - `no-answer`: the wrapper did not say in time whether it typed the Interrupt.
+ * - `paused`: the Agent is Paused (ADR 0028): it has no process, so it is held until Resume.
  */
 export type DowngradeReason =
   | "below-threshold"
@@ -581,7 +607,8 @@ export type DowngradeReason =
   | "person-typing"
   | "dialog-open"
   | "session-not-ready"
-  | "no-answer";
+  | "no-answer"
+  | "paused";
 
 /**
  * Why a Directive waited for the Agent's next turn instead of being typed right away:

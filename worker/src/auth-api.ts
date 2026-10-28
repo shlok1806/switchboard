@@ -7,6 +7,7 @@
 //   GET  /auth/github/callback           back from GitHub: the session cookie, then the Dashboard
 //   POST /auth/device/code               the CLI: starts GitHub's device flow
 //   POST /auth/device/token              the CLI: one poll; a session once the Person approved
+//   POST /auth/device/session            the Dashboard: one poll; the session cookie once approved
 //   POST /auth/signout                   clears the Dashboard's session cookie
 //   GET  /auth/dev/signin?login=&repo=   dev only: the fake sign-in for the Dashboard
 //   POST /auth/dev/session               dev only: the fake sign-in for the CLI and the tests
@@ -17,6 +18,7 @@
 
 import type {
   AuthConfigResponse,
+  DeviceSessionResponse,
   DeviceTokenResponse,
   DevSessionResponse,
   PersonName,
@@ -98,7 +100,9 @@ export async function handleAuthRoute(request: Request, url: URL, env: Env, chan
     case "POST /auth/device/code":
       return startDeviceFlow(env, dev);
     case "POST /auth/device/token":
-      return pollDeviceFlow(request, env, dev, channels);
+      return pollDeviceFlow(request, env, dev, channels, false);
+    case "POST /auth/device/session":
+      return pollDeviceFlow(request, env, dev, channels, true);
     case "GET /auth/dev/signin":
     case "POST /auth/dev/session":
       if (!dev) return fail(404, "Not found.");
@@ -141,23 +145,30 @@ async function finishWebFlow(
   if (secret === null || signIn === null) return problem(null, "not-configured", [clearState]);
   const state = await verifyPayload(secret, url.searchParams.get("state") ?? "");
   const repo = typeof state?.repo === "string" ? channelRepo(env, state.repo) : null;
-  if (state === null || state.kind !== "oauth-state" || repo === null) return problem(null, "failed", [clearState]);
+  if (state === null || state.kind !== "oauth-state" || repo === null) return problem(null, "bad-state", [clearState]);
   if (typeof state.exp !== "number" || state.exp * 1000 < Date.now()) return problem(repo, "expired", [clearState]);
   // The callback must reach the browser that started this sign-in.
-  if (readCookie(request, STATE_COOKIE) !== state.nonce) return problem(repo, "failed", [clearState]);
+  if (readCookie(request, STATE_COOKIE) !== state.nonce) return problem(repo, "no-cookie", [clearState]);
   if (url.searchParams.get("error") === "access_denied") return problem(repo, "denied", [clearState]);
   const code = url.searchParams.get("code");
-  if (!code) return problem(repo, "failed", [clearState]);
+  if (!code) return problem(repo, "no-code", [clearState]);
 
-  let person: PersonName | null;
+  let userToken: string;
   try {
-    const userToken = await signIn.exchangeCode(code, `${url.origin}/auth/github/callback`);
-    person = personFromLogin(await signIn.userLogin(userToken));
+    userToken = await signIn.exchangeCode(code, `${url.origin}/auth/github/callback`);
   } catch (error) {
-    console.error("GitHub sign-in failed", error);
-    return problem(repo, "failed", [clearState]);
+    console.error("GitHub sign-in: the code exchange failed", error);
+    return problem(repo, "exchange-failed", [clearState]);
   }
-  if (person === null) return problem(repo, "failed", [clearState]);
+  let login: string;
+  try {
+    login = await signIn.userLogin(userToken);
+  } catch (error) {
+    console.error("GitHub sign-in: reading the login failed", error);
+    return problem(repo, "login-failed", [clearState]);
+  }
+  const person = personFromLogin(login);
+  if (person === null) return problem(repo, "login-unusable", [clearState]);
   const admitted = await member(channels, repo, person, dev);
   if (!admitted.ok) {
     return problem(repo, admitted.status === 403 ? "not-a-member" : "not-configured", [clearState]);
@@ -176,7 +187,18 @@ async function startDeviceFlow(env: Env, dev: boolean): Promise<Response> {
   }
 }
 
-async function pollDeviceFlow(request: Request, env: Env, dev: boolean, channels: Channels): Promise<Response> {
+/**
+ * One poll of GitHub's device flow. The CLI (`/auth/device/token`) gets the session in the
+ * body; the Dashboard (`/auth/device/session`) gets it as its cookie, so it never sits in
+ * page JavaScript. Either way membership is checked before a session is made.
+ */
+async function pollDeviceFlow(
+  request: Request,
+  env: Env,
+  dev: boolean,
+  channels: Channels,
+  browser: boolean,
+): Promise<Response> {
   const reason = notConfigured(env, dev);
   const signIn = signInFor(env);
   const secret = sessionSecret(env, dev);
@@ -190,7 +212,10 @@ async function pollDeviceFlow(request: Request, env: Env, dev: boolean, channels
   try {
     const poll = await signIn.pollDevice(body.deviceCode);
     if (!poll.ok) {
-      if (poll.pending) return json<DeviceTokenResponse>({ ok: false, pending: true, slowDown: poll.slowDown });
+      if (poll.pending) {
+        const pending = { ok: false, pending: true, slowDown: poll.slowDown } as const;
+        return browser ? json<DeviceSessionResponse>(pending) : json<DeviceTokenResponse>(pending);
+      }
       return fail(poll.error === "failed" ? 502 : 400, poll.reason);
     }
     person = personFromLogin(await signIn.userLogin(poll.userToken));
@@ -200,7 +225,12 @@ async function pollDeviceFlow(request: Request, env: Env, dev: boolean, channels
   if (person === null) return fail(502, "GitHub answered with a login Switchboard cannot use.");
   const admitted = await member(channels, repo, person, dev);
   if (!admitted.ok) return fail(admitted.status, admitted.reason);
-  return json<DeviceTokenResponse>({ ok: true, session: await signSession(secret, person), person, repo });
+  const session = await signSession(secret, person);
+  if (!browser) return json<DeviceTokenResponse>({ ok: true, session, person, repo });
+  const response = json<DeviceSessionResponse>({ ok: true, person, repo });
+  response.headers.append("Set-Cookie", sessionCookie(session));
+  response.headers.set("Cache-Control", "no-store");
+  return response;
 }
 
 /** The dev-only fake sign-in: any login, still subject to the membership check. */

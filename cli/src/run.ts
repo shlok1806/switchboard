@@ -1,5 +1,5 @@
-// `switchboard run <cli> [...args]`: runs an agent CLI (Claude Code, Codex or
-// Gemini CLI) in a pty so the terminal stays fully interactive, and joins the
+// `switchboard run <cli> [...args]`: runs an agent CLI (Claude Code, Codex,
+// Cursor or Gemini CLI) in a pty so the terminal stays fully interactive, and joins the
 // session to the Channel as an Agent. Its hooks (the Hook Capture) report what the
 // Agent does to the Channel. What differs from CLI to CLI is in its adapter
 // (clis/): how the session ID is known, how hooks and MCP tools are installed for
@@ -161,7 +161,7 @@ async function predecessorOf(
   client: ChannelClient,
   name: string,
 ): Promise<{ summary: AgentSummary; continuing: Map<AgentId, AgentId> } | string> {
-  const { agents } = await client.request<AgentsResponse>("/api/agents");
+  const { agents } = await client.request<AgentsResponse>("/api/agents?include=gone");
   const found = matchAgents(agents, name);
   if (found.length === 0) return `no Agent on this Channel is called ${name}, so this session cannot continue it.`;
   if (found.length > 1) return `${name} could be ${found.map((a) => a.id).join(", ")}; use the full Agent ID.`;
@@ -762,6 +762,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   let args = plan.args;
   let hookDir: string | null = null;
+  let disposeInstall: (() => Promise<void>) | undefined;
   const stopHooks = async () => {
     models.close();
     approvals.close();
@@ -770,6 +771,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     stream.close();
     await hooks?.close();
     await proxy?.close();
+    await disposeInstall?.();
     if (hookDir) await rm(hookDir, { recursive: true, force: true });
   };
   const childEnv: Record<string, string> = { ...(env as Record<string, string>) };
@@ -960,6 +962,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       });
       args = installed.args;
       Object.assign(childEnv, installed.env);
+      disposeInstall = installed.dispose;
     } catch (error) {
       console.error(`switchboard: could not install the session's hooks: ${(error as Error).message}`);
       tools?.dispose();

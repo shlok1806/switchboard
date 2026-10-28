@@ -17,7 +17,7 @@ export function Glyph({ state, className }: { state: GlyphState; className?: str
       viewBox="0 0 12 12"
       aria-hidden
       data-state={state}
-      className={cn("inline-block size-3 shrink-0", needsPerson(state) ? "text-signal" : "text-ink", className)}
+      className={cn("inline-block size-3 shrink-0", needsPerson(state) ? "text-signal" : state === "running" ? "text-running" : "text-ink", className)}
     >
       {SHAPES[state]}
     </svg>
@@ -32,6 +32,13 @@ const SHAPES: Record<GlyphState, React.ReactNode> = {
   "review-other": <polygon points="6,1.5 10.5,6 6,10.5 1.5,6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />,
   running: <circle cx="6" cy="6" r="5" fill="currentColor" />,
   idle: <circle cx="6" cy="6" r="4.25" fill="none" stroke="var(--ink-3)" strokeWidth="1.5" />,
+  // Two bars: stopped on purpose, kept for later. Neither the signal colour nor the running one.
+  paused: (
+    <>
+      <rect x="2.25" y="1.5" width="2.5" height="9" fill="var(--ink-3)" />
+      <rect x="7.25" y="1.5" width="2.5" height="9" fill="var(--ink-3)" />
+    </>
+  ),
   gone: <circle cx="6" cy="6" r="4.25" fill="none" stroke="var(--ink-4)" strokeWidth="1.5" strokeDasharray="0.1 2.6" strokeLinecap="round" />,
   done: <polyline points="1.5,6.5 4.75,9.5 10.5,2.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />,
 };
@@ -58,7 +65,7 @@ export function State({
     <span
       className={cn(
         "inline-flex items-center gap-2 whitespace-nowrap",
-        signal ? "font-semibold text-signal" : state === "gone" ? "text-ink-3" : state === "idle" ? "text-ink-2" : "text-ink",
+        signal ? "font-semibold text-signal" : state === "gone" || state === "paused" ? "text-ink-3" : state === "idle" ? "text-ink-2" : "text-ink",
         className,
       )}
     >

@@ -493,7 +493,7 @@ export class SwitchboardTools {
 
   /** The one Agent `target` names, by Agent ID or Nickname: only those not Gone when `running`. */
   private async findAgent(agent: AgentId, target: string, running: boolean): Promise<Agent> {
-    const { agents } = await this.as<AgentsResponse>(agent, "/api/agents");
+    const { agents } = await this.as<AgentsResponse>(agent, running ? "/api/agents" : "/api/agents?include=gone");
     const found = matchAgents(running ? agents.filter((a) => a.presence !== "gone") : agents, target);
     if (found.length !== 1) {
       throw new Error(

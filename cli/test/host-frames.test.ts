@@ -65,7 +65,15 @@ describe("the Host's supervisor", () => {
     const lines: string[] = [];
     const supervisor = new HostSupervisor({
       config: { url: channel.url, repo: "shlok/app", session: "s", person: "shlok" },
-      settings: { name: "studio", repo: "shlok/app", roots: [dir], maxPermissionMode: "default", maxAgents: 2 },
+      settings: {
+        name: "studio",
+        repo: "shlok/app",
+        roots: [dir],
+        maxPermissionMode: "default",
+        maxAgents: 2,
+        allow: [],
+        allowChannel: false,
+      },
       node: process.execPath,
       cli: "/nonexistent",
       env: { ...process.env, SWITCHBOARD_CONFIG_DIR: dir },

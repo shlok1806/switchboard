@@ -91,6 +91,15 @@ export type DeviceTokenResponse =
   /** The Person has not entered the code yet; `slowDown` asks for a longer interval. */
   { ok: false; pending: true; slowDown?: boolean } | { ok: true; session: string; person: PersonName; repo: string };
 
+/**
+ * `POST /auth/device/session`: one poll for the Dashboard, which cannot keep the session in
+ * page JavaScript. Same request as `/auth/device/token`; on success the session is the
+ * HttpOnly cookie of the response, so it is not in the body.
+ */
+export type DeviceSessionResponse =
+  | { ok: false; pending: true; slowDown?: boolean }
+  | { ok: true; person: PersonName; repo: string };
+
 /** `POST /auth/dev/session`: the dev-only fake sign-in for the CLI. */
 export interface DevSessionRequest {
   login: string;
@@ -104,5 +113,24 @@ export interface DevSessionResponse {
   repo: string;
 }
 
-/** Why the Dashboard's web sign-in came back without a session: `?signin=<code>`. */
-export type SignInProblem = "not-configured" | "not-a-member" | "denied" | "expired" | "failed" | "not-allowed";
+/**
+ * Why the Dashboard's web sign-in came back without a session: `?signin=<code>`.
+ * `bad-state`: the link back from GitHub was not one this Switchboard made. `no-cookie`: it
+ * came back to a browser that did not start it, or one that blocked the cookie. `no-code`:
+ * GitHub sent no code. `exchange-failed`: GitHub refused the code. `login-failed`: GitHub
+ * would not say who signed in. `login-unusable`: that GitHub login is not one Switchboard
+ * can use. `failed`: anything else.
+ */
+export type SignInProblem =
+  | "not-configured"
+  | "not-a-member"
+  | "denied"
+  | "expired"
+  | "failed"
+  | "not-allowed"
+  | "bad-state"
+  | "no-cookie"
+  | "no-code"
+  | "exchange-failed"
+  | "login-failed"
+  | "login-unusable";

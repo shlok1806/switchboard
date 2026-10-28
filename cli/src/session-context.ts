@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { AgentContext, Cli, ReportedUsage, UsageLimit } from "../../shared/src/index";
 import { directiveText } from "../../shared/src/index";
 import { claudeConfigDir, projectDir } from "./claude-session";
+import { cursorProjects } from "./clis/cursor";
 import { maskSecrets } from "./proxy/mask";
 
 const run = promisify(execFile);
@@ -268,7 +269,9 @@ export class SessionContextReader {
           : await findSession(
               this.cli === "codex"
                 ? join(this.env.CODEX_HOME || join(homedir(), ".codex"), "sessions")
-                : join(this.env.GEMINI_CLI_HOME || homedir(), ".gemini", "tmp"),
+                : this.cli === "cursor"
+                  ? cursorProjects(this.env)
+                  : join(this.env.GEMINI_CLI_HOME || homedir(), ".gemini", "tmp"),
               this.id,
             );
     return this.path;

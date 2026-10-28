@@ -183,10 +183,22 @@ describe("signing in to the Dashboard with GitHub", () => {
     const state = new URL(start.headers.get("Location") ?? "").searchParams.get("state") ?? "";
     signIn.codes.set("c", "shlok1806");
     const stolen = await fetchWorker(`${PROD_BASE}/auth/github/callback?code=c&state=${encodeURIComponent(state)}`);
-    expect(stolen.headers.get("Location")).toBe(`/${REPO}?signin=failed`);
+    expect(stolen.headers.get("Location")).toBe(`/${REPO}?signin=no-cookie`);
     expect(setCookie(stolen, "sb_session")).toBeNull();
     const forged = await fetchWorker(`${PROD_BASE}/auth/github/callback?code=c&state=v1.e30.AAAA`);
-    expect(forged.headers.get("Location")).toBe("/?signin=failed");
+    expect(forged.headers.get("Location")).toBe("/?signin=bad-state");
+  });
+
+  it("says whether GitHub sent no code or refused the one it sent", async () => {
+    const start = await fetchWorker(`${PROD_BASE}/auth/github/start?repo=${REPO}`);
+    const state = new URL(start.headers.get("Location") ?? "").searchParams.get("state") ?? "";
+    const headers = { Cookie: `sb_oauth=${cookieValue(setCookie(start, "sb_oauth"))}` };
+    const callback = (code: string) =>
+      fetchWorker(`${PROD_BASE}/auth/github/callback?${new URLSearchParams({ ...(code ? { code } : {}), state })}`, {
+        headers,
+      });
+    expect((await callback("")).headers.get("Location")).toBe(`/${REPO}?signin=no-code`);
+    expect((await callback("not-a-code")).headers.get("Location")).toBe(`/${REPO}?signin=exchange-failed`);
   });
 
   it("refuses a Person without write access to the repo", async () => {
@@ -268,6 +280,46 @@ describe("signing in from the CLI with GitHub's device flow", () => {
       body: JSON.stringify({ deviceCode, repo: "someone/else" }),
     });
     expect(unknown.status).toBe(404);
+  });
+});
+
+describe("signing in from the Dashboard with a code (the device flow, no redirect)", () => {
+  const poll = (deviceCode: string, repo = REPO) =>
+    fetchWorker(`${PROD_BASE}/auth/device/session`, { method: "POST", body: JSON.stringify({ deviceCode, repo }) });
+  const deviceCode = async () =>
+    (await (await fetchWorker(`${PROD_BASE}/auth/device/code`, { method: "POST" })).json<DeviceCodeResponse>())
+      .deviceCode;
+
+  it("waits for the Person, then answers with the session as a cookie and not in the body", async () => {
+    const code = await deviceCode();
+    const waiting = await poll(code);
+    expect(await waiting.json()).toEqual({ ok: false, pending: true, slowDown: false });
+    expect(setCookie(waiting, "sb_session")).toBeNull();
+
+    signIn.devices.set(code, "Sam-Dev");
+    const done = await poll(code);
+    expect(await done.json()).toEqual({ ok: true, person: "sam-dev", repo: REPO });
+    const header = setCookie(done, "sb_session");
+    expect(header).toMatch(/; Path=\/; Max-Age=\d+; HttpOnly; Secure; SameSite=Lax$/);
+
+    const joined = await withCookie("/api/join", cookieValue(header), { method: "POST", body: "{}" });
+    expect((await joined.json<JoinResponse>()).person.name).toBe("sam-dev");
+  });
+
+  it("says why when the code expired, and refuses a Person without write access", async () => {
+    const expired = await poll("never-issued");
+    expect(expired.status).toBe(400);
+    expect((await expired.json<ErrorResponse>()).reason).toContain("expired");
+
+    github.permissions.set("outsider", "none");
+    const code = await deviceCode();
+    signIn.devices.set(code, "outsider");
+    const refused = await poll(code);
+    expect(refused.status).toBe(403);
+    expect((await refused.json<ErrorResponse>()).reason).toContain("does not have write access");
+    expect(setCookie(refused, "sb_session")).toBeNull();
+
+    expect((await poll(code, "someone/else")).status).toBe(404);
   });
 });
 

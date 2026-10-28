@@ -97,7 +97,7 @@ export class Directives {
   /**
    * A Person, or a lead for its Person, sending a Directive to Agent `to`. Whether a
    * lead may reach `to` is the Channel's check. Refused when the Channel has no such
-   * Agent. A Gone Agent gets it when it resumes.
+   * Agent. A Gone or Paused Agent gets it when it resumes.
    */
   send(from: DirectiveSender, to: AgentId, text: string): DirectiveResult {
     const agent = this.host.findAgent(to);
@@ -117,7 +117,10 @@ export class Directives {
       to,
       text,
     };
-    if (!agent.canReceiveInterrupts) {
+    if (agent.presence === "paused") {
+      // No process to type into (ADR 0028): held, and handed over when the Agent resumes.
+      this.queue(agent, directive, "paused");
+    } else if (!agent.canReceiveInterrupts) {
       this.queue(agent, directive, "cli-cannot-interrupt");
     } else if (!this.type(agent, directive)) {
       // No wrapper has attached. A Gone Agent's is not about to; another's may be reconnecting (ADR 0025).

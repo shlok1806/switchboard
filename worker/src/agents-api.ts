@@ -253,7 +253,7 @@ export async function handleAgentRoute(
   const { person } = caller;
   switch (route.kind) {
     case "list":
-      return json<AgentsResponse>({ agents: await channel.listAgents() });
+      return json<AgentsResponse>({ agents: await channel.listAgents(url.searchParams.get("include") === "gone") });
     case "accounts":
       return json<AccountsResponse>({ accounts: await channel.listAccounts() });
     case "register": {

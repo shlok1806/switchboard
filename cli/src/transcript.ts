@@ -160,6 +160,28 @@ function codexEntries(lines: Json[]): Raw[] {
   return out;
 }
 
+/** Cursor agent transcript: one JSON object per line with `role` and `message`. */
+function cursorEntries(lines: Json[]): Raw[] {
+  const out: Raw[] = [];
+  for (const e of lines) {
+    const role = str(e.role);
+    const message = obj(e.message);
+    const content = message.content;
+    if (role === "user") {
+      const said = textOf(content);
+      if (said.trim() !== "") out.push({ kind: "prompt", text: said });
+    }
+    if (role === "assistant") {
+      for (const part of Array.isArray(content) ? content : []) {
+        const p = obj(part);
+        if (p.type === "text" && str(p.text)?.trim() !== "") out.push({ kind: "text", text: str(p.text) });
+        if (p.type === "tool_use") out.push({ kind: "tool", text: `${str(p.name)}: ${mainArg(p.input)}` });
+      }
+    }
+  }
+  return out;
+}
+
 /** Gemini CLI's session file: one JSON document with its `messages`. */
 function geminiEntries(messages: Json[]): Raw[] {
   const out: Raw[] = [];
@@ -201,7 +223,9 @@ export function condense(cli: Cli, file: string): Raw[] {
       // A line still being written.
     }
   }
-  return cli === "codex" ? codexEntries(lines) : claudeEntries(lines);
+  if (cli === "codex") return codexEntries(lines);
+  if (cli === "cursor") return cursorEntries(lines);
+  return claudeEntries(lines);
 }
 
 const SPLIT_TAIL = new RegExp(`${MASK.replace(/\*/g, "\\*")}(?:(?:${ESCAPE_SEQUENCE})+[A-Za-z0-9_-]+)+`, "g");

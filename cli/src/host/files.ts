@@ -1,9 +1,11 @@
 // A Host's files (ADR 0015), all under `<config>/host/`, next to the Person's login:
 //
 //   host.json       what `switchboard host install` was given: the name, the Channel,
-//                   the folders Agents may run in and the loosest permission mode
+//                   the folders Agents may run in, the loosest permission mode and
+//                   the other Persons who may use the Host (ADR 0028)
 //   agents.json     the Agents the Host runs, to resume them after a crash or a reboot
-//                   (session ID, folder, Nickname, model and mode; never the brief)
+//                   (session ID, folder, Nickname, model and mode; never the brief),
+//                   and the ones it has Paused, which it keeps but never resumes by itself
 //   host.pid        the running supervisor's process ID
 //   host.log        the supervisor's own log, capped at 5 MB with one rotation
 //   launchd.log     what launchd caught on the supervisor's stdout and stderr: only
@@ -13,7 +15,7 @@
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentId, PermissionMode } from "../../../shared/src/index";
-import { isPermissionMode } from "../../../shared/src/index";
+import { isPermissionMode, LOGIN_PATTERN, MAX_HOST_ALLOW } from "../../../shared/src/index";
 import { configDir } from "../config";
 
 export interface HostSettings {
@@ -24,6 +26,13 @@ export interface HostSettings {
   maxPermissionMode: PermissionMode;
   /** How many Agents this Host runs at once (ADR 0017). A `host.json` from before it has none. */
   maxAgents: number;
+  /**
+   * The other Persons who may start, stop, pause and resume Agents on this Host
+   * (`--allow`), and whether every Person with write access to the Channel's repo may
+   * (`--allow-channel`). Neither: only the Host's own Person. A `host.json` from before has neither.
+   */
+  allow: string[];
+  allowChannel: boolean;
 }
 
 /** The local cap when `host.json` names none, and the largest `--max-agents` takes. */
@@ -38,6 +47,8 @@ export interface HostedAgent {
   nickname?: string;
   model?: string;
   permissionMode: PermissionMode;
+  /** Paused (ADR 0028): no process runs, and the Host does not start one by itself, not even after a restart. */
+  paused?: true;
 }
 
 /** An Agent's log is cut over to `<agent>.log.1` past this size. */
@@ -90,7 +101,7 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env): HostSettings
   } catch {
     return null;
   }
-  const { name, repo, roots, maxPermissionMode, maxAgents } = parsed;
+  const { name, repo, roots, maxPermissionMode, maxAgents, allow, allowChannel } = parsed;
   if (typeof name !== "string" || typeof repo !== "string" || !Array.isArray(roots)) return null;
   return {
     name,
@@ -101,6 +112,11 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env): HostSettings
       Number.isInteger(maxAgents) && (maxAgents as number) >= 1 && (maxAgents as number) <= MAX_MAX_AGENTS
         ? (maxAgents as number)
         : DEFAULT_MAX_AGENTS,
+    // Only well-formed logins count: a damaged entry never widens the list.
+    allow: Array.isArray(allow)
+      ? allow.filter((l): l is string => typeof l === "string" && LOGIN_PATTERN.test(l)).slice(0, MAX_HOST_ALLOW)
+      : [],
+    allowChannel: allowChannel === true,
   };
 }
 
@@ -111,7 +127,7 @@ export function writeSettings(settings: HostSettings, env: NodeJS.ProcessEnv = p
 /** One entry of `agents.json`, if it has every field with its type. */
 function hostedAgent(value: unknown): HostedAgent | null {
   if (typeof value !== "object" || value === null) return null;
-  const { agent, sessionId, cwd, nickname, model, permissionMode } = value as Record<string, unknown>;
+  const { agent, sessionId, cwd, nickname, model, permissionMode, paused } = value as Record<string, unknown>;
   if (typeof agent !== "string" || agent.split("/").length !== 3) return null;
   if (typeof sessionId !== "string" || typeof cwd !== "string" || !isPermissionMode(permissionMode)) return null;
   if ((nickname !== undefined && typeof nickname !== "string") || (model !== undefined && typeof model !== "string")) {
@@ -124,6 +140,7 @@ function hostedAgent(value: unknown): HostedAgent | null {
     ...(nickname === undefined ? {} : { nickname }),
     ...(model === undefined ? {} : { model }),
     permissionMode,
+    ...(paused === true ? { paused: true as const } : {}),
   };
 }
 

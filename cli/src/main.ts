@@ -3,12 +3,12 @@
 //
 //   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
 //   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
-//   switchboard run codex|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Codex or Gemini CLI]
+//   switchboard run codex|cursor|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Codex, Cursor or Gemini CLI]
 //   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
 //   switchboard whoami
-//   switchboard host install|uninstall|run|status   (ADR 0015)
-//   switchboard spawn [--host <name>] [--cwd <folder>] [--from <agent>] [...] [brief]
-//   switchboard stop <agent>
+//   switchboard host install|uninstall|run|status|list   (ADR 0015, ADR 0028)
+//   switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--from <agent>] [...] [brief]
+//   switchboard stop|pause|resume <agent>   (ADR 0028)
 //   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
 //   switchboard attach allow|revoke|list|prompts   (ADR 0021)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
@@ -17,7 +17,16 @@ import { parseArgs } from "node:util";
 import { ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig } from "./config";
-import { HOST_USAGE, hostCommand, ROLE_USAGE, roleCommand, spawnCommand, stopCommand } from "./host/commands";
+import {
+  HOST_USAGE,
+  hostCommand,
+  pauseCommand,
+  ROLE_USAGE,
+  resumeCommand,
+  roleCommand,
+  spawnCommand,
+  stopCommand,
+} from "./host/commands";
 import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
 import { renameAgent } from "./rename";
@@ -28,11 +37,14 @@ const USAGE = `Usage:
   switchboard login [--url <channel url>] [--repo <owner>/<repo>] [--force]
   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Claude Code]
   switchboard run codex [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Codex]
+  switchboard run cursor [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--no-mask] [...arguments for Cursor CLI]
   switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
   switchboard whoami
-  switchboard spawn [--host <name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--from <agent>] [--repo <owner>/<repo>] [brief...]
+  switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--from <agent>] [--repo <owner>/<repo>] [brief...]
   switchboard stop <agent> [--repo <owner>/<repo>]
+  switchboard pause <agent> [--repo <owner>/<repo>]
+  switchboard resume <agent> [--repo <owner>/<repo>]
 ${HOST_USAGE.replace("Usage:\n", "")}
 ${ROLE_USAGE.replace("Usage:\n", "")}
 ${ATTACH_USAGE.replace("Usage:\n", "")}
@@ -79,6 +91,11 @@ folders Agents may run in (repeat it); --max-permission-mode is the loosest mode
 may run in (default "default"). \`spawn\` starts an Agent on one of your Hosts (--host,
 else the one you used last) in --cwd (else this folder), with the brief as its first
 prompt, and --from to hand it another Agent's work; \`stop\` stops one. Both work from any machine.
+--allow <login> (repeat it) and --allow-channel let other People start, stop, pause and
+resume Agents on that Host: they name it \`<your login>/<name>\`, and the Agents run as you,
+in your folders, in your permission mode limit. Without them only you can (ADR 0028).
+\`pause\` ends an Agent's process on its Host and keeps its session, Agent ID and Claims;
+\`resume\` relaunches it with the same conversation.
 
 \`role grant <agent> lead\` makes one of your Agents a lead: it may start Agents on your
 Hosts, and stop and send Directives to the Agents it starts, within the Channel's
@@ -180,6 +197,10 @@ async function main(argv: string[]): Promise<number> {
       return spawnCommand(rest);
     case "stop":
       return stopCommand(rest);
+    case "pause":
+      return pauseCommand(rest);
+    case "resume":
+      return resumeCommand(rest);
     case "role":
       return roleCommand(rest);
     case "attach":

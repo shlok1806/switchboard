@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentId,
   AgentResponse,
+  AgentsResponse,
   ChannelEvent,
   ClaimRefusal,
   HistoryResponse,
@@ -142,6 +143,9 @@ describe("a Claim held by a Gone Agent", () => {
 
     await end(shlok);
     expect((await task(number)).claim).toMatchObject({ holder: byAgent(shlok.agent), stale: true });
+    expect(
+      (await (await call("/api/agents", { person: "shlok" })).json<AgentsResponse>()).agents.map((a) => a.id),
+    ).toContain(shlok.agent);
     // A Person's own Claim never goes Stale.
     expect((await task(other)).claim?.stale).toBe(false);
     const stale = (await events()).filter((e) => e.seq > since && e.type === "claim.stale");
@@ -232,6 +236,9 @@ describe("Takeover", () => {
     expect(response.status).toBe(200);
     const after = (await response.json<TaskActionResponse>()).task;
     expect(after).toMatchObject({ status: "claimed", claim: { holder: byPerson("dev"), stale: false } });
+    expect(
+      (await (await call("/api/agents", { person: "dev" })).json<AgentsResponse>()).agents.map((a) => a.id),
+    ).not.toContain(shlok.agent);
     expect(after.claim?.claimedAt).toBeDefined();
 
     expect(await claimEvents(since)).toEqual([

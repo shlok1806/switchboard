@@ -376,6 +376,7 @@ export class Relay {
    * typed it. Returns why not when it could not be sent or was not typed.
    */
   private async interrupt(agent: Agent, delivery: Delivery): Promise<"typed" | DowngradeReason> {
+    if (agent.presence === "paused") return "paused";
     if (!agent.canReceiveInterrupts) return "cli-cannot-interrupt";
     const { sql } = this.host;
     const now = Date.now();

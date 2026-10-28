@@ -7,6 +7,7 @@ import {
   MAX_NICKNAME_LENGTH,
   PERMISSION_MODES,
   cleanAbsolutePath,
+  hostAllows,
   notUnderRootsReason,
   permissionModeWithin,
   underRoots,
@@ -52,16 +53,17 @@ export function WithCode({ text }: { text: string }) {
 }
 
 /**
- * This Person's own Hosts, and the Channel's cap on Agents Hosts run, read as the Hosts page
- * reads them: again when a Host comes or goes, an Agent on one starts or stops, or `again`
- * changes. `null` while loading.
+ * The Hosts this Person may start Agents on, their own and other Persons' that allow them
+ * (ADR 0028), and the Channel's cap on Agents Hosts run, read as the Hosts page reads them:
+ * again when a Host comes or goes, an Agent on one starts or stops, or `again` changes.
+ * `null` while loading.
  */
 function useMyHosts(again: number): { hosts: Host[]; cap?: number; running?: number; problem?: string } | null {
   const me = useMe();
   const { hosts: response, problem } = useHosts(again);
   if (response === undefined) return problem === undefined ? null : { hosts: [], problem };
   if (response === null) return { hosts: [] };
-  return { hosts: response.hosts.filter((h) => h.person === me), cap: response.cap, running: response.running };
+  return { hosts: response.hosts.filter((h) => hostAllows(h, me)), cap: response.cap, running: response.running };
 }
 
 /** One field, its label above it in 13 ink-3 (design.md), a note under it. */
@@ -217,8 +219,8 @@ export function StartAgentSheet() {
         loaded === null
           ? "Looking for your Hosts"
           : hosts.length === 0
-            ? (loaded.problem ?? "A Host starts Claude Code Agents on one of your machines, with no terminal. You have none on this Channel yet.")
-            : "Claude Code, on one of your Hosts. It joins the Channel like any other Agent."
+            ? (loaded.problem ?? "A Host starts Claude Code Agents on a machine, with no terminal. None on this Channel is yours or open to you yet.")
+            : "Claude Code, on a Host you may use. It joins the Channel like any other Agent."
       }
       actions={
         <>
@@ -311,8 +313,11 @@ function StartAgentForm({
 }) {
   const store = useStore();
   // A Hand off starts on the predecessor's Host and in its folder, when this Person has that Host.
-  const [chosenHost, setChosenHost] = useState<string | undefined>(() => hosts.find((h) => h.id === prefill?.host)?.name);
-  const host = hosts.find((h) => h.name === chosenHost) ?? hosts.find((h) => h.live) ?? hosts[0]!;
+  const me = useMe();
+  const [chosenHost, setChosenHost] = useState<string | undefined>(() => hosts.find((h) => h.id === prefill?.host)?.id);
+  // Your own Hosts first, then the Live ones.
+  const host = hosts.find((h) => h.id === chosenHost) ?? hosts.find((h) => h.live && h.person === me) ?? hosts.find((h) => h.live) ?? hosts[0]!;
+  const others = host.person !== me;
   const [cwd, setCwd] = useState<string | undefined>(() => (prefill?.cwd && underRoots(prefill.cwd, host.roots) ? prefill.cwd : undefined));
   const [brief, setBrief] = useState(prefill?.brief ?? "");
   const [nickname, setNickname] = useState("");
@@ -357,7 +362,8 @@ function StartAgentForm({
     setBusy(true);
     setProblem(undefined);
     const result = await store.source.spawnAgent({
-      host: host.name,
+      // Another Person's Host is named in full; your own by its name.
+      host: others ? host.id : host.name,
       cli: "claude-code",
       cwd: clean,
       permissionMode: chosenMode,
@@ -390,7 +396,7 @@ function StartAgentForm({
       {hosts.length > 1 && (
         <Field label="Host">
           <select
-            value={host.name}
+            value={host.id}
             onChange={(e) => {
               setChosenHost(e.target.value);
               // Another Host has other folders.
@@ -399,13 +405,19 @@ function StartAgentForm({
             className={`${FIELD} pr-7`}
           >
             {hosts.map((h) => (
-              <option key={h.id} value={h.name}>
-                {h.name}
+              <option key={h.id} value={h.id}>
+                {h.person === me ? h.name : h.id}
                 {h.live ? "" : " (Offline)"}
               </option>
             ))}
           </select>
         </Field>
+      )}
+      {others && (
+        <p className="text-small text-ink-3">
+          {host.person}'s machine lets you use it. The Agent runs as {host.person}, in their folders and within their limits, and the Channel
+          records that you started it.
+        </p>
       )}
       <div className="flex min-w-0 flex-col gap-1.5">
         <Field label="Folder">
@@ -538,9 +550,45 @@ function FolderChoices({ host, value, onPick }: { host: Host; value: string; onP
   );
 }
 
-/** Whether this Person can stop the Agent: one of their Hosts runs it, and it is not Gone. */
-export function canStop(agent: Agent, me: string): boolean {
-  return agent.host !== undefined && agent.person === me && agent.presence !== "gone";
+/**
+ * Whether this Person may stop, pause or resume an Agent: a Host runs it, it is not Gone,
+ * and it is theirs or its Host allows them (ADR 0028). The Host checks again on its own file.
+ */
+export function useMayControl(): (agent: Agent) => boolean {
+  const me = useMe();
+  const { hosts } = useHosts();
+  return (agent) =>
+    agent.host !== undefined &&
+    agent.presence !== "gone" &&
+    (agent.person === me || (hosts?.hosts.some((h) => h.id === agent.host && hostAllows(h, me)) ?? false));
+}
+
+/** Pause a running Agent, or Resume a Paused one (ADR 0028). Nothing for an Agent this Person may not control. */
+export function PauseResumeButton({ agent }: { agent: Agent }) {
+  const store = useStore();
+  const mayControl = useMayControl();
+  const [busy, setBusy] = useState(false);
+  const asking = useRef(false);
+  if (!mayControl(agent) || (agent.presence === "gone")) return null;
+  const paused = agent.presence === "paused";
+  const name = agent.nickname ?? agent.id;
+  const act = async () => {
+    if (asking.current) return;
+    asking.current = true;
+    setBusy(true);
+    const result = await (paused ? store.source.resumeAgent(agent.id) : store.source.pauseAgent(agent.id));
+    asking.current = false;
+    setBusy(false);
+    if (!result.ok) return toast.error(result.reason);
+    toast.success(paused ? `Asked ${hostName(agent.host ?? "")} to resume ${name}` : `Asked ${hostName(agent.host ?? "")} to pause ${name}`, {
+      description: paused ? "It continues its saved session." : "It keeps its session and Claims, and uses no tokens until resumed.",
+    });
+  };
+  return (
+    <Button busy={busy} onClick={act}>
+      {paused ? "Resume" : "Pause"}
+    </Button>
+  );
 }
 
 /** How long Stop waits for the Agent to go Gone before it may be asked again. */
@@ -567,7 +615,6 @@ export function StopAgentButton({
   returnFocusTo?: HTMLElement | null;
 }) {
   const store = useStore();
-  const me = useMe();
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
     if (ask) setConfirming(true);
@@ -577,7 +624,8 @@ export function StopAgentButton({
   }, [confirming, onAsking]);
   // Gone (or no longer this Person's to stop) while the question is open: the question goes,
   // and the page gets its actions back.
-  const stoppable = canStop(agent, me);
+  const mayControl = useMayControl();
+  const stoppable = mayControl(agent);
   useEffect(() => {
     if (!stoppable) setConfirming(false);
   }, [stoppable]);

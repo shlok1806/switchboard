@@ -6,17 +6,19 @@
  */
 import { useEffect, useState } from "react";
 import type { Agent, Host, Person } from "@shared/index";
+import { hostAllows } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { GroupLine, byPerson, shortName } from "@/components/domain/fleet";
-import { StartAgentButton } from "@/components/domain/start-agent";
+import { StartAgentButton, WithCode } from "@/components/domain/start-agent";
 import { Glyph, State, useAgentStates } from "@/components/domain/state";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { CopyCommand, EmptyState, EmptyView, ErrorPage, ViewSkeleton } from "@/components/shell/states";
 import { useHosts } from "@/data/hosts";
-import { useChannel, useMe } from "@/data/store";
+import { useChannel, useMe, useStore } from "@/data/store";
+import { attachKey, nextSeq } from "@/lib/attach-key";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ago } from "@/lib/format";
 import { go, href, replace } from "@/lib/router";
@@ -321,6 +323,9 @@ function Inspector({ host: h, agents, onClose }: { host: Host; agents: Agent[]; 
           </ul>
         )}
       </Section>
+      <Section title={mine ? "Who can use this Mac" : "Who can use it"} as="h3">
+        {mine ? <Sharing host={h} /> : <OpenToYou host={h} />}
+      </Section>
       <Section title="Limits" as="h3">
         <dl className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-row">
           <dt className="text-ink-3">Folders</dt>
@@ -338,5 +343,84 @@ function Inspector({ host: h, agents, onClose }: { host: Host; agents: Agent[]; 
         </dl>
       </Section>
     </InspectorFrame>
+  );
+}
+
+/** What another Person's Host says about you: whether it takes your requests. */
+function OpenToYou({ host: h }: { host: Host }) {
+  const me = useMe();
+  const open = hostAllows(h, me);
+  return (
+    <p className="text-small text-ink-2">
+      {open
+        ? `${h.person} lets you start, stop, pause and resume Agents here. They run as ${h.person}, in their folders.`
+        : `Only ${h.person} can use it. They can open it to you from their own Hosts page.`}
+    </p>
+  );
+}
+
+/**
+ * Who else may start, stop, pause and resume Agents on one of your Hosts (ADR 0028). A
+ * toggle signs the new list with this browser's attach key and sends it; the Host applies
+ * it to its own file only for a key you trusted on that machine, so a refusal says what to run there.
+ */
+function Sharing({ host: h }: { host: Host }) {
+  const store = useStore();
+  const { snapshot } = useChannel();
+  const repo = snapshot?.channel.repo;
+  const [now, setNow] = useState({ allow: h.allow, allowChannel: h.allowChannel });
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string>();
+  const people = (snapshot?.persons ?? []).map((p: Person) => p.name).filter((n) => n !== h.person).sort();
+
+  const apply = async (allow: string[], allowChannel: boolean) => {
+    if (busy || repo === undefined) return;
+    setBusy(true);
+    setProblem(undefined);
+    try {
+      const key = await attachKey();
+      const at = Date.now();
+      const seq = nextSeq(at);
+      const sig = await key.signAllow(repo, h.name, at, seq, allow, allowChannel);
+      const result = await store.source.setHostAllow(h.name, { allow, allowChannel, key: key.spki, at, seq, sig });
+      if (result.ok) setNow({ allow, allowChannel });
+      else setProblem(result.reason);
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : "This browser could not sign the change.");
+    }
+    setBusy(false);
+  };
+
+  const toggle = (name: string) =>
+    apply(now.allow.includes(name) ? now.allow.filter((n) => n !== name) : [...now.allow, name], now.allowChannel);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-small text-ink-3">
+        They start Agents here as you, in your folders, within the limits below. Each change is signed by this browser and checked on the Mac.
+      </p>
+      <label className="flex items-center gap-2 text-row text-ink">
+        <input type="checkbox" checked={now.allowChannel} disabled={busy || !h.live} onChange={() => apply(now.allow, !now.allowChannel)} />
+        Everyone on this Channel
+      </label>
+      {people.map((name) => (
+        <label key={name} className={cn("flex items-center gap-2 text-row", now.allowChannel ? "text-ink-3" : "text-ink")}>
+          <input
+            type="checkbox"
+            checked={now.allowChannel || now.allow.includes(name)}
+            disabled={busy || !h.live || now.allowChannel}
+            onChange={() => toggle(name)}
+          />
+          {name}
+        </label>
+      ))}
+      {people.length === 0 && <p className="text-small text-ink-3">No one else has joined this Channel yet.</p>}
+      {!h.live && <p className="text-small text-ink-3">The Host is Offline, and it changes its list itself. Start it to share it.</p>}
+      {problem && (
+        <p role="alert" className="text-small text-ink">
+          <WithCode text={problem} />
+        </p>
+      )}
+    </div>
   );
 }

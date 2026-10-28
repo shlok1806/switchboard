@@ -1,4 +1,5 @@
 import type {
+  SetHostAllowRequest,
   CreateTaskRequest,
   ActionResult,
   Agent,
@@ -62,6 +63,9 @@ export type MockState = "ready" | "loading" | "empty" | "error" | "read-error";
 const READ_FAILED = "The Channel's Worker answered 500 to this read.";
 
 export class MockChannelSource implements ChannelSource {
+  async agent(id: AgentId): Promise<Agent | null> {
+    return this.agents.find((agent) => agent.id === id) ?? null;
+  }
   readonly me = ME;
   readonly capabilities = ALL_CAPABILITIES;
   readonly isMock = true;
@@ -73,6 +77,8 @@ export class MockChannelSource implements ChannelSource {
     name: "studio",
     roots: ["/work/switchboard"],
     maxPermissionMode: "acceptEdits",
+    allow: [],
+    allowChannel: false,
     live: true,
     registeredAt: new Date(T0 - 12 * 86_400_000).toISOString(),
     lastSeenAt: new Date(T0).toISOString(),
@@ -537,13 +543,49 @@ export class MockChannelSource implements ChannelSource {
     if (agent.host === undefined) return { ok: false, reason: `${id} runs in a terminal, not on a Host. Stop it there.` };
     if (agent.presence === "gone") return { ok: false, reason: `${id} is Gone already.` };
     const at = new Date().toISOString();
-    this.record(makeEvent("agent.stop", person(this.me), null, { agent: id, host: agent.host }, { at }), undefined, true);
+    this.record(makeEvent("agent.stop", person(this.me), null, { agent: id, host: agent.host, owner: agent.person }, { at }), undefined, true);
     // Like a real Host: the session takes a moment to end, then the Agent goes Gone.
     setTimeout(() => {
       agent.presence = "gone";
       agent.lastSeenAt = new Date().toISOString();
       this.emit({ type: "agent", agent: clone(agent) });
     }, 1500);
+    return { ok: true };
+  }
+
+  async pauseAgent(id: AgentId): Promise<ActionResult> {
+    return this.pauseOrResume(id, "pause");
+  }
+
+  async resumeAgent(id: AgentId): Promise<ActionResult> {
+    return this.pauseOrResume(id, "resume");
+  }
+
+  private async pauseOrResume(id: AgentId, action: "pause" | "resume"): Promise<ActionResult> {
+    await new Promise((r) => setTimeout(r, 400));
+    const agent = this.agents.find((a) => a.id === id);
+    if (!agent) return { ok: false, reason: `No Agent ${id} on this Channel.` };
+    if (agent.host === undefined) return { ok: false, reason: `${id} runs in a terminal, not on a Host. Pause it there.` };
+    if (action === "pause" && (agent.presence === "gone" || agent.presence === "paused")) {
+      return { ok: false, reason: `${id} is not running.` };
+    }
+    if (action === "resume" && agent.presence !== "paused") return { ok: false, reason: `${id} is not Paused, so there is nothing to resume.` };
+    const at = new Date().toISOString();
+    this.record(
+      makeEvent(action === "pause" ? "agent.pause" : "agent.resume", person(this.me), null, { agent: id, host: agent.host, owner: agent.person }, { at }),
+      undefined,
+      true,
+    );
+    agent.presence = action === "pause" ? "paused" : "live";
+    agent.lastSeenAt = new Date().toISOString();
+    this.emit({ type: "agent", agent: clone(agent) });
+    return { ok: true };
+  }
+
+  async setHostAllow(name: string, request: SetHostAllowRequest): Promise<ActionResult> {
+    await new Promise((r) => setTimeout(r, 300));
+    if (name !== this.host.name) return { ok: false, reason: `You have no Host named ${name}.` };
+    this.host = { ...this.host, allow: request.allow, allowChannel: request.allowChannel };
     return { ok: true };
   }
 

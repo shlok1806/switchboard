@@ -4,16 +4,21 @@
 //   POST   /api/hosts               register (or update) one of the caller's Hosts
 //   DELETE /api/hosts/:name         remove one of the caller's Hosts
 //   POST   /api/agents/spawn        start an Agent on one of the caller's Hosts
-//   POST   /api/agents/:id/stop     stop an Agent one of the caller's Hosts runs
+//   POST   /api/agents/:id/stop     stop an Agent a Host runs
+//   POST   /api/agents/:id/pause    end its process, keep its session (ADR 0028)
+//   POST   /api/agents/:id/resume   relaunch a Paused Agent (ADR 0028)
 //
 // Every route needs a Person's session, except that a lead's Agent token may spawn and
 // stop (ADR 0018): the Channel checks the role and the lead's subtree. Any other Agent
-// token is refused (ADR 0005).
+// token is refused (ADR 0005). A Person may use another Person's Host only if that Host
+// allows them (ADR 0028): the Channel checks its copy, the Host its own file.
 
 import type {
   AgentId,
+  ControlAgentResponse,
   HostResponse,
   HostsResponse,
+  SetHostAllowResponse,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StopAgentResponse,
@@ -25,7 +30,9 @@ import {
   cleanNickname,
   HOST_NAME_PATTERN,
   isPermissionMode,
+  LOGIN_PATTERN,
   MAX_BRIEF_LENGTH,
+  MAX_HOST_ALLOW,
   MAX_HOST_ROOTS,
   MAX_MODEL_LENGTH,
   PERMISSION_MODES,
@@ -38,11 +45,15 @@ export type HostRoute =
   | { kind: "list" }
   | { kind: "register" }
   | { kind: "remove"; name: string }
+  | { kind: "allow"; name: string }
   | { kind: "spawn" }
-  | { kind: "stop"; id: AgentId };
+  | { kind: "stop"; id: AgentId }
+  | { kind: "pause"; id: AgentId }
+  | { kind: "resume"; id: AgentId };
 
-const STOP = /^\/api\/agents\/([^/]+)\/stop$/;
+const CONTROL = /^\/api\/agents\/([^/]+)\/(stop|pause|resume)$/;
 const HOST = /^\/api\/hosts\/([^/]+)$/;
+const ALLOW = /^\/api\/hosts\/([^/]+)\/allow$/;
 
 /** Returns the Host route a request is for, or null when it is not one. */
 export function matchHostRoute(method: string, pathname: string): HostRoute | null {
@@ -52,17 +63,20 @@ export function matchHostRoute(method: string, pathname: string): HostRoute | nu
     return null;
   }
   if (pathname === "/api/agents/spawn") return method === "POST" ? { kind: "spawn" } : null;
+  const allow = ALLOW.exec(pathname);
+  if (allow?.[1] !== undefined) return method === "POST" ? { kind: "allow", name: allow[1] } : null;
   const host = HOST.exec(pathname);
   if (host?.[1] !== undefined) return method === "DELETE" ? { kind: "remove", name: host[1] } : null;
-  const stop = STOP.exec(pathname);
-  if (stop?.[1] === undefined || method !== "POST") return null;
+  const control = CONTROL.exec(pathname);
+  if (control?.[1] === undefined || method !== "POST") return null;
   let id: string;
   try {
-    id = decodeURIComponent(stop[1]);
+    id = decodeURIComponent(control[1]);
   } catch {
     return null;
   }
-  return id.split("/").length === 3 ? { kind: "stop", id: id as AgentId } : null;
+  const kind = control[2] as "stop" | "pause" | "resume";
+  return id.split("/").length === 3 ? { kind, id: id as AgentId } : null;
 }
 
 export const HOST_AGENT_REFUSED =
@@ -70,7 +84,15 @@ export const HOST_AGENT_REFUSED =
 
 /** Whether an Agent token may call `route`: a lead may spawn and stop, the Channel decides the rest (ADR 0018). */
 export function agentMayCall(route: HostRoute): boolean {
+  // Pausing and resuming stay a Person's (ADR 0028): a lead's reach is to start and stop its own subtree.
   return route.kind === "spawn" || route.kind === "stop";
+}
+
+/** A Host's name, or `<person>/<name>`. */
+function isHostRef(value: string): boolean {
+  const slash = value.indexOf("/");
+  if (slash < 0) return HOST_NAME_PATTERN.test(value);
+  return LOGIN_PATTERN.test(value.slice(0, slash)) && HOST_NAME_PATTERN.test(value.slice(slash + 1));
 }
 
 const MODE_REASON = `"permissionMode" must be one of ${PERMISSION_MODES.join(", ")}.`;
@@ -79,8 +101,8 @@ type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 function parseSpawn(body: Record<string, unknown>): Parsed<SpawnAgentRequest> {
   const { host, cli, cwd, nickname, model, brief, permissionMode, from } = body;
-  if (host !== undefined && (typeof host !== "string" || !HOST_NAME_PATTERN.test(host))) {
-    return { ok: false, reason: '"host" must be the name of one of your Hosts.' };
+  if (host !== undefined && (typeof host !== "string" || !isHostRef(host))) {
+    return { ok: false, reason: '"host" must be the name of one of your Hosts, or `<person>/<name>` of another\'s.' };
   }
   // Codex and Gemini CLI follow behind the same request (ADR 0015).
   if (cli !== "claude-code") {
@@ -136,7 +158,7 @@ export async function handleHostRoute(
     case "list":
       return json<HostsResponse>(await channel.listHosts());
     case "register": {
-      const { name, roots, maxPermissionMode } = await readJson(request);
+      const { name, roots, maxPermissionMode, allow, allowChannel } = await readJson(request);
       if (typeof name !== "string" || !HOST_NAME_PATTERN.test(name)) {
         return fail(400, '"name" must be a Host name: lower-case letters, digits and "-", at most 40.');
       }
@@ -147,12 +169,54 @@ export async function handleHostRoute(
       if (maxPermissionMode !== undefined && !isPermissionMode(maxPermissionMode)) {
         return fail(400, `"maxPermissionMode" must be one of ${PERMISSION_MODES.join(", ")}.`);
       }
+      if (
+        allow !== undefined &&
+        (!Array.isArray(allow) ||
+          allow.length > MAX_HOST_ALLOW ||
+          !allow.every((login) => typeof login === "string" && LOGIN_PATTERN.test(login)))
+      ) {
+        return fail(400, `"allow" must be at most ${MAX_HOST_ALLOW} Person logins.`);
+      }
+      if (allowChannel !== undefined && typeof allowChannel !== "boolean") {
+        return fail(400, '"allowChannel" must be true or false.');
+      }
       const host = await channel.registerHost(person, {
         name,
         roots: [...new Set(clean as string[])],
         ...(maxPermissionMode === undefined ? {} : { maxPermissionMode }),
+        ...(allow === undefined ? {} : { allow: allow as string[] }),
+        ...(allowChannel === undefined ? {} : { allowChannel }),
       });
       return json<HostResponse>({ ok: true, host });
+    }
+    case "allow": {
+      const body = await readJson(request);
+      const { allow, allowChannel, key, at, seq, sig } = body;
+      if (
+        !Array.isArray(allow) ||
+        allow.length > MAX_HOST_ALLOW ||
+        !allow.every((l) => typeof l === "string" && LOGIN_PATTERN.test(l)) ||
+        typeof allowChannel !== "boolean" ||
+        typeof key !== "string" ||
+        typeof sig !== "string" ||
+        key.length > 400 ||
+        sig.length > 400 ||
+        !Number.isSafeInteger(at) ||
+        !Number.isSafeInteger(seq)
+      ) {
+        return fail(400, "A signed allow-list change needs allow, allowChannel, key, at, seq and sig.");
+      }
+      const result = await channel.setHostAllow(person, route.name, {
+        allow: allow as string[],
+        allowChannel,
+        key,
+        at: at as number,
+        seq: seq as number,
+        sig,
+      });
+      return result.ok
+        ? json<SetHostAllowResponse>({ ok: true, host: result.host })
+        : fail(result.status, result.reason);
     }
     case "remove":
       return (await channel.removeHost(person, route.name))
@@ -177,6 +241,12 @@ export async function handleHostRoute(
       const result = await channel.stopAgent(caller, route.id);
       if (!result.ok) return fail(result.status, result.reason);
       return json<StopAgentResponse>({ ok: true, agent: route.id, host: result.host });
+    }
+    case "pause":
+    case "resume": {
+      const result = await channel.controlAgent(person, route.id, route.kind);
+      if (!result.ok) return fail(result.status, result.reason);
+      return json<ControlAgentResponse>({ ok: true, agent: route.id, host: result.host, presence: result.presence });
     }
   }
 }

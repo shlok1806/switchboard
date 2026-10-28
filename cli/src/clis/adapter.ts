@@ -61,6 +61,8 @@ export interface Installed {
   args: string[];
   /** Added to the CLI's environment. */
   env: Record<string, string>;
+  /** Restores project files the adapter changed, when the session ends. */
+  dispose?: () => Promise<void>;
 }
 
 export interface CliAdapter {

@@ -5,9 +5,11 @@
 // Only non-secret files are read, and an email address is masked: the label is
 // shown to everyone on the Channel.
 
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type { Cli } from "../../shared/src/index";
 import { cleanAccountLabel } from "../../shared/src/index";
 
@@ -47,6 +49,16 @@ async function loginEmail(cli: Cli, env: NodeJS.ProcessEnv): Promise<string | nu
       const active = (await readJson(join(env.GEMINI_CLI_HOME || homedir(), ".gemini", "google_accounts.json")))
         ?.active;
       return typeof active === "string" ? active : null;
+    }
+    case "cursor": {
+      try {
+        const bin = env.SWITCHBOARD_CURSOR_BIN || "cursor-agent";
+        const { stdout } = await promisify(execFile)(bin, ["status"], { env });
+        const match = /Logged in as\s+(\S+)/.exec(stdout);
+        return match?.[1] ?? null;
+      } catch {
+        return null;
+      }
     }
     case "codex":
       return null;

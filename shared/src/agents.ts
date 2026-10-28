@@ -14,6 +14,7 @@ import type { ReportedUsage } from "./usage";
 export const CLI_SHORT_NAMES: Record<Cli, string> = {
   "claude-code": "claude",
   codex: "codex",
+  cursor: "cursor",
   gemini: "gemini",
 };
 
@@ -30,6 +31,7 @@ export const AGENT_ID_SESSION_CHARS = 4;
 export const AGENT_ID_SESSION_END: Record<Cli, "start" | "end"> = {
   "claude-code": "start",
   codex: "end",
+  cursor: "start",
   gemini: "start",
 };
 
@@ -131,6 +133,8 @@ export function modelLabel(id: string): string {
       model,
     );
   if (gemini?.[1] !== undefined) return [`Gemini ${gemini[1]}`, ...words(gemini[2] ?? "")].join(" ");
+  const composer = /^composer-(\d+(?:\.\d+)?)$/i.exec(model);
+  if (composer?.[1] !== undefined) return `Composer ${composer[1]}`;
   return model;
 }
 

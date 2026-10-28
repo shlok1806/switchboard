@@ -17,7 +17,7 @@
 // - Interrupts: Codex's prompt takes typed input mid-turn and adds it to the turn
 //   (seen with codex-cli 0.159.1). Its approval dialogs are told by PermissionRequest.
 // - Wakes: typed at its idle prompt, as for Claude Code, once its Stop hook ended the
-//   turn (ADR 0027). Nothing wakes a new session before its first prompt, when its
+//   turn (ADR 0029). Nothing wakes a new session before its first prompt, when its
 //   hooks first run, or a session whose hooks the Person has not trusted.
 // - MCP tools: `-c mcp_servers.switchboard...`, approved for the session (Codex
 //   otherwise asks before each call, and refuses them all under `-a never`).
@@ -321,7 +321,7 @@ export const codex: CliAdapter = {
   interrupts: true,
   // Not known to clear its composer on double Escape or Ctrl+C, so neither reads as clearing.
   idleClears: false,
-  // Its Stop hook ends a turn, and a paste then Enter at its idle prompt starts one (ADR 0027).
+  // Its Stop hook ends a turn, and a paste then Enter at its idle prompt starts one (ADR 0029).
   wakes: true,
   // Codex may hide its dialog while a hook waits: not verified (ADR 0014).
   remoteDeny: false,

@@ -30,6 +30,7 @@ function agent(id: string, extra: Partial<Agent> = {}): Agent {
 const lead = agent("shlok/claude/aaaa", { nickname: "planner", role: "lead" });
 const child = agent("shlok/codex/bbbb", { cli: "codex", parent: lead.id, startedAt: "2026-10-15T09:05:00.000Z" });
 const maya = agent("maya/claude/cccc", { presence: "gone" });
+const mayaIdle = agent("maya/claude/dddd", { presence: "idle" });
 const login: Task = {
   number: 12,
   title: "Fix the login redirect",
@@ -88,19 +89,18 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the canvas", () => {
-  it("draws every Agent with its state and Task, a frame for where it runs, and an edge from a lead", async () => {
+  it("draws current Agents with their state and Task, a frame for where they run, and an edge from a lead", async () => {
     const { container } = render(<CanvasView />, { wrapper: channel([lead, child, maya]) });
     expect(await node(/^planner, shlok's Claude Code Agent, Running, #12 Fix the login redirect$/)).toBeTruthy();
     expect(await node(/^shlok\/codex\/bbbb, shlok's Codex Agent, Running$/)).toBeTruthy();
-    expect(await node(/^maya\/claude\/cccc, maya's Claude Code Agent, Gone$/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^maya\/claude\/cccc/ })).toBeNull();
     expect(screen.getByText("#12 Fix the login redirect")).toBeTruthy();
     expect([...container.querySelectorAll("[data-edge]")].map((p) => p.getAttribute("data-edge"))).toEqual([`${lead.id} ${child.id}`]);
     // One frame for each Person's hand-started Agents, the signed-in Person's first.
     const frames = [...container.querySelectorAll("[data-frame]")];
-    expect(frames.map((f) => f.querySelector("span > span:first-child")?.textContent)).toEqual(["terminals", "terminals"]);
+    expect(frames.map((f) => f.querySelector("span > span:first-child")?.textContent)).toEqual(["terminals"]);
     expect(frames[0]!.textContent).toContain("shlok (you)");
     expect(frames[0]!.textContent).toContain("2 Agents");
-    expect(frames[1]!.textContent).toContain("1 Agent");
   });
 
   it("puts an Agent a Host started in that Host's frame", async () => {
@@ -132,7 +132,7 @@ describe("the canvas", () => {
     const width = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
     try {
-      const { container } = render(<CanvasView />, { wrapper: channel([maya, child, lead]) });
+      const { container } = render(<CanvasView />, { wrapper: channel([mayaIdle, child, lead]) });
       await screen.findByText("planner");
       // No canvas to pan on a phone: the frames are lanes, yours first.
       expect(container.querySelector("[role=application]")).toBeNull();
@@ -150,7 +150,7 @@ describe("the canvas", () => {
     // maya's Agent joined first, but the signed-in Person's frame comes first.
     const { container } = render(<CanvasView />, { wrapper: channel([maya, child, lead]) });
     await node(/^planner/);
-    expect([...container.querySelectorAll("[data-node]")].map((e) => e.getAttribute("data-node"))).toEqual([lead.id, child.id, maya.id]);
+    expect([...container.querySelectorAll("[data-node]")].map((e) => e.getAttribute("data-node"))).toEqual([lead.id, child.id]);
   });
 
   it("opens an Agent on a click, and shows where it came from", async () => {

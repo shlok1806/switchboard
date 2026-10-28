@@ -20,7 +20,7 @@
 // - Interrupts: not typed; they are delivered as Queue, labelled downgraded,
 //   until typing mid-turn into Gemini CLI is seen to work.
 // - Wakes: none; a Queue waits for its next turn until typing at its idle prompt is
-//   seen to start a turn (ADR 0027).
+//   seen to start a turn (ADR 0029).
 // - MCP tools: `mcpServers` in the session's settings.
 // - Proxy Capture: CODE_ASSIST_ENDPOINT (Login with Google) or GOOGLE_GEMINI_BASE_URL
 //   (an API key), by auth type (gemini-route.ts); the proxy reads the generateContent
@@ -114,7 +114,7 @@ export const gemini: CliAdapter = {
   binEnv: "SWITCHBOARD_GEMINI_BIN",
   interrupts: false,
   idleClears: false,
-  // Typing into its prompt has not been seen to work, for an Interrupt or a Wake (ADR 0027).
+  // Typing into its prompt has not been seen to work, for an Interrupt or a Wake (ADR 0029).
   wakes: false,
   remoteDeny: false,
   // Not verified against its hooks: its AfterAgent answer is not known to continue a turn.

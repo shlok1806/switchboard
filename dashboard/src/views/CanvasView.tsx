@@ -145,7 +145,7 @@ const Node = memo(function Node({
       style={{ left: at.x, top: at.y, width: NODE_W, height: NODE_H }}
       className={cn(
         "group absolute rounded-[var(--r)] border border-rule-2 bg-paper transition-opacity duration-[var(--dur)] select-none hover:bg-paper-2",
-        state === "needs" || state === "needs-other" || state === "stale" ? "border-2 border-signal" : undefined,
+        state === "needs" || state === "needs-other" || state === "stale" ? "border-2 border-signal" : state === "running" ? "border-2 border-running" : undefined,
         selected && "outline-2 outline-offset-2 outline-ink outline-solid",
         // Gone with nothing held: only its outline goes quiet, its words stay readable.
         muted && "border-rule",

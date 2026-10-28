@@ -163,5 +163,12 @@ export async function configuredModel(
         named(await readJson(join(env.GEMINI_CLI_HOME || homedir(), ".gemini", "settings.json")));
       return model === undefined ? {} : { model };
     }
+    case "cursor": {
+      const configDir = env.CURSOR_CONFIG_DIR || join(homedir(), ".cursor");
+      const config = await readJson(join(configDir, "cli-config.json"));
+      const modelId = (config.model as { modelId?: unknown } | undefined)?.modelId;
+      const model = flag(args, "model") ?? str(modelId);
+      return model === undefined ? {} : { model };
+    }
   }
 }

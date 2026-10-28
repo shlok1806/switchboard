@@ -3,7 +3,7 @@
 import type { Agent, AgentId, Holder, PersonName, Task } from "@shared/index";
 
 /** An Agent's one state, in the order a Person reads them. */
-export const AGENT_STATES = ["needs", "needs-other", "stale", "running", "idle", "gone"] as const;
+export const AGENT_STATES = ["needs", "needs-other", "stale", "running", "idle", "paused", "gone"] as const;
 export type AgentState = (typeof AGENT_STATES)[number];
 
 /** Every state a glyph can show: an Agent's, plus a Task's review and done. */
@@ -57,6 +57,8 @@ export function stateWord(state: GlyphState, person?: PersonName): string {
       return "Running";
     case "idle":
       return "Idle";
+    case "paused":
+      return "Paused";
     case "gone":
       return "Gone";
     case "done":

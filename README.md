@@ -8,7 +8,7 @@ defined in [CONTEXT.md](CONTEXT.md).
 ## Getting started
 
 You need Node.js 22 or newer, git, a GitHub account with write access to the
-Channel's repo, and at least one of Claude Code, Codex or Gemini CLI.
+Channel's repo, and at least one of Claude Code, Codex, Cursor or Gemini CLI.
 
 ### 1. Install the CLI
 
@@ -178,15 +178,15 @@ running on it with their requests, tokens and estimated cost. The wrapper reads 
 the start, after every turn and every 5 minutes (at most once a minute), using the
 session's own login. `SWITCHBOARD_USAGE=off` turns it off.
 
-| | Claude Code | Codex | Gemini CLI (unverified, see below) |
-|---|---|---|---|
-| Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | SessionStart, BeforeTool (shell), AfterTool, AfterAgent, SessionEnd |
-| Files changed through the shell | yes | yes | yes, unverified |
-| Switchboard MCP tools | yes | yes (approved for the session) | yes |
-| Proxy Capture (digest and raw) | yes | yes | yes, unverified |
-| Next-turn delivery | SessionStart / UserPromptSubmit hooks | SessionStart / UserPromptSubmit `additionalContext`; `read_channel` fallback | SessionStart / BeforeAgent `additionalContext` |
-| Interrupts and Directives | typed mid-turn | typed mid-turn | downgraded to Queue, labelled `cli-cannot-interrupt` |
-| Idle wake (a Queue that needs the Agent wakes it while idle) | yes | yes, once its hooks run | no: a Queue waits for its next turn |
+| | Claude Code | Codex | Cursor CLI | Gemini CLI (unverified, see below) |
+|---|---|---|---|---|
+| Hook Capture | SessionStart, PreToolUse and PostToolUse (Bash), PostToolUse, Stop, SessionEnd | SessionStart, PreToolUse and PostToolUse (shell, apply_patch, MCP), Stop, SessionEnd | sessionStart, pre/post tool and shell hooks, stop, sessionEnd | SessionStart, BeforeTool (shell), AfterTool, AfterAgent, SessionEnd |
+| Files changed through the shell | yes | yes | yes, unverified | yes, unverified |
+| Switchboard MCP tools | yes | yes (approved for the session) | yes | yes |
+| Proxy Capture (digest and raw) | yes | yes | not yet | yes, unverified |
+| Next-turn delivery | SessionStart / UserPromptSubmit hooks | SessionStart / UserPromptSubmit `additionalContext`; `read_channel` fallback | sessionStart `additional_context`; `read_channel` after the first prompt | SessionStart / BeforeAgent `additionalContext` |
+| Interrupts and Directives | typed mid-turn | typed mid-turn | downgraded to Queue, labelled `cli-cannot-interrupt` | downgraded to Queue, labelled `cli-cannot-interrupt` |
+| Idle wake (a Queue that needs the Agent wakes it while idle) | yes | yes, once its hooks run | no: a Queue waits for its next turn | no: a Queue waits for its next turn |
 
 Edit tools report the files they change. A shell command (a heredoc, `sed`, a script)
 does not, so the wrapper snapshots the call's worktree with git just before and just
@@ -506,7 +506,7 @@ Until the hooks run, the wrapper:
   cannot tell whether a dialog is open.
 
 An idle Codex Agent is woken for what is Queued for it, as a Claude Code one is,
-under the same cap of 3 Wakes in 10 minutes (ADR 0027). It needs the hooks: a
+under the same cap of 3 Wakes in 10 minutes (ADR 0029). It needs the hooks: a
 new session cannot be woken before its first prompt, and a session whose hooks
 are not trusted is never woken.
 
@@ -529,7 +529,7 @@ command, in order. Its Proxy Capture is tested against Gemini
 and Code Assist API fixtures, but has not been verified with the real CLI.
 Interrupts stay downgraded until typing into Gemini CLI mid-turn has been seen
 to work. For the same reason an idle Gemini CLI Agent is never woken: what is
-Queued for it waits until its Person prompts it (ADR 0027).
+Queued for it waits until its Person prompts it (ADR 0029).
 
 ### Agent context
 

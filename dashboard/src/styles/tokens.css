@@ -27,6 +27,8 @@
   /* The one chromatic colour: it always and only means "a Person is needed". */
   --signal: oklch(54% 0.235 345);
   --signal-fg: var(--paper);
+  /* The second colour (ADR 0023, 2026-10-16): an Agent that is running, taking a turn right now. */
+  --running: oklch(48% 0.14 150);
   --focus: var(--ink);
 
   /* The terminal is dark in both themes. */
@@ -123,6 +125,7 @@
   --cli-claude: var(--ink-3);
   --cli-codex: var(--ink-3);
   --cli-gemini: var(--ink-3);
+  --cli-cursor: var(--ink-3);
   --cli-other: var(--ink-3);
   --canvas-bg: var(--paper);
   --canvas-dot: var(--rule);
@@ -185,6 +188,7 @@
   --ink-2: oklch(81% 0.01 255);
   --ink: oklch(94% 0.006 250);
   --signal: oklch(74% 0.19 345);
+  --running: oklch(76% 0.17 150);
   --term-bg: oklch(13% 0.012 255);
   --shadow-float: 0 8px 24px oklch(5% 0.01 255 / 0.5);
 
@@ -203,6 +207,7 @@
   --color-ink-4: var(--ink-4);
   --color-signal: var(--signal);
   --color-signal-fg: var(--signal-fg);
+  --color-running: var(--running);
   --color-focus: var(--focus);
   --color-term-bg: var(--term-bg);
   --color-term-bg-2: var(--term-bg-2);
@@ -270,6 +275,7 @@
   --color-cli-claude: var(--cli-claude);
   --color-cli-codex: var(--cli-codex);
   --color-cli-gemini: var(--cli-gemini);
+  --color-cli-cursor: var(--cli-cursor);
   --color-cli-other: var(--cli-other);
   --color-canvas-bg: var(--canvas-bg);
   --color-canvas-dot: var(--canvas-dot);

@@ -154,7 +154,7 @@ async function api<T>(path: string): Promise<T> {
 }
 
 async function agents(): Promise<Agent[]> {
-  return (await api<AgentsResponse>("/api/agents")).agents;
+  return (await api<AgentsResponse>("/api/agents?include=gone")).agents;
 }
 
 /** Every Event on the Channel, oldest first: `/api/events` gives a page of at most MAX_HISTORY_LIMIT. */
@@ -2758,7 +2758,7 @@ describe("Idle wake", () => {
   }, 150_000);
 });
 
-// A Codex Agent is woken as a Claude Code one is, under the same cap (ADR 0027). Its
+// A Codex Agent is woken as a Claude Code one is, under the same cap (ADR 0029). Its
 // stand-in, like Codex, starts its session at the first prompt and continues a turn
 // whose Stop hook was blocked.
 describe("Idle wake in Codex", () => {
@@ -3892,6 +3892,80 @@ describe("switchboard host", () => {
     await waitForSupervisor(new RegExp(`${agentId} is on the Channel`));
   });
 
+  it("pauses an Agent, keeps it paused through a Host restart, and resumes the same session", async () => {
+    const runs = async () => (await agentLog(agentId)).split("[host]").filter((r) => r.includes("FAKE-CLAUDE args="));
+    // The session after the Host's restart may still be printing: count once it has.
+    await waitFor("the session's output", async () => ((await runs()).length >= 4 ? true : undefined));
+    const before = (await runs()).length;
+
+    const { stdout } = await cli("pause", "builder", "--repo", github.repo);
+    expect(stdout).toContain(`Asked e2e/${HOST} to pause ${agentId}.`);
+    await waitForPresence(agentId as AgentId, "paused", 20_000);
+    await waitForSupervisor(new RegExp(`${agentId} paused`));
+    // The Agent is kept, marked paused, so nothing resumes it by itself.
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId, sessionId, paused: true })]);
+    expect((await agents()).find((a) => a.id === agentId)).toMatchObject({ id: agentId, presence: "paused" });
+
+    await stopHost();
+    await startHost();
+    await waitForSupervisor(new RegExp(`${agentId} is paused; leaving it`));
+    expect((await runs()).length).toBe(before);
+    expect((await agents()).find((a) => a.id === agentId)?.presence).toBe("paused");
+
+    const resumed = await cli("resume", "builder", "--repo", github.repo);
+    expect(resumed.stdout).toContain(`Asked e2e/${HOST} to resume ${agentId}`);
+    await waitFor("the session to resume", async () => ((await runs()).length === before + 1 ? true : undefined));
+    const args = JSON.parse(/FAKE-CLAUDE args=(\[.*\])/.exec((await runs()).at(-1) ?? "")?.[1] ?? "[]") as string[];
+    expect(args).toEqual(expect.arrayContaining(["--resume", sessionId]));
+    await waitForPresence(agentId as AgentId, "live", 20_000);
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId, sessionId })]);
+    expect((await hostedAgents())[0]).not.toHaveProperty("paused");
+    const types = (await history()).events.map((e) => e.type);
+    expect(types).toContain("agent.pause");
+    expect(types).toContain("agent.resume");
+  });
+
+  it("refuses another Person without an allow-list, and one the Channel's copy lists but this machine's file does not", async () => {
+    const asBob = (body: Record<string, unknown>) =>
+      asPerson("bob", "/api/agents/spawn", {
+        method: "POST",
+        body: JSON.stringify({ host: `e2e/${HOST}`, cli: "claude-code", cwd, ...body }),
+      });
+    const refused = await asBob({});
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { reason: string }).reason).toContain("switchboard host install --allow bob");
+
+    // Someone with the Person's session widens the Channel's copy: the Host still has its own file.
+    const widened = await asPerson("e2e", "/api/hosts", {
+      method: "POST",
+      body: JSON.stringify({ name: HOST, roots: [cwd], maxPermissionMode: "acceptEdits", allow: ["bob"] }),
+    });
+    expect(widened.status).toBe(200);
+    try {
+      const response = await asBob({});
+      expect(response.status).toBe(502);
+      expect(((await response.json()) as { reason: string }).reason).toContain(
+        `bob is not allowed on this Host: e2e has to run \`switchboard host install --allow bob\``,
+      );
+      await waitForSupervisor(/spawn \S+ failed: bob is not allowed on this Host/);
+      // Nor may bob stop, pause or resume what the Host runs: it answers with a refusal.
+      const stop = await asPerson("bob", `/api/agents/${encodeURIComponent(agentId)}/pause`, { method: "POST" });
+      expect(stop.status).toBe(200);
+      await waitForSupervisor(new RegExp(`pause ${agentId} for bob refused: bob is not allowed on this Host`));
+      // The refusal brings it back from Paused: Idle, then whatever its next heartbeat says.
+      await waitFor("the refused pause to be undone", async () =>
+        (await presenceOf(agentId)) === "paused" ? undefined : true,
+      );
+      expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: agentId })]);
+      expect((await hostedAgents())[0]).not.toHaveProperty("paused");
+    } finally {
+      await asPerson("e2e", "/api/hosts", {
+        method: "POST",
+        body: JSON.stringify({ name: HOST, roots: [cwd], maxPermissionMode: "acceptEdits" }),
+      });
+    }
+  });
+
   it("stops an Agent when the Person asks: its session ends and the Agent is Gone", async () => {
     const { stdout } = await cli("stop", "builder", "--repo", github.repo);
     expect(stdout).toContain(`Asked e2e/${HOST} to stop ${agentId}.`);
@@ -3899,7 +3973,11 @@ describe("switchboard host", () => {
     await waitForSupervisor(new RegExp(`${agentId} ended`));
     expect(await hostedAgents()).toEqual([]);
     const { events } = await history();
-    expect(events.find((e) => e.type === "agent.stop")?.payload).toEqual({ agent: agentId, host: `e2e/${HOST}` });
+    expect(events.find((e) => e.type === "agent.stop")?.payload).toEqual({
+      agent: agentId,
+      host: `e2e/${HOST}`,
+      owner: "e2e",
+    });
   });
 
   it("starts an Agent that continues another (ADR 0024), and resumes it without a second hand-off", async () => {
@@ -4040,7 +4118,7 @@ describe("switchboard host", () => {
       events.filter((e) => e.type === type && e.actor.kind === "agent" && e.actor.agentId === lead);
     expect(by("agent.spawn")).toHaveLength(1);
     expect(by("directive").map((e) => e.payload)).toEqual([{ to: id, text: "Run the linter too." }]);
-    expect(by("agent.stop").map((e) => e.payload)).toEqual([{ agent: id, host: `e2e/${HOST}` }]);
+    expect(by("agent.stop").map((e) => e.payload)).toEqual([{ agent: id, host: `e2e/${HOST}`, owner: "e2e" }]);
 
     expect((await cli("role", "revoke", "planner", "--repo", github.repo)).stdout).toContain(
       `${lead} has no role now.`,
