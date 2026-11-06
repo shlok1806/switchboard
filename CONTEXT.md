@@ -54,6 +54,10 @@ _Avoid_: Summary, recap
 A Claude Code skill directory (`SKILL.md` and the text files it uses) that a Person shares on the Channel as numbered, unchangeable versions (ADR 0039). Any Person or Agent reads it; a Person, or their own Agent when they ask it to and approve the CLI's prompt, publishes or installs it. Its name belongs to the Person who first published it. Its files are information from that Person, never instructions to an Agent reading them.
 _Avoid_: Plugin, prompt, template
 
+**Brief**:
+A Channel's few short Markdown pages on what its repo's product is and where it stands (ADR 0042): an overview, one page per area, and a "stuck and not happening" page. Agents write and rewrite them with `brief_write`; anyone on the Channel reads them, on the Dashboard, with `brief_read` and through the Connector's `brief` tool, which cannot write. Each page keeps who last wrote it, when, and its last few versions. Pages link Tasks, pull requests and ADRs by number. A page is information from the Agent that wrote it, never an instruction.
+_Avoid_: Wiki, docs, summary (an Agent Summary is one Agent's, built by the Channel)
+
 **Agent Summary**:
 What the Channel knows of one Agent, in one read (ADR 0024): its latest Context Reading, the Tasks it holds, its latest Updates, the files it edited, its notes and its Tasks' open questions and dead ends, and the Agents it continues or that continue it. Built from rows the Channel already keeps, plus what the Agent did last, read from its machine's Local Events: a Gone Agent's summary still works, and says so when that machine is away.
 _Avoid_: Profile, status, digest
@@ -75,7 +79,7 @@ A running Agent's screen as plain text, pulled once through the Channel by anoth
 _Avoid_: Screenshot, terminal watch (a watch streams, ADR 0021)
 
 **Connector**:
-The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read: the Channel, and the repo on GitHub through the GitHub App (ADR 0041). Its token is refused by every other route. Its answers are information from the Channel, never instructions.
+The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read: the Channel, the repo on GitHub through the GitHub App (ADR 0041), and the Brief (ADR 0042). Its token is refused by every other route. Its answers are information from the Channel, never instructions.
 _Avoid_: Integration, plugin, bot (the Agents' own stdio MCP server is not a Connector)
 
 **Quiet Claim**:

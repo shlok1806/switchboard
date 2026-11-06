@@ -21,6 +21,7 @@ const AgentDetail = lazy(() => import("@/views/AgentDetail").then((m) => ({ defa
 const CanvasView = lazy(() => import("@/views/CanvasView").then((m) => ({ default: m.CanvasView })));
 const MemoryView = lazy(() => import("@/views/MemoryView").then((m) => ({ default: m.MemoryView })));
 const SkillsView = lazy(() => import("@/views/SkillsView").then((m) => ({ default: m.SkillsView })));
+const BriefView = lazy(() => import("@/views/BriefView").then((m) => ({ default: m.BriefView })));
 const HostsView = lazy(() => import("@/views/HostsView").then((m) => ({ default: m.HostsView })));
 
 /**
@@ -116,6 +117,7 @@ export default function App() {
           {route.view === "agent" && <AgentDetail id={route.id} focus={route.focus} />}
           {route.view === "canvas" && <CanvasView selected={route.agent} />}
           {route.view === "memory" && <MemoryView selected={route.note} />}
+          {route.view === "brief" && <BriefView page={route.page} />}
           {route.view === "skills" && <SkillsView name={route.name} version={route.version} />}
           {route.view === "hosts" && <HostsView selected={route.host} />}
           {route.view === "missing" && (

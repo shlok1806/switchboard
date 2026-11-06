@@ -132,7 +132,8 @@ http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
 Anyone on a Channel can ask about the repo's work from the Claude desktop or web app,
 ChatGPT or Claude Code, without running an Agent: "what is in progress and what is
 stuck?", "what happened on #142 today?", "what has maya been doing?", "what merged
-this week, and what is failing CI?", "what does the ADR about stale claims say?".
+this week, and what is failing CI?", "what does the ADR about stale claims say?",
+"what is this product, and where does the VM engine stand?".
 Each Channel has a read-only MCP connector at
 
 ```text
@@ -177,8 +178,8 @@ Then run `/mcp` in a session (or `claude mcp login switchboard-greenroom` in a
 shell), pick the server, and sign in in the browser it opens. Claude Code keeps and
 refreshes the token itself.
 
-The connector has two tools, `channel` and `github`. Both take two optional
-arguments, `about` and `since`, and the app picks the tool from your question.
+The connector has three tools, `channel`, `github` and `brief`. The first two take two
+optional arguments, `about` and `since`, and the app picks the tool from your question.
 
 `channel` reads what the Channel keeps:
 
@@ -212,6 +213,14 @@ down, or the App is not installed, the tool says so in a sentence instead of
 failing. CI state needs the App's Checks and Commit statuses read permissions
 ([docs/github-app-setup.md](docs/github-app-setup.md)); without them the answer
 says CI is missing and gives the rest.
+
+`brief` reads the Channel's Brief (ADR 0042): a few short pages its Agents write
+and keep current on what the product is and where it stands. With no argument it
+answers with the overview and the list of pages; `brief(area: "vm-engine")` answers
+with that area's page, and `brief(area: "stuck")` with what is stuck and not
+happening. Each page says when it was last written and by which Agent, and comes
+with links for the Tasks, pull requests and ADRs it names. A call reads at most a
+few dozen rows and writes none; the connector cannot write a page.
 
 Sign-ins last 30 days from the app's last refresh, and stop working
 within minutes of losing write access to the repo.
@@ -533,6 +542,24 @@ reads them in full with `memory_recent` and `memory_search`.
 - A resumed session is told only what came while it was away: the wrapper keeps the last
   note each Agent was shown under `~/.config/switchboard/memory/`.
 - Secrets the Proxy Capture recognises are masked before a note leaves your machine.
+
+### The Brief: pages Agents keep on where the repo stands
+
+Each Channel has a **Brief** (ADR 0042): at most 24 short Markdown pages that say what
+the product is and where it stands. `overview` is the product as a whole, `stuck` is
+what is stuck and not happening, and each area (`vm-engine`, `verifier`) has a page of
+its own. Pages link Tasks and pull requests as `#123` and decisions as `ADR 0040`.
+
+- Agents write a page with `brief_write` (a page, its Markdown and an optional title)
+  and read the Brief with `brief_read`. A rewrite replaces the page; the Channel keeps
+  its last 3 earlier versions, which `brief_read` reads back with `version`.
+- Only Agents write pages, and secrets the Proxy Capture recognises are masked before
+  a page leaves your machine. To have one written, ask your agent: "Update the Brief's
+  vm-engine page with what changed today."
+- A Channel takes `BRIEF_WRITES_PER_DAY` page writes a day (200 by default), two rows
+  written each; a write that changes nothing writes nothing.
+- The Dashboard's Brief view shows every page with its age, and the connector's
+  `brief` tool reads them for anyone who asks (see Ask the Channel).
 
 ### Shared skills
 

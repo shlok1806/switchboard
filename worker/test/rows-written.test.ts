@@ -175,3 +175,42 @@ it("an actively coding Agent writes a bounded number of rows an hour", async () 
   const perHour = 10 * meter.cursors.reduce((sum, cursor) => sum + cursor.rowsWritten, 0);
   expect(perHour).toBeLessThanOrEqual(ROWS_PER_AGENT_HOUR);
 });
+
+/**
+ * A typical day of the Brief (ADR 0042): a librarian Agent rewrites the overview, six
+ * area pages and the stuck page four times each, and a quarter of its writes find the
+ * page already says the same.
+ */
+const BRIEF_PAGES = ["overview", "vm-engine", "verifier", "companion", "release", "site", "bench", "stuck"];
+const BRIEF_REWRITES = 4;
+/** What one page write may cost: its page's row and the day's count of writes. */
+const ROWS_PER_BRIEF_WRITE = 2;
+
+it("a day of typical Brief updates writes two rows per changed page, and none for an unchanged one", async () => {
+  const librarian = live[0] as AgentId;
+  const put = async (page: string, text: string): Promise<boolean> => {
+    const response = await call(`/api/brief/${page}`, {
+      method: "PUT",
+      headers: { Authorization: await bearer({ person: "shlok", agent: librarian }) },
+      body: JSON.stringify({ text }),
+    });
+    expect(response.status, page).toBeLessThan(300);
+    return response.status === 201;
+  };
+  let changed = 0;
+  meter.cursors = [];
+  meter.paused = false;
+  for (let round = 1; round <= BRIEF_REWRITES; round++) {
+    for (const [i, page] of BRIEF_PAGES.entries()) {
+      // Every fourth write is the librarian finding nothing new on that page.
+      const same = round > 1 && (round + i) % 4 === 0;
+      const text = `# ${page}\n\nWhere ${page} stands, pass ${same ? round - 1 : round}. See #${100 + i} and ADR 0042.`;
+      if (await put(page, text)) changed += 1;
+    }
+  }
+  meter.paused = true;
+  const rows = meter.cursors.reduce((sum, cursor) => sum + cursor.rowsWritten, 0);
+  expect(changed).toBeGreaterThan(BRIEF_PAGES.length * (BRIEF_REWRITES - 1));
+  expect(changed).toBeLessThan(BRIEF_PAGES.length * BRIEF_REWRITES);
+  expect(rows).toBeLessThanOrEqual(ROWS_PER_BRIEF_WRITE * changed);
+});

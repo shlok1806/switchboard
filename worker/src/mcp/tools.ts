@@ -1,9 +1,11 @@
 // The read-only connector's tools (ADR 0040). Each one gets a read-only view of its
 // Channel, never the Channel's stub, so no tool can reach a method that writes.
-// The github tool (#157, ADR 0041) reads GitHub instead; the brief (#158) and costs
-// (#160) tools join this list.
+// The github tool (#157, ADR 0041) reads GitHub instead; the brief tool (#158, ADR 0042)
+// reads the Brief's pages; the costs tool (#160) joins this list.
 
+import type { BriefPage, BriefPageSummary } from "../../../shared/src/index";
 import type { ChannelAnswer, ChannelQuestion } from "../ask";
+import { briefTool } from "./brief";
 import { formatAnswer } from "./format";
 import { githubTool } from "./github";
 import { parseSince } from "./since";
@@ -11,6 +13,8 @@ import { parseSince } from "./since";
 /** What a tool may ask of its Channel: reads, and nothing else. */
 export interface ReadOnlyChannel {
   askChannel(question: ChannelQuestion): Promise<ChannelAnswer>;
+  /** One page of the Brief and, for the overview or a page there is none of, every page without its text. */
+  askBrief(page: string): Promise<{ page: BriefPage | null; pages?: BriefPageSummary[] }>;
 }
 
 /**
@@ -104,4 +108,4 @@ const channelTool: McpTool = {
   },
 };
 
-export const TOOLS: readonly McpTool[] = [channelTool, githubTool];
+export const TOOLS: readonly McpTool[] = [channelTool, githubTool, briefTool];

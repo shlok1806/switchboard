@@ -115,12 +115,15 @@ CLI identity (claude, codex, gemini) is a word in the secondary line, never a co
 
 Top bar (every screen, 44px, not sticky; below 640px it becomes the phone bar, see Phone). Left: the wordmark (a 16px jack
 mark and "Switchboard" at 15/600), the channel path in mono (`shlok1806/app`), then the
-views as keys: Now, Agents, Tasks, Canvas, Activity, Memory, Hosts. A key is 28px tall,
+views as keys: Now, Agents, Tasks, Canvas, Activity, Brief, Memory, Skills, Hosts. A key is 28px tall,
 13/500, with its count in ink-3 after the word; the current key is pressed: solid ink with
 paper text. The Now key carries the needs-a-Person count as a signal chip (signal fill,
 paper text, 2px radius), the only place a count is coloured. Right: the People with their
 local times (`shlok 10:02 · maya 15:02 · dev 19:32`; you in 600) and a Search key with a
 `⌘K` hint. No sidebar, no workspace switcher, no avatars, no action button in the bar.
+On a narrower desk the bar gives way in order: the People strip below 1180px, the word
+"Switchboard" below 1000px (its mark stays), the channel path below 900px and the `⌘K` hint
+below 800px; keys that still do not fit scroll sideways, fading at the right edge.
 
 Page head. One line: a 20/600 sentence of state or the view's name, then the facts in ink-3
 on the same baseline, separated by middle dots. Never a row of figure tiles.
@@ -213,7 +216,7 @@ above the home indicator. One sheet serves every place that opens it.
 Phone. One breakpoint, 640px: every PAGE below it uses the phone pattern, which is also the
 Phone board. The top bar is the wordmark, the channel and Search (no kbd hint); the views
 move to a 56px bottom tab bar fixed to the bottom edge (Now with its signal chip, Agents,
-Tasks, Activity, More; Canvas, Memory and Hosts live under More), every target at least
+Tasks, Activity, More; Canvas, Brief, Memory, Skills and Hosts live under More), every target at least
 44px (a button, a chip, a filter, Close and a section head's link included; a link inside
 running text is the one exception), the page gets 56px of bottom padding; the People strip is hidden. The page gutter is 16.
 A table never sits in a horizontal scroll box: below 640px its rows stack (`table.stack`):

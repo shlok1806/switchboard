@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "screenshots");
 
-const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "memory", "skills", "hosts"];
+const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "brief", "memory", "skills", "hosts"];
 // Pages that show one thing: ready, loading, and an error page. With nothing on the Channel
 // they have nothing to name, which is the error page too.
 const PAGES = { agent: "agents/shlok%2Fclaude%2F7f3a", task: "tasks/12" };
@@ -64,9 +64,11 @@ function cases() {
   }
   list.push({ page: "missing", hash: "no-such-page", state: "ready", want: "error" });
   // The views with a read of their own, failing while the Channel is up.
-  for (const view of ["hosts", "memory", "skills"]) list.push({ page: view, hash: view, state: "read-error", want: "error" });
+  for (const view of ["hosts", "brief", "memory", "skills"]) list.push({ page: view, hash: view, state: "read-error", want: "error" });
   // A skill open in the inspector, at an older version, with every file in full.
   list.push({ page: "skill", hash: "skills/release-notes/1", state: "ready" });
+  // An area's page of the Brief, with its age and author.
+  list.push({ page: "brief-area", hash: "brief/api-client", state: "ready" });
   return list.filter((c) => !only || only.includes(c.page));
 }
 

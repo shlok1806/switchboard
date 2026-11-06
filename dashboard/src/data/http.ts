@@ -36,6 +36,7 @@ import type {
   MemoryResponse,
   SkillResponse,
   SkillsResponse,
+  BriefResponse,
   TerminalInputFrame,
   TerminalWatchFrame,
   Verdict,
@@ -53,6 +54,7 @@ import {
   memoryQueryString,
   SKILLS_PATH,
   skillPath,
+  BRIEF_PATH,
   summaryPath,
 } from "@shared/index";
 import type {
@@ -432,6 +434,14 @@ export class HttpChannelSource implements ChannelSource {
     const { status, body } = await this.call<SkillResponse>(skillPath(name, version));
     if (status >= 400) throw new Error(reasonOf(body, status));
     return body as SkillResponse;
+  }
+
+  async brief(): Promise<BriefResponse | null> {
+    const { status, body } = await this.call<BriefResponse>(BRIEF_PATH);
+    // A Worker from before the Brief (ADR 0042): the Dashboard leaves it out.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as BriefResponse;
   }
 
   async spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult> {

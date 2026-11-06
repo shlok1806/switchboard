@@ -16,6 +16,7 @@ import type {
   SetHostAllowRequest,
   SkillResponse,
   SkillsResponse,
+  BriefResponse,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StreamMessage,
@@ -147,6 +148,8 @@ export interface ChannelSource {
   skills(): Promise<SkillsResponse | null>;
   /** `GET /api/skills/:name`: one version of a skill with its files (the latest when `version` is left out), and every version. */
   skill(name: string, version?: number): Promise<SkillResponse>;
+  /** `GET /api/brief`: the Brief's pages, current versions, the overview first (ADR 0042); null when the Worker has none. */
+  brief(): Promise<BriefResponse | null>;
   /** `POST /api/agents/spawn`: start an Agent on one of this Person's own Hosts, or one that allows them (ADR 0028). */
   spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult>;
   /** `POST /api/agents/:id/stop`: ask the Host that runs an Agent to stop it: this Person's, or on a Host that allows them. */
