@@ -12,7 +12,7 @@ import App from "@/App";
 import { MockChannelSource, type MockState } from "@/data/mock/mockSource";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 
-const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "memory", "hosts"] as const;
+const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "memory", "skills", "hosts"] as const;
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -57,6 +57,7 @@ describe("a Channel with nothing on it", () => {
     ["tasks", /No Tasks yet/, /New Task/],
     ["feed", /No Events yet/, /Post an Update/],
     ["memory", /No notes yet/, /How notes work/],
+    ["skills", /No skills shared yet/, /Copy switchboard skills publish/],
     ["hosts", /No Hosts yet/, /Copy switchboard host install/],
   ];
   it.each(cases)("%s says so, with one thing to do next", async (view, title, action) => {
@@ -160,6 +161,7 @@ describe("a read that fails while the Channel is up", () => {
   it.each([
     ["#/hosts", "Could not read the Hosts", "hosts"],
     ["#/memory", "Could not read the notes", "memory"],
+    ["#/skills", "Could not read the skills", "skills"],
   ] as const)("%s says why, and Try again reads again", async (hash, title, read) => {
     const source = await open("read-error", hash);
     const reads = vi.spyOn(source, read);

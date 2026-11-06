@@ -1,9 +1,10 @@
-// Secret masking for the Proxy Capture. It runs on the laptop, before a Proxy
-// Event leaves it, in both Proxy modes. It is a pure function over text: it finds
+// Secret masking. The Proxy Capture runs it on the laptop, before a Proxy Event leaves
+// it, in both Proxy modes; skill sharing refuses a bundle it finds a secret in, on the
+// laptop and again on the Channel (ADR 0039). It is a pure function over text: it finds
 // common key formats and env-style assignments, keeps the part that says what kind
 // of secret it is (`sk-ant-`, `AKIA`, `GITHUB_TOKEN=`) and masks the rest.
 
-import { AGENT_TOKEN_PREFIX } from "../../../shared/src/index";
+import { AGENT_TOKEN_PREFIX } from "./auth";
 
 /** What every masked value is replaced with. */
 export const MASK = "****";
