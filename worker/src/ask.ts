@@ -9,6 +9,7 @@
 import type { Agent, AgentId, ChannelEvent, MemoryNote, PersonName, Task, TaskNumber } from "../../shared/src/index";
 import { personFromLogin } from "../../shared/src/index";
 import type { MemoryReadResult } from "./memory";
+import { searchWords } from "./search-words";
 
 /** A Claim with no Update for this many hours is Quiet, unless QUIET_CLAIM_HOURS says otherwise. */
 export const DEFAULT_QUIET_CLAIM_HOURS = 4;
@@ -125,9 +126,22 @@ function words(text: string): string[] {
   return text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
 }
 
-function matchesAll(text: string, wanted: readonly string[]): boolean {
+/** How many of `wanted` the text has. */
+function score(text: string, wanted: readonly string[]): number {
   const have = new Set(words(text));
-  return wanted.every((word) => have.has(word));
+  return wanted.filter((word) => have.has(word)).length;
+}
+
+/**
+ * The items that have any of `wanted` (ADR 0043), those with more of them first and
+ * otherwise in the order given.
+ */
+function byWords<T>(items: readonly T[], text: (item: T) => string, wanted: readonly string[]): T[] {
+  return items
+    .map((item) => ({ item, score: score(text(item), wanted) }))
+    .filter((scored) => scored.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((scored) => scored.item);
 }
 
 function eventText(event: ChannelEvent): string {
@@ -189,8 +203,8 @@ export function askChannel(host: AskHost, question: ChannelQuestion, now = Date.
     const person = about.person;
     tasks = tasks.filter((t) => holderOf(t)?.person === person);
   } else if (about?.kind === "words") {
-    const wanted = words(about.words);
-    tasks = tasks.filter((t) => matchesAll(`${t.title} ${t.labels.join(" ")}`, wanted));
+    const wanted = searchWords(about.words);
+    tasks = byWords(tasks, (t) => `${t.title} ${t.labels.join(" ")}`, wanted);
   }
   answer.tasks = tasks;
 
@@ -225,8 +239,8 @@ export function askChannel(host: AskHost, question: ChannelQuestion, now = Date.
   else {
     let events = said.events;
     if (about?.kind === "words") {
-      const wanted = words(about.words);
-      events = events.filter((e) => matchesAll(eventText(e), wanted));
+      const wanted = searchWords(about.words);
+      events = byWords(events, eventText, wanted);
       answer.searched = `the newest ${ASK_WORDS_WINDOW} Updates and Directives, the Tasks in progress and every note`;
     }
     const recent = events.filter((e) => e.at >= since);

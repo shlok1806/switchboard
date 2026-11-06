@@ -346,6 +346,14 @@ describe("connecting an app", () => {
     expect(one).toContain("About Task #2.");
     expect(one).not.toContain("Task #1 ");
     expect(await ask(tokens.access_token, { about: "Safari cookie" })).toContain("Safari drops the state cookie");
+    // A model asks with several words that might be there; one is enough.
+    const some = await ask(tokens.access_token, { about: "linux windows safari ipad" });
+    expect(some).toContain("Safari drops the state cookie");
+    expect(some).toContain(`Redirect fixed; adding the test for the Safari case."`);
+    // The question's own words ("the") find nothing by themselves.
+    expect(await ask(tokens.access_token, { about: "what is the status of linux" })).not.toContain(
+      "Safari drops the state cookie",
+    );
   });
 
   it("refreshes, rotating the refresh token, and a replayed one ends the sign-in", async () => {

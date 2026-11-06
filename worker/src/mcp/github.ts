@@ -6,6 +6,7 @@
 
 import { oneLine } from "../../../shared/src/index";
 import { GitHubApiError, type RestGitHub } from "../github/index";
+import { QUESTION_WORDS } from "../search-words";
 import { parseSince } from "./since";
 import type { McpTool, ReadOnlyGitHub, ToolResult } from "./tools";
 
@@ -29,11 +30,7 @@ const WEEK_MS = 7 * 86_400_000;
 /** The files the words search looks through: prose, where docs, ADRs and plans live. */
 const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$/i;
 /** Words that say nothing about which file is meant. */
-const STOP_WORDS = new Set(
-  "a an and are about as at be by do does doc docs file for from how in is it of on or our say says the this to us we what when where which who why with".split(
-    " ",
-  ),
-);
+const STOP_WORDS = new Set([...QUESTION_WORDS, "doc", "docs", "file"]);
 
 /** Wraps the App's repo client so a tool can only read with it. */
 export function readOnlyGitHub(rest: RestGitHub, repo: string): ReadOnlyGitHub {
