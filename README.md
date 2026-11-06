@@ -385,7 +385,10 @@ The per-call record of an Agent's work stays on the machine it ran on (ADR 0037)
 each tool call, shell command, turn end and file edit, the model-request digests of
 the Proxy Capture, and the Relay's rule Drops about them. They still stream live to
 everyone's Dashboard. Their record is kept in one SQLite file on your machine,
-`~/.config/switchboard/events.db`, for 30 days. When someone opens an Agent's history,
+`~/.config/switchboard/events.db`, for 30 days, and the Channel itself does not store
+them, which keeps the hosted Worker inside Cloudflare's free plan (about 430 rows
+written per Agent-hour instead of 7,190). Events recorded before this change stay on
+the Channel and still show. When someone opens an Agent's history,
 the Channel's feed or an `agent_summary`, the Channel asks the machine for that
 history over the socket it already holds. While the Agent runs, its wrapper answers.
 After that, the machine's Host answers, if one is installed for the Channel there
