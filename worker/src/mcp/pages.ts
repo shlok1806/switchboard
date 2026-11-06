@@ -38,7 +38,10 @@ function page(title: string, body: string, status = 200): Response {
       "Cache-Control": "no-store",
       "X-Frame-Options": "DENY",
       "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
-      "Referrer-Policy": "no-referrer",
+      // Not no-referrer: under it a browser posts the consent form with `Origin: null`,
+      // which the answer's same-origin check must refuse. same-origin keeps the referrer
+      // from every other site, the app's redirect included.
+      "Referrer-Policy": "same-origin",
     },
   });
 }
@@ -49,16 +52,12 @@ export interface ConsentView {
   client: string;
   /** The host the app's sign-in goes back to, shown so a lookalike app is noticed. */
   redirectHost: string;
-  loopback: boolean;
   /** The signed request the Allow button posts back. */
   request: string;
   switchAccount: string;
 }
 
 export function consentPage(view: ConsentView): Response {
-  const loopback = view.loopback
-    ? "<p>This app runs on your own computer. Allow it only if you just started connecting it yourself.</p>"
-    : "";
   return page(
     "Connect to Switchboard",
     `<h1>Let ${escapeHtml(view.client)} read the Switchboard Channel ${escapeHtml(view.repo)}?</h1>
@@ -68,7 +67,7 @@ export function consentPage(view: ConsentView): Response {
 <li>It <strong>cannot change</strong> anything on the Channel or on GitHub.</li>
 <li>It loses access when you lose write access to ${escapeHtml(view.repo)}.</li>
 </ul>
-${loopback}
+<p><strong>Allow this only if you just started connecting ${escapeHtml(view.client)} yourself.</strong> If someone sent you this link, cancel: they would get the access.</p>
 <form method="post">
 <input type="hidden" name="request" value="${escapeHtml(view.request)}">
 <button class="primary" type="submit" name="decision" value="allow">Allow read-only access</button>

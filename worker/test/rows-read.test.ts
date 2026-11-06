@@ -464,7 +464,11 @@ const ASK_BUDGET = 400;
 
 it("the connector's channel tool reads a bounded number of rows, plain or narrowed", async () => {
   const endpoint = `${BASE}/r/${REPO}/mcp`;
-  const token = await signAccess(SESSION_SECRET, "shlok", REPO, endpoint);
+  // A signed-in app's grant, which each call checks is still live.
+  await runInDurableObject(channelStub(), (channel: Channel) => {
+    channel.startMcpGrant("rows-read-grant", "shlok", "rows-read-client", Date.now() + 86_400_000);
+  });
+  const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-grant", endpoint);
   const ask = async (args: Record<string, string>) => {
     const response = await call(`/r/${REPO}/mcp`, {
       method: "POST",

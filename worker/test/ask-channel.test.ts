@@ -69,6 +69,16 @@ async function ask(token: string, args: Record<string, unknown> = {}): Promise<s
   return result.content.map((c) => c.text).join("\n");
 }
 
+/**
+ * The Origin a browser sends when it posts a form back to the page it came from
+ * (Fetch, "serializing a request origin"): under the page's no-referrer policy that is
+ * "null"; under same-origin, or strict-origin on https, it is the page's own origin.
+ */
+function browserOrigin(page: Response, at: URL): string {
+  const policy = (page.headers.get("Referrer-Policy") ?? "strict-origin-when-cross-origin").split(",").at(-1)?.trim();
+  return policy === "no-referrer" ? "null" : at.origin;
+}
+
 interface Connection {
   clientId: string;
   code: string;
@@ -116,10 +126,16 @@ async function authorizeInBrowser(
   const consent = await fetchWorker(back.toString(), { headers: { Cookie: session } });
   if (consent.status !== 200) return { stopped: consent };
   const html = await consent.text();
+  expect(html).toContain("If someone sent you this link, cancel");
   const request = /name="request" value="([^"]+)"/.exec(html)?.[1] ?? "";
+  // Posted as a browser posts this page's form: with the Origin the page's policy allows.
   const allowed = await fetchWorker(back.toString(), {
     method: "POST",
-    headers: { Cookie: session, Origin: PROD_BASE, "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      Cookie: session,
+      Origin: browserOrigin(consent, back),
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
     body: new URLSearchParams({ request, decision: "allow" }).toString(),
   });
   expect(allowed.status).toBe(302);
@@ -336,15 +352,22 @@ describe("connecting an app", () => {
     expect(next.refresh_token).not.toBe(tokens.refresh_token);
     await ask(next.access_token);
 
-    // The old refresh token again: a replay, so neither works any more.
+    // The old refresh token again: a replay, so neither works any more, nor the access token.
     expect(await (await refresh(tokens.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
     expect(await (await refresh(next.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
+    expect((await rpc(next.access_token, "tools/list")).status).toBe(401);
   });
 
   it("takes a code once: a replayed code ends the sign-in it started", async () => {
     const { clientId, code, verifier, tokens } = await connect("shlok1806");
     const redeem = () =>
-      tokenRequest({ grant_type: "authorization_code", code, client_id: clientId, code_verifier: verifier });
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: CLAUDE_CALLBACK,
+        client_id: clientId,
+        code_verifier: verifier,
+      });
     expect(await (await redeem()).json()).toMatchObject({ error: "invalid_grant" });
     const refresh = await tokenRequest({
       grant_type: "refresh_token",
@@ -352,8 +375,59 @@ describe("connecting an app", () => {
       client_id: clientId,
     });
     expect(await refresh.json()).toMatchObject({ error: "invalid_grant" });
-    // Nor does a third try start it again.
+    // Nor does a third try start it again, and the access token it gave stops working.
     expect(await (await redeem()).json()).toMatchObject({ error: "invalid_grant" });
+    expect((await rpc(tokens.access_token, "tools/list")).status).toBe(401);
+  });
+
+  it("a code is redeemed only with the redirect_uri its authorization request named", async () => {
+    const registered = await fetchWorker(`${PROD_BASE}/oauth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_name: "Claude", redirect_uris: [CLAUDE_CALLBACK] }),
+    });
+    const { client_id: clientId } = await registered.json<{ client_id: string }>();
+    const { verifier, challenge } = await pkce();
+    const authorized = await authorizeInBrowser("shlok1806", clientId, challenge);
+    if (!("redirect" in authorized)) throw new Error("Sign-in stopped");
+    const code = authorized.redirect.searchParams.get("code") ?? "";
+    const fields = { grant_type: "authorization_code", code, client_id: clientId, code_verifier: verifier };
+    expect(await (await tokenRequest(fields)).json()).toMatchObject({ error: "invalid_grant" });
+    expect((await tokenRequest({ ...fields, redirect_uri: CLAUDE_CALLBACK })).status).toBe(200);
+  });
+
+  it("keeps a few sign-ins per Person and app: a new one past them ends the oldest", async () => {
+    const registered = await fetchWorker(`${PROD_BASE}/oauth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_name: "Claude", redirect_uris: [CLAUDE_CALLBACK] }),
+    });
+    const { client_id: clientId } = await registered.json<{ client_id: string }>();
+    const signInOnce = async () => {
+      const { verifier, challenge } = await pkce();
+      const authorized = await authorizeInBrowser("shlok1806", clientId, challenge);
+      if (!("redirect" in authorized)) throw new Error("Sign-in stopped");
+      const exchanged = await tokenRequest({
+        grant_type: "authorization_code",
+        code: authorized.redirect.searchParams.get("code") ?? "",
+        redirect_uri: CLAUDE_CALLBACK,
+        client_id: clientId,
+        code_verifier: verifier,
+      });
+      expect(exchanged.status).toBe(200);
+      return exchanged.json<Connection["tokens"]>();
+    };
+    const first = await signInOnce();
+    const later = [];
+    for (let n = 0; n < 5; n++) later.push(await signInOnce());
+    expect((await rpc(first.access_token, "tools/list")).status).toBe(401);
+    const refreshed = await tokenRequest({
+      grant_type: "refresh_token",
+      refresh_token: first.refresh_token,
+      client_id: clientId,
+    });
+    expect(await refreshed.json()).toMatchObject({ error: "invalid_grant" });
+    for (const tokens of later) expect((await rpc(tokens.access_token, "tools/list")).status).toBe(200);
   });
 
   it("refuses a code without its PKCE verifier", async () => {
@@ -482,9 +556,63 @@ describe("who is refused", () => {
     expect(swapped.status).toBe(400);
     expect(swapped.headers.get("Location")).toBeNull();
   });
+
+  it("refuses a registration with too many or too long redirects", async () => {
+    const register = (uris: string[]) =>
+      fetchWorker(`${PROD_BASE}/oauth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_name: "Claude Code", redirect_uris: uris }),
+      });
+    const many = Array.from({ length: 11 }, (_, n) => `http://localhost:${4000 + n}/callback`);
+    expect(await (await register(many)).json()).toMatchObject({ error: "invalid_redirect_uri" });
+    const long = `http://localhost:4000/${"a".repeat(600)}`;
+    expect(await (await register([long])).json()).toMatchObject({ error: "invalid_redirect_uri" });
+  });
+
+  it("refuses a consent answer a browser posted with Origin null, as under a no-referrer page", async () => {
+    const registered = await fetchWorker(`${PROD_BASE}/oauth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_name: "Claude", redirect_uris: [CLAUDE_CALLBACK] }),
+    });
+    const { client_id: clientId } = await registered.json<{ client_id: string }>();
+    const { challenge } = await pkce();
+    const session = `sb_session=${(await bearer("shlok1806")).slice("Bearer ".length)}`;
+    const at = `${PROD_BASE}/oauth/authorize?${new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: CLAUDE_CALLBACK,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      resource: ENDPOINT,
+    })}`;
+    const html = await (await fetchWorker(at, { headers: { Cookie: session } })).text();
+    const request = /name="request" value="([^"]+)"/.exec(html)?.[1] ?? "";
+    const posted = await fetchWorker(at, {
+      method: "POST",
+      headers: { Cookie: session, Origin: "null", "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ request, decision: "allow" }).toString(),
+    });
+    expect(posted.status).toBe(403);
+  });
 });
 
 describe("read-only", () => {
+  it("takes a small batch, and refuses a larger one", async () => {
+    const { tokens } = await connect("shlok1806");
+    const batch = (size: number) =>
+      fetchWorker(ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokens.access_token}` },
+        body: JSON.stringify(Array.from({ length: size }, (_, id) => ({ jsonrpc: "2.0", id, method: "ping" }))),
+      });
+    const small = await batch(2);
+    expect(small.status).toBe(200);
+    expect(await small.json()).toHaveLength(2);
+    expect((await batch(9)).status).toBe(400);
+  });
+
   it("the access token reaches no Channel API route, and the endpoint takes no other credential", async () => {
     const moving = await agent("shlok1806");
     const { tokens } = await connect("shlok1806");

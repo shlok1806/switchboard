@@ -1,8 +1,8 @@
 // A Channel's read-only MCP endpoint (ADR 0040), `/r/<owner>/<repo>/mcp`, on MCP's
 // Streamable HTTP transport without sessions or streams: each JSON-RPC message is a
 // POST answered with JSON. It takes only the connector's own access token
-// (tokens.ts), checks Membership on every call as every Channel call does, and hands
-// its tools a read-only view of the Channel.
+// (tokens.ts), checks on every call that its grant is live and that its Person is a
+// Member, as every Channel call does, and hands its tools a read-only view of the Channel.
 
 import { devMode, sessionSecret } from "../auth";
 import type { Channel } from "../channel";
@@ -14,6 +14,12 @@ import { READ_ONLY_ANNOTATIONS, type ReadOnlyChannel, TOOLS } from "./tools";
 export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
 
 const SERVER_VERSION = "0.1.0";
+
+/**
+ * The most messages one POST may batch. MCP 2025-06-18 dropped batching, but
+ * 2025-03-26, which this endpoint still speaks, has it; a small cap bounds a POST's reads.
+ */
+export const MAX_BATCH = 8;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -69,7 +75,7 @@ export async function handleMcp(
   if (header === null || !header.startsWith("Bearer ")) return unauthorized(url, false);
   const grant = await readAccess(secret, header.slice("Bearer ".length).trim());
   if (grant === null || grant.repo !== repo) return unauthorized(url, true);
-  const admitted = await channel.admit(repo, { kind: "session", person: grant.person }, dev);
+  const admitted = await channel.admitConnector(repo, grant.person, grant.grant, dev);
   if (!admitted.ok) {
     return reply(rpcError(null, -32002, admitted.reason), admitted.status === 401 ? 401 : admitted.status, {
       ...(admitted.status === 401 ? { "WWW-Authenticate": `Bearer error="invalid_token"` } : {}),
@@ -86,6 +92,9 @@ export async function handleMcp(
   const readOnly: ReadOnlyChannel = { askChannel: (question) => channel.askChannel(question) };
   const answer = (message: unknown) => respond(message, readOnly, repo, url.origin);
   if (Array.isArray(body)) {
+    if (body.length === 0 || body.length > MAX_BATCH) {
+      return reply(rpcError(null, -32600, `A batch must hold 1 to ${MAX_BATCH} messages.`), 400);
+    }
     const answers = (await Promise.all(body.map(answer))).filter((a) => a !== null);
     return answers.length === 0 ? new Response(null, { status: 202, headers: CORS }) : reply(answers);
   }

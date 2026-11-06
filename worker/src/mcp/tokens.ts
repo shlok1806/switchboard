@@ -32,6 +32,8 @@ export interface AuthorizationRequest {
   state?: string;
   /** The Channel the token is for: its key, `owner/repo` lowercased. */
   repo: string;
+  /** Whether the request named its redirect_uri, which the token request must then repeat. */
+  redirectGiven: boolean;
 }
 
 /** What an access token says. */
@@ -39,6 +41,8 @@ export interface AccessGrant {
   person: PersonName;
   repo: string;
   scope: string;
+  /** The grant it was issued under, which every MCP call checks is still live. */
+  grant: string;
 }
 
 /** What a refresh token says. */
@@ -94,6 +98,7 @@ export async function readConsent(
     typeof p.redirectUri !== "string" ||
     typeof p.challenge !== "string" ||
     typeof p.repo !== "string" ||
+    typeof p.redirectGiven !== "boolean" ||
     (p.state !== undefined && typeof p.state !== "string")
   ) {
     return null;
@@ -105,6 +110,7 @@ export async function readConsent(
       redirectUri: p.redirectUri,
       challenge: p.challenge,
       repo: p.repo,
+      redirectGiven: p.redirectGiven,
       ...(typeof p.state === "string" ? { state: p.state } : {}),
     },
   };
@@ -120,6 +126,7 @@ export async function signCode(secret: string, person: PersonName, request: Auth
     person,
     client: await clientKey(request.clientId),
     redirectUri: request.redirectUri,
+    redirectGiven: request.redirectGiven,
     challenge: request.challenge,
     repo: request.repo,
     exp: now() + CODE_TTL_SECONDS,
@@ -134,6 +141,7 @@ export async function readCode(
   person: PersonName;
   client: string;
   redirectUri: string;
+  redirectGiven: boolean;
   challenge: string;
   repo: string;
 } | null> {
@@ -145,12 +153,21 @@ export async function readCode(
     typeof p.jti !== "string" ||
     typeof p.client !== "string" ||
     typeof p.redirectUri !== "string" ||
+    typeof p.redirectGiven !== "boolean" ||
     typeof p.challenge !== "string" ||
     typeof p.repo !== "string"
   ) {
     return null;
   }
-  return { jti: p.jti, person, client: p.client, redirectUri: p.redirectUri, challenge: p.challenge, repo: p.repo };
+  return {
+    jti: p.jti,
+    person,
+    client: p.client,
+    redirectUri: p.redirectUri,
+    redirectGiven: p.redirectGiven,
+    challenge: p.challenge,
+    repo: p.repo,
+  };
 }
 
 /** Whether `verifier` is the PKCE verifier of S256 `challenge` (RFC 7636). */
@@ -160,13 +177,20 @@ export async function pkceMatches(verifier: string, challenge: string): Promise<
   return base64url(new Uint8Array(digest)) === challenge;
 }
 
-/** An access token for `person` on the Channel of `repo`, whose MCP endpoint is `audience`. */
-export function signAccess(secret: string, person: PersonName, repo: string, audience: string): Promise<string> {
+/** An access token for `person` on the Channel of `repo`, under `grant`, whose MCP endpoint is `audience`. */
+export function signAccess(
+  secret: string,
+  person: PersonName,
+  repo: string,
+  grant: string,
+  audience: string,
+): Promise<string> {
   const iat = now();
   return signPayload(secret, {
     kind: "mcp-access",
     sub: person,
     repo,
+    grant,
     aud: audience,
     scope: MCP_SCOPE,
     iat,
@@ -177,8 +201,16 @@ export function signAccess(secret: string, person: PersonName, repo: string, aud
 export async function readAccess(secret: string, token: string): Promise<AccessGrant | null> {
   const p = await read(secret, token, "mcp-access");
   const person = typeof p?.sub === "string" ? personFromLogin(p.sub) : null;
-  if (p === null || person === null || typeof p.repo !== "string" || p.scope !== MCP_SCOPE) return null;
-  return { person, repo: p.repo, scope: p.scope };
+  if (
+    p === null ||
+    person === null ||
+    typeof p.repo !== "string" ||
+    typeof p.grant !== "string" ||
+    p.scope !== MCP_SCOPE
+  ) {
+    return null;
+  }
+  return { person, repo: p.repo, scope: p.scope, grant: p.grant };
 }
 
 export function signRefresh(secret: string, grant: RefreshGrant): Promise<string> {

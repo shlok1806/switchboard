@@ -1358,6 +1358,17 @@ export class Channel extends DurableObject<Env> {
     );
   }
 
+  /**
+   * Admits a call to the read-only connector (ADR 0040): its access token's grant must
+   * still be live (one read by key), and its Person a Member, as for every Channel call.
+   */
+  admitConnector(repo: string, person: PersonName, grant: string, dev: boolean): Promise<AdmitResult> {
+    if (!this.mcpGrants.live(grant)) {
+      return Promise.resolve({ ok: false, status: 401, reason: "This sign-in ended. Connect the app again." });
+    }
+    return this.admit(repo, { kind: "session", person }, dev);
+  }
+
   /** Starts the grant of a connector sign-in whose code was redeemed (ADR 0040). */
   startMcpGrant(id: string, person: PersonName, client: string, expiresAt: number): GrantResult {
     return this.mcpGrants.start(id, person, client, expiresAt);

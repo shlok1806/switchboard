@@ -61,6 +61,7 @@ const CHATGPT_CONNECTOR = /^https:\/\/chatgpt\.com\/connector\/oauth\/[A-Za-z0-9
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 const MAX_REDIRECT_URIS = 10;
+const MAX_REDIRECT_URI_LENGTH = 512;
 const MAX_CLIENT_NAME = 100;
 const MAX_STATE = 1000;
 
@@ -248,9 +249,12 @@ async function register(request: Request, env: Env, secret: string): Promise<Res
     !Array.isArray(uris) ||
     uris.length === 0 ||
     uris.length > MAX_REDIRECT_URIS ||
-    !uris.every((uri) => typeof uri === "string")
+    !uris.every((uri) => typeof uri === "string" && uri.length <= MAX_REDIRECT_URI_LENGTH)
   ) {
-    return oauthError("invalid_redirect_uri", `"redirect_uris" must list 1 to ${MAX_REDIRECT_URIS} URIs.`);
+    return oauthError(
+      "invalid_redirect_uri",
+      `"redirect_uris" must list 1 to ${MAX_REDIRECT_URIS} URIs of at most ${MAX_REDIRECT_URI_LENGTH} characters.`,
+    );
   }
   const refused = uris.find((uri) => !allowedRedirect(env, uri));
   if (refused !== undefined) {
@@ -331,7 +335,14 @@ async function readAuthorization(
   return {
     ok: true,
     client,
-    request: { clientId, redirectUri, challenge, repo, ...(state === undefined ? {} : { state }) },
+    request: {
+      clientId,
+      redirectUri,
+      challenge,
+      repo,
+      redirectGiven: asked !== null,
+      ...(state === undefined ? {} : { state }),
+    },
   };
 }
 
@@ -388,7 +399,6 @@ async function authorize(
     repo: auth.repo,
     client: client.name,
     redirectHost: target.host,
-    loopback: loopback(target),
     request: await signConsent(secret, person, auth),
     switchAccount: signInUrl,
   });
@@ -473,7 +483,9 @@ async function token(
     const code = await readCode(secret, params.get("code") ?? "");
     if (code === null) return oauthError("invalid_grant", "The authorization code is not valid or expired.");
     if (code.client !== client) return oauthError("invalid_grant", "The code was issued to another client.");
-    if (params.get("redirect_uri") !== null && params.get("redirect_uri") !== code.redirectUri) {
+    // RFC 6749 4.1.3: a redirect_uri the authorization request named must be repeated here.
+    const redirectUri = params.get("redirect_uri");
+    if ((code.redirectGiven || redirectUri !== null) && redirectUri !== code.redirectUri) {
       return oauthError("invalid_grant", "redirect_uri does not match the authorization request.");
     }
     if (!(await pkceMatches(params.get("code_verifier") ?? "", code.challenge))) {
@@ -508,7 +520,7 @@ async function token(
   const audience = `${url.origin}${mcpPath(repo)}`;
   return open(
     {
-      access_token: await signAccess(secret, person, repo, audience),
+      access_token: await signAccess(secret, person, repo, grant.id, audience),
       token_type: "Bearer",
       expires_in: ACCESS_TTL_SECONDS,
       refresh_token: await signRefresh(secret, {
