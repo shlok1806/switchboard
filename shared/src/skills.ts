@@ -83,7 +83,8 @@ export function skillPath(name: string, version?: number): string {
 }
 
 /** File names that hold credentials, whatever is in them: never published. */
-const SECRET_FILE = /(^|\/)(\.env(\..*)?|\.npmrc|\.netrc|\.pypirc|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|credentials(\.json)?|.*\.(pem|key|p12|pfx|keystore))$/i;
+const SECRET_FILE =
+  /(^|\/)(\.env(\..*)?|\.npmrc|\.netrc|\.pypirc|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|credentials(\.json)?|.*\.(pem|key|p12|pfx|keystore))$/i;
 
 /** Why `path` cannot be a skill's file, or null. */
 function badPath(path: string): string | null {
@@ -112,7 +113,10 @@ export function checkSkill(
   files: readonly SkillFile[],
 ): { ok: true; size: number; description?: string } | { ok: false; reason: string } {
   if (!SKILL_NAME_PATTERN.test(name)) {
-    return { ok: false, reason: `"${name}" is not a skill name: lower-case letters, digits, ".", "_" and "-", up to 64.` };
+    return {
+      ok: false,
+      reason: `"${name}" is not a skill name: lower-case letters, digits, ".", "_" and "-", up to 64.`,
+    };
   }
   if (files.length === 0 || files.length > MAX_SKILL_FILES) {
     return { ok: false, reason: `A skill has 1 to ${MAX_SKILL_FILES} files; ${name} has ${files.length}.` };
@@ -134,7 +138,8 @@ export function checkSkill(
     size += utf8Bytes(file.content);
     if (SECRET_FILE.test(file.path) || maskSecrets(file.content).count > 0) secrets.push(file.path);
   }
-  if (!seen.has(SKILL_ENTRY)) return { ok: false, reason: `A skill needs ${SKILL_ENTRY} at the root of its directory.` };
+  if (!seen.has(SKILL_ENTRY))
+    return { ok: false, reason: `A skill needs ${SKILL_ENTRY} at the root of its directory.` };
   if (size > MAX_SKILL_BYTES) {
     return { ok: false, reason: `${name} is ${size} bytes; a skill may be at most ${MAX_SKILL_BYTES}.` };
   }

@@ -92,7 +92,10 @@ export const SWITCHBOARD_TOOLS = [
 ] as const;
 
 /** The skill tools that publish or write files: never approved for the session in advance (ADR 0039). */
-export const SKILL_WRITE_TOOLS = ["skill_publish", "skill_install"] as const satisfies readonly (typeof SWITCHBOARD_TOOLS)[number][];
+export const SKILL_WRITE_TOOLS = [
+  "skill_publish",
+  "skill_install",
+] as const satisfies readonly (typeof SWITCHBOARD_TOOLS)[number][];
 
 export type SwitchboardTool = (typeof SWITCHBOARD_TOOLS)[number];
 
