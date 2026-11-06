@@ -15,6 +15,9 @@ import type {
   MemoryResponse,
   PersonAction,
   BriefResponse,
+  ConnectLangfuseRequest,
+  LangfuseConnection,
+  LangfuseSettingsResponse,
   Skill,
   SkillResponse,
   SkillsResponse,
@@ -28,7 +31,9 @@ import {
   DEFAULT_HOST_AGENTS_LIVE_CAP,
   DEFAULT_PERMISSION_MODE,
   agentIdFor,
+  cleanLangfuseConnect,
   cleanNickname,
+  LANGFUSE_KEY_END,
   holderName,
   hostIdFor,
   noteFromEvent,
@@ -46,6 +51,7 @@ import {
   type ConnectionState,
   type EventPage,
   type HistoryScope,
+  type LangfuseResult,
   type SpawnResult,
   type TerminalFrame,
   type TerminalLink,
@@ -79,6 +85,14 @@ export class MockChannelSource implements ChannelSource {
   readonly capabilities = ALL_CAPABILITIES;
   readonly isMock = true;
   private agents: Agent[];
+  /** The Channel's Langfuse project (ADR 0044): connected, unless the Channel is empty. */
+  private langfuseProject: LangfuseConnection | null = {
+    host: "https://cloud.langfuse.com",
+    publicKeyEnd: "4f2a",
+    project: { id: "cm1greenroom", name: "greenroom" },
+    connectedBy: ME,
+    connectedAt: new Date(T0 - 3 * 86_400_000).toISOString(),
+  };
   /** The demo Person's one Host, as `switchboard host install` would register it. */
   private host: Host = {
     id: hostIdFor(ME, "studio"),
@@ -116,6 +130,7 @@ export class MockChannelSource implements ChannelSource {
     } = {},
   ) {
     if (opts.state === "empty") {
+      this.langfuseProject = null;
       this.agents = [];
       this.tasks = [];
       return;
@@ -521,6 +536,37 @@ export class MockChannelSource implements ChannelSource {
     if (this.opts.state === "read-error") throw new Error(READ_FAILED);
     if (this.opts.state === "empty") return { pages: [] };
     return clone({ pages: BRIEF_PAGES });
+  }
+
+  /** Like the Worker: the project without its secret key. The demo's Person is the Channel's owner. */
+  async langfuse(): Promise<LangfuseSettingsResponse> {
+    await new Promise((r) => setTimeout(r, 100));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    return clone({ langfuse: this.langfuseProject, canManage: true });
+  }
+
+  /** Like the Worker: checked, tried against Langfuse (here, a secret key of "sk-lf-wrong" is refused), then kept. */
+  async connectLangfuse(request: ConnectLangfuseRequest): Promise<LangfuseResult> {
+    await new Promise((r) => setTimeout(r, 400));
+    const body = cleanLangfuseConnect({ ...request });
+    if (!body.ok) return { ok: false, reason: body.reason };
+    if (body.connect.secretKey === "sk-lf-wrong") {
+      return { ok: false, reason: `Langfuse at ${body.connect.host} refused these keys. Check that they are the project's.` };
+    }
+    this.langfuseProject = {
+      host: body.connect.host,
+      publicKeyEnd: body.connect.publicKey.slice(-LANGFUSE_KEY_END),
+      project: { id: "cm1greenroom", name: "greenroom" },
+      connectedBy: ME,
+      connectedAt: new Date().toISOString(),
+    };
+    return { ok: true, settings: clone({ langfuse: this.langfuseProject, canManage: true }) };
+  }
+
+  async removeLangfuse(): Promise<LangfuseResult> {
+    await new Promise((r) => setTimeout(r, 200));
+    this.langfuseProject = null;
+    return { ok: true, settings: { langfuse: null, canManage: true } };
   }
 
   /** Like the Worker and the Host: checked, then an Agent that registers a moment later. */

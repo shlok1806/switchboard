@@ -20,12 +20,14 @@ import type {
 import { agentPath, BRIEF_HISTORY, MAX_BRIEF_PAGES } from "../../shared/src/index";
 import { Channel } from "../src/channel";
 import { installGitHubApp } from "../src/github/index";
+import { sealSecretKey } from "../src/langfuse";
 import { signAccess } from "../src/mcp/tokens";
 import { installJev } from "../src/relay/jev";
 import { lastUpdate } from "../src/status-comment";
 import { BASE, bearer, channelStub, forgetTokens, REPO, remember, SESSION_SECRET, streamQuery, url } from "./client";
 import { FakeGitHubApi } from "./fake-github-api";
 import { FakeJev } from "./fake-jev";
+import { FakeLangfuse, LANGFUSE_HOST, PROJECT, PUBLIC_KEY, SECRET_KEY } from "./fake-langfuse";
 
 /**
  * The history the Channel is given before anything is measured: Events from Agents
@@ -606,6 +608,57 @@ it("the connector's brief tool reads one row per page for the overview, and one 
     expect(response.status).toBe(200);
   });
   expect(dashboard).toBeLessThan(MAX_BRIEF_PAGES + 10);
+});
+
+it("the connector's costs tool reads the Channel's one Langfuse row besides what admits the call (ADR 0044)", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  const langfuse = new FakeLangfuse();
+  langfuse.listen();
+  langfuse.observations.push({
+    type: "GENERATION",
+    traceName: "verifier turn",
+    model: "claude-opus-4-1",
+    environment: "production",
+    startTime: new Date(Date.now() - 86_400_000).toISOString(),
+    latencyMs: 3_000,
+    cost: 0.5,
+  });
+  try {
+    const secretSealed = await sealSecretKey(SESSION_SECRET, REPO, SECRET_KEY);
+    await runInDurableObject(channelStub(), (channel: Channel) => {
+      channel.startMcpGrant("rows-read-costs", "shlok", "rows-read-client", Date.now() + 86_400_000);
+      channel.setLangfuseProject({
+        host: LANGFUSE_HOST,
+        publicKey: PUBLIC_KEY,
+        secretSealed,
+        project: PROJECT,
+        connectedBy: "shlok",
+        connectedAt: new Date().toISOString(),
+      });
+    });
+    const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-costs", endpoint);
+    const send = async (message: Record<string, unknown>) => {
+      const response = await call(`/r/${REPO}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+      });
+      return (await response.json()) as { result: { isError?: boolean; content?: { text: string }[] } };
+    };
+    const ask = async (args: Record<string, string>) => {
+      const { result } = await send({ method: "tools/call", params: { name: "costs", arguments: args } });
+      expect(result.isError, JSON.stringify(args)).toBe(false);
+      expect(result.content?.[0]?.text).toContain("$0.50");
+    };
+    // Membership is checked, and cached, by a first call, as by any caller's.
+    await ask({});
+    const admitting = await rowsRead(() => send({ method: "ping" }));
+    for (const args of [{}, { by: "trace" }, { by: "day", period: "7d" }] as Record<string, string>[]) {
+      expect(await rowsRead(() => ask(args)), JSON.stringify(args)).toBe(admitting + 1);
+    }
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 /** What starting the Channel's Durable Object again reads, as after an eviction or a deploy. */

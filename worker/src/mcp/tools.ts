@@ -1,11 +1,12 @@
 // The read-only connector's tools (ADR 0040). Each one gets a read-only view of its
 // Channel, never the Channel's stub, so no tool can reach a method that writes.
 // The github tool (#157, ADR 0041) reads GitHub instead; the brief tool (#158, ADR 0042)
-// reads the Brief's pages; the costs tool (#160) joins this list.
+// reads the Brief's pages; the costs tool (#160, ADR 0044) reads the repo's own Langfuse.
 
 import type { BriefPage, BriefPageSummary } from "../../../shared/src/index";
 import type { ChannelAnswer, ChannelQuestion } from "../ask";
 import { briefTool } from "./brief";
+import { type CostsSource, costsTool } from "./costs";
 import { formatAnswer } from "./format";
 import { githubTool } from "./github";
 import { parseSince } from "./since";
@@ -32,6 +33,11 @@ export interface ToolContext {
   channel: ReadOnlyChannel;
   /** GitHub, or null while the Worker has no GitHub App configured. */
   github: ReadOnlyGitHub | null;
+  /**
+   * The Channel's Langfuse project and its keys, or null when none is connected (ADR 0044).
+   * Read when called, so only the costs tool reads its row.
+   */
+  langfuse(): Promise<CostsSource | null>;
   /** The Channel's key, `owner/repo` lowercased. */
   repo: string;
   /** The Worker's origin, for links to the Dashboard. */
@@ -108,4 +114,4 @@ const channelTool: McpTool = {
   },
 };
 
-export const TOOLS: readonly McpTool[] = [channelTool, githubTool, briefTool];
+export const TOOLS: readonly McpTool[] = [channelTool, githubTool, briefTool, costsTool];

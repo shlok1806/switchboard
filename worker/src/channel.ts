@@ -107,6 +107,7 @@ import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Direct
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } from "./hosts";
+import { LangfuseProject, type StoredLangfuse } from "./langfuse";
 import { type GrantResult, McpGrants } from "./mcp/grants";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
 import { ProxyCapture } from "./proxy-capture";
@@ -446,6 +447,8 @@ export class Channel extends DurableObject<Env> {
   private readonly brief: Brief;
   /** The read-only connector's sign-ins (ADR 0040). */
   private readonly mcpGrants: McpGrants;
+  /** The repo's own Langfuse project, its secret key sealed (ADR 0044). */
+  private readonly langfuse: LangfuseProject;
   /** A Claim with no Update for this long is Quiet (ADR 0040). */
   private readonly quietAfterMs: number;
   /** How long a transcript read waits for the wrapper's page: TRANSCRIPT_WAIT_MS, or shorter in tests. */
@@ -496,6 +499,7 @@ export class Channel extends DurableObject<Env> {
       Number.isInteger(briefWrites) && briefWrites >= 0 ? briefWrites : DEFAULT_BRIEF_WRITES_PER_DAY,
     );
     this.mcpGrants = new McpGrants(ctx.storage.sql);
+    this.langfuse = new LangfuseProject(ctx.storage.sql);
     const quietHours = Number(env.QUIET_CLAIM_HOURS);
     this.quietAfterMs = (quietHours > 0 ? quietHours : DEFAULT_QUIET_CLAIM_HOURS) * 60 * 60 * 1000;
     const notesPerDay = Number(env.MEMORY_NOTES_PER_DAY);
@@ -1385,6 +1389,30 @@ export class Channel extends DurableObject<Env> {
    */
   askBrief(page: string): { page: BriefPage | null; pages?: BriefPageSummary[] } {
     return this.brief.ask(page);
+  }
+
+  /** Whether `person` is the Channel's owner, an admin of its repo, asked of GitHub now (ADR 0044). */
+  isOwner(person: PersonName, dev: boolean): Promise<{ ok: true; owner: boolean } | { ok: false; reason: string }> {
+    return this.access.isOwner(person, dev);
+  }
+
+  /**
+   * The Channel's Langfuse project with its secret key still sealed, for the Worker
+   * alone: the settings route shows only `connection(...)` of it, and the Connector's
+   * costs tool opens the key for its calls to Langfuse (ADR 0044). One row read.
+   */
+  langfuseProject(): StoredLangfuse | null {
+    return this.langfuse.get();
+  }
+
+  /** Connects the Channel's Langfuse project, or replaces it. The Worker checked the owner and the keys. */
+  setLangfuseProject(stored: StoredLangfuse): void {
+    this.langfuse.set(stored);
+  }
+
+  /** Removes the Channel's Langfuse project. True when there was one. */
+  removeLangfuseProject(): boolean {
+    return this.langfuse.remove();
   }
 
   /** The Channel's notes, for any Person or Agent on it (ADR 0019). */

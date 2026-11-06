@@ -9,7 +9,7 @@
     "cf-typegen": "wrangler types",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.scripts.json",
     "test": "vitest run",
-    "lint": "biome check . ../scripts",
+    "lint": "biome check . ../scripts ../shared",
     "channel": "tsx ../scripts/channel.ts"
   },
   "devDependencies": {

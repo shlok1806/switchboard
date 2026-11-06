@@ -168,6 +168,7 @@ const VIEW_NAME: Record<Route["view"], string> = {
   brief: "Brief",
   skills: "Skills",
   hosts: "Hosts",
+  settings: "Settings",
   missing: "Page",
 };
 
@@ -194,6 +195,15 @@ function Body({ view }: { view: Route["view"] }) {
       );
     case "skills":
       return <Table rows={4} wide={false} />;
+    case "settings":
+      return (
+        <div className="flex max-w-[40rem] flex-col gap-3">
+          <Bar w="8rem" h="h-4" />
+          <Bar w="100%" className="max-w-full" />
+          <Bar w="70%" />
+          <span aria-hidden className="h-[30px] w-40 rounded-[var(--r)] border border-rule-2" />
+        </div>
+      );
     case "brief":
       return (
         <div className="grid gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]">

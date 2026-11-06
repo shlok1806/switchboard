@@ -8,7 +8,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { ArrowLeftRight, ChevronRight, Eye, Monitor, Moon, Plus, Rows2, Rows3, Send, Square, Sun, UserRoundCheck } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, Eye, Monitor, Moon, Plus, Rows2, Rows3, Send, Settings, Square, Sun, UserRoundCheck } from "lucide-react";
 import type { Agent, Task } from "@shared/index";
 import { VIEWS } from "@/components/shell/nav";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
@@ -341,6 +341,9 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
               <v.icon aria-hidden /> {v.title}
             </CommandItem>
           ))}
+          <CommandItem value="View Channel settings" onSelect={() => run({ view: "settings" })}>
+            <Settings aria-hidden /> Channel settings
+          </CommandItem>
         </CommandGroup>
         <CommandGroup heading="Theme">
           {THEMES.map((t) => (
