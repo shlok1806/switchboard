@@ -44,6 +44,9 @@ const vars = {
   DIRECTIVE_ATTACH_WAIT_SECONDS: "1",
   // Small, so a test reaches the daily cap on notes with a few of them.
   MEMORY_NOTES_PER_DAY: "5",
+  QUIET_CLAIM_HOURS: "4",
+  // One app's callback the tests register besides the known ones (test/ask-channel.test.ts).
+  MCP_EXTRA_REDIRECT_URIS: "https://inspector.test/callback",
   GITHUB_API_URL: "",
   GITHUB_WEB_URL: "",
   JEV_API_URL: "",

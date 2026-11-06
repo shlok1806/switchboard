@@ -86,7 +86,9 @@ async function subscribe(person: string): Promise<{ received: StreamMessage[]; c
   if (!socket) throw new Error("No WebSocket in the upgrade response");
   socket.accept();
   const received: StreamMessage[] = [];
-  socket.addEventListener("message", (m) => received.push(JSON.parse(m.data as string) as StreamMessage));
+  socket.addEventListener("message", (m) => {
+    received.push(JSON.parse(m.data as string) as StreamMessage);
+  });
   return { received, close: () => socket.close() };
 }
 

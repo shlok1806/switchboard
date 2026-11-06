@@ -52,7 +52,7 @@ it("builds what fits today's budget, one index past it on a day that spent nothi
     // What SQLite says each build wrote: a row per Event it covers, and its schema row.
     expect(sql.exec("SELECT day, rows FROM index_builds ORDER BY day").toArray()).toEqual([
       { day: "2026-10-15", rows: 300 + 1 },
-      { day: "2026-10-16", rows: 55 + 4 },
+      { day: "2026-10-16", rows: 55 + 5 },
     ]);
   });
 });

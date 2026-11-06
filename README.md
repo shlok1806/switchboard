@@ -127,6 +127,70 @@ For local work, `wrangler dev` with `DEV_FAKE_GITHUB=true` adds a dev-only fake
 sign-in that answers only on localhost: `switchboard login --url
 http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
 
+## Ask the Channel
+
+Anyone on a Channel can ask about the repo's work from the Claude desktop or web app,
+ChatGPT or Claude Code, without running an Agent: "what is in progress and what is
+stuck?", "what happened on #142 today?", "what has maya been doing?". Each Channel
+has a read-only MCP connector at
+
+```text
+https://<worker>/r/<owner>/<repo>/mcp
+```
+
+for example `https://switchboard.switchboard-worker.workers.dev/r/shlok1806/greenroom/mcp`.
+You sign in with GitHub, as on the Dashboard, and you get in if you have write
+access to the repo. The connector can only read: it cannot post, claim, send a
+Directive or change anything on GitHub, and its token is refused everywhere else on
+the Worker (ADR 0040).
+
+**Claude desktop app or claude.ai** (Pro, Max, Team or Enterprise; on Team and
+Enterprise an Owner may have to add it for the organization first):
+
+1. Open **Settings**, then **Connectors**, and choose **Add custom connector**.
+2. Name it, say `Switchboard greenroom`, and paste the connector URL. Leave the
+   advanced OAuth settings empty.
+3. Choose **Add**, then **Connect**. A browser page asks you to sign in with GitHub,
+   then shows what you are allowing: read-only access to that one Channel, as you.
+   Choose **Allow read-only access**.
+4. In a chat, turn the connector on from the tools menu and ask away.
+
+**ChatGPT:**
+
+1. Open [chatgpt.com/plugins](https://chatgpt.com/plugins), choose **+**, then **Add
+   custom MCP server**. Your workspace's admin may have to allow custom MCP servers.
+2. Give it a name, and under **Connection** choose **Public endpoint** and paste the
+   connector URL. Choose OAuth for authentication.
+3. Accept the warning and choose **Create as a plugin**. Sign in with GitHub and
+   choose **Allow read-only access** when asked.
+4. In a new chat, type `@` and pick the plugin.
+
+**Claude Code:**
+
+```sh
+claude mcp add --transport http --scope user switchboard-greenroom \
+  https://switchboard.switchboard-worker.workers.dev/r/shlok1806/greenroom/mcp
+```
+
+Then run `/mcp` in a session (or `claude mcp login switchboard-greenroom` in a
+shell), pick the server, and sign in in the browser it opens. Claude Code keeps and
+refreshes the token itself.
+
+The connector has one tool for now, `channel`, with two optional arguments:
+
+- `since`: how far back Updates, Directives and notes go, as `90m`, `24h`, `7d` or an
+  ISO 8601 time. 24 hours by default.
+- `about`: a Task (`#142`), an Agent (`shlok1806/claude/7f3a` or its Nickname), a
+  Person (`maya`) or words to look for.
+
+It answers with the Tasks in progress and who holds them, the Claims that are stuck
+(Stale, blocked, or Quiet: no Update for `QUIET_CLAIM_HOURS`, 4 by default), the
+latest Updates, Directives and Memory Notes, and the Agents on the Channel. Every
+item carries its Task number or Update ID and a link to the Dashboard, so the app
+can cite it and you can click through. Each answer reads at most a few hundred rows
+and writes none. Sign-ins last 30 days from the app's last refresh, and stop working
+within minutes of losing write access to the repo.
+
 ## Running an agent CLI through Switchboard
 
 ```sh

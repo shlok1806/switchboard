@@ -8,6 +8,8 @@
 //   /r/<owner>/<repo>/api/memory    the notes Agents write for each other (memory-api.ts)
 //   /r/<owner>/<repo>/api/skills    skills shared on the Channel (skills-api.ts, ADR 0039)
 //   POST /api/github/webhook        GitHub's deliveries, routed by their repository
+//   /r/<owner>/<repo>/mcp           the read-only MCP connector of that Channel (mcp/server.ts, ADR 0040)
+//   /oauth/..., /.well-known/oauth-* its OAuth sign-in (mcp/oauth.ts)
 //
 // Everything under /r/ needs a credential: a Person session or an Agent token
 // (auth.ts). The Channel admits it: a live token, and a Person with write access
@@ -35,6 +37,9 @@ import { handleClaimRoute, isAgentId, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
 import { agentMayCall, HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } from "./hosts-api";
 import { fail, json, readJson } from "./http";
+import { handleOAuthRoute, isOAuthRoute } from "./mcp/oauth";
+import { MCP_PATH } from "./mcp/paths";
+import { handleMcp } from "./mcp/server";
 import { GET_MEMORY_ROUTE, handleMemoryRoute, POST_MEMORY_ROUTE } from "./memory-api";
 import { relaySettings } from "./relay/relay";
 import { handleSkillRoute, matchSkillRoute } from "./skills-api";
@@ -320,6 +325,20 @@ export default {
       return handleWebhook(request, env, (repo) => channelOf(env, repo));
     }
     if (isAuthRoute(url.pathname)) return handleAuthRoute(request, url, env, (repo) => channelOf(env, repo));
+    if (isOAuthRoute(url.pathname)) return handleOAuthRoute(request, url, env, (repo) => channelOf(env, repo));
+
+    const mcp = MCP_PATH.exec(url.pathname);
+    if (mcp?.[1] !== undefined) {
+      let named: string;
+      try {
+        named = decodeURIComponent(mcp[1]);
+      } catch {
+        return fail(404, "Not found.");
+      }
+      const repo = channelRepo(env, named);
+      if (repo === null) return fail(404, `There is no Channel for ${named} here.`);
+      return handleMcp(request, url, env, repo, channelOf(env, repo));
+    }
 
     const api = CHANNEL_PATH.exec(url.pathname);
     if (api?.[1] !== undefined && api[2] !== undefined) {

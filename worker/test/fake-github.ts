@@ -1,13 +1,16 @@
 // An in-memory GitHub for tests. It keeps Issues, sub-issues and dependencies, and
 // every change made "on GitHub" returns the webhook delivery GitHub would send, so a
-// test decides whether to deliver it or let it go missing.
+// test decides whether to deliver it or let it go missing. FakeSignIn is GitHub's
+// side of sign-in.
 
-import type { TaskNumber } from "../../shared/src/index";
+import type { DeviceCodeResponse, TaskNumber } from "../../shared/src/index";
 import type {
   ComparedFile,
   Comparison,
+  DevicePoll,
   GitHub,
   GitHubIssue,
+  GitHubSignIn,
   IssueRef,
   NewIssue,
   NewPullRequest,
@@ -467,5 +470,46 @@ export class FakeGitHub implements GitHub {
     const delivery = { event, payload };
     this.outbox.push(delivery);
     return delivery;
+  }
+}
+
+/** GitHub's side of sign-in: a code or a device code stands for a login. */
+export class FakeSignIn implements GitHubSignIn {
+  /** Web-flow codes, and the login each signs in. */
+  readonly codes = new Map<string, string>();
+  /** Device codes: the login once the Person approved, null while pending. */
+  readonly devices = new Map<string, string | null>();
+
+  authorizeUrl(state: string, redirectUri: string): string {
+    return `https://github.test/login/oauth/authorize?${new URLSearchParams({ state, redirect_uri: redirectUri })}`;
+  }
+
+  async exchangeCode(code: string): Promise<string> {
+    const login = this.codes.get(code);
+    if (login === undefined) throw new Error("bad_verification_code");
+    return `user-token-${login}`;
+  }
+
+  async startDevice(): Promise<DeviceCodeResponse> {
+    const deviceCode = `device-${this.devices.size + 1}`;
+    this.devices.set(deviceCode, null);
+    return {
+      deviceCode,
+      userCode: "ABCD-1234",
+      verificationUri: "https://github.test/login/device",
+      interval: 5,
+      expiresIn: 900,
+    };
+  }
+
+  async pollDevice(deviceCode: string): Promise<DevicePoll> {
+    const login = this.devices.get(deviceCode);
+    if (login === undefined) return { ok: false, pending: false, error: "expired", reason: "The code expired." };
+    if (login === null) return { ok: false, pending: true, slowDown: false };
+    return { ok: true, userToken: `user-token-${login}` };
+  }
+
+  async userLogin(userToken: string): Promise<string> {
+    return userToken.slice("user-token-".length);
   }
 }

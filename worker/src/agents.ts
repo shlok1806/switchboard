@@ -225,11 +225,12 @@ export class AgentRoster {
       .map(rowToAgent);
   }
 
-  /** The Agents that are not Gone, most recently seen first. */
-  live(): Agent[] {
+  /** The Agents that are not Gone, most recently seen first; at most `limit` of them when given. */
+  live(limit = -1): Agent[] {
     return this.host.sql
       .exec<AgentRow>(
-        "SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone' ORDER BY last_seen_at DESC, id",
+        "SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone' ORDER BY last_seen_at DESC, id LIMIT ?",
+        limit,
       )
       .toArray()
       .map(rowToAgent);
