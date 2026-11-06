@@ -1048,6 +1048,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             log("the CLI's hooks are running");
           }
           typer.hook(input);
+          // The session started: the librarian's first pass need not wait for its retry.
+          if (input.hook_event_name === "SessionStart") librarianWaker?.ready();
           // The hook knows where the session's transcript is.
           if (typeof input.transcript_path === "string" && input.transcript_path !== "") {
             usage?.tally.follow(input.transcript_path);
@@ -1163,6 +1165,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     screen?.write(data, () => screenStream.changed());
     watch.activity();
     typer.output(data);
+    // The CLI's prompt takes a paste now: the librarian's first pass need not wait for its retry.
+    if (data.includes("\x1b[?2004h")) librarianWaker?.ready();
   });
 
   let remindedAt = 0;

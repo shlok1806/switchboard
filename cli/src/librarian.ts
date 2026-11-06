@@ -235,6 +235,8 @@ export class LibrarianWaker {
   /** A check asked for while one ran: it runs again once that one is done. */
   private again = false;
   private lastIdleMove = 0;
+  /** Why the last wake could not be typed, so each reason is logged once. */
+  private lastNotTyped: string | null = null;
   private stopped = false;
 
   constructor(private readonly options: LibrarianWakerOptions) {}
@@ -279,6 +281,17 @@ export class LibrarianWaker {
     clearTimeout(this.settle);
     clearTimeout(this.retry);
     clearInterval(this.poll);
+  }
+
+  /**
+   * The session may take a prompt now (it started, or turned bracketed paste on): a wake
+   * that could not be typed is tried again at once instead of after the retry.
+   */
+  ready(): void {
+    if (this.retry === undefined || this.stopped) return;
+    clearTimeout(this.retry);
+    this.retry = undefined;
+    void this.check();
   }
 
   private later(): void {
@@ -335,12 +348,17 @@ export class LibrarianWaker {
       return librarianPrompt(feed);
     });
     if (result.typed) {
+      this.lastNotTyped = null;
       this.options.log(
         `librarian: woke for ${feed.cursor === null ? "its first pass" : `${feed.changes.length} change(s)`} through ${feed.through}`,
       );
       return;
     }
     this.told = null;
+    // Said once per reason, so a session that cannot take the prompt for long does not fill the log.
+    const reason = result.reason ?? "unknown";
+    if (reason !== this.lastNotTyped) this.options.log(`librarian: not woken yet: ${reason}; trying again`);
+    this.lastNotTyped = reason;
     this.later();
   }
 }

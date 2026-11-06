@@ -4261,6 +4261,37 @@ describe("switchboard host", () => {
     expect(await term.exited).toBe(0);
   });
 
+  it("starts the librarian with `switchboard librarian`: in its mode, with its tools and brief, and its first pass typed (ADR 0045)", async () => {
+    const { stdout } = await cli("librarian", "--host", HOST, "--cwd", cwd, "--model", "opus", "--repo", github.repo);
+    const id = /^(e2e\/claude\/\S+) "librarian" is running on e2e\/studio\./m.exec(stdout)?.[1] ?? "";
+    expect(id, stdout).not.toBe("");
+    const spawn = (await history()).events.findLast((e) => e.type === "agent.spawn");
+    expect(spawn?.payload).toMatchObject({ librarian: true, permissionMode: "dontAsk", nickname: "librarian" });
+    expect(await hostedAgents()).toEqual([expect.objectContaining({ agent: id, librarian: true })]);
+    expect((await agents()).find((a) => a.id === id)?.librarian).toBe(true);
+
+    // The wrapper ran Claude Code as the librarian, and typed its first pass at the prompt by itself.
+    const log = await waitFor(
+      "the librarian's first pass",
+      async () => {
+        const text = await agentLog(id);
+        return /FAKE-CLAUDE pasted turn done/.test(text) ? text : undefined;
+      },
+      30_000,
+    );
+    const args = JSON.parse(/FAKE-CLAUDE args=(\[.*\])/.exec(log)?.[1] ?? "[]") as string[];
+    expect(args).toEqual(
+      expect.arrayContaining(["--permission-mode", "dontAsk", "--strict-mcp-config", "--model", "opus"]),
+    );
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(LIBRARIAN_BRIEF);
+    const settings = JSON.parse(await readFile(args[args.indexOf("--settings") + 1] ?? "", "utf8"));
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining([...LIBRARIAN_DENIED_TOOLS]));
+    expect(log).toMatch(/FAKE-CLAUDE pasted prompt="Switchboard, for the librarian\..*This is your first pass/);
+
+    await cli("stop", "librarian", "--repo", github.repo);
+    await waitFor("the librarian to end", async () => ((await hostedAgents()).length === 0 ? true : undefined), 20_000);
+  });
+
   it("uninstalls: the LaunchAgent is unloaded and removed, and the Host leaves the Channel", async () => {
     await stopHost();
     const { stdout } = await cli("host", "uninstall");
@@ -4594,9 +4625,10 @@ describe("The librarian (ADR 0045)", () => {
     const agent = await waitFor("the librarian on the Channel", async () => (await agents()).find((a) => a.id === id));
     expect(agent.librarian).toBe(true);
 
-    // Its first pass, typed at its prompt, builds the Brief from where things stand.
+    // Typed at its prompt by itself: its first pass, unless a librarian on this Channel made it already
+    // (the Host's test starts one), and then what came since.
     const first = await woken(librarian, seen);
-    expect(first).toContain("This is your first pass");
+    expect(first).toMatch(/This is your first pass|Since your last pass:/);
     expect(first).toMatch(/You may write at most 8 page\(s\) this time/);
     const tools = JSON.parse((await librarian.waitForOutput(/FAKE-CLAUDE tools=(\[.*?\])/))[1] ?? "[]") as string[];
     expect(tools.sort()).toEqual([...LIBRARIAN_MCP_TOOLS].sort());
