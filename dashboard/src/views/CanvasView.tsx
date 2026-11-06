@@ -17,7 +17,7 @@ import { contextPercent, shortName } from "@/components/domain/fleet";
 import { InspectorFrame } from "@/components/shell/inspector";
 import { EmptyView } from "@/components/shell/states";
 import { FirstAgentAction, StartAgentButton } from "@/components/domain/start-agent";
-import { Glyph, State, useAgentStates, useNeedsYou } from "@/components/domain/state";
+import { Glyph, Orb, State, useAgentStates, useNeedsYou } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
@@ -165,6 +165,7 @@ const Node = memo(function Node({
           <Glyph state={state} />
           <span className={cn("min-w-0 flex-1 truncate text-row font-semibold", state === "gone" ? "text-ink-3" : "text-ink")}>{shortName(agent)}</span>
           {agent.role === "lead" && <span className="shrink-0 rounded-[var(--r)] border border-rule-2 px-1.5 text-ink-3">lead</span>}
+          <Orb state={state} />
         </span>
         <span className="min-w-0 overflow-hidden whitespace-nowrap text-ink-3" title={task?.title}>
           {task ? `#${task.number} ${shortTitle(task.title)}` : "No Claim"}
@@ -324,6 +325,7 @@ function Lanes({
                         <span className={cn("shrink-0 text-small tabular-nums", needsPerson(state) ? "font-semibold text-signal" : "text-ink-3")}>
                           {stateWord(state, agent.person)} · {age(agent, state)}
                         </span>
+                        <Orb state={state} />
                       </span>
                       <span className="pl-5 text-small [overflow-wrap:anywhere] text-ink-3">
                         {task ? `#${task.number} ${task.title}` : "No Claim"}

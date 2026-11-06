@@ -13,7 +13,7 @@ import { PendingApproval } from "@/components/domain/approval";
 import { FirstAgentAction } from "@/components/domain/start-agent";
 import { GroupLine, Secondary, StackedRow, contextPercent, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
 import { RowFrame } from "@/components/domain/log";
-import { State } from "@/components/domain/state";
+import { Orb, State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { useNow } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
@@ -473,10 +473,15 @@ function FleetRow({ line }: { line: Line }) {
         <State state={state} person={a.person} />
       </td>
       <td className="py-2 pr-3">
-        <a href={href({ view: "agent", id: a.id })} className={cn("text-row font-semibold [overflow-wrap:anywhere] hover:underline", gone ? "text-ink-2" : "text-ink")}>
-          {shortName(a)}
-        </a>
-        <Secondary agent={a} model={false} />
+        <div className="flex items-start gap-2">
+          <Orb state={state} reserve />
+          <div className="min-w-0">
+            <a href={href({ view: "agent", id: a.id })} className={cn("text-row font-semibold [overflow-wrap:anywhere] hover:underline", gone ? "text-ink-2" : "text-ink")}>
+              {shortName(a)}
+            </a>
+            <Secondary agent={a} model={false} />
+          </div>
+        </div>
       </td>
       <td className={cn("py-2 pr-3 text-row", gone && !first ? "text-ink-3" : "text-ink")}>
         {first ? (

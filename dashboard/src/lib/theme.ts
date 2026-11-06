@@ -25,7 +25,11 @@ function resolve(choice: ThemeChoice): "light" | "dark" {
 function paint(choice: ThemeChoice) {
   const root = document.documentElement;
   root.classList.add("theme-switching");
-  root.classList.toggle("dark", resolve(choice) === "dark");
+  const dark = resolve(choice) === "dark";
+  root.classList.toggle("dark", dark);
+  // Light is marked too: the thinking orb reads the nearest mark and only falls back to the
+  // system's setting without one, which a Person who chose light over a dark system is not.
+  root.classList.toggle("light", !dark);
   requestAnimationFrame(() => root.classList.remove("theme-switching"));
 }
 
