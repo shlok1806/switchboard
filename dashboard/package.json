@@ -28,6 +28,7 @@
     "react-dom": "^19.3.0",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.7.0",
+    "thinking-orbs": "0.3.2",
     "tunnel-rat": "^0.1.2"
   },
   "devDependencies": {
