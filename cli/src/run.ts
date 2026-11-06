@@ -73,6 +73,7 @@ import { prepareSessionTools, type SessionTools } from "./mcp-config";
 import { MemoryInbox, MemoryNudges } from "./memory";
 import { configuredModel, ModelWatch } from "./model-watch";
 import { NextTurn, type NextTurnItems } from "./next-turn";
+import { dashboardUrl, onboard, shouldOnboard } from "./onboarding";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
@@ -281,6 +282,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
     log(`could not reach the Channel for ${repo}: ${error.message}`);
   }
+
   // `--from` (ADR 0024): the session carries on another Agent's work, and starts with
   // what the Channel knows of it. One that cannot be read stops here, before the CLI runs.
   let predecessor: AgentSummary | null = null;
@@ -1065,6 +1067,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   const stdin = process.stdin;
   const stdout = process.stdout;
+  // A Person's first session on this machine starts with the guide, before the agent CLI
+  // draws its screen (ADR 0038). Nothing waits for a key: the CLI starts at once after it.
+  if (plan.kind !== "none" && shouldOnboard(config.person, { stdin: !!stdin.isTTY, stdout: !!stdout.isTTY }, env)) {
+    onboard(
+      { person: config.person, repo, dashboard: dashboardUrl(config.url, repo) },
+      (text) => stdout.write(text),
+      env,
+    );
+  }
   const cliPty = pty.spawn(bin, args, {
     name: env.TERM || "xterm-256color",
     cols: stdout.columns || 80,
