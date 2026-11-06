@@ -269,6 +269,18 @@ async function seedWork(): Promise<{ moving: AgentId; update: string }> {
     },
   );
   expect(noted.status).toBe(201);
+  // The Brief, as an Agent writes it (ADR 0042).
+  for (const [page, text] of [
+    ["overview", "# The app\n\nLogin is being fixed in #1."],
+    ["vm-engine", "# VM engine\n\nLume only."],
+  ]) {
+    const put = await api(
+      `/api/brief/${page}`,
+      { person: "shlok1806", agent: moving },
+      { method: "PUT", body: JSON.stringify({ text }) },
+    );
+    expect(put.status).toBe(201);
+  }
   expect(
     (await api(`${agentPath(gone)}/end`, { person: "maya", agent: gone }, { method: "POST", body: "{}" })).status,
   ).toBe(200);
@@ -319,6 +331,7 @@ describe("connecting an app", () => {
     expect(listed.result.tools.map((t) => [t.name, t.annotations.readOnlyHint])).toEqual([
       ["channel", true],
       ["github", true],
+      ["brief", true],
     ]);
 
     const text = await ask(tokens.access_token);
@@ -627,6 +640,9 @@ describe("read-only", () => {
       ["POST", "/api/updates", { text: "from the connector" }],
       ["POST", "/api/directives", { to: moving, text: "stop" }],
       ["POST", "/api/memory", { text: "a note", tags: ["fact"] }],
+      // The Brief: the Connector reads it with its own tool, and never writes a page (ADR 0042).
+      ["PUT", "/api/brief/overview", { text: "# Written by the connector" }],
+      ["GET", "/api/brief", undefined],
       ["POST", "/api/tasks", { title: "A new Task" }],
       ["POST", claimPath(1), {}],
       ["POST", "/api/agents", { cli: "claude-code", sessionId: "ffff0000-0000-4000-8000-000000000000", cwd: "/" }],
@@ -675,6 +691,7 @@ describe("read-only", () => {
     const questions: Record<string, Record<string, string>[]> = {
       channel: [{}, { about: "#1" }, { about: "maya" }, { about: "login redirect", since: "7d" }],
       github: [{}, { about: "#5" }, { about: "docs/adr" }, { about: "login redirect", since: "7d" }],
+      brief: [{}, { area: "vm-engine" }, { area: "stuck" }, { area: "no such page" }],
     };
     for (const { name } of listed.result.tools) {
       expect(questions[name], `questions for ${name}`).toBeDefined();
@@ -685,8 +702,13 @@ describe("read-only", () => {
       }
     }
     // A tool that is not on the list is not a way in.
-    const writeTool = await rpc(tokens.access_token, "tools/call", { name: "post_update", arguments: { text: "hi" } });
-    expect(await writeTool.json()).toMatchObject({ error: { code: -32602 } });
+    for (const name of ["post_update", "brief_write"]) {
+      const writeTool = await rpc(tokens.access_token, "tools/call", {
+        name,
+        arguments: { page: "overview", text: "hi" },
+      });
+      expect(await writeTool.json(), name).toMatchObject({ error: { code: -32602 } });
+    }
     metering = false;
     expect(written.reduce((sum, cursor) => sum + cursor.rowsWritten, 0)).toBe(0);
   });

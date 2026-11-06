@@ -13,6 +13,8 @@ export type Route =
   | { view: "agent"; id: string; focus?: "directive" }
   | { view: "canvas"; agent?: string }
   | { view: "memory"; note?: string }
+  /** The Brief (ADR 0042), at one of its pages: the overview when none is named. */
+  | { view: "brief"; page?: string }
   /** The skills Persons share (ADR 0039), one open in the inspector at a version. */
   | { view: "skills"; name?: string; version?: number }
   | { view: "hosts"; host?: string }
@@ -45,6 +47,8 @@ export function parse(hash: string): Route {
       return { view: "feed", event: a };
     case "memory":
       return a ? { view: "memory", note: a } : { view: "memory" };
+    case "brief":
+      return a ? { view: "brief", page: a } : { view: "brief" };
     case "skills":
       if (!a) return { view: "skills" };
       if (b === undefined) return { view: "skills", name: a };
@@ -82,6 +86,8 @@ export function href(route: Route): string {
       return route.agent ? `#/canvas/${encodeURIComponent(route.agent)}` : "#/canvas";
     case "memory":
       return route.note ? `#/memory/${encodeURIComponent(route.note)}` : "#/memory";
+    case "brief":
+      return route.page ? `#/brief/${encodeURIComponent(route.page)}` : "#/brief";
     case "skills":
       if (!route.name) return "#/skills";
       return `#/skills/${encodeURIComponent(route.name)}${route.version === undefined ? "" : `/${route.version}`}`;

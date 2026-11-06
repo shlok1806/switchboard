@@ -55,7 +55,7 @@ const PLACEHOLDER: Record<Step["kind"], string> = {
 };
 
 /** The views whose page is a list: there `/` opens the palette, or the page's own Find. */
-const LISTS = new Set<Route["view"]>(["now", "agents", "tasks", "canvas", "feed", "memory", "skills", "hosts"]);
+const LISTS = new Set<Route["view"]>(["now", "agents", "tasks", "canvas", "feed", "brief", "memory", "skills", "hosts"]);
 
 /** Whether a key press is typing into a field, where `/` is a character and not a shortcut. */
 function typing(target: EventTarget | null): boolean {

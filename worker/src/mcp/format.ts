@@ -13,12 +13,12 @@ export interface Links {
 }
 
 /** `2026-11-06 09:40 UTC`. */
-function time(iso: string): string {
+export function time(iso: string): string {
   return `${iso.slice(0, 16).replace("T", " ")} UTC`;
 }
 
 /** `9 hours`, `2 days`, `40 minutes`. */
-function span(ms: number): string {
+export function span(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
   if (minutes < 120) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
   const hours = Math.round(minutes / 60);

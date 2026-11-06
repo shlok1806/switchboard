@@ -38,6 +38,8 @@
     "LEAD_AGENTS_LIVE_CAP": "5",
     // At most this many memory notes per Channel per UTC day (ADR 0019).
     "MEMORY_NOTES_PER_DAY": "300",
+    // At most this many writes of the Brief's pages per Channel per UTC day, two rows each (ADR 0042).
+    "BRIEF_WRITES_PER_DAY": "200",
     // A transcript read waits this many seconds for the wrapper's page (ADR 0019).
     "TRANSCRIPT_WAIT_SECONDS": "10",
     // A history read waits this many seconds for each machine's Local Events (ADR 0037).

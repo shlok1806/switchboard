@@ -12,7 +12,7 @@ import App from "@/App";
 import { MockChannelSource, type MockState } from "@/data/mock/mockSource";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 
-const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "memory", "skills", "hosts"] as const;
+const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "brief", "memory", "skills", "hosts"] as const;
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -56,6 +56,7 @@ describe("a Channel with nothing on it", () => {
     ["canvas", /No Agents on the canvas yet/, /Copy switchboard run claude/],
     ["tasks", /No Tasks yet/, /New Task/],
     ["feed", /No Events yet/, /Post an Update/],
+    ["brief", /No Brief yet/, /How the Brief works/],
     ["memory", /No notes yet/, /How notes work/],
     ["skills", /No skills shared yet/, /Copy switchboard skills publish/],
     ["hosts", /No Hosts yet/, /Copy switchboard host install/],

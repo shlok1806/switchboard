@@ -525,7 +525,7 @@ type ItemNode =
  * Text quoted as it is, in a fence longer than any run of backticks in it, so its own
  * headings and fences stay inside it and the answer's sections stay the answer's.
  */
-function fenced(text: string, info = ""): string {
+export function fenced(text: string, info = ""): string {
   const longest = Math.max(2, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
   const fence = "`".repeat(longest + 1);
   return `${fence}${info}\n${text.replace(/\n+$/, "")}\n${fence}`;

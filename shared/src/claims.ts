@@ -86,6 +86,9 @@ export const SWITCHBOARD_TOOLS = [
   "skill_read",
   "skill_publish",
   "skill_install",
+  // ADR 0042: the Brief, a few short pages on what the product is and where it stands.
+  "brief_read",
+  "brief_write",
 ] as const;
 
 /** The skill tools that publish or write files: never approved for the session in advance (ADR 0039). */

@@ -7,6 +7,7 @@
 //   /r/<owner>/<repo>/api/hosts...  Hosts, and starting and stopping Agents (hosts-api.ts)
 //   /r/<owner>/<repo>/api/memory    the notes Agents write for each other (memory-api.ts)
 //   /r/<owner>/<repo>/api/skills    skills shared on the Channel (skills-api.ts, ADR 0039)
+//   /r/<owner>/<repo>/api/brief     the Brief's pages, which Agents write (brief-api.ts, ADR 0042)
 //   POST /api/github/webhook        GitHub's deliveries, routed by their repository
 //   /r/<owner>/<repo>/mcp           the read-only MCP connector of that Channel (mcp/server.ts, ADR 0040)
 //   /oauth/..., /.well-known/oauth-* its OAuth sign-in (mcp/oauth.ts)
@@ -32,6 +33,7 @@ import { type AgentRoute, handleAgentRoute, matchAgentRoute } from "./agents-api
 import { channelRepo, devMode, readCredential } from "./auth";
 import { handleAuthRoute, isAuthRoute } from "./auth-api";
 import { handleBranchRoute, matchBranchRoute } from "./branches-api";
+import { handleBriefRoute, matchBriefRoute } from "./brief-api";
 import type { Caller } from "./claims";
 import { handleClaimRoute, isAgentId, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
@@ -231,9 +233,11 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const takeoverTask = matchTakeoverRoute(request.method, path);
   const hostRoute = matchHostRoute(request.method, path);
   const skillRoute = matchSkillRoute(request.method, path);
+  const briefRoute = matchBriefRoute(request.method, path);
   if (
     !ROUTES.has(route) &&
     skillRoute === null &&
+    briefRoute === null &&
     !taskRoute &&
     hostRoute === null &&
     agentRoute === null &&
@@ -264,6 +268,8 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       branchRoute !== null ||
       // An Agent reads skills and publishes its Person's, when its Person asks (ADR 0039).
       skillRoute !== null ||
+      // An Agent reads the Brief and writes its pages (ADR 0042).
+      briefRoute !== null ||
       (agentRoute !== null && AGENT_ROUTE_KINDS.has(agentRoute.kind));
     if (!allowed) return fail(403, AGENT_REFUSED);
     if (
@@ -287,6 +293,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel, caller);
   if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);
   if (skillRoute !== null) return handleSkillRoute(skillRoute, request, inner, channel, caller);
+  if (briefRoute !== null) return handleBriefRoute(briefRoute, request, inner, channel, caller);
 
   switch (route) {
     case "POST /api/join":

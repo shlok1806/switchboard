@@ -63,7 +63,7 @@ export function consentPage(view: ConsentView): Response {
     `<h1>Let ${escapeHtml(view.client)} read the Switchboard Channel ${escapeHtml(view.repo)}?</h1>
 <p>You are signed in as <strong>${escapeHtml(view.person)}</strong>. The app will sign in as you and send its answer to <strong>${escapeHtml(view.redirectHost)}</strong>.</p>
 <ul>
-<li>It can <strong>read</strong> the Channel: its Tasks and Claims, Updates, Directives, Memory Notes and Agents.</li>
+<li>It can <strong>read</strong> the Channel: its Tasks and Claims, Updates, Directives, Memory Notes, Agents and Brief.</li>
 <li>It <strong>cannot change</strong> anything on the Channel or on GitHub.</li>
 <li>It loses access when you lose write access to ${escapeHtml(view.repo)}.</li>
 </ul>

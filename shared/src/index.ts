@@ -2,6 +2,7 @@ export * from "./agent-context";
 export * from "./agents";
 export * from "./approvals";
 export * from "./auth";
+export * from "./brief";
 export * from "./branches";
 export * from "./channel";
 export * from "./claims";

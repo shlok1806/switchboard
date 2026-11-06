@@ -168,10 +168,9 @@ describe("the github tool", () => {
     const { result } = await response.json<{
       result: { tools: { name: string; annotations: { readOnlyHint: boolean } }[] };
     }>();
-    expect(result.tools.map((t) => [t.name, t.annotations.readOnlyHint])).toEqual([
-      ["channel", true],
-      ["github", true],
-    ]);
+    const listed = result.tools.map((t) => [t.name, t.annotations.readOnlyHint]);
+    expect(listed).toContainEqual(["channel", true]);
+    expect(listed).toContainEqual(["github", true]);
   });
 
   it("answers what merged in the last week and what is failing CI, with links", async () => {

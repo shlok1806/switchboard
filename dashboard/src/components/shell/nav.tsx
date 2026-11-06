@@ -5,7 +5,7 @@
  * reaches them. The only coloured count is the number of lines that need you.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Bot, BookOpen, Check, Puzzle, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
+import { Bot, BookOpen, Check, FileText, Puzzle, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +23,7 @@ import { signOut } from "@/lib/session";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "memory" | "skills" | "hosts";
+export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "brief" | "memory" | "skills" | "hosts";
 
 /** The views, in the order the keys show them. The icon is for the command palette only. */
 export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
@@ -32,6 +32,7 @@ export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
   { id: "tasks", title: "Tasks", icon: SquareKanban },
   { id: "canvas", title: "Canvas", icon: Workflow },
   { id: "feed", title: "Activity", icon: MessagesSquare },
+  { id: "brief", title: "Brief", icon: FileText },
   { id: "memory", title: "Memory", icon: BookOpen },
   { id: "skills", title: "Skills", icon: Puzzle },
   { id: "hosts", title: "Hosts", icon: Server },
@@ -128,12 +129,17 @@ export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; 
     <header className="flex h-[var(--topbar-h)] shrink-0 items-center gap-4 border-b border-rule bg-paper px-[var(--gutter)]">
       <a href={href({ view: "now" })} className="flex shrink-0 items-center gap-2 hover:no-underline" aria-label="Switchboard">
         <Mark />
-        <span className="text-title font-semibold text-ink">Switchboard</span>
+        {/* Below 1000px the keys need the room: the mark stands for the name, as the link's label says. */}
+        <span className="text-title font-semibold text-ink max-[1000px]:hidden">Switchboard</span>
       </a>
       <code className="min-w-0 truncate text-small text-ink-3 max-[900px]:hidden" title={repo}>
         {repo}
       </code>
-      <nav aria-label="Views" className="flex items-center gap-1">
+      {/* The keys scroll sideways on a window too narrow for all of them, fading out where they go on. */}
+      <nav
+        aria-label="Views"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] max-[760px]:[mask-image:linear-gradient(to_right,#000_calc(100%-1.5rem),transparent)]" /* taste-skill-ignore: a scroll-edge mask, not a coloured fill */
+      >
         {VIEWS.map((v) => (
           <Key
             key={v.id}
@@ -154,7 +160,7 @@ export function TopBar({ route, repo, onSearch }: { route: Route; repo: string; 
           className="inline-flex h-[30px] items-center gap-2 rounded-[var(--r)] border border-rule-2 px-2.5 text-small font-medium text-ink transition-colors duration-[var(--dur)] hover:border-ink-3 hover:bg-paper-2 active:translate-y-px"
         >
           Search
-          <kbd className="rounded-[2px] border border-current px-1 pt-0.5 pb-px text-[11.5px] leading-none opacity-55">⌘K</kbd>
+          <kbd className="rounded-[2px] border border-current px-1 pt-0.5 pb-px text-[11.5px] leading-none opacity-55 max-[800px]:hidden">⌘K</kbd>
         </button>
       </div>
     </header>

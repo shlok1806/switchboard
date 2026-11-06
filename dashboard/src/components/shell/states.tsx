@@ -165,6 +165,7 @@ const VIEW_NAME: Record<Route["view"], string> = {
   agent: "Agent",
   canvas: "Canvas",
   memory: "Memory",
+  brief: "Brief",
   skills: "Skills",
   hosts: "Hosts",
   missing: "Page",
@@ -193,6 +194,26 @@ function Body({ view }: { view: Route["view"] }) {
       );
     case "skills":
       return <Table rows={4} wide={false} />;
+    case "brief":
+      return (
+        <div className="grid gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]">
+          <div className="flex flex-col gap-4 max-lg:hidden">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="flex flex-col gap-2">
+                <Bar w="8rem" />
+                <Bar w="5rem" h="h-2" />
+              </div>
+            ))}
+          </div>
+          <div className="flex max-w-[44rem] flex-col gap-3">
+            <Bar w="12rem" h="h-4" />
+            <Bar w="16rem" h="h-2" />
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <Bar key={i} w={i % 3 === 2 ? TASKS[i % TASKS.length]! : "100%"} className="max-w-full" />
+            ))}
+          </div>
+        </div>
+      );
     case "agents":
     case "hosts":
       return (

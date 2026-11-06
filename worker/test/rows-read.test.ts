@@ -17,7 +17,7 @@ import type {
   MemoryResponse,
   Task,
 } from "../../shared/src/index";
-import { agentPath } from "../../shared/src/index";
+import { agentPath, BRIEF_HISTORY, MAX_BRIEF_PAGES } from "../../shared/src/index";
 import { Channel } from "../src/channel";
 import { installGitHubApp } from "../src/github/index";
 import { signAccess } from "../src/mcp/tokens";
@@ -549,6 +549,63 @@ it("the connector's github tool reads only what admitting the call reads: GitHub
     installGitHubApp(null);
     vi.restoreAllMocks();
   }
+});
+
+it("the connector's brief tool reads one row per page for the overview, and one for an area (ADR 0042)", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  // A full Brief, every page with its kept earlier versions.
+  await runInDurableObject(channelStub(), (channel: Channel, state) => {
+    channel.startMcpGrant("rows-read-brief", "shlok", "rows-read-client", Date.now() + 86_400_000);
+    const author = JSON.stringify({ agent: measured, person: "shlok" });
+    const at = new Date().toISOString();
+    const pages = ["overview", "stuck", ...Array.from({ length: MAX_BRIEF_PAGES - 2 }, (_, n) => `area-${n}`)];
+    for (const page of pages) {
+      const text = `# ${page}\n\n${"Where it stands, with #12 and ADR 0040. ".repeat(150)}`;
+      const earlier = Array.from({ length: BRIEF_HISTORY }, (_, n) => ({
+        page,
+        title: page,
+        version: BRIEF_HISTORY - n,
+        text,
+        author: JSON.parse(author),
+        updatedAt: at,
+      }));
+      state.storage.sql.exec(
+        "INSERT INTO brief_pages (page, title, version, text, author, updated_at, earlier) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        page,
+        page,
+        BRIEF_HISTORY + 1,
+        text,
+        author,
+        at,
+        JSON.stringify(earlier),
+      );
+    }
+  });
+  const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-brief", endpoint);
+  const send = async (message: Record<string, unknown>) => {
+    const response = await call(`/r/${REPO}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+    });
+    return (await response.json()) as { result: { isError?: boolean; content?: { text: string }[] } };
+  };
+  const ask = async (args: Record<string, string>) => {
+    const { result } = await send({ method: "tools/call", params: { name: "brief", arguments: args } });
+    expect(result.isError, JSON.stringify(args)).toBe(false);
+    return result.content?.[0]?.text ?? "";
+  };
+  // Membership is checked, and cached, by a first call, as by any caller's.
+  await ask({});
+  const admitting = await rowsRead(() => send({ method: "ping" }));
+  expect(await rowsRead(async () => expect(await ask({})).toContain('"area-21"'))).toBe(admitting + MAX_BRIEF_PAGES);
+  expect(await rowsRead(async () => expect(await ask({ area: "area-3" })).toContain("## area-3"))).toBe(admitting + 1);
+  // The Dashboard's read of every page reads each page's row once.
+  const dashboard = await rowsRead(async () => {
+    const response = await call("/api/brief", { headers: { Authorization: await bearer("shlok") } });
+    expect(response.status).toBe(200);
+  });
+  expect(dashboard).toBeLessThan(MAX_BRIEF_PAGES + 10);
 });
 
 /** What starting the Channel's Durable Object again reads, as after an eviction or a deploy. */

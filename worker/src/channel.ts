@@ -14,6 +14,8 @@ import type {
   AgentRole,
   AgentSummary,
   ApprovalDenyMessage,
+  BriefPage,
+  BriefPageSummary,
   Capture,
   ChannelEvent,
   DeliveryMessage,
@@ -66,12 +68,14 @@ import type {
   TouchedFile,
   TranscriptRequestMessage,
   TranscriptResponse,
+  WriteBriefRequest,
 } from "../../shared/src/index";
 import {
   agentIdFor,
   cleanHistoryPage,
   cleanTerminalText,
   cleanTranscriptPage,
+  DEFAULT_BRIEF_WRITES_PER_DAY,
   DEFAULT_GONE_AFTER_SECONDS,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
   DEFAULT_LEAD_AGENTS_LIVE_CAP,
@@ -97,6 +101,7 @@ import { Alarms } from "./alarms";
 import { askChannel, type ChannelAnswer, type ChannelQuestion, DEFAULT_QUIET_CLAIM_HOURS } from "./ask";
 import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
+import { BRIEF_SCHEMA, Brief, type BriefResult } from "./brief";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
 import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
@@ -437,6 +442,8 @@ export class Channel extends DurableObject<Env> {
   /** The notes Agents write for each other (ADR 0019). */
   private readonly memory: Memory;
   private readonly skills: Skills;
+  /** The Brief's pages (ADR 0042). */
+  private readonly brief: Brief;
   /** The read-only connector's sign-ins (ADR 0040). */
   private readonly mcpGrants: McpGrants;
   /** A Claim with no Update for this long is Quiet (ADR 0040). */
@@ -482,6 +489,12 @@ export class Channel extends DurableObject<Env> {
     ctx.storage.sql.exec(MEMORY_SCHEMA);
     ctx.storage.sql.exec(SKILLS_SCHEMA);
     this.skills = new Skills(ctx.storage.sql);
+    ctx.storage.sql.exec(BRIEF_SCHEMA);
+    const briefWrites = Number(env.BRIEF_WRITES_PER_DAY);
+    this.brief = new Brief(
+      ctx.storage.sql,
+      Number.isInteger(briefWrites) && briefWrites >= 0 ? briefWrites : DEFAULT_BRIEF_WRITES_PER_DAY,
+    );
     this.mcpGrants = new McpGrants(ctx.storage.sql);
     const quietHours = Number(env.QUIET_CLAIM_HOURS);
     this.quietAfterMs = (quietHours > 0 ? quietHours : DEFAULT_QUIET_CLAIM_HOURS) * 60 * 60 * 1000;
@@ -1331,6 +1344,47 @@ export class Channel extends DurableObject<Env> {
     files: SkillFile[],
   ): Promise<SkillResult<{ skill: SkillSummary; published: boolean }>> {
     return this.skills.publish(caller, name, files);
+  }
+
+  /** Every page of the Brief, current versions, for any Person or Agent on the Channel (ADR 0042). */
+  briefPages(): BriefPage[] {
+    return this.brief.pages();
+  }
+
+  /** One page of the Brief, current or one of its kept earlier versions. */
+  readBriefPage(page: string, version?: number): BriefResult<{ page: BriefPage; versions: number[] }> {
+    return this.brief.read(page, version);
+  }
+
+  /** Replaces a page of the Brief. Only an Agent writes one, for its Person (ADR 0042). */
+  writeBriefPage(
+    caller: Caller,
+    page: string,
+    write: WriteBriefRequest,
+  ): BriefResult<{ page: BriefPage; written: boolean }> | ClaimRefusal {
+    if (caller.agent === undefined) {
+      return {
+        ok: false,
+        status: 403,
+        reason: "Only Agents write the Brief, through their own MCP. A Person asks their Agent to.",
+      };
+    }
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    const nickname = this.agents.find(caller.agent)?.nickname;
+    return this.brief.write(
+      { agent: caller.agent, person: caller.person, ...(nickname === undefined ? {} : { nickname }) },
+      page,
+      write,
+    );
+  }
+
+  /**
+   * The Connector's `brief` tool (ADR 0042): one page and, for the overview or a page
+   * there is none of, the list of pages. Bounded by the Brief's page cap, and no write.
+   */
+  askBrief(page: string): { page: BriefPage | null; pages?: BriefPageSummary[] } {
+    return this.brief.ask(page);
   }
 
   /** The Channel's notes, for any Person or Agent on it (ADR 0019). */

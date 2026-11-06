@@ -14,6 +14,7 @@ import type {
   MemoryQuery,
   MemoryResponse,
   PersonAction,
+  BriefResponse,
   Skill,
   SkillResponse,
   SkillsResponse,
@@ -52,6 +53,7 @@ import {
 import { accounts, ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
 import { SKILL_VERSIONS } from "./skills";
+import { BRIEF_PAGES } from "./brief";
 import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
 import { mockTerminal } from "./terminal";
 
@@ -511,6 +513,14 @@ export class MockChannelSource implements ChannelSource {
     const skill = all.find((v) => v.version === wanted);
     if (!skill) throw new Error(`${name} has no version ${wanted}; it has ${versions.join(", ")}.`);
     return clone({ skill, versions });
+  }
+
+  /** Like the Worker: every page's current version, the overview first and the stuck page last. */
+  async brief(): Promise<BriefResponse> {
+    await new Promise((r) => setTimeout(r, 100));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    if (this.opts.state === "empty") return { pages: [] };
+    return clone({ pages: BRIEF_PAGES });
   }
 
   /** Like the Worker and the Host: checked, then an Agent that registers a moment later. */
