@@ -46,6 +46,8 @@ export interface CheckedSpawn {
   lead?: AgentId;
   /** The Agent it continues (ADR 0024): the wrapper starts with `--from`. */
   from?: AgentId;
+  /** The Channel's librarian (ADR 0045): the wrapper starts with `--librarian`. */
+  librarian?: true;
 }
 
 type Refused = { ok: false; reason: string };
@@ -157,6 +159,15 @@ export function checkSpawn(
     return refuse('the nickname, model or brief is not text, or starts with "-"');
   const place = checkFolderAndMode(frame.cwd, frame.permissionMode, limits);
   if (!place.ok) return refuse(place.reason);
+  // The librarian (ADR 0045) reads and writes Brief pages only: its mode lets nothing else run
+  // unasked, and it takes no first prompt but its own fixed one.
+  const librarian = frame.librarian;
+  if (librarian !== undefined && librarian !== true) return refuse("the librarian flag is not true");
+  if (librarian === true) {
+    if (place.permissionMode !== "dontAsk") return refuse('the librarian runs only in the "dontAsk" mode');
+    if (brief !== undefined || from !== undefined || lead !== undefined)
+      return refuse("the librarian takes no brief, continues no Agent and is started by a Person, not a lead");
+  }
   return {
     ok: true,
     request: {
@@ -170,6 +181,7 @@ export function checkSpawn(
       by: frame.by,
       ...(lead === undefined ? {} : { lead: lead as AgentId }),
       ...(from === undefined ? {} : { from: from as AgentId }),
+      ...(librarian === true ? { librarian: true as const } : {}),
     },
   };
 }

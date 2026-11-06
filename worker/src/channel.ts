@@ -39,14 +39,17 @@ import type {
   InterruptAttached,
   InterruptMessage,
   InterruptResult,
+  LibrarianFeedResponse,
   MemoryNote,
   MemoryQuery,
+  MoveLibrarianCursorRequest,
   PendingApproval,
   Person,
   PersonName,
   PostNoteRequest,
   ProxyCaptureReply,
   ProxyMode,
+  QuietClaim,
   RegisterAgentRequest,
   RegisterHostRequest,
   ReportedPresence,
@@ -101,13 +104,14 @@ import { Alarms } from "./alarms";
 import { askChannel, type ChannelAnswer, type ChannelQuestion, DEFAULT_QUIET_CLAIM_HOURS } from "./ask";
 import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
-import { BRIEF_SCHEMA, Brief, type BriefResult } from "./brief";
+import { BRIEF_SCHEMA, Brief, type BriefResult, migrateBrief } from "./brief";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
 import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } from "./hosts";
 import { LangfuseProject, type StoredLangfuse } from "./langfuse";
+import { LIBRARIAN_SCHEMA, librarianFeed, moveLibrarianCursor } from "./librarian";
 import { type GrantResult, McpGrants } from "./mcp/grants";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
 import { ProxyCapture } from "./proxy-capture";
@@ -493,6 +497,8 @@ export class Channel extends DurableObject<Env> {
     ctx.storage.sql.exec(SKILLS_SCHEMA);
     this.skills = new Skills(ctx.storage.sql);
     ctx.storage.sql.exec(BRIEF_SCHEMA);
+    migrateBrief(ctx.storage.sql);
+    ctx.storage.sql.exec(LIBRARIAN_SCHEMA);
     const briefWrites = Number(env.BRIEF_WRITES_PER_DAY);
     this.brief = new Brief(
       ctx.storage.sql,
@@ -832,7 +838,7 @@ export class Channel extends DurableObject<Env> {
     if (request.host !== undefined && request.spawn !== undefined) {
       this.hosts.spawned(person, request.host, request.spawn, agent);
     }
-    return { ...result, agent, token: await this.access.issueAgentToken(agent.id, person) };
+    return { ...result, agent, token: await this.access.issueAgentToken(agent.id, person, agent.librarian === true) };
   }
 
   /**
@@ -1380,7 +1386,48 @@ export class Channel extends DurableObject<Env> {
       { agent: caller.agent, person: caller.person, ...(nickname === undefined ? {} : { nickname }) },
       page,
       write,
+      caller.librarian === true,
     );
+  }
+
+  /**
+   * The Librarian Feed (ADR 0045): what changed after the Librarian Cursor that may
+   * change a Brief page, the Quiet Claims now, and the Brief's budget today. Only reads.
+   */
+  librarianFeed(): LibrarianFeedResponse {
+    return librarianFeed({
+      sql: this.ctx.storage.sql,
+      toEvent: rowToEvent,
+      quiet: () => {
+        const answer = this.askChannel({ since: new Date().toISOString() });
+        return answer.tasks.flatMap((task): QuietClaim[] => {
+          const since = answer.quiet[task.number];
+          const holder = task.claim?.holder;
+          if (since === undefined || holder === undefined) return [];
+          return [
+            {
+              task: task.number,
+              title: task.title,
+              holder: holder.kind === "agent" ? holder.agentId : holder.person,
+              since,
+            },
+          ];
+        });
+      },
+      briefPages: () => this.brief.count(),
+      briefBudget: () => this.brief.budget(),
+    });
+  }
+
+  /** Moves the Librarian Cursor: the librarian's token only (ADR 0045). */
+  moveLibrarianCursor(
+    caller: Caller,
+    request: MoveLibrarianCursorRequest,
+  ): { ok: true; cursor: number } | { ok: false; status: number; reason: string } {
+    if (caller.agent === undefined || caller.librarian !== true) {
+      return { ok: false, status: 403, reason: "Only the Channel's librarian moves its cursor." };
+    }
+    return moveLibrarianCursor(this.ctx.storage.sql, caller.agent, request.through, request.quiet);
   }
 
   /**

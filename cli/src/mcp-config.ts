@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { AgentId } from "../../shared/src/index";
 import { REPO_ENV } from "./channel-choice";
 import { configDir } from "./config";
+import { LIBRARIAN_ENV } from "./librarian";
 import { AGENT_FILE_ENV, MCP_SERVER_NAME, NEXT_TURN_FILE_ENV, REPO_DIR_ENV, SKILL_WRITES_ENV } from "./mcp-server";
 
 /** A stdio MCP server, the way every agent CLI describes one. */
@@ -66,7 +67,7 @@ export function prepareSessionTools(
   cwd: string,
   repo: string,
   env: NodeJS.ProcessEnv = process.env,
-  options: { skillWrites: boolean } = { skillWrites: false },
+  options: { skillWrites: boolean; librarian?: boolean } = { skillWrites: false },
 ): SessionTools {
   const dir = mkdtempSync(join(tmpdir(), "switchboard-session-"));
   const agentFile = join(dir, "agent");
@@ -86,6 +87,8 @@ export function prepareSessionTools(
         SWITCHBOARD_CONFIG_DIR: configDir(env),
         // The skill tools that publish and write, only where the CLI asks before each call (ADR 0039).
         ...(options.skillWrites ? { [SKILL_WRITES_ENV]: "1" } : {}),
+        // The librarian's tools only (ADR 0045).
+        ...(options.librarian === true ? { [LIBRARIAN_ENV]: "1" } : {}),
       },
     },
     dir,

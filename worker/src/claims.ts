@@ -40,6 +40,8 @@ export interface Caller {
   person: PersonName;
   /** Set when the call carries an Agent token: the Agent calls through Switchboard's tools (the Tool Capture). */
   agent?: AgentId;
+  /** The Agent token is the Channel's librarian's (ADR 0045). */
+  librarian?: true;
 }
 
 /** A resolved Caller: the Actor its Events name, and the Capture that carried them. */

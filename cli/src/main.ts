@@ -8,6 +8,7 @@
 //   switchboard whoami
 //   switchboard host install|uninstall|run|status|list   (ADR 0015, ADR 0028)
 //   switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--from <agent>] [...] [brief]
+//   switchboard librarian [--host <name>|<person>/<name>] [--cwd <folder>] [--model <model>]   (ADR 0045)
 //   switchboard stop|pause|resume <agent>   (ADR 0028)
 //   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
 //   switchboard attach allow|revoke|list|prompts   (ADR 0021)
@@ -22,6 +23,7 @@ import { configPath, readConfig } from "./config";
 import {
   HOST_USAGE,
   hostCommand,
+  librarianCommand,
   pauseCommand,
   ROLE_USAGE,
   resumeCommand,
@@ -47,6 +49,7 @@ const USAGE = `Usage:
   switchboard whoami
   switchboard help onboarding
   switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--from <agent>] [--repo <owner>/<repo>] [brief...]
+  switchboard librarian [--host <name>|<person>/<name>] [--cwd <folder>] [--model <model>] [--repo <owner>/<repo>]
   switchboard stop <agent> [--repo <owner>/<repo>]
   switchboard pause <agent> [--repo <owner>/<repo>]
   switchboard resume <agent> [--repo <owner>/<repo>]
@@ -100,6 +103,9 @@ prompt, and --from to hand it another Agent's work; \`stop\` stops one. Both wor
 --allow <login> (repeat it) and --allow-channel let other People start, stop, pause and
 resume Agents on that Host: they name it \`<your login>/<name>\`, and the Agents run as you,
 in your folders, in your permission mode limit. Without them only you can (ADR 0028).
+\`librarian\` starts the Channel's librarian on one of your Hosts, in --cwd (a clone of the
+repo under the Host's folders; else this folder): an Agent that keeps the Brief current
+and can write nothing but Brief pages. A Channel has one (ADR 0045).
 \`pause\` ends an Agent's process on its Host and keeps its session, Agent ID and Claims;
 \`resume\` relaunches it with the same conversation.
 
@@ -201,6 +207,8 @@ async function main(argv: string[]): Promise<number> {
       return hostCommand(rest);
     case "spawn":
       return spawnCommand(rest);
+    case "librarian":
+      return librarianCommand(rest);
     case "stop":
       return stopCommand(rest);
     case "pause":

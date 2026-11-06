@@ -9,6 +9,7 @@ import type { HookCapture } from "../hooks/capture";
 import type { ClaudeHookInput } from "../hooks/summarize";
 import type { SessionTools } from "../mcp-config";
 import type { ApiFormat } from "../proxy/api";
+import type { SessionSettings } from "../session-settings";
 
 /** Which session a launch will be. */
 export type SessionPlan =
@@ -41,6 +42,8 @@ export interface InstallOptions extends SessionContext {
   proxyUrl?: string;
   /** The route the Proxy Capture took for this session, when it runs. */
   proxyRoute?: ProxyRoute;
+  /** More session settings, such as the librarian's permissions (ADR 0045). Only CLIs that take settings. */
+  settings?: SessionSettings[];
 }
 
 /** Where a session's model traffic really goes, and the API it speaks. */

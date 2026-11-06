@@ -49,6 +49,8 @@ export interface HostedAgent {
   permissionMode: PermissionMode;
   /** Paused (ADR 0028): no process runs, and the Host does not start one by itself, not even after a restart. */
   paused?: true;
+  /** The Channel's librarian (ADR 0045): started, and resumed, with `--librarian`. */
+  librarian?: true;
 }
 
 /** An Agent's log is cut over to `<agent>.log.1` past this size. */
@@ -127,7 +129,10 @@ export function writeSettings(settings: HostSettings, env: NodeJS.ProcessEnv = p
 /** One entry of `agents.json`, if it has every field with its type. */
 function hostedAgent(value: unknown): HostedAgent | null {
   if (typeof value !== "object" || value === null) return null;
-  const { agent, sessionId, cwd, nickname, model, permissionMode, paused } = value as Record<string, unknown>;
+  const { agent, sessionId, cwd, nickname, model, permissionMode, paused, librarian } = value as Record<
+    string,
+    unknown
+  >;
   if (typeof agent !== "string" || agent.split("/").length !== 3) return null;
   if (typeof sessionId !== "string" || typeof cwd !== "string" || !isPermissionMode(permissionMode)) return null;
   if ((nickname !== undefined && typeof nickname !== "string") || (model !== undefined && typeof model !== "string")) {
@@ -141,6 +146,7 @@ function hostedAgent(value: unknown): HostedAgent | null {
     ...(model === undefined ? {} : { model }),
     permissionMode,
     ...(paused === true ? { paused: true as const } : {}),
+    ...(librarian === true ? { librarian: true as const } : {}),
   };
 }
 

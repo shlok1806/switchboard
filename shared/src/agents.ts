@@ -205,6 +205,11 @@ export interface RegisterAgentRequest {
   /** Working directory of the session. */
   cwd: string;
   /**
+   * The session is the Channel's librarian (ADR 0045): its token may write Brief pages and
+   * nothing else. Once a librarian, always one: leaving it out later keeps it.
+   */
+  librarian?: true;
+  /**
    * Sets the Nickname. Omit to keep the current one; null clears it. A Nickname
    * another Agent holds is not set, and the answer says so in `nicknameRefused`
    * (ADR 0009); the Agent registers anyway.

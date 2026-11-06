@@ -3,10 +3,18 @@
 // the same row, so a write is one row whatever the history holds and pruning is a
 // slice. A Channel takes at most BRIEF_WRITES_PER_DAY page writes a UTC day, counted
 // in one row of its own: a write that changes a page writes two rows, one that
-// changes nothing writes none.
+// changes nothing writes none. The librarian's writes stop at three quarters of the
+// day's cap, so the other Agents always have a quarter (ADR 0045).
 
 import type { BriefAuthor, BriefPage, BriefPageSummary, WriteBriefRequest } from "../../shared/src/index";
-import { BRIEF_HISTORY, BRIEF_OVERVIEW, briefOrder, defaultBriefTitle, MAX_BRIEF_PAGES } from "../../shared/src/index";
+import {
+  BRIEF_HISTORY,
+  BRIEF_OVERVIEW,
+  briefOrder,
+  defaultBriefTitle,
+  librarianWritesPerDay,
+  MAX_BRIEF_PAGES,
+} from "../../shared/src/index";
 import { utcDay } from "./channel";
 
 export const BRIEF_SCHEMA = `
@@ -25,6 +33,23 @@ export const BRIEF_SCHEMA = `
     writes INTEGER NOT NULL
   );
 `;
+
+/** Adds what later ADRs brought to a Brief made before them: the librarian's own count (ADR 0045). */
+export function migrateBrief(sql: SqlStorage): void {
+  try {
+    sql.exec("ALTER TABLE brief_budget ADD COLUMN librarian_writes INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // The column is there already.
+  }
+}
+
+/** The day's page writes: all of them, and the librarian's. */
+export interface BriefBudget {
+  writesToday: number;
+  perDay: number;
+  librarianToday: number;
+  librarianPerDay: number;
+}
 
 type PageRow = {
   page: string;
@@ -60,6 +85,22 @@ export class Brief {
     /** A Channel's page writes per UTC day. */
     private readonly perDay: number,
   ) {}
+
+  /** The day's page writes and the caps on them. One row read. */
+  budget(): BriefBudget {
+    const used = this.today();
+    return {
+      writesToday: used.writes,
+      perDay: this.perDay,
+      librarianToday: used.librarian,
+      librarianPerDay: librarianWritesPerDay(this.perDay),
+    };
+  }
+
+  /** How many pages there are. One row read per page. */
+  count(): number {
+    return this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM brief_pages").one().n;
+  }
 
   /** Every page's current version, in the Brief's order. One row read per page. */
   pages(): BriefPage[] {
@@ -115,12 +156,14 @@ export class Brief {
 
   /**
    * Replaces a page for `author`, keeping its last BRIEF_HISTORY versions, or says why
-   * not. A write that changes nothing writes nothing and is not counted.
+   * not. A write that changes nothing writes nothing and is not counted. A `librarian`
+   * write also counts against the librarian's share of the day (ADR 0045).
    */
   write(
     author: BriefAuthor,
     page: string,
     write: WriteBriefRequest,
+    librarian = false,
   ): BriefResult<{ page: BriefPage; written: boolean }> {
     const current = this.sql.exec<PageRow>("SELECT * FROM brief_pages WHERE page = ?", page).toArray()[0];
     const title = write.title ?? current?.title ?? defaultBriefTitle(page);
@@ -128,8 +171,7 @@ export class Brief {
       return { ok: true, value: { page: pageOf(current), written: false } };
     }
     if (current === undefined) {
-      const count = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM brief_pages").one().n;
-      if (count >= MAX_BRIEF_PAGES) {
+      if (this.count() >= MAX_BRIEF_PAGES) {
         return {
           ok: false,
           status: 409,
@@ -137,7 +179,7 @@ export class Brief {
         };
       }
     }
-    const admitted = this.admit();
+    const admitted = this.admit(librarian);
     if (!admitted.ok) return admitted;
     const earlier = current === undefined ? [] : [pageOf(current), ...(JSON.parse(current.earlier) as BriefPage[])];
     const next: BriefPage = {
@@ -164,23 +206,47 @@ export class Brief {
     return { ok: true, value: { page: next, written: true } };
   }
 
-  /** Whether the Channel takes another page write today, counting it if so. */
-  private admit(): { ok: true } | { ok: false; status: 429; reason: string } {
-    const day = utcDay();
+  /** Today's counts, zero on a new UTC day. */
+  private today(): { writes: number; librarian: number } {
     const used = this.sql
-      .exec<{ day: string; writes: number }>("SELECT day, writes FROM brief_budget WHERE id = 1")
+      .exec<{ day: string; writes: number; librarian_writes: number }>(
+        "SELECT day, writes, librarian_writes FROM brief_budget WHERE id = 1",
+      )
       .toArray()[0];
-    if (used?.day === day && used.writes >= this.perDay) {
+    return used?.day === utcDay()
+      ? { writes: used.writes, librarian: used.librarian_writes }
+      : { writes: 0, librarian: 0 };
+  }
+
+  /** Whether the Channel takes another page write today, from the librarian when `librarian`, counting it if so. */
+  private admit(librarian: boolean): { ok: true } | { ok: false; status: 429; reason: string } {
+    const day = utcDay();
+    const used = this.today();
+    if (used.writes >= this.perDay) {
       return {
         ok: false,
         status: 429,
         reason: `This Channel has taken its ${this.perDay} Brief writes for today (UTC). Pages can be written again tomorrow.`,
       };
     }
+    const share = librarianWritesPerDay(this.perDay);
+    if (librarian && used.librarian >= share) {
+      return {
+        ok: false,
+        status: 429,
+        reason: `The librarian has made its ${share} Brief writes for today (UTC); the rest of the Channel's ${this.perDay} are kept for the other Agents. Pages can be written again tomorrow.`,
+      };
+    }
+    const mine = librarian ? 1 : 0;
     this.sql.exec(
-      `INSERT INTO brief_budget (id, day, writes) VALUES (1, ?, 1)
-       ON CONFLICT (id) DO UPDATE SET writes = CASE WHEN day = excluded.day THEN writes + 1 ELSE 1 END, day = excluded.day`,
+      `INSERT INTO brief_budget (id, day, writes, librarian_writes) VALUES (1, ?, 1, ?)
+       ON CONFLICT (id) DO UPDATE SET
+         writes = CASE WHEN day = excluded.day THEN writes + 1 ELSE 1 END,
+         librarian_writes = CASE WHEN day = excluded.day THEN librarian_writes + excluded.librarian_writes
+                            ELSE excluded.librarian_writes END,
+         day = excluded.day`,
       day,
+      mine,
     );
     return { ok: true };
   }

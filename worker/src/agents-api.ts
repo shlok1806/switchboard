@@ -160,6 +160,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
     spawn,
     continues,
     historyHost,
+    librarian,
   } = body;
   const cleanedUsage = cleanUsage(usage);
   const cleanedContext = cleanContext(context);
@@ -205,6 +206,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
   if (continues !== undefined && (typeof continues !== "string" || continues.split("/").length !== 3)) {
     return { ok: false, reason: '"continues" must be the ID of the Agent this session carries on.' };
   }
+  if (librarian !== undefined && librarian !== true) return { ok: false, reason: '"librarian" must be true.' };
   return {
     ok: true,
     value: {
@@ -227,6 +229,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
       ...(spawn === undefined ? {} : { spawn: spawn as string }),
       ...(continues === undefined ? {} : { continues: continues as AgentId }),
       ...(historyHost === undefined ? {} : { historyHost }),
+      ...(librarian === true ? { librarian } : {}),
     },
   };
 }

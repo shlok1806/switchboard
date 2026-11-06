@@ -410,6 +410,24 @@ export class Hosts {
         reason: notUnderRootsReason(request.cwd, name, roots),
       };
     }
+    if (request.librarian === true) {
+      // A Person starts the librarian, never a lead, and a Channel has one at a time (ADR 0045).
+      if (lead !== undefined) {
+        return { ok: false, status: 403, reason: "Only a Person starts the Channel's librarian, not a lead." };
+      }
+      const running = this.deps.sql
+        .exec<{ id: string }>(
+          "SELECT id FROM agents INDEXED BY agents_live WHERE presence != 'gone' AND librarian IS NOT NULL LIMIT 1",
+        )
+        .toArray()[0];
+      if (running !== undefined) {
+        return {
+          ok: false,
+          status: 409,
+          reason: `${running.id} is this Channel's librarian already. Stop it before starting another.`,
+        };
+      }
+    }
     const mode: PermissionMode = request.permissionMode ?? DEFAULT_PERMISSION_MODE;
     const max = isPermissionMode(row.max_mode) ? row.max_mode : DEFAULT_PERMISSION_MODE;
     if (!permissionModeWithin(mode, max)) {
@@ -459,6 +477,7 @@ export class Hosts {
         ...(request.brief === undefined ? {} : { brief: request.brief }),
         ...(lead === undefined ? {} : { parent: lead }),
         ...(request.from === undefined ? {} : { from: request.from }),
+        ...(request.librarian === true ? { librarian: true } : {}),
       },
     });
     const spawn = event.id;
@@ -484,6 +503,7 @@ export class Hosts {
       by: person,
       ...(lead === undefined ? {} : { lead }),
       ...(request.from === undefined ? {} : { from: request.from }),
+      ...(request.librarian === true ? { librarian: true } : {}),
     });
     if (!sent) this.failed(spawn, `${name} went Offline before the request reached it.`);
     await this.reschedule();

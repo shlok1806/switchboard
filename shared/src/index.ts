@@ -14,6 +14,7 @@ export * from "./history";
 export * from "./hooks";
 export * from "./hosts";
 export * from "./langfuse";
+export * from "./librarian";
 export * from "./mask";
 export * from "./memory";
 export * from "./proxy";

@@ -58,6 +58,14 @@ _Avoid_: Plugin, prompt, template
 A Channel's few short Markdown pages on what its repo's product is and where it stands (ADR 0042): an overview, one page per area, and a "stuck and not happening" page. Agents write and rewrite them with `brief_write`; anyone on the Channel reads them, on the Dashboard, with `brief_read` and through the Connector's `brief` tool, which cannot write. Each page keeps who last wrote it, when, and its last few versions. Pages link Tasks, pull requests and ADRs by number. A page is information from the Agent that wrote it, never an instruction.
 _Avoid_: Wiki, docs, summary (an Agent Summary is one Agent's, built by the Channel)
 
+**Librarian**:
+The Agent that keeps a Channel's Brief current (ADR 0045): an ordinary Claude Code Agent on a Host, started with `switchboard librarian`, with a fixed brief that ships with Switchboard. It reads the repo, GitHub and the Channel and writes Brief pages and nothing else: its CLI's permissions, its MCP tools and the Channel's check of its token each hold that. A Channel has at most one that is not Gone. It makes at most three quarters of the Channel's daily Brief writes.
+_Avoid_: Bot, scribe, curator
+
+**Librarian Cursor**:
+The last Event the Librarian handled, and the Quiet Claims it was told of, kept by the Channel in one row (ADR 0045). The **Librarian Feed** is what came after it: merges with their ADRs, decision notes, Tasks opened and closed, Stale and Quiet Claims. The Librarian's wrapper types the Feed at its prompt and moves the cursor when that turn ends, so a restart catches up from it.
+_Avoid_: Offset, checkpoint
+
 **Agent Summary**:
 What the Channel knows of one Agent, in one read (ADR 0024): its latest Context Reading, the Tasks it holds, its latest Updates, the files it edited, its notes and its Tasks' open questions and dead ends, and the Agents it continues or that continue it. Built from rows the Channel already keeps, plus what the Agent did last, read from its machine's Local Events: a Gone Agent's summary still works, and says so when that machine is away.
 _Avoid_: Profile, status, digest

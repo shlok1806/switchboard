@@ -6,6 +6,7 @@
 //   switchboard host run       (what the LaunchAgent runs; tests run it directly)
 //   switchboard host status
 //   switchboard host list      (every Host on the Channel, and who may use it)
+//   switchboard librarian [--host <name>|<person>/<name>] [--cwd <folder>] [--model <model>]   (ADR 0045)
 //   switchboard spawn [--host N|PERSON/N] [--cwd DIR] [--nickname N] [--model M] [--permission-mode M] [--repo R] [brief...]
 //   switchboard stop <agent> [--repo R]
 //   switchboard pause <agent> [--repo R]    (ADR 0028)
@@ -40,6 +41,7 @@ import {
   hostAllows,
   isAgentRole,
   isPermissionMode,
+  LIBRARIAN_NICKNAME,
   LOGIN_PATTERN,
   MAX_HOST_ALLOW,
   PERMISSION_MODES,
@@ -413,6 +415,52 @@ export function spawnCommand(args: string[]): Promise<number> {
       answer.agent === undefined
         ? `${answer.host} is still starting it (spawn ${answer.spawn}). The Channel says when it is on.`
         : `${answer.agent.id}${answer.agent.nickname ? ` "${answer.agent.nickname}"` : ""} is running on ${answer.host}.`,
+    );
+    return 0;
+  });
+}
+
+/**
+ * Starts the Channel's librarian (ADR 0045) on one of the Person's Hosts: an Agent that keeps
+ * the Brief current and can write nothing else. The Host runs it in the dontAsk mode, with its
+ * own fixed brief, in a clone of the repo under its folders.
+ */
+export function librarianCommand(args: string[]): Promise<number> {
+  return command(async () => {
+    const { values, positionals } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: {
+        host: { type: "string" },
+        cwd: { type: "string" },
+        model: { type: "string" },
+        repo: { type: "string" },
+      },
+    });
+    if (positionals.length > 0) throw new CommandError("the librarian takes no brief: its own ships with Switchboard.");
+    const config = await signedIn();
+    const { client, repo } = await channelFor(config, values.repo);
+    const answer = await client.request<SpawnAgentResponse>(
+      "/api/agents/spawn",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...(values.host === undefined ? {} : { host: values.host }),
+          cli: "claude-code",
+          cwd: resolve(values.cwd ?? process.cwd()),
+          nickname: LIBRARIAN_NICKNAME,
+          ...(values.model === undefined ? {} : { model: values.model }),
+          permissionMode: "dontAsk",
+          librarian: true,
+        }),
+      },
+      60_000,
+    );
+    const where = `on ${answer.host}. It keeps the Brief of ${repo} current and writes nothing else.`;
+    console.log(
+      answer.agent === undefined
+        ? `${answer.host} is still starting the librarian (spawn ${answer.spawn}). The Channel says when it is on.`
+        : `${answer.agent.id} "${answer.agent.nickname ?? LIBRARIAN_NICKNAME}" is running ${where}`,
     );
     return 0;
   });

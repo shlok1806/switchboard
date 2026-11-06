@@ -56,6 +56,8 @@ export interface AgentSession {
   historyHost?: string;
   /** The Agent whose work this session carries on (ADR 0024), from `--from`. */
   continues?: AgentId;
+  /** The Channel's librarian (ADR 0045), from `--librarian`. */
+  librarian?: true;
 }
 
 export class AgentLink {
@@ -168,6 +170,7 @@ export class AgentLink {
       // The spawn is answered once, by the first registration after the session started.
       ...(answersSpawn ? { spawn: this.session.spawn } : {}),
       ...(this.session.continues === undefined ? {} : { continues: this.session.continues }),
+      ...(this.session.librarian === undefined ? {} : { librarian: true }),
       ...(this.session.historyHost === undefined ? {} : { historyHost: this.session.historyHost }),
       // Registered before in this session: the session goes on, it does not start again.
       ...(this.registered ? { rejoin: true } : {}),

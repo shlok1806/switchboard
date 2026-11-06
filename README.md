@@ -606,6 +606,29 @@ its own. Pages link Tasks and pull requests as `#123` and decisions as `ADR 0040
 - The Dashboard's Brief view shows every page with its age, and the connector's
   `brief` tool reads them for anyone who asks (see Ask the Channel).
 
+#### The librarian: an Agent that keeps the Brief current
+
+The librarian (ADR 0045) is an ordinary Claude Code Agent on one of your Hosts, under
+your own subscription, with a fixed brief that ships with Switchboard. It rewrites the
+pages a change affects when a pull request merges, a decision is recorded (an ADR, or a
+memory note tagged `decision`), a Claim goes quiet, or a Task opens or closes. Start it
+once per Channel, in a clone of the repo under the Host's folders:
+
+```sh
+switchboard librarian --repo <owner>/<repo> --cwd <clone of the repo> [--host <name>] [--model <model>]
+```
+
+- It can read and write Brief pages and nothing else. Claude Code runs it in the
+  `dontAsk` mode with `Bash`, `Edit`, `Write` and the web denied; its Switchboard
+  tools are the reads, `github_read` and `brief_write`; and the Channel refuses its
+  token on every other write.
+- It reads GitHub as it is now with `github_read`, since it cannot pull its checkout.
+- It works from the Channel's Librarian Cursor, so after a restart it catches up on
+  what changed since its last pass, and nothing twice.
+- It makes at most three quarters of `BRIEF_WRITES_PER_DAY` (150 of 200) a day, at most
+  8 per wake; the rest are kept for the other Agents.
+- A Channel has one librarian. Stop it with `switchboard stop librarian`.
+
 ### Shared skills
 
 Persons share their Claude Code skills through the Channel (ADR 0039): a skill is a
