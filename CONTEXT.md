@@ -34,6 +34,10 @@ _Avoid_: Assignment, lock, ownership
 Anything recorded on the channel, such as a Claim, a Step completed, a file edited or a message. Every Event names its Agent or Person and its Capture.
 _Avoid_: Log, activity, message
 
+**Local Event**:
+An Event of an Agent's per-call work: a `tool.call`, `command`, `turn.end` or `file.edit` from the Hook Capture, a Proxy Digest or Raw Proxy Event, and the Relay's rule Drops about them (ADR 0037). It streams live like any Event, but its record is kept in the local store of the machine that made it, `<config>/events.db`, for 30 days. The Channel reads it from that machine's wrapper or Host when a history page or Agent Summary asks. While the machine is away its Local Events are missing from history, and the read says so ("offline: history unavailable until shlok1806/studio is back"); the Agent's Updates, Claims, Directives, notes, touched files and Verdicts are still read from the Channel.
+_Avoid_: Log line, trace, local log
+
 **Update**:
 An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening. It may be addressed to Agents by their Agent IDs: each addressee always hears it, Queued at least, and still as information, never as an instruction (ADR 0026).
 _Avoid_: Status, note, post
@@ -47,7 +51,7 @@ What an Agent's wrapper adds to its context at its next turn: one line for each 
 _Avoid_: Summary, recap
 
 **Agent Summary**:
-What the Channel knows of one Agent, in one read (ADR 0024): its latest Context Reading, the Tasks it holds, its latest Updates, the files it edited, its notes and its Tasks' open questions and dead ends, and the Agents it continues or that continue it. Built from rows the Channel already keeps, so it reads nothing from a session and works for a Gone Agent.
+What the Channel knows of one Agent, in one read (ADR 0024): its latest Context Reading, the Tasks it holds, its latest Updates, the files it edited, its notes and its Tasks' open questions and dead ends, and the Agents it continues or that continue it. Built from rows the Channel already keeps, plus what the Agent did last, read from its machine's Local Events: a Gone Agent's summary still works, and says so when that machine is away.
 _Avoid_: Profile, status, digest
 
 **Hand-off**:
@@ -121,7 +125,7 @@ The permanent name of an Agent, made of its Person, its CLI and a short form of 
 _Avoid_: Agent name, handle
 
 **Host**:
-A machine one Person lets the Channel start Agents on, such as `shlok1806/studio`. Its supervisor, `switchboard host run`, runs those Agents in terminals nobody sees and stops them when the Person asks on the Channel. It belongs to exactly one Person. Only that Person's requests run there, unless its machine's own file also allows others (`--allow`, `--allow-channel`, or a change signed in the Dashboard by a browser key that Person trusted there). The Agents it runs belong to its Person (ADR 0015, ADR 0028).
+A machine one Person lets the Channel start Agents on, such as `shlok1806/studio`. Its supervisor, `switchboard host run`, runs those Agents in terminals nobody sees and stops them when the Person asks on the Channel. It belongs to exactly one Person. Only that Person's requests run there, unless its machine's own file also allows others (`--allow`, `--allow-channel`, or a change signed in the Dashboard by a browser key that Person trusted there). The Agents it runs belong to its Person (ADR 0015, ADR 0028). It answers the Channel's history reads for its machine's Agents once their wrappers have exited, from the machine's Local Events (ADR 0037).
 _Avoid_: Worker, machine, runner, node
 
 **Lead**:

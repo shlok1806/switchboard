@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type {
   Agent,
   AgentId,
+  AgentSummary,
   AgentsResponse,
   ChannelEvent,
   EventOf,
@@ -35,6 +36,7 @@ import {
   REVIEW_LABEL,
   STANDING_RULE,
   signedInput,
+  summaryPath,
   type TerminalInputOp,
   type TerminalRefusedFrame,
   type TerminalScreenFrame,
@@ -3791,6 +3793,35 @@ describe("switchboard host", () => {
       maxPermissionMode: "acceptEdits",
       live: false,
     });
+  });
+
+  it("keeps a terminal Agent's history on this machine: its wrapper answers, then the Host, and the Channel says when neither can (ADR 0037)", async () => {
+    const term = new Terminal(["run", "claude"]);
+    const { agentEnv: id } = await term.started();
+    await term.attached(id);
+    await term.waitForOutput(/hook SessionStart exit=0/);
+    term.type("turn\r");
+    await term.waitForOutput(/FAKE-CLAUDE turn done/);
+    const activity = async () => (await api<AgentSummary>(summaryPath(id as AgentId))).activity?.map((a) => a.text);
+    // While the session runs, its wrapper answers from the machine's store.
+    const running = await waitFor("the wrapper's answer", async () => {
+      const lines = await activity();
+      return lines?.includes("Read README.md") ? lines : undefined;
+    });
+    expect(running).toEqual(expect.arrayContaining(["edited src/app.ts (+1 -1)", "ran npm test", "ended turn 1"]));
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+
+    // Its wrapper is gone and the machine's Host is not running: the Channel says so, without failing.
+    const reason = `offline: history unavailable until e2e/${HOST} is back`;
+    expect((await api<AgentSummary>(summaryPath(id as AgentId))).historyUnavailable).toBe(reason);
+    const page = await api<HistoryResponse>(`/api/events?tail=50&agent=${encodeURIComponent(id)}`);
+    expect(page.unavailable).toEqual([{ host: `e2e/${HOST}`, agents: [id], reason }]);
+
+    // The Host answers from the same store once it runs.
+    await startHost();
+    expect(await activity()).toEqual(running);
+    await stopHost();
   });
 
   let agentId = "";

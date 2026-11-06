@@ -8,6 +8,7 @@ export * from "./claims";
 export * from "./directives";
 export * from "./domain";
 export * from "./escapes";
+export * from "./history";
 export * from "./hooks";
 export * from "./hosts";
 export * from "./memory";

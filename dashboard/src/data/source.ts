@@ -7,6 +7,7 @@ import type {
   ChannelSnapshot,
   ClaimRefusal,
   CreateTaskRequest,
+  HistoryGap,
   HostsResponse,
   MemoryQuery,
   MemoryResponse,
@@ -48,6 +49,8 @@ export type HistoryScope = { agent: AgentId } | { task: TaskNumber };
 export interface EventPage {
   events: ChannelEvent[];
   olderBefore?: number;
+  /** The Local Events this page could not read: their machines are away (ADR 0037). */
+  unavailable?: HistoryGap[];
 }
 
 /**

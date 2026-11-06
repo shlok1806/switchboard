@@ -20,6 +20,8 @@ import type {
   DirectiveAck,
   DirectiveInterruptMessage,
   DirectiveTypedResult,
+  HistoryPageMessage,
+  HistoryRequestMessage,
   InterruptAttach,
   InterruptMessage,
   InterruptResult,
@@ -48,6 +50,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   handoffBrief,
   interruptNotice,
+  isLocalEvent,
   modelPath,
   STANDING_RULE,
   summaryName,
@@ -58,12 +61,14 @@ import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { ApprovalReporter, DenyGate } from "./approvals";
 import { type ChannelChoice, ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
-import { ChannelClient, ChannelError, targetOf } from "./channel-client";
+import { ChannelClient, ChannelError, type ChannelMessage, targetOf } from "./channel-client";
 import { claudeConfigDir, projectDir, withSessionId } from "./claude-session";
 import type { CliAdapter, ProxyRoute, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
+import { readSettings } from "./host/files";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
+import { openLocalStore } from "./local-store";
 import { prepareSessionTools, type SessionTools } from "./mcp-config";
 import { MemoryInbox, MemoryNudges } from "./memory";
 import { configuredModel, ModelWatch } from "./model-watch";
@@ -171,6 +176,16 @@ async function predecessorOf(
   return { summary: await client.request<AgentSummary>(summaryPath(predecessor.id)), continuing };
 }
 
+/**
+ * The name of the Host installed on this machine for the Channel of `repo` (ADR 0015), which
+ * answers for its Agents' Local Events once their wrappers are gone (ADR 0037), or undefined.
+ */
+export function hostFor(repo: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const settings = readSettings(env);
+  if (settings === null) return undefined;
+  return (channelKey(settings.repo) ?? settings.repo) === repo ? settings.name : undefined;
+}
+
 export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<number> {
   const env = process.env;
   const config = await readConfig();
@@ -247,6 +262,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // Registering trades the Person's session for the Agent's token; the client then
   // acts with the token, and the stream reconnects with it (ADR 0007).
   const client = new ChannelClient(targetOf(config, repo));
+  // The machine's store of its Agents' Local Events (ADR 0037), and the Host installed here for this Channel.
+  const storeRepo = channelKey(repo) ?? repo;
+  const store = plan.kind === "none" ? null : openLocalStore(log, env);
+  const machineHost = hostFor(storeRepo, env);
   // The Channel checks the Person's Membership itself. A refusal is said in its own
   // words, since signing in again would not change it; when the Channel cannot be
   // reached the session starts anyway and keeps trying.
@@ -336,6 +355,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     ...(env.SWITCHBOARD_HOST ? { host: env.SWITCHBOARD_HOST } : {}),
     ...(env.SWITCHBOARD_HOST && env.SWITCHBOARD_SPAWN ? { spawn: env.SWITCHBOARD_SPAWN } : {}),
     ...(predecessor === null ? {} : { continues: predecessor.agent.id }),
+    // This machine's Host for the Channel answers for the Agent's Local Events once the wrapper is gone (ADR 0037).
+    ...(machineHost === undefined ? {} : { historyHost: machineHost }),
   });
 
   // The Channel stream stays open for the whole session. It carries the Hook
@@ -388,7 +409,12 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // Tells the Channel this socket is the Agent's wrapper, so its Interrupts and Directives come here.
   const attach = () => {
     if (agentId === null) return;
-    const frame: InterruptAttach = { type: "interrupt.attach", agent: agentId };
+    // With a local store, it answers the Channel's reads of its Agent's history too (ADR 0037).
+    const frame: InterruptAttach = {
+      type: "interrupt.attach",
+      agent: agentId,
+      ...(store === null ? {} : { history: true }),
+    };
     stream.send(JSON.stringify(frame));
   };
   // The live terminal (ADR 0021): the screen goes to watchers, redacted, while anyone watches;
@@ -665,6 +691,35 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         log,
       })
     : null;
+  // What its Agent did, as the Channel recorded it, kept on this machine (ADR 0037).
+  const keepLocally = (message: ChannelMessage) => {
+    if (store === null) return;
+    try {
+      if (message.type === "hook.ack") store.put(storeRepo, message.events ?? []);
+      else if (message.type === "proxy.ack" && message.event !== undefined) store.put(storeRepo, [message.event]);
+      else if (message.type === "event" && message.event.type === "verdict" && isLocalEvent(message.event)) {
+        // The Relay's rule Drops about its Agent's Local Events stay with them.
+        const about = (message.event.payload as { event?: string }).event;
+        if (about !== undefined && store.has(storeRepo, about)) store.put(storeRepo, [message.event]);
+      }
+    } catch (error) {
+      log(`could not keep Local Events: ${(error as Error).message}`);
+    }
+  };
+  const answerHistory = (request: HistoryRequestMessage) => {
+    let frame: HistoryPageMessage;
+    try {
+      // Only ever its own Agent's history.
+      frame = {
+        type: "history.page",
+        id: request.id,
+        events: store?.page(storeRepo, { ...request, agent: agentId ?? undefined }) ?? [],
+      };
+    } catch (error) {
+      frame = { type: "history.page", id: request.id, error: (error as Error).message.slice(0, 300) };
+    }
+    stream.send(JSON.stringify(frame));
+  };
   const addForNextTurn = (items: NextTurnItems) => {
     const kept = nextTurn.add(items);
     // A Person's Directive is their word: the Agent may be woken again. A lead's is not (ADR 0018).
@@ -680,6 +735,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
       if (message.type === "event") memory.event(message.event);
       if (message.type === "proxy.ack" || message.type === "proxy.refused") proxy?.reply(message);
+      keepLocally(message);
+      if (message.type === "history.request" && message.agent === agentId) answerHistory(message);
       if (message.type === "agent") {
         proxy?.agentChanged(message.agent);
         link?.agentChanged(message.agent);
@@ -771,6 +828,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     stream.close();
     await hooks?.close();
     await proxy?.close();
+    store?.close();
     await disposeInstall?.();
     if (hookDir) await rm(hookDir, { recursive: true, force: true });
   };

@@ -2,6 +2,7 @@
  * The Channel API contract: what a client (the Dashboard, the wrapper, hooks)
  * reads over HTTP and receives over the WebSocket. The Worker implements it.
  */
+
 import type {
   Agent,
   AgentId,
@@ -14,6 +15,7 @@ import type {
   TaskNumber,
   Verdict,
 } from "./domain";
+import type { HistoryGap } from "./history";
 import type { AccountUsage } from "./usage";
 
 export interface ChannelInfo {
@@ -42,6 +44,8 @@ export interface ChannelSnapshot {
    * loaded, to page back from (`GET /api/events?tail=<n>&before=<seq>`).
    */
   olderBefore?: number;
+  /** The Local Events the feed could not read, because the machines that keep them are away (ADR 0037). */
+  unavailable?: HistoryGap[];
 }
 
 /** Messages the Worker sends over the WebSocket (`/api/stream?after=<cursor>`). */
@@ -103,6 +107,11 @@ export interface HistoryResponse {
   events: ChannelEvent[];
   /** The `seq` of the last Event returned, or `after` when there are none. */
   cursor: number;
+  /**
+   * For a `tail` read: the Local Events it could not read, because the machine that
+   * keeps them is away (ADR 0037). Absent when none are missing.
+   */
+  unavailable?: HistoryGap[];
 }
 
 /** `GET /api/persons`: every Person who has joined the Channel. */

@@ -40,6 +40,8 @@
     "MEMORY_NOTES_PER_DAY": "300",
     // A transcript read waits this many seconds for the wrapper's page (ADR 0019).
     "TRANSCRIPT_WAIT_SECONDS": "10",
+    // A history read waits this many seconds for each machine's Local Events (ADR 0037).
+    "HISTORY_WAIT_SECONDS": "3",
     // `POST /api/agents/spawn` waits this many seconds for the spawned Agent (ADR 0015).
     "HOST_SPAWN_WAIT_SECONDS": "45",
     // A Directive waits this many seconds for its Agent's wrapper to attach before it is Queued (ADR 0025).

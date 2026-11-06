@@ -9,6 +9,7 @@ import type {
   ChannelSnapshot,
   Holder,
   Host,
+  HostId,
   HostsResponse,
   MemoryQuery,
   MemoryResponse,
@@ -27,6 +28,7 @@ import {
   holderName,
   hostIdFor,
   noteFromEvent,
+  offlineReason,
   notUnderRootsReason,
   MAX_MEMORY_LIMIT,
   permissionModeWithin,
@@ -39,6 +41,7 @@ import {
   type ClaimResult,
   type ConnectionState,
   type EventPage,
+  type HistoryScope,
   type SpawnResult,
   type TerminalFrame,
   type TerminalLink,
@@ -129,7 +132,14 @@ export class MockChannelSource implements ChannelSource {
       relay: RELAY,
       accounts,
       cursor: this.events.at(-1)?.seq ?? 0,
+      // The simulated Channel's offline Host keeps Local Events nobody can read now (ADR 0037).
+      unavailable: this.offlineHosts().map((id) => ({ host: id, agents: [], reason: offlineReason(id) })),
     });
+  }
+
+  /** The simulated Channel's Hosts that are away. */
+  private offlineHosts(): HostId[] {
+    return this.allHosts().filter((host) => !host.live).map((host) => host.id);
   }
 
   /** The simulated Channel's snapshot holds its whole history. */
@@ -137,9 +147,12 @@ export class MockChannelSource implements ChannelSource {
     return { events: [], verdicts: [] };
   }
 
-  // The simulated Channel's whole history is in its snapshot.
-  async scopedEvents(): Promise<EventPage> {
-    return { events: [] };
+  // The simulated Channel's whole history is in its snapshot; an Agent whose Host is away says so.
+  async scopedEvents(scope: HistoryScope): Promise<EventPage> {
+    if (!("agent" in scope)) return { events: [] };
+    const host = this.agents.find((agent) => agent.id === scope.agent)?.historyHost;
+    if (host === undefined || !this.offlineHosts().includes(host)) return { events: [] };
+    return { events: [], unavailable: [{ host, agents: [scope.agent], reason: offlineReason(host) }] };
   }
 
   async eventsById(): Promise<ChannelEvent[]> {
@@ -420,13 +433,9 @@ export class MockChannelSource implements ChannelSource {
     return { ok: true, task: clone(task) };
   }
 
-  async hosts(): Promise<HostsResponse> {
-    await new Promise((r) => setTimeout(r, 120));
-    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
-    const running = this.agents.filter((a) => a.host !== undefined && a.presence !== "gone").length;
-    // The other Persons' Hosts the demo Agents run on (a Person starts Agents only on their
-    // own), and a laptop of shlok's that has been Offline for two days.
-    if (this.opts.state === "empty") return { hosts: [], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running: 0 };
+  /** This machine's Host, the other Persons' Hosts the demo Agents run on, and a laptop of shlok's that has been Offline for two days. */
+  private allHosts(): Host[] {
+    if (this.opts.state === "empty") return [];
     const host = (id: `${string}/${string}`, roots: string[], extra: Partial<Host> = {}): Host => ({ ...this.host, id, person: id.split("/")[0]!, name: id.split("/")[1]!, roots, ...extra });
     const twoDays = new Date(T0 - 2 * 86_400_000).toISOString();
     const others = [
@@ -434,7 +443,17 @@ export class MockChannelSource implements ChannelSource {
       host("maya/maya-mbp", ["/Users/maya/src/app", "/Users/maya/src/design"], { maxPermissionMode: "default" }),
       host("dev/devbox", ["/home/dev/app"], { maxPermissionMode: "auto" }),
     ];
-    return clone({ hosts: [this.host, ...others], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
+    return [this.host, ...others];
+  }
+
+  async hosts(): Promise<HostsResponse> {
+    await new Promise((r) => setTimeout(r, 120));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    const running = this.agents.filter((a) => a.host !== undefined && a.presence !== "gone").length;
+    // The other Persons' Hosts the demo Agents run on (a Person starts Agents only on their
+    // own), and a laptop of shlok's that has been Offline for two days.
+    if (this.opts.state === "empty") return { hosts: [], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running: 0 };
+    return clone({ hosts: this.allHosts(), cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
   }
 
   /**
