@@ -2260,8 +2260,15 @@ describe("A live terminal (ADR 0021)", () => {
       return this.frames.filter((f) => f.type === "terminal.screen") as TerminalScreenFrame[];
     }
 
+    /**
+     * The refusals of this browser's own frames. Every watcher gets every refusal, and
+     * each browser numbers its frames from 1, so a refusal is this one's only when it
+     * names this key (or no key: the Channel's own, sent to the sender alone).
+     */
     refusals(): TerminalRefusedFrame[] {
-      return this.frames.filter((f) => f.type === "terminal.refused") as TerminalRefusedFrame[];
+      return (this.frames.filter((f) => f.type === "terminal.refused") as TerminalRefusedFrame[]).filter(
+        (r) => r.fingerprint === this.fingerprint || r.fingerprint === "",
+      );
     }
 
     /** The screen's text once a frame shows `pattern`. */
