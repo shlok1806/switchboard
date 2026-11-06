@@ -154,6 +154,13 @@ export class Tasks {
     // The Tasks with a Claim, whoever holds it, so "what is in progress" (ADR 0040)
     // reads only those. A Claim is a few rows of a Channel's Tasks at any time.
     host.storage.sql.exec(`CREATE INDEX IF NOT EXISTS tasks_claimed ON tasks (number) WHERE ${CLAIMED}`);
+    // A done Task's Claim is history, never Stale: nothing is left to take over. Tasks
+    // closed before `write` cleared it keep the flag; this clears them, reading only
+    // the claimed Tasks through their index.
+    host.storage.sql.exec(
+      `UPDATE tasks SET data = json_set(data, '$.claim.stale', json('false'))
+       WHERE ${CLAIMED} AND json_extract(data, '$.status') = 'done' AND json_extract(data, '$.claim.stale') = 1`,
+    );
   }
 
   /** Every Task, lowest Issue number first. Runs the first reconcile if there has never been one. */
@@ -410,7 +417,12 @@ export class Tasks {
   }
 
   /** Stores a Task and tells every client. Callers own only the Switchboard fields (ADR 0001). */
-  write(task: Task): void {
+  write(written: Task): void {
+    // A done Task's Claim is history, never Stale: nothing is left to take over.
+    const task =
+      written.status === "done" && written.claim?.stale === true
+        ? { ...written, claim: { ...written.claim, stale: false } }
+        : written;
     this.host.storage.sql.exec(
       "INSERT OR REPLACE INTO tasks (number, data, holder_agent) VALUES (?, ?, ?)",
       task.number,
