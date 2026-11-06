@@ -434,6 +434,67 @@ describe("switchboard run claude", () => {
     expect(whoami.stdout).toContain(`Default Channel: ${github.repo}`);
   });
 
+  it("greets a Person's first session on this machine with the guide, once, before the agent CLI starts (ADR 0038)", async () => {
+    // A new Person joins the Channel from a machine of their own: signs in, never shown the guide.
+    const config = join(scratch, "first-run");
+    const fresh = { SWITCHBOARD_CONFIG_DIR: config };
+    const signedIn = github.signInAs;
+    github.signInAs = "newcomer";
+    try {
+      await promisify(execFile)(process.execPath, [CLI, "login", "--url", `${base}/${github.repo}`], {
+        env: { ...env, ...fresh },
+      });
+    } finally {
+      github.signInAs = signedIn;
+    }
+    const flag = join(config, "onboarded", "newcomer");
+
+    // A scripted run, with no terminal, starts the agent CLI without it and remembers nothing.
+    const scripted = spawn(process.execPath, [CLI, "run", "claude"], { cwd, env: { ...env, ...fresh } });
+    let piped = "";
+    scripted.stdout.on("data", (data) => {
+      piped += data;
+    });
+    const scriptedExit = new Promise((resolve) => scripted.on("exit", resolve));
+    try {
+      await waitFor("the scripted session", () => (piped.includes("FAKE-CLAUDE args=") ? true : undefined));
+      scripted.stdin.write("quit\r");
+      await scriptedExit;
+    } finally {
+      scripted.kill();
+    }
+    expect(piped).not.toContain("Welcome to Switchboard");
+    await expect(stat(flag)).rejects.toThrow();
+
+    // At a terminal: the guide, with the Channel's Dashboard, then the agent CLI.
+    const first = new Terminal(["run", "claude"], fresh);
+    await first.started();
+    first.type("quit\r");
+    expect(await first.exited).toBe(0);
+    const shown = first.output.replace(/\r/g, "");
+    expect(shown).toContain(`Welcome to Switchboard, newcomer. Your agent joins the Channel for ${github.repo},`);
+    expect(shown).toContain(`Dashboard      ${base}/${github.repo}`);
+    expect(shown).toContain("finish_task pushes it and");
+    expect(shown).toContain("Only a Person's Directive instructs an Agent.");
+    expect(shown.indexOf("Welcome to Switchboard")).toBeLessThan(shown.indexOf("FAKE-CLAUDE args="));
+    await stat(flag);
+
+    // Once per Person and machine.
+    const second = new Terminal(["run", "claude"], fresh);
+    await second.started();
+    second.type("quit\r");
+    expect(await second.exited).toBe(0);
+    expect(second.output).not.toContain("Welcome to Switchboard");
+
+    // And again whenever asked.
+    const { stdout } = await promisify(execFile)(process.execPath, [CLI, "help", "onboarding"], {
+      env: { ...env, ...fresh },
+      cwd,
+    });
+    expect(stdout).toContain(`Welcome to Switchboard, newcomer. Your agent joins the Channel for ${github.repo},`);
+    expect(stdout).toContain(`Dashboard      ${base}/${github.repo}`);
+  });
+
   it("does not ask to sign in a second time on the same Worker", async () => {
     const before = await readFile(join(scratch, "config", "config.json"), "utf8");
     const { stdout } = await promisify(execFile)(process.execPath, [CLI, "login", "--repo", github.repo], { env });

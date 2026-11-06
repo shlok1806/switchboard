@@ -11,6 +11,7 @@
 //   switchboard stop|pause|resume <agent>   (ADR 0028)
 //   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
 //   switchboard attach allow|revoke|list|prompts   (ADR 0021)
+//   switchboard help onboarding   (ADR 0038)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
@@ -29,6 +30,7 @@ import {
 } from "./host/commands";
 import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
+import { dashboardUrl, onboardingGuide } from "./onboarding";
 import { renameAgent } from "./rename";
 import { runCli } from "./run";
 import { ATTACH_USAGE, attachCommand } from "./terminal/attach-keys";
@@ -41,6 +43,7 @@ const USAGE = `Usage:
   switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
   switchboard whoami
+  switchboard help onboarding
   switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--from <agent>] [--repo <owner>/<repo>] [brief...]
   switchboard stop <agent> [--repo <owner>/<repo>]
   switchboard pause <agent> [--repo <owner>/<repo>]
@@ -216,8 +219,11 @@ async function main(argv: string[]): Promise<number> {
       }
       return runCli(adapter, args);
     }
-    case undefined:
     case "help":
+      if (rest[0] === "onboarding") return helpOnboarding();
+      console.log(USAGE);
+      return 0;
+    case undefined:
     case "--help":
     case "-h":
       console.log(USAGE);
@@ -226,6 +232,23 @@ async function main(argv: string[]): Promise<number> {
       console.error(`Unknown command: ${command}\n\n${USAGE}`);
       return 2;
   }
+}
+
+/** `switchboard help onboarding`: the first-run guide again, for this directory's Channel when signed in (ADR 0038). */
+async function helpOnboarding(): Promise<number> {
+  const config = await readConfig();
+  if (config === null) {
+    process.stdout.write(onboardingGuide({}));
+    return 0;
+  }
+  let repo: string = config.repo;
+  try {
+    repo = (await chooseChannel(config, { env: process.env, cwd: process.cwd() })).repo;
+  } catch (error) {
+    if (!(error instanceof ChannelChoiceError)) throw error;
+  }
+  process.stdout.write(onboardingGuide({ person: config.person, repo, dashboard: dashboardUrl(config.url, repo) }));
+  return 0;
 }
 
 main(process.argv.slice(2)).then(

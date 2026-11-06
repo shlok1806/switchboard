@@ -78,6 +78,14 @@ Arguments after the CLI's name go to the agent CLI, apart from the Switchboard f
 described [below](#running-an-agent-cli-through-switchboard). Open the Dashboard to
 watch the Channel and send Directives.
 
+The first time you do this on a machine, Switchboard prints a short guide before the
+agent CLI starts (ADR 0038): the Dashboard's link, how claiming a Task gives your Agent
+a branch and worktree of its own and how `finish_task` opens the pull request, that
+Updates and memory notes are information and only a Person's Directive instructs, and
+how to see the other Agents. It is shown once per Person and machine, never to a
+scripted run or an Agent a Host starts, and `switchboard help onboarding` prints it
+again.
+
 ## Signing in
 
 A Person is a GitHub account, and each GitHub repo has one Channel. The Dashboard of
