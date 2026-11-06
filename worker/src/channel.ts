@@ -76,6 +76,7 @@ import {
   describeActivity,
   HISTORY_WAIT_MS,
   hostIdFor,
+  isLocalEvent,
   LIVE_PING,
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
@@ -144,8 +145,10 @@ export interface NewEvent<K extends EventType> {
  * Creates the `events` table, which is append-only: this object only ever INSERTs
  * into it, apart from the one-time backfill of the actor columns below.
  *
- * The table holds the Channel's whole history, so every query on a hot path must
- * reach its rows through an index; Durable Objects bill each row a query reads. The
+ * The table holds the Channel's history apart from Local Events, which their machines
+ * keep (ADR 0037; rows from before it stay and are read with the rest), so every
+ * query on a hot path must reach its rows through an index; Durable Objects bill
+ * each row a query reads. The
  * partial indexes cover the few Event types that are looked up later: pushes and
  * merges (the Relay's recent code) and Updates (the status comment, Takeovers).
  * `actor_kind` and `actor_id` copy the actor's kind and Agent ID or Person name out
@@ -435,6 +438,14 @@ export class Channel extends DurableObject<Env> {
   private readonly historyReads = new Map<string, HistoryRead>();
   /** How long a history read waits: HISTORY_WAIT_MS, or shorter in tests. */
   private readonly historyWaitMs: number;
+  /** The last `seq` this object gave, read from the stored Events at its first Event (ADR 0037). */
+  private lastSeq: number | null = null;
+  /**
+   * The newest Local Events, which the Channel does not store (ADR 0037), by ID: so an
+   * Event sent again after a reconnect is recorded once and acknowledged as it was, and
+   * a recent one is still read by ID. In memory, for as long as this object lives.
+   */
+  private readonly recentLocal = new Map<string, ChannelEvent>();
   /** The history indexes built so far (`buildHistoryIndexes`), and the UTC day they were last tried. */
   private historyIndexes: HistoryIndexes;
   private historyIndexesDay = utcDay();
@@ -1517,10 +1528,13 @@ export class Channel extends DurableObject<Env> {
   /** The Events with these IDs, oldest first; IDs the Channel does not know are left out. */
   eventsById(ids: readonly string[]): ChannelEvent[] {
     if (ids.length === 0) return [];
-    return this.ctx.storage.sql
+    const stored = this.ctx.storage.sql
       .exec<EventRow>(`SELECT * FROM events WHERE id IN (${ids.map(() => "?").join(", ")}) ORDER BY seq`, ...ids)
       .toArray()
       .map(rowToEvent);
+    // A recent Local Event is still known here; older ones are only on their machine.
+    const recent = ids.flatMap((id) => this.recentLocal.get(id) ?? []);
+    return recent.length === 0 ? stored : mergePages([stored, recent], Number.MAX_SAFE_INTEGER);
   }
 
   /** The first `count` Wakes with `seq` above `after`, oldest first. */
@@ -1992,29 +2006,79 @@ export class Channel extends DurableObject<Env> {
     return stored;
   }
 
-  /** Records an Event under `id` and broadcasts it, or returns null when the Channel already has that ID. */
+  /**
+   * Records an Event under `id` and broadcasts it, or returns null when the Channel
+   * already has that ID. A Local Event is given its place and broadcast but not stored:
+   * its machine keeps it (ADR 0037).
+   */
   private insert<K extends EventType>(id: string, event: NewEvent<K>): ChannelEvent | null {
-    const row = this.ctx.storage.sql
-      .exec<EventRow>(
-        `INSERT INTO events (id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING RETURNING *`,
-        id,
-        new Date().toISOString(),
-        event.type,
-        JSON.stringify(event.actor),
-        event.capture,
-        event.task ?? null,
-        event.turn ?? null,
-        JSON.stringify(event.payload),
-        ...actorColumns(event.actor),
-      )
-      .toArray()[0];
-    if (!row) return null;
-    const stored = rowToEvent(row);
-    this.broadcast({ type: "event", event: stored });
+    const at = new Date().toISOString();
+    let recorded: ChannelEvent;
+    if (isLocalEvent(event)) {
+      if (this.recentLocal.has(id) || this.eventsById([id]).length > 0) return null;
+      recorded = JSON.parse(
+        JSON.stringify({
+          id,
+          seq: this.nextSeq(),
+          at,
+          type: event.type,
+          actor: event.actor,
+          capture: event.capture,
+          ...(event.task === undefined ? {} : { task: event.task }),
+          ...(event.turn === undefined ? {} : { turn: event.turn }),
+          payload: event.payload,
+        }),
+      ) as ChannelEvent;
+      this.recentLocal.set(id, recorded);
+      for (const oldest of this.recentLocal.keys()) {
+        if (this.recentLocal.size <= RECENT_LOCAL_EVENTS) break;
+        this.recentLocal.delete(oldest);
+      }
+    } else {
+      const row = this.ctx.storage.sql
+        .exec<EventRow>(
+          `INSERT INTO events (seq, id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING RETURNING *`,
+          this.peekSeq(),
+          id,
+          at,
+          event.type,
+          JSON.stringify(event.actor),
+          event.capture,
+          event.task ?? null,
+          event.turn ?? null,
+          JSON.stringify(event.payload),
+          ...actorColumns(event.actor),
+        )
+        .toArray()[0];
+      if (!row) return null;
+      this.lastSeq = row.seq;
+      recorded = rowToEvent(row);
+    }
+    this.broadcast({ type: "event", event: recorded });
     // The Relay decides who hears about it, after this request.
-    this.relay.consider(stored);
-    return stored;
+    this.relay.consider(recorded);
+    return recorded;
+  }
+
+  /** The next `seq`, taken: see `peekSeq`. */
+  private nextSeq(): number {
+    const seq = this.peekSeq();
+    this.lastSeq = seq;
+    return seq;
+  }
+
+  /**
+   * The `seq` the next Event gets: the time in microseconds, or one more than the last
+   * `seq` given, whichever is larger (ADR 0037). It only grows and needs no stored
+   * counter, and leaves room between stored Events for the Local Events made between them.
+   */
+  private peekSeq(): number {
+    if (this.lastSeq === null) {
+      this.lastSeq =
+        this.ctx.storage.sql.exec<{ seq: number | null }>("SELECT MAX(seq) AS seq FROM events").one().seq ?? 0;
+    }
+    return Math.max(this.lastSeq + 1, Date.now() * 1000);
   }
 
   private broadcast(message: StreamMessage): void {
@@ -2023,6 +2087,9 @@ export class Channel extends DurableObject<Env> {
     }
   }
 }
+
+/** How many Local Events the Channel remembers by ID (`recentLocal`). */
+const RECENT_LOCAL_EVENTS = 5000;
 
 /** Why a machine that is attached keeps no history to read: its switchboard is from before ADR 0037. */
 function oldSwitchboard(holder: string): string {

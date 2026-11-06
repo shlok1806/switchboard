@@ -170,6 +170,7 @@ export class HookCapture {
    * Each Agent's touched files once read, kept in step by `touch`, the table's only
    * writer. The Relay reads every live Agent's files for nearly every Event it
    * considers, so they come from memory, not from `touched_files`, while this object lives.
+   * Edit counts and recency after a file's first edit live only here (ADR 0037).
    * Anything else that writes or deletes an Agent's rows must update this too: pruning
    * Gone Agents (#114) must `touched.delete(id)` with their rows.
    */
@@ -232,23 +233,27 @@ export class HookCapture {
     return files;
   }
 
+  /**
+   * Counts a file edit. The row is written once per file per Agent, at its first edit,
+   * since other machines need only which files (ADR 0037); its edit count and recency
+   * are kept in memory while this object lives.
+   */
   private touch(actor: ChannelEvent["actor"], event: Extract<ChannelEvent, { type: "file.edit" }>): void {
     if (actor.kind !== "agent") return;
-    this.host.sql.exec(
-      `INSERT INTO touched_files (agent, path, edits, first_edited_at, last_edited_at, last_seq)
-       VALUES (?, ?, 1, ?, ?, ?)
-       ON CONFLICT (agent, path) DO UPDATE SET
-         edits = edits + 1, last_edited_at = excluded.last_edited_at, last_seq = excluded.last_seq`,
-      actor.agentId,
-      event.payload.path,
-      event.at,
-      event.at,
-      event.seq,
-    );
-    const known = this.touched.get(actor.agentId);
-    if (known === undefined) return;
+    const known = this.touchedFiles(actor.agentId);
     const { path } = event.payload;
     const before = known.find((f) => f.path === path);
+    if (before === undefined) {
+      this.host.sql.exec(
+        `INSERT INTO touched_files (agent, path, edits, first_edited_at, last_edited_at, last_seq)
+         VALUES (?, ?, 1, ?, ?, ?) ON CONFLICT (agent, path) DO NOTHING`,
+        actor.agentId,
+        path,
+        event.at,
+        event.at,
+        event.seq,
+      );
+    }
     const file: TouchedFile = before
       ? { ...before, edits: before.edits + 1, lastEditedAt: event.at }
       : { path, edits: 1, firstEditedAt: event.at, lastEditedAt: event.at };

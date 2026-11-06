@@ -153,9 +153,11 @@ async function seed(live: AgentId[]): Promise<void> {
       task: number | null,
       payload: unknown,
     ) => {
+      // An older Channel's history, from before `seq` became the time (ADR 0037): seq 1 to EVENTS.
       sql.exec(
-        `INSERT INTO events (id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO events (seq, id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        row + 1,
         `seed-${row}`,
         new Date(Date.now() - (EVENTS - row) * 1000).toISOString(),
         type,
@@ -251,6 +253,7 @@ beforeEach(async () => {
   for (const agent of live) await heartbeat(agent, "live");
   measured = live[0] as AgentId;
   await seed(live);
+  await listenForVerdicts();
   await meterChannel();
 });
 
@@ -279,14 +282,25 @@ async function sendHooks(agent: AgentId, events: HookEvent[]): Promise<void> {
   socket.close();
 }
 
-/** The Relay's Verdicts about Event `id`, read without being counted. */
+/** The Events whose Verdicts the Relay broadcast, heard on a Dashboard's stream. */
+const verdictsHeard = new Set<string>();
+
+/** Opens a Dashboard's stream, which hears every Verdict the Relay gives, stored or not (ADR 0037). */
+async function listenForVerdicts(): Promise<void> {
+  verdictsHeard.clear();
+  const response = await call(`/api/stream?${await streamQuery("shlok")}`, { headers: { Upgrade: "websocket" } });
+  const socket = response.webSocket;
+  if (!socket) throw new Error("No WebSocket in the upgrade response");
+  socket.accept();
+  socket.addEventListener("message", (message) => {
+    const frame = JSON.parse(String(message.data)) as { type: string; event?: ChannelEvent };
+    if (frame.type === "event" && frame.event?.type === "verdict") verdictsHeard.add(frame.event.payload.event);
+  });
+}
+
+/** Whether the Relay has given a Verdict about Event `id`; reads nothing. */
 async function verdictsAbout(id: string): Promise<boolean> {
-  return runInDurableObject(channelStub(), (_channel, state) =>
-    state.storage.sql
-      .exec<{ payload: string }>("SELECT payload FROM events WHERE type = 'verdict' ORDER BY seq DESC LIMIT 10")
-      .toArray()
-      .some((row) => JSON.stringify(row.payload).includes(id)),
-  );
+  return verdictsHeard.has(id);
 }
 
 it("a Hook Event reads a bounded number of rows", async () => {

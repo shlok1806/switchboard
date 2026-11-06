@@ -2,7 +2,7 @@
 // it: Hook Events sent over the Channel WebSocket, read back through the Channel
 // API the Dashboard and the Relay use, against the real Worker and Durable Object.
 
-import { reset } from "cloudflare:test";
+import { reset, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -22,13 +22,14 @@ import {
   branchPath,
   claimPath,
   finishPath,
+  HEARTBEAT_INTERVAL_MS,
   MAX_HOOK_ARG_LENGTH,
   MAX_HOOK_COMMAND_LENGTH,
   releasePath,
   taskBranch,
 } from "../../shared/src/index";
 import { installGitHub } from "../src/github/index";
-import { type As, bearer, forgetTokens, remember, streamQuery, url } from "./client";
+import { type As, bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
 
 function call(path: string, init?: RequestInit): Promise<Response> {
@@ -56,6 +57,8 @@ function edit(path: string, additions = 1, deletions = 0): HookEvent {
  */
 class FakeWrapper {
   private readonly replies: HookCaptureReply[] = [];
+  /** The Hook Events the Channel broadcast on this wrapper's sockets, in order, each time it did. */
+  private readonly heard: ChannelEvent[] = [];
   private readonly sockets = new Map<string, WebSocket>();
   private readonly mine = new Set<string>();
 
@@ -90,6 +93,8 @@ class FakeWrapper {
     socket.addEventListener("message", (message) => {
       const frame = JSON.parse(message.data as string) as { type: string };
       if (frame.type === "hook.ack" || frame.type === "hook.refused") this.replies.push(frame as HookCaptureReply);
+      const { event } = frame as { event?: ChannelEvent };
+      if (frame.type === "event" && event?.capture === "hook") this.heard.push(event);
     });
     this.sockets.set(agent, socket);
     return socket;
@@ -125,7 +130,17 @@ class FakeWrapper {
     return body.files.map((f) => [f.path, f.edits]);
   }
 
+  /**
+   * The Hook Events the Channel recorded, as everyone's stream carried them: the Channel
+   * stores none of them (ADR 0037), so the Dashboard sees them live and reads them later
+   * from the Agent's machine. Every Event the ack names was broadcast before the ack.
+   */
   async hookEvents(): Promise<ChannelEvent[]> {
+    return [...this.heard];
+  }
+
+  /** The Hook Events in the Channel's stored history. */
+  async storedHookEvents(): Promise<ChannelEvent[]> {
     const response = await call("/api/events", { headers: await this.headers() });
     return (await response.json<HistoryResponse>()).events.filter((e) => e.capture === "hook");
   }
@@ -180,6 +195,8 @@ describe("recording Hook Events", () => {
     }
     // The ack hands the wrapper the Events as recorded, for its machine's local store (ADR 0037).
     expect(ack.type === "hook.ack" && ack.events).toEqual(recorded);
+    // Which is where they stay: the Channel stores none of them.
+    expect(await shlok.storedHookEvents()).toEqual([]);
   });
 
   it("records a message sent again after a reconnect once, and counts its file edits once", async () => {
@@ -214,18 +231,17 @@ describe("recording Hook Events", () => {
   it("counts Hook Events as a sign of life without changing Presence", async () => {
     const shlok = wrapper("shlok");
     const agent = await shlok.register("cccc0000-0000-4000-8000-000000000000");
-    const before = await call("/api/agents", {
-      headers: { Authorization: await bearer("shlok") },
-    }).then((r) => r.json<AgentsResponse>());
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Its wrapper has sent no heartbeat for two intervals, but its hooks still report work.
+    const silentSince = Date.now() - 2 * HEARTBEAT_INTERVAL_MS;
+    await runInDurableObject(channelStub(), (_channel, state) => {
+      state.storage.sql.exec("UPDATE agents SET last_seen_at = ? WHERE id = ?", silentSince, agent);
+    });
     await shlok.hooks(agent, [hook("turn.end", { turn: 1 })]);
     const after = await call("/api/agents", {
       headers: { Authorization: await bearer("shlok") },
     }).then((r) => r.json<AgentsResponse>());
     expect(after.agents[0]?.presence).toBe("live");
-    expect(Date.parse(after.agents[0]?.lastSeenAt ?? "")).toBeGreaterThan(
-      Date.parse(before.agents[0]?.lastSeenAt ?? ""),
-    );
+    expect(Date.parse(after.agents[0]?.lastSeenAt ?? "")).toBeGreaterThan(silentSince);
   });
 
   it("refuses Events for another Person's Agent, for unknown Agents, and malformed ones", async () => {
