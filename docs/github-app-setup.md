@@ -41,6 +41,14 @@ Repository permissions:
 | Issues | Read and write | read Tasks, assignees, labels, the status comment, tick Steps |
 | Pull requests | Read and write | open a Task's pull request when it is finished |
 | Metadata | Read-only | required by GitHub; also answers the membership check |
+| Checks | Read-only | the Connector's `github` tool reads CI state (ADR 0041) |
+| Commit statuses | Read-only | the same, for CI services that post commit statuses |
+
+Checks and Commit statuses were added for the Connector's `github` tool. On an App
+registered before them, add both under **Permissions & events**, save, and accept
+the new permissions on each installation (GitHub asks the installation's owner by
+email and on the installation's settings page). Until then the tool answers
+without CI state and says so.
 
 No account or organization permissions. Membership is read with the installation
 token from `GET /repos/{owner}/{repo}/collaborators/{login}/permission`, which needs

@@ -1,17 +1,33 @@
 // The read-only connector's tools (ADR 0040). Each one gets a read-only view of its
 // Channel, never the Channel's stub, so no tool can reach a method that writes.
-// The github (#157), brief (#158) and costs (#160) tools join this list.
+// The github tool (#157, ADR 0041) reads GitHub instead; the brief (#158) and costs
+// (#160) tools join this list.
 
 import type { ChannelAnswer, ChannelQuestion } from "../ask";
 import { formatAnswer } from "./format";
+import { githubTool } from "./github";
+import { parseSince } from "./since";
 
 /** What a tool may ask of its Channel: reads, and nothing else. */
 export interface ReadOnlyChannel {
   askChannel(question: ChannelQuestion): Promise<ChannelAnswer>;
 }
 
+/**
+ * What a tool may ask of GitHub (ADR 0041): reads as the Switchboard GitHub App's
+ * installation on the Channel's repo. Each answer is GitHub's own, status and headers included.
+ */
+export interface ReadOnlyGitHub {
+  /** A REST GET of `/repos/<owner>/<repo>` followed by `path`. */
+  get(path: string): Promise<Response>;
+  /** A GraphQL query. A document with a mutation or subscription is refused before it is sent. */
+  query(query: string, variables: Record<string, unknown>): Promise<Response>;
+}
+
 export interface ToolContext {
   channel: ReadOnlyChannel;
+  /** GitHub, or null while the Worker has no GitHub App configured. */
+  github: ReadOnlyGitHub | null;
   /** The Channel's key, `owner/repo` lowercased. */
   repo: string;
   /** The Worker's origin, for links to the Dashboard. */
@@ -40,32 +56,7 @@ export const READ_ONLY_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
-/** How far back `since` reaches when it is left out. */
-const DEFAULT_SINCE_MS = 24 * 60 * 60 * 1000;
-const UNITS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
 const MAX_ABOUT = 200;
-
-/** `since` as a time and a label: a span (`90m`, `24h`, `7d`, `2w`) or an ISO 8601 time. */
-export function parseSince(raw: unknown, now: number): { at: string; label: string } | { error: string } {
-  if (raw === undefined || raw === null || raw === "") {
-    return { at: new Date(now - DEFAULT_SINCE_MS).toISOString(), label: "the last 24 hours" };
-  }
-  if (typeof raw !== "string") return { error: '"since" must be a string such as "24h", "7d" or an ISO 8601 time.' };
-  const span = /^\s*(\d{1,5})\s*([mhdw])\s*$/i.exec(raw);
-  if (span?.[1] !== undefined && span[2] !== undefined) {
-    const amount = Number(span[1]);
-    const unit = span[2].toLowerCase();
-    const names: Record<string, string> = { m: "minute", h: "hour", d: "day", w: "week" };
-    return {
-      at: new Date(now - amount * (UNITS[unit] ?? 0)).toISOString(),
-      label: `the last ${amount} ${names[unit]}${amount === 1 ? "" : "s"}`,
-    };
-  }
-  const at = Date.parse(raw);
-  if (Number.isNaN(at))
-    return { error: `"since" must be a span such as "24h" or "7d", or an ISO 8601 time, not ${raw}.` };
-  return { at: new Date(Math.min(at, now)).toISOString(), label: "the time asked for" };
-}
 
 const channelTool: McpTool = {
   name: "channel",
@@ -113,4 +104,4 @@ const channelTool: McpTool = {
   },
 };
 
-export const TOOLS: readonly McpTool[] = [channelTool];
+export const TOOLS: readonly McpTool[] = [channelTool, githubTool];

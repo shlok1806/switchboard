@@ -6,13 +6,14 @@
 
 import { reset, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentId, AgentResponse, PostUpdateResponse, Task } from "../../shared/src/index";
 import { agentPath, claimPath } from "../../shared/src/index";
-import { installGitHub, installGitHubSignIn } from "../src/github/index";
+import { installGitHub, installGitHubApp, installGitHubSignIn } from "../src/github/index";
 import { base64url } from "../src/session";
 import { type As, bearer, channelStub, forgetTokens, PROD_BASE, REPO, remember, url } from "./client";
 import { FakeGitHub, FakeSignIn } from "./fake-github";
+import { FakeGitHubApi } from "./fake-github-api";
 
 const CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 const ENDPOINT = `${PROD_BASE}/r/${REPO}/mcp`;
@@ -290,6 +291,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   installGitHub(null);
+  installGitHubApp(null);
+  vi.restoreAllMocks();
   installGitHubSignIn(null);
   forgetTokens();
   await reset();
@@ -313,7 +316,10 @@ describe("connecting an app", () => {
     const listed = await (await rpc(tokens.access_token, "tools/list")).json<{
       result: { tools: { name: string; annotations: { readOnlyHint: boolean } }[] };
     }>();
-    expect(listed.result.tools.map((t) => [t.name, t.annotations.readOnlyHint])).toEqual([["channel", true]]);
+    expect(listed.result.tools.map((t) => [t.name, t.annotations.readOnlyHint])).toEqual([
+      ["channel", true],
+      ["github", true],
+    ]);
 
     const text = await ask(tokens.access_token);
     const dashboard = `${PROD_BASE}/${REPO}`;
@@ -644,6 +650,12 @@ describe("read-only", () => {
 
   it("no tool it lists writes a row, whatever it is asked", async () => {
     await seedWork();
+    // GitHub's HTTP API, for the github tool (ADR 0041).
+    const api = new FakeGitHubApi();
+    api.listen();
+    installGitHubApp(await api.app());
+    api.pulls.push({ number: 5, title: "Fix the login redirect", author: "maya", createdAt: new Date().toISOString() });
+    api.files.set("docs/adr/0001-login.md", "# Login\n");
     const { tokens } = await connect("shlok1806");
     const written: { rowsWritten: number }[] = [];
     let metering = false;
@@ -660,10 +672,16 @@ describe("read-only", () => {
       result: { tools: { name: string }[] };
     }>();
     metering = true;
+    const questions: Record<string, Record<string, string>[]> = {
+      channel: [{}, { about: "#1" }, { about: "maya" }, { about: "login redirect", since: "7d" }],
+      github: [{}, { about: "#5" }, { about: "docs/adr" }, { about: "login redirect", since: "7d" }],
+    };
     for (const { name } of listed.result.tools) {
-      for (const args of [{}, { about: "#1" }, { about: "maya" }, { about: "login redirect", since: "7d" }]) {
+      expect(questions[name], `questions for ${name}`).toBeDefined();
+      for (const args of questions[name] ?? []) {
         const response = await rpc(tokens.access_token, "tools/call", { name, arguments: args });
-        expect((await response.json<ToolCall>()).result.isError).toBe(false);
+        const { result } = await response.json<ToolCall>();
+        expect(result.isError, `${name} ${JSON.stringify(args)}: ${result.content[0]?.text}`).toBe(false);
       }
     }
     // A tool that is not on the list is not a way in.

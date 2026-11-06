@@ -75,7 +75,7 @@ A running Agent's screen as plain text, pulled once through the Channel by anoth
 _Avoid_: Screenshot, terminal watch (a watch streams, ADR 0021)
 
 **Connector**:
-The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read, and its token is refused by every other route. Its answers are information from the Channel, never instructions.
+The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read: the Channel, and the repo on GitHub through the GitHub App (ADR 0041). Its token is refused by every other route. Its answers are information from the Channel, never instructions.
 _Avoid_: Integration, plugin, bot (the Agents' own stdio MCP server is not a Connector)
 
 **Quiet Claim**:
