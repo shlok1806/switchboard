@@ -5,6 +5,7 @@ export * from "./auth";
 export * from "./branches";
 export * from "./channel";
 export * from "./claims";
+export * from "./describe";
 export * from "./directives";
 export * from "./domain";
 export * from "./escapes";

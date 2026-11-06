@@ -94,6 +94,7 @@ import {
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
 import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
+import { askChannel, type ChannelAnswer, type ChannelQuestion, DEFAULT_QUIET_CLAIM_HOURS } from "./ask";
 import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
@@ -101,6 +102,7 @@ import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Direct
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } from "./hosts";
+import { type GrantResult, McpGrants } from "./mcp/grants";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
@@ -214,6 +216,8 @@ export const HISTORY_INDEXES = [
   },
   { name: "events_by_task", on: "(task, seq)", where: "task IS NOT NULL AND type <> 'verdict'" },
   { name: "events_wakes", on: "(seq)", where: "type = 'wake'" },
+  // What People and Agents said, newest first, for the read-only connector (ADR 0040).
+  { name: "events_said", on: "(seq)", where: "type IN ('update', 'directive')" },
 ] as const;
 
 export type HistoryIndex = (typeof HISTORY_INDEXES)[number]["name"];
@@ -433,6 +437,10 @@ export class Channel extends DurableObject<Env> {
   /** The notes Agents write for each other (ADR 0019). */
   private readonly memory: Memory;
   private readonly skills: Skills;
+  /** The read-only connector's sign-ins (ADR 0040). */
+  private readonly mcpGrants: McpGrants;
+  /** A Claim with no Update for this long is Quiet (ADR 0040). */
+  private readonly quietAfterMs: number;
   /** How long a transcript read waits for the wrapper's page: TRANSCRIPT_WAIT_MS, or shorter in tests. */
   private readonly transcriptWaitMs: number;
   /** Transcript reads waiting for their wrapper's page, by request ID. In memory: a read lasts one request. */
@@ -474,6 +482,9 @@ export class Channel extends DurableObject<Env> {
     ctx.storage.sql.exec(MEMORY_SCHEMA);
     ctx.storage.sql.exec(SKILLS_SCHEMA);
     this.skills = new Skills(ctx.storage.sql);
+    this.mcpGrants = new McpGrants(ctx.storage.sql);
+    const quietHours = Number(env.QUIET_CLAIM_HOURS);
+    this.quietAfterMs = (quietHours > 0 ? quietHours : DEFAULT_QUIET_CLAIM_HOURS) * 60 * 60 * 1000;
     const notesPerDay = Number(env.MEMORY_NOTES_PER_DAY);
     this.memory = new Memory(
       ctx.storage.sql,
@@ -1323,6 +1334,40 @@ export class Channel extends DurableObject<Env> {
   }
 
   /** The Channel's notes, for any Person or Agent on it (ADR 0019). */
+  /**
+   * The `channel` tool of the read-only connector (ADR 0040): what is in progress,
+   * what is stuck, what was said since `since`, narrowed by `about`. Bounded reads
+   * through indexes, and no write.
+   */
+  askChannel(question: ChannelQuestion): ChannelAnswer {
+    const sql = this.ctx.storage.sql;
+    return askChannel(
+      {
+        sql,
+        claimedTasks: (limit) => this.tasks.claimed(limit),
+        task: (number) => this.tasks.read(number),
+        agent: (id) => this.agents.find(id),
+        liveAgents: (limit) => this.agents.live(limit),
+        isPerson: (name) => sql.exec("SELECT name FROM persons WHERE name = ?", name).toArray().length > 0,
+        notes: (query) => this.memory.read(query),
+        indexed: (name) => this.historyIndexes.built.has(name),
+        toEvent: rowToEvent,
+        quietAfterMs: this.quietAfterMs,
+      },
+      question,
+    );
+  }
+
+  /** Starts the grant of a connector sign-in whose code was redeemed (ADR 0040). */
+  startMcpGrant(id: string, person: PersonName, client: string, expiresAt: number): GrantResult {
+    return this.mcpGrants.start(id, person, client, expiresAt);
+  }
+
+  /** Rotates a connector sign-in's grant for a refresh (ADR 0040). */
+  rotateMcpGrant(id: string, generation: number, client: string, expiresAt: number): GrantResult {
+    return this.mcpGrants.rotate(id, generation, client, expiresAt);
+  }
+
   readMemory(query: MemoryQuery): MemoryReadResult {
     return this.memory.read(query);
   }

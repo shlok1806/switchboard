@@ -48,6 +48,7 @@ import {
   claimPath,
   cleanNoteText,
   describeNote,
+  describeTask,
   finishPath,
   holderName,
   MAX_ADDRESSEES,
@@ -68,12 +69,14 @@ import {
   memoryQueryString,
   modelLabel,
   nicknamePath,
+  oneLine,
   PERMISSION_MODES,
   releasePath,
   stepPath,
   summaryPath,
   summaryText,
   taskBranch,
+  taskRefs,
   terminalReadPath,
   transcriptPath,
 } from "../../shared/src/index";
@@ -138,12 +141,6 @@ function actorName(event: ChannelEvent, agents: ReadonlyMap<AgentId, Agent>): st
   return actor.kind === "person" ? actor.person : actor.kind;
 }
 
-/** Channel text on one line, cut to `max`. */
-function oneLine(text: string, max: number): string {
-  const flat = cleanNoteText(text);
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-}
-
 /**
  * One line per Agent, readable by a model: its ID, Nickname, Person, CLI, Account
  * Label, Presence, the Tasks it holds and what it is doing (ADR 0024). `me` marks the
@@ -194,7 +191,7 @@ function describeEvent(event: AgentDeliverable, agents: ReadonlyMap<AgentId, Age
       detail = holderName(event.payload.holder);
       break;
     case "claim.blocked":
-      detail = `${holderName(event.payload.holder)}, now blocked by ${blockers(event.payload.blockedBy)}`;
+      detail = `${holderName(event.payload.holder)}, now blocked by ${taskRefs(event.payload.blockedBy)}`;
       break;
     case "takeover":
       detail = `from ${holderName(event.payload.from)} to ${holderName(event.payload.to)}`;
@@ -233,31 +230,6 @@ function describeEvent(event: AgentDeliverable, agents: ReadonlyMap<AgentId, Age
       detail = "";
   }
   return `[${event.seq}] ${event.at} ${actorName(event, agents)} ${event.type}${task}${capture}${detail ? `: ${detail}` : ""}`;
-}
-
-function blockers(numbers: readonly number[]): string {
-  return numbers.map((n) => `#${n}`).join(", ");
-}
-
-/**
- * One line per Task, readable by a model. `me` marks the Tasks the calling Agent
- * holds, so a resumed Agent can see which Claims it still has.
- */
-export function describeTask(task: Task, me?: AgentId): string {
-  const parts = [`#${task.number} ${task.title}`, `[${task.status}]`];
-  if (task.steps.length > 0) parts.push(`${task.stepsDone}/${task.steps.length} Steps`);
-  const claim = task.claim;
-  if (claim) {
-    const mine = claim.holder.kind === "agent" && claim.holder.agentId === me ? " (you)" : "";
-    const stale = claim.stale ? " (Stale: its holder is Gone, only a Person can take it over)" : "";
-    parts.push(`held by ${holderName(claim.holder)}${mine}${stale}`);
-  }
-  if (claim?.blockedBy && claim.blockedBy.length > 0) {
-    parts.push(`claimed but now blocked by ${blockers(claim.blockedBy)}`);
-  } else if (task.blockedBy.length > 0) {
-    parts.push(`blocked by ${blockers(task.blockedBy)}`);
-  }
-  return parts.join(" ");
 }
 
 function describeSteps(task: Task): string {

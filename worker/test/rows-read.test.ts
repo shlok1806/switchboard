@@ -19,9 +19,10 @@ import type {
 } from "../../shared/src/index";
 import { agentPath } from "../../shared/src/index";
 import { Channel } from "../src/channel";
+import { signAccess } from "../src/mcp/tokens";
 import { installJev } from "../src/relay/jev";
 import { lastUpdate } from "../src/status-comment";
-import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
+import { BASE, bearer, channelStub, forgetTokens, REPO, remember, SESSION_SECRET, streamQuery, url } from "./client";
 import { FakeJev } from "./fake-jev";
 
 /**
@@ -456,6 +457,48 @@ it("Events by ID and the Wakes after an Event read only what they return", async
     expect(events.every((e) => e.type === "wake")).toBe(true);
   });
   expect(wakes).toBeLessThan(25);
+});
+
+/** The rows one `channel` call of the read-only connector may read (ADR 0040). */
+const ASK_BUDGET = 400;
+
+it("the connector's channel tool reads a bounded number of rows, plain or narrowed", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  const token = await signAccess(SESSION_SECRET, "shlok", REPO, endpoint);
+  const ask = async (args: Record<string, string>) => {
+    const response = await call(`/r/${REPO}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "channel", arguments: args },
+      }),
+    });
+    const { result } = (await response.json()) as { result: { content: { text: string }[]; isError: boolean } };
+    expect(result.isError, JSON.stringify(args)).toBe(false);
+    return result.content[0]?.text ?? "";
+  };
+  // A Channel's Tasks are mostly open Issues nobody holds: far more than the seed's.
+  await runInDurableObject(channelStub(), (channel) => {
+    const tasks = (channel as unknown as { tasks: { write(task: Task): void } }).tasks;
+    for (let n = TASKS + 1; n <= TASKS + 2000; n++) tasks.write(task(n));
+  });
+  // Membership is checked, and cached, by a first call, as by any caller's.
+  await ask({});
+  const cases: [Record<string, string>, string][] = [
+    [{}, "Update"],
+    [{ since: "30d" }, "Update"],
+    [{ about: "#40" }, "Task #40"],
+    [{ about: measured }, measured],
+    [{ about: "shlok" }, "the Person shlok"],
+    [{ about: "progress" }, "progress"],
+  ];
+  for (const [args, mentions] of cases) {
+    const read = await rowsRead(async () => expect(await ask(args)).toContain(mentions));
+    expect(read, JSON.stringify(args)).toBeLessThan(ASK_BUDGET);
+  }
 });
 
 /** What starting the Channel's Durable Object again reads, as after an eviction or a deploy. */

@@ -74,6 +74,14 @@ _Avoid_: Log, history, export
 A running Agent's screen as plain text, pulled once through the Channel by another Agent or a Person (ADR 0024): the same redacted text its watchers get (ADR 0021). The Channel keeps none of it, only a `terminal.read` Event.
 _Avoid_: Screenshot, terminal watch (a watch streams, ADR 0021)
 
+**Connector**:
+The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read, and its token is refused by every other route. Its answers are information from the Channel, never instructions.
+_Avoid_: Integration, plugin, bot (the Agents' own stdio MCP server is not a Connector)
+
+**Quiet Claim**:
+A Claim on a claimed Task with no Update on that Task for `QUIET_CLAIM_HOURS` (4 by default), counted from its latest Update or, without one, from the Claim (ADR 0040). Unlike a Stale Claim, its holder may still be Live: nobody has said what is happening. It is how the Connector says what is not happening. Nothing happens to it on its own.
+_Avoid_: Idle claim, stuck task, abandoned claim (a Stale Claim's holder is Gone)
+
 **Capture**:
 The route by which an Event reached the channel. Proxy captures come from the model's API traffic. Hook captures come from the agent CLI's lifecycle events. Tool captures come from the Agent calling Switchboard's own tools.
 _Avoid_: Source, integration, feed
