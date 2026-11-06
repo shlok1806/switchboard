@@ -27,7 +27,10 @@
 //         -> one Edit tool call on the file at <path> (its PostToolUse hook)
 //   shell <command>
 //         -> one Bash tool call: its PreToolUse hooks, then the command, run for real
-//            in the current directory (`\n` in it is a line break), then PostToolUse
+//            in the current directory (`\n` in it is a line break), then PostToolUse.
+//            Like every tool call here (`edit`, `call`), it is refused, as Claude Code
+//            refuses it, when a `permissions.deny` rule names the tool, or in
+//            `--permission-mode dontAsk` when no `permissions.allow` rule does
 //   end   -> ends the turn the Person's line started (the Stop hook), leaving it at its prompt
 //   end again
 //         -> the model stops again after a Stop hook blocked it (`stop_hook_active`)
@@ -205,6 +208,27 @@ async function mcpClient(server) {
   return client;
 }
 
+/** A rule's tool: `Bash(npm test:*)` is a rule for Bash. */
+const ruleTool = (rule) => rule.replace(/\(.*\)$/, "");
+
+/**
+ * Why Claude Code would refuse `tool` without asking, or null: a `permissions.deny` rule
+ * wins over any allow, and `--permission-mode dontAsk` refuses every tool not allowed.
+ */
+function refusal(tool) {
+  if ((settings.permissions?.deny ?? []).some((rule) => ruleTool(rule) === tool)) return "denied by a deny rule";
+  const allowed = (settings.permissions?.allow ?? []).some((rule) => ruleTool(rule) === tool);
+  if (flagValue("--permission-mode") === "dontAsk" && !allowed) return "not allowed in dontAsk";
+  return null;
+}
+
+/** Prints a refusal, as the model would see it, when Claude Code refuses `tool`. */
+function refused(tool) {
+  const why = refusal(tool);
+  if (why !== null) console.log(`FAKE-CLAUDE refused ${tool}: ${why}`);
+  return why !== null;
+}
+
 /** Whether a `permissions.ask` rule in its settings names `tool`: Claude Code then asks, in every mode. */
 function asks(tool) {
   return (settings.permissions?.ask ?? []).includes(tool);
@@ -212,6 +236,10 @@ function asks(tool) {
 
 async function callTool(name, input) {
   const tool = `mcp__switchboard__${name}`;
+  if (refused(tool)) {
+    console.log(`FAKE-CLAUDE done ${name}`);
+    return;
+  }
   if (asks(tool)) {
     // Like Claude Code's dialog for an `ask` rule: the next line answers it, "1" allowing it once.
     console.log(`FAKE-CLAUDE asking permission for ${tool}`);
@@ -421,7 +449,8 @@ async function answer(command) {
   const subagent = /^subagent (\S+) (.*)$/.exec(command);
   if (subagent) await modelTurn(subagent[2], subagent[1]);
   const shell = /^shell (.+)$/.exec(command);
-  if (shell) {
+  if (shell && refused("Bash")) console.log("FAKE-CLAUDE shell done refused");
+  else if (shell) {
     // A Bash tool call: its PreToolUse hooks, the command for real (`\n` in it is a line break), PostToolUse.
     const tool_input = { command: shell[1].replaceAll("\\n", "\n") };
     const tool_use_id = `toolu_${createHash("sha256").update(`${Date.now()}${Math.random()}`).digest("hex").slice(0, 12)}`;
@@ -441,7 +470,8 @@ async function answer(command) {
     console.log(`FAKE-CLAUDE shell done exit=${result.status}`);
   }
   const edit = /^edit (.+)$/.exec(command);
-  if (edit) {
+  if (edit && refused("Edit")) console.log("FAKE-CLAUDE edit refused");
+  else if (edit) {
     toolUse(
       "Edit",
       { file_path: edit[1], old_string: "}", new_string: "}\n// more" },

@@ -7,10 +7,12 @@
 import { reset, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentResponse, GitHubReadResponse } from "../../shared/src/index";
+import { GITHUB_READ_PATH } from "../../shared/src/index";
 import type { Channel } from "../src/channel";
 import { installGitHubApp } from "../src/github/index";
 import { signAccess } from "../src/mcp/tokens";
-import { BASE, channelStub, REPO, SESSION_SECRET } from "./client";
+import { BASE, bearer, channelStub, forgetTokens, REPO, remember, SESSION_SECRET, url } from "./client";
 import { FakeGitHubApi } from "./fake-github-api";
 
 const ENDPOINT = `${BASE}/r/${REPO}/mcp`;
@@ -153,6 +155,7 @@ beforeEach(async () => {
 afterEach(async () => {
   installGitHubApp(null);
   vi.restoreAllMocks();
+  forgetTokens();
   await reset();
 });
 
@@ -339,5 +342,35 @@ describe("the github tool", () => {
     }
     metering = false;
     expect(written.reduce((sum, cursor) => sum + cursor.rowsWritten, 0)).toBe(0);
+  });
+});
+
+describe("the github tool for Agents (ADR 0045)", () => {
+  it("answers an Agent's GET /api/github as the Connector's tool answers, so a librarian reads GitHub without a shell", async () => {
+    const registered = await exports.default.fetch(
+      new Request(url("/api/agents"), {
+        method: "POST",
+        headers: { Authorization: await bearer("shlok1806"), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cli: "claude-code",
+          sessionId: "0001ffff-0000-4000-8000-000000000000",
+          cwd: "/repo",
+          librarian: true,
+        }),
+      }),
+    );
+    expect(registered.status).toBe(200);
+    const librarian = remember(await registered.json<AgentResponse>()).agent.id;
+    const about = "docs/adr/0040-ask-the-channel-a-read-only-mcp-connector.md";
+    const response = await exports.default.fetch(
+      new Request(url(`${GITHUB_READ_PATH}?about=${encodeURIComponent(about)}`), {
+        headers: { Authorization: await bearer({ person: "shlok1806", agent: librarian }) },
+      }),
+    );
+    expect(response.status).toBe(200);
+    const answer = await response.json<GitHubReadResponse>();
+    expect(answer.isError).toBe(false);
+    expect(answer).toEqual({ ...(await call({ about })), isError: false });
+    expect(answer.text).toContain("Ask the Channel is one read-only MCP endpoint per Channel.");
   });
 });

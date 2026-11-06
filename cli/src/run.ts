@@ -25,6 +25,7 @@ import type {
   InterruptAttach,
   InterruptMessage,
   InterruptResult,
+  LibrarianFeedResponse,
   MemoryResponse,
   SetApprovalRequest,
   SetModelRequest,
@@ -51,6 +52,7 @@ import {
   handoffBrief,
   interruptNotice,
   isLocalEvent,
+  LIBRARIAN_PATH,
   modelPath,
   STANDING_RULE,
   summaryName,
@@ -68,6 +70,7 @@ import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
 import { readSettings } from "./host/files";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
+import { LibrarianWaker, librarianArgs, librarianSettings } from "./librarian";
 import { openLocalStore } from "./local-store";
 import { prepareSessionTools, type SessionTools } from "./mcp-config";
 import { MemoryInbox, MemoryNudges } from "./memory";
@@ -99,6 +102,11 @@ const END_TIMEOUT_MS = 3000;
 const USAGE_END_WAIT_MS = 10_000;
 /** The environment variable that turns usage readings off (ADR 0011): `off`. */
 const USAGE_ENV = "SWITCHBOARD_USAGE";
+/** The librarian's waits (ADR 0045): the settle after a meaningful Event, the poll, the idle cursor move, a retry. */
+const LIBRARIAN_SETTLE_MS = 60_000;
+const LIBRARIAN_POLL_MS = 15 * 60_000;
+const LIBRARIAN_IDLE_MOVE_MS = 30 * 60_000;
+const LIBRARIAN_RETRY_MS = 30_000;
 /** How long the wrapper waits for the first SessionStart hook before it says the hooks are not running. */
 const HOOK_TRUST_WAIT_MS = 8000;
 
@@ -149,6 +157,17 @@ export function takeAccountLabel(args: string[]): { accountLabel?: string; rest:
 export function takeRepo(args: string[]): { repo?: string; rest: string[] } {
   const { value, rest } = takeOption(args, "repo");
   return value === undefined ? { rest } : { repo: value, rest };
+}
+
+/** Takes the wrapper's own `--librarian` (ADR 0045) out of the agent CLI's arguments. */
+export function takeLibrarian(args: string[]): { librarian: boolean; rest: string[] } {
+  const end = args.indexOf("--");
+  const before = end === -1 ? args : args.slice(0, end);
+  const after = end === -1 ? [] : args.slice(end);
+  return {
+    librarian: before.includes("--librarian"),
+    rest: [...before.filter((arg) => arg !== "--librarian"), ...after],
+  };
 }
 
 /** Takes the wrapper's own `--from`, the Agent this session continues (ADR 0024), out of the agent CLI's arguments. */
@@ -209,9 +228,19 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const { accountLabel: accountFlag, rest: afterAccount } = takeAccountLabel(afterNickname);
   const { repo: repoFlag, rest: afterRepo } = takeRepo(afterAccount);
   const { from: fromFlag, rest: afterFrom } = takeFrom(afterRepo);
+  // The Channel's librarian (ADR 0045): Claude Code with its permissions, its tools and its brief.
+  const { librarian, rest: afterLibrarian } = takeLibrarian(afterFrom);
+  if (librarian && adapter.cli !== "claude-code") {
+    console.error("switchboard: --librarian runs only with claude.");
+    return 2;
+  }
+  if (librarian && fromFlag !== undefined) {
+    console.error("switchboard: --librarian continues no other Agent; leave out --from.");
+    return 2;
+  }
   let proxyFlags: ProxyFlags;
   try {
-    proxyFlags = takeProxyFlags(afterFrom);
+    proxyFlags = takeProxyFlags(afterLibrarian);
   } catch (error) {
     console.error(`switchboard: ${(error as Error).message}`);
     return 2;
@@ -222,7 +251,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     console.error(`switchboard: the Proxy Capture does not support ${adapter.label} yet; use --proxy off.`);
     return 2;
   }
-  const rest = proxyFlags.rest;
+  let rest = proxyFlags.rest;
+  if (librarian) {
+    const checked = librarianArgs(rest);
+    if (!checked.ok) {
+      console.error(`switchboard: ${checked.reason}`);
+      return 2;
+    }
+    rest = checked.args;
+  }
   const cwd = process.cwd();
   const ctx = { cwd, env };
   let plan: SessionPlan;
@@ -357,6 +394,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     ...(env.SWITCHBOARD_HOST ? { host: env.SWITCHBOARD_HOST } : {}),
     ...(env.SWITCHBOARD_HOST && env.SWITCHBOARD_SPAWN ? { spawn: env.SWITCHBOARD_SPAWN } : {}),
     ...(predecessor === null ? {} : { continues: predecessor.agent.id }),
+    ...(librarian ? { librarian: true as const } : {}),
     // This machine's Host for the Channel answers for the Agent's Local Events once the wrapper is gone (ADR 0037).
     ...(machineHost === undefined ? {} : { historyHost: machineHost }),
   });
@@ -670,27 +708,44 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
   };
   // Wakes the Agent while it is idle for what deserves it, instead of waiting for its next turn.
-  const waker = adapter.wakes
-    ? new Waker({
+  // The librarian is woken by the Librarian Feed alone (ADR 0045), never by the Relay.
+  const waker =
+    adapter.wakes && !librarian
+      ? new Waker({
+          type: (produce) => typer.wake(produce),
+          pending: () => hooksRunning && nextTurn.wakeWorthy,
+          take: () => nextTurn.takeForWake(),
+          woke: (batch) => {
+            if (agentId === null) return;
+            const frame: WakeMessage = {
+              type: "wake",
+              agent: agentId,
+              deliveries: batch.deliveries,
+              directives: batch.directives,
+            };
+            if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear of the Wake: not connected");
+          },
+          capped: () => {
+            if (agentId === null) return;
+            const frame: WakeCappedMessage = { type: "wake.capped", agent: agentId };
+            if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear the Wakes stopped: not connected");
+          },
+          log,
+        })
+      : null;
+  // Reads the Librarian Feed and types what changed at the idle prompt (ADR 0045).
+  const librarianWaker = librarian
+    ? new LibrarianWaker({
+        read: () => client.request<LibrarianFeedResponse>(LIBRARIAN_PATH),
+        move: async (request) => {
+          await client.request(LIBRARIAN_PATH, { method: "PUT", body: JSON.stringify(request) });
+        },
         type: (produce) => typer.wake(produce),
-        pending: () => hooksRunning && nextTurn.wakeWorthy,
-        take: () => nextTurn.takeForWake(),
-        woke: (batch) => {
-          if (agentId === null) return;
-          const frame: WakeMessage = {
-            type: "wake",
-            agent: agentId,
-            deliveries: batch.deliveries,
-            directives: batch.directives,
-          };
-          if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear of the Wake: not connected");
-        },
-        capped: () => {
-          if (agentId === null) return;
-          const frame: WakeCappedMessage = { type: "wake.capped", agent: agentId };
-          if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear the Wakes stopped: not connected");
-        },
         log,
+        settleMs: seconds(env.SWITCHBOARD_LIBRARIAN_SETTLE_SECONDS, LIBRARIAN_SETTLE_MS),
+        pollMs: seconds(env.SWITCHBOARD_LIBRARIAN_POLL_SECONDS, LIBRARIAN_POLL_MS),
+        idleMoveMs: LIBRARIAN_IDLE_MOVE_MS,
+        retryMs: seconds(env.SWITCHBOARD_LIBRARIAN_RETRY_SECONDS, LIBRARIAN_RETRY_MS),
       })
     : null;
   // What its Agent did, as the Channel recorded it, kept on this machine (ADR 0037).
@@ -735,7 +790,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const stream = client.follow(
     (message) => {
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
-      if (message.type === "event") memory.event(message.event);
+      if (message.type === "event") {
+        memory.event(message.event);
+        librarianWaker?.event(message.event);
+      }
       if (message.type === "proxy.ack" || message.type === "proxy.refused") proxy?.reply(message);
       keepLocally(message);
       if (message.type === "history.request" && message.agent === agentId) answerHistory(message);
@@ -919,14 +977,16 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   };
   // Asks the model for memory notes when a turn changed files, and before compaction
   // (ADR 0019), where the CLI's hooks were checked to carry each ask (ADR 0024).
-  const nudges = adapter.memoryNudges.includes("stop")
-    ? new MemoryNudges({
-        context: async () => (contextReader === null ? undefined : (await readContext(contextReader)).context),
-        env,
-        log,
-        compaction: adapter.memoryNudges.includes("compaction"),
-      })
-    : null;
+  // The librarian writes no files and no notes (ADR 0045): nothing to nudge.
+  const nudges =
+    adapter.memoryNudges.includes("stop") && !librarian
+      ? new MemoryNudges({
+          context: async () => (contextReader === null ? undefined : (await readContext(contextReader)).context),
+          env,
+          log,
+          compaction: adapter.memoryNudges.includes("compaction"),
+        })
+      : null;
   const onRegistered = (agent: Agent, token: string | undefined) => {
     agentId = agent.id;
     hooks?.setAgent(agent.id);
@@ -937,6 +997,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     approvals.registered();
     attach();
     void memory.registered(agent.id);
+    librarianWaker?.start();
   };
   const linkTo = (sessionId: string, resumed: boolean) => {
     if (link !== null || !settleContinuation(sessionId)) return;
@@ -992,7 +1053,11 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             usage?.tally.follow(input.transcript_path);
             contextReader?.follow(input.transcript_path);
           }
-          if (input.hook_event_name === "Stop") usage?.schedule.turnEnded();
+          if (input.hook_event_name === "Stop") {
+            usage?.schedule.turnEnded();
+            // The turn the Feed was typed for ended: the cursor moves past what it was told.
+            void librarianWaker?.turnEnded();
+          }
           // A turn ended: what arrived meanwhile may wake the Agent now.
           waker?.poke();
         },
@@ -1011,7 +1076,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             }),
       });
       // Switchboard's MCP tools for this session only (the Tool Capture).
-      tools = prepareSessionTools(cwd, repo, env, { skillWrites: adapter.promptsForSkillWrites });
+      tools = prepareSessionTools(cwd, repo, env, {
+        skillWrites: adapter.promptsForSkillWrites && !librarian,
+        librarian,
+      });
       const installed = await adapter.install({
         ...ctx,
         args: plan.args,
@@ -1019,6 +1087,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         hooks,
         tools,
         ...(proxy && proxyRoute ? { proxyUrl: proxy.url, proxyRoute } : {}),
+        ...(librarian ? { settings: [librarianSettings(tools.server.name)] } : {}),
       });
       args = installed.args;
       Object.assign(childEnv, installed.env);
@@ -1175,6 +1244,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   paste.dispose();
   screen?.dispose();
   waker?.stop();
+  librarianWaker?.stop();
   discovering.abort();
   watch.stop();
   stdin.off("data", onInput);

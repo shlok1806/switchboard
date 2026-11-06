@@ -62,7 +62,7 @@ export const claude: CliAdapter = {
 
   discover: ({ cwd, env }, since, signal) => waitForPickedSession(projectDir(claudeConfigDir(env), cwd), since, signal),
 
-  async install({ args, dir, cwd, env, hooks, tools, proxyUrl, proxyRoute }) {
+  async install({ args, dir, cwd, env, hooks, tools, proxyUrl, proxyRoute, settings = [] }) {
     // Claude Code settings can set ANTHROPIC_BASE_URL too, and they win over the
     // environment, so the session's own settings point it at the proxy as well.
     const proxyEnv: Record<string, string> = proxyUrl
@@ -73,6 +73,7 @@ export const claude: CliAdapter = {
       hooks.settings(),
       ...proxySettings,
       skillWriteSettings(tools.server.name),
+      ...settings,
     ]);
     // Claude Code settings cannot hold MCP servers, so they go in --mcp-config.
     return { args: withMcpConfig(withSettings, writeClaudeMcpConfig(tools)), env: proxyEnv };

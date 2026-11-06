@@ -42,12 +42,14 @@ export const ACCESS_SCHEMA = `
 export interface Admitted {
   person: PersonName;
   agent?: AgentId;
+  /** The token is the Channel's librarian's (ADR 0045): it writes Brief pages and nothing else. */
+  librarian?: true;
 }
 
 export type AdmitResult = ({ ok: true } & Admitted) | { ok: false; status: 401 | 403 | 503; reason: string };
 
 type MemberRow = { person: string; allowed: number; checked_at: number };
-type TokenRow = { hash: string; agent: string; person: string; issued_at: number };
+type TokenRow = { hash: string; agent: string; person: string; issued_at: number; librarian: number | null };
 
 export interface AccessHost {
   sql: SqlStorage;
@@ -60,6 +62,12 @@ export interface AccessHost {
 export class Access {
   constructor(private readonly host: AccessHost) {
     host.sql.exec(ACCESS_SCHEMA);
+    // ADR 0045: a librarian's token, marked on its own row so admitting it reads no more.
+    try {
+      host.sql.exec("ALTER TABLE agent_tokens ADD COLUMN librarian INTEGER");
+    } catch {
+      // The column is there already.
+    }
   }
 
   /** The repo this Channel is for, once the Worker has said. */
@@ -94,7 +102,11 @@ export class Access {
           reason: "This Agent token was revoked (its Agent went Gone) or never issued. Register the Agent again.",
         };
       }
-      admitted = { person: row.person, agent: row.agent as AgentId };
+      admitted = {
+        person: row.person,
+        agent: row.agent as AgentId,
+        ...(row.librarian === 1 ? { librarian: true } : {}),
+      };
     } else {
       admitted = { person: credential.person };
     }
@@ -163,15 +175,16 @@ export class Access {
     }
   }
 
-  /** A new token for Agent `agent` of `person`. Returned once; only its hash is kept. */
-  async issueAgentToken(agent: AgentId, person: PersonName): Promise<string> {
+  /** A new token for Agent `agent` of `person`, a librarian's when `librarian`. Returned once; only its hash is kept. */
+  async issueAgentToken(agent: AgentId, person: PersonName, librarian = false): Promise<string> {
     const token = newAgentToken();
     this.host.sql.exec(
-      "INSERT INTO agent_tokens (hash, agent, person, issued_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO agent_tokens (hash, agent, person, issued_at, librarian) VALUES (?, ?, ?, ?, ?)",
       await tokenHash(token),
       agent,
       person,
       Date.now(),
+      librarian ? 1 : null,
     );
     return token;
   }

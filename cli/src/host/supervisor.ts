@@ -145,6 +145,7 @@ export function wrapperArgs(entry: HostedAgent, resume: boolean, prompt?: string
     ...(entry.nickname === undefined ? [] : ["--nickname", entry.nickname]),
     ...(from === undefined || resume ? [] : ["--from", from]),
     ...(entry.model === undefined ? [] : ["--model", entry.model]),
+    ...(entry.librarian === true ? ["--librarian"] : []),
     // Always given, so the Person's own default mode never applies to a Host's Agent.
     "--permission-mode",
     entry.permissionMode,
@@ -423,6 +424,7 @@ export class HostSupervisor {
       ...(request.nickname === undefined ? {} : { nickname: request.nickname }),
       ...(request.model === undefined ? {} : { model: request.model }),
       permissionMode: request.permissionMode,
+      ...(request.librarian === true ? { librarian: true as const } : {}),
     };
     this.options.log(`spawn ${request.spawn} from ${request.lead ?? request.by}: ${entry.agent} in ${entry.cwd}`);
     this.launch(entry, {

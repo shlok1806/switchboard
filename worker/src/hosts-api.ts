@@ -100,7 +100,7 @@ const MODE_REASON = `"permissionMode" must be one of ${PERMISSION_MODES.join(", 
 type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 function parseSpawn(body: Record<string, unknown>): Parsed<SpawnAgentRequest> {
-  const { host, cli, cwd, nickname, model, brief, permissionMode, from } = body;
+  const { host, cli, cwd, nickname, model, brief, permissionMode, from, librarian } = body;
   if (host !== undefined && (typeof host !== "string" || !isHostRef(host))) {
     return { ok: false, reason: '"host" must be the name of one of your Hosts, or `<person>/<name>` of another\'s.' };
   }
@@ -132,6 +132,20 @@ function parseSpawn(body: Record<string, unknown>): Parsed<SpawnAgentRequest> {
   if (from !== undefined && (typeof from !== "string" || from.split("/").length !== 3)) {
     return { ok: false, reason: '"from" must be the ID of the Agent whose work it carries on.' };
   }
+  // The librarian (ADR 0045) runs with its fixed brief, in the dontAsk mode, carrying on no one.
+  if (librarian !== undefined && librarian !== true) return { ok: false, reason: '"librarian" must be true.' };
+  if (librarian === true) {
+    if (permissionMode !== undefined && permissionMode !== "dontAsk") {
+      return { ok: false, reason: 'The librarian always runs in the "dontAsk" permission mode.' };
+    }
+    if (text !== undefined && text !== "") {
+      return {
+        ok: false,
+        reason: "The librarian runs with the brief that ships with Switchboard, and takes no other.",
+      };
+    }
+    if (from !== undefined) return { ok: false, reason: "The librarian carries on no other Agent's work." };
+  }
   return {
     ok: true,
     value: {
@@ -143,6 +157,7 @@ function parseSpawn(body: Record<string, unknown>): Parsed<SpawnAgentRequest> {
       ...(text === undefined || text === "" ? {} : { brief: text }),
       ...(permissionMode === undefined ? {} : { permissionMode }),
       ...(from === undefined ? {} : { from: from as AgentId }),
+      ...(librarian === true ? { librarian: true as const, permissionMode: "dontAsk" as const } : {}),
     },
   };
 }

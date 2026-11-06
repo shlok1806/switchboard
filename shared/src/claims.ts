@@ -89,6 +89,8 @@ export const SWITCHBOARD_TOOLS = [
   // ADR 0042: the Brief, a few short pages on what the product is and where it stands.
   "brief_read",
   "brief_write",
+  // ADR 0045: GitHub as it is now, read-only, through the Channel. Only the librarian's server lists it.
+  "github_read",
 ] as const;
 
 /** The skill tools that publish or write files: never approved for the session in advance (ADR 0039). */

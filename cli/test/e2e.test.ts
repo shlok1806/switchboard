@@ -23,6 +23,7 @@ import type {
   ChannelEvent,
   EventOf,
   HistoryResponse,
+  LibrarianFeedResponse,
   SkillsResponse,
   Task,
   TaskResponse,
@@ -33,6 +34,8 @@ import {
   agentPath,
   approvalDenyPath,
   attachKeyFingerprint,
+  LIBRARIAN_BRIEF,
+  LIBRARIAN_PATH,
   MAX_HISTORY_LIMIT,
   nicknamePath,
   REVIEW_LABEL,
@@ -46,6 +49,7 @@ import {
   type TerminalScreenFrame,
   toBase64,
 } from "../../shared/src/index";
+import { LIBRARIAN_DENIED_TOOLS, LIBRARIAN_MCP_TOOLS } from "../src/librarian";
 import { EDIT_NUDGE } from "../src/memory";
 import { CODE_ASSIST_SSE, GEMINI_SSE, RESPONSES_SSE, RESPONSES_TURN } from "./fixtures/api-shapes";
 import { GitHubApi } from "./fixtures/github-api";
@@ -4463,6 +4467,194 @@ describe("The Brief (ADR 0042)", () => {
       expect(await term.exited).toBe(0);
     }
   });
+});
+
+/** Delivers GitHub's signed `pull_request` webhook for pull request `pr`, merged from `branch` into main. */
+async function mergedOnGitHub(pr: number, branch: string, baseSha: string, headSha: string): Promise<void> {
+  const body = JSON.stringify({
+    action: "closed",
+    number: pr,
+    pull_request: {
+      number: pr,
+      merged: true,
+      merge_commit_sha: headSha,
+      base: { ref: "main", sha: baseSha },
+      head: { ref: branch, sha: headSha },
+    },
+    repository: { full_name: github.repo, default_branch: "main" },
+    sender: { login: "e2e" },
+  });
+  const response = await fetch(`${base}/api/github/webhook`, {
+    method: "POST",
+    body,
+    headers: {
+      "Content-Type": "application/json",
+      "X-GitHub-Event": "pull_request",
+      "X-GitHub-Delivery": randomUUID(),
+      "X-Hub-Signature-256": `sha256=${createHmac("sha256", WEBHOOK_SECRET).update(body).digest("hex")}`,
+    },
+  });
+  expect(response.status).toBe(204);
+}
+
+describe("The librarian (ADR 0045)", () => {
+  let dir = "";
+  let origin = "";
+  let reply = "";
+  let formerOrigin: string | null = null;
+  const LIBRARIAN_ENV = {
+    ...gitEnv,
+    ...INTERRUPT_ENV,
+    // Long enough for the Task and the merge that follows it to come as one wake.
+    SWITCHBOARD_LIBRARIAN_SETTLE_SECONDS: "3",
+    SWITCHBOARD_LIBRARIAN_RETRY_SECONDS: "1",
+  };
+
+  beforeAll(async () => {
+    origin = join(scratch, "librarian-origin.git");
+    await git(scratch, "init", "--quiet", "--bare", "-b", "main", origin);
+    const seed = join(scratch, "librarian-seed");
+    await git(scratch, "clone", "--quiet", origin, seed);
+    await writeFile(join(seed, "README.md"), "# The app\n");
+    await git(seed, "add", "README.md");
+    await git(seed, "commit", "--quiet", "-m", "Start");
+    await git(seed, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    dir = join(scratch, "librarian-repo");
+    await cloneChannel(origin, dir);
+    dir = await realpath(dir);
+    formerOrigin = github.origin;
+    github.origin = origin;
+    reply = join(scratch, "librarian-reply");
+  }, 60_000);
+
+  afterAll(() => {
+    github.origin = formerOrigin;
+  });
+
+  /** The prompts typed at `term`'s idle prompt since output position `from`. */
+  function promptsSince(term: Terminal, from: number): string[] {
+    const output = term.output.slice(from).replace(/\r/g, "");
+    return [...output.matchAll(/FAKE-CLAUDE pasted prompt=(".*?") before=/g)].map((m) => JSON.parse(m[1] ?? '""'));
+  }
+
+  /** Waits for the next prompt typed at `term` after output position `from`, and for its turn to end. */
+  async function woken(term: Terminal, from: number): Promise<string> {
+    const [prompt] = await waitFor(
+      "the librarian to be woken",
+      () => {
+        const found = promptsSince(term, from);
+        return found.length > 0 ? found : undefined;
+      },
+      30_000,
+    );
+    await waitFor("its turn to end", () =>
+      /FAKE-CLAUDE pasted turn done/.test(term.output.slice(from)) ? true : undefined,
+    );
+    return prompt ?? "";
+  }
+
+  /** The Feed once the cursor has moved past `seq`, with nothing after it to tell. */
+  function caughtUp(seq: number): Promise<LibrarianFeedResponse> {
+    return waitFor("the cursor to move", async () => {
+      const feed = await api<LibrarianFeedResponse>(LIBRARIAN_PATH);
+      return feed.cursor !== null && feed.cursor >= seq && feed.changes.length === 0 ? feed : undefined;
+    });
+  }
+
+  /** The `seq` of the latest Event `match` picks. */
+  async function seqOf(match: (event: ChannelEvent) => boolean): Promise<number> {
+    return (await api<HistoryResponse>("/api/events?tail=200")).events.filter(match).at(-1)?.seq ?? Infinity;
+  }
+
+  it("runs with only reads and Brief writes, builds the Brief, and is woken by what changed, from its cursor after a restart", async () => {
+    // What the fake model does in each turn the librarian is woken for: it tries a shell
+    // command, an edit and an Update, which are refused, then writes a page.
+    await writeFile(
+      reply,
+      [
+        `shell touch ${join(dir, "escaped")}`,
+        `edit ${join(dir, "README.md")}`,
+        'call post_update {"text":"I can post"}',
+        'call brief_write {"page":"overview","text":"# The app\\n\\nA README and nothing else yet."}',
+      ].join("\n"),
+    );
+    const librarian = new Terminal(
+      ["run", "claude", "--librarian"],
+      { ...LIBRARIAN_ENV, FAKE_CLAUDE_REPLY_FILE: reply },
+      dir,
+    );
+    const seen = librarian.output.length;
+    const { args, sessionId, agentEnv: id } = await librarian.started();
+
+    // Claude Code runs with the librarian's mode, only its own MCP server, and the fixed brief.
+    expect(args).toEqual(expect.arrayContaining(["--permission-mode", "dontAsk", "--strict-mcp-config"]));
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(LIBRARIAN_BRIEF);
+    const settings = JSON.parse(await readFile(args[args.indexOf("--settings") + 1] ?? "", "utf8"));
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining([...LIBRARIAN_DENIED_TOOLS]));
+    const agent = await waitFor("the librarian on the Channel", async () => (await agents()).find((a) => a.id === id));
+    expect(agent.librarian).toBe(true);
+
+    // Its first pass, typed at its prompt, builds the Brief from where things stand.
+    const first = await woken(librarian, seen);
+    expect(first).toContain("This is your first pass");
+    expect(first).toMatch(/You may write at most 8 page\(s\) this time/);
+    const tools = JSON.parse((await librarian.waitForOutput(/FAKE-CLAUDE tools=(\[.*?\])/))[1] ?? "[]") as string[];
+    expect(tools.sort()).toEqual([...LIBRARIAN_MCP_TOOLS].sort());
+    // What it tried besides the page was refused, and never ran.
+    expect(librarian.output.slice(seen)).toContain("FAKE-CLAUDE refused Bash: denied by a deny rule");
+    expect(librarian.output.slice(seen)).toContain("FAKE-CLAUDE refused Edit: denied by a deny rule");
+    expect(librarian.output.slice(seen)).toContain("FAKE-CLAUDE refused mcp__switchboard__post_update: not allowed");
+    await expect(stat(join(dir, "escaped"))).rejects.toThrow();
+    const { pages } = await api<BriefResponse>("/api/brief");
+    expect(pages.find((p) => p.page === "overview")).toMatchObject({
+      text: "# The app\n\nA README and nothing else yet.",
+      author: { agent: id },
+    });
+    await caughtUp(0);
+
+    // A Task opens and a pull request with an ADR merges: one wake names both.
+    await writeFile(reply, 'call brief_write {"page":"vm-engine","text":"# VM engine\\n\\nLume only (ADR 0001)."}');
+    const work = join(scratch, "librarian-work");
+    await git(scratch, "clone", "--quiet", origin, work);
+    const mainSha = await git(work, "rev-parse", "HEAD");
+    const task = github.open("Use Lume for the VM engine");
+    await git(work, "checkout", "--quiet", "-b", `task/${task}-use-lume`);
+    await mkdir(join(work, "docs", "adr"), { recursive: true });
+    await writeFile(join(work, "docs", "adr", "0001-use-lume.md"), "# Use Lume\n");
+    await git(work, "add", ".");
+    await git(work, "commit", "--quiet", "-m", "Use Lume");
+    await git(work, "push", "--quiet", "origin", `task/${task}-use-lume`);
+    const head = await git(work, "rev-parse", "HEAD");
+    const beforeWake = librarian.output.length;
+    await openedOnGitHub(task);
+    const pr = 900 + task;
+    await mergedOnGitHub(pr, `task/${task}-use-lume`, mainSha, head);
+    const second = await woken(librarian, beforeWake);
+    expect(second).toContain("Since your last pass:");
+    expect(second).toContain(`Task #${task} opened: "Use Lume for the VM engine"`);
+    expect(second).toContain(`pull request #${pr} merged (task/${task}-use-lume into main), 1 file(s)`);
+    expect(second).toContain("decision records: docs/adr/0001-use-lume.md");
+    // The turn ended, so the cursor is past both.
+    await caughtUp(await seqOf((e) => e.type === "merge" && e.payload.pr === pr));
+
+    // It stops; a Task opens meanwhile; started again, it is told only that.
+    librarian.type("quit\r");
+    expect(await librarian.exited).toBe(0);
+    const later = github.open("Write the changelog");
+    await openedOnGitHub(later);
+    const again = new Terminal(
+      ["run", "claude", "--librarian", "--resume", sessionId],
+      { ...LIBRARIAN_ENV, FAKE_CLAUDE_REPLY_FILE: reply },
+      dir,
+    );
+    const third = await woken(again, 0);
+    expect(third).toContain(`Task #${later} opened: "Write the changelog"`);
+    expect(third).not.toContain(`#${pr} merged`);
+    expect(third).not.toContain(`Task #${task} opened`);
+    await caughtUp(await seqOf((e) => e.type === "task.create" && e.task === later));
+    again.type("quit\r");
+    expect(await again.exited).toBe(0);
+  }, 120_000);
 });
 
 describe("Reading another session's transcript (ADR 0019)", () => {

@@ -40,6 +40,7 @@ import { handleClaimRoute, isAgentId, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
 import { agentMayCall, HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } from "./hosts-api";
 import { fail, json, readJson } from "./http";
+import { handleLibrarianRoute, LIBRARIAN_REFUSED, librarianMayCall, matchLibrarianRoute } from "./librarian-api";
 import { handleOAuthRoute, isOAuthRoute } from "./mcp/oauth";
 import { MCP_PATH } from "./mcp/paths";
 import { handleMcp } from "./mcp/server";
@@ -219,6 +220,15 @@ const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
   "approval",
 ]);
 
+/** What a librarian's wrapper reports on its own session (ADR 0045): not the librarian's writing. */
+const LIBRARIAN_WRAPPER_REPORTS: ReadonlySet<AgentRoute["kind"]> = new Set([
+  "heartbeat",
+  "end",
+  "nickname",
+  "model",
+  "approval",
+]);
+
 const AGENT_REFUSED =
   "An Agent token cannot do this. Agents read the Channel, post their own Events, and claim, release and finish " +
   "Tasks for themselves (and a lead acts on its own subtree); Takeovers, roles and everything else a Person " +
@@ -236,12 +246,14 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const hostRoute = matchHostRoute(request.method, path);
   const skillRoute = matchSkillRoute(request.method, path);
   const briefRoute = matchBriefRoute(request.method, path);
+  const librarianRoute = matchLibrarianRoute(request.method, path);
   // A Person's only, so an Agent token is refused below as for any route not on its list.
   const settingsRoute = matchSettingsRoute(request.method, path);
   if (
     !ROUTES.has(route) &&
     skillRoute === null &&
     briefRoute === null &&
+    librarianRoute === null &&
     settingsRoute === null &&
     !taskRoute &&
     hostRoute === null &&
@@ -261,6 +273,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const caller: Caller = {
     person: admitted.person,
     ...(admitted.agent === undefined ? {} : { agent: admitted.agent }),
+    ...(admitted.librarian === true ? { librarian: true } : {}),
   };
 
   if (caller.agent !== undefined) {
@@ -275,6 +288,8 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       skillRoute !== null ||
       // An Agent reads the Brief and writes its pages (ADR 0042).
       briefRoute !== null ||
+      // An Agent reads GitHub and the Librarian Feed; only the librarian moves its cursor (ADR 0045).
+      librarianRoute !== null ||
       (agentRoute !== null && AGENT_ROUTE_KINDS.has(agentRoute.kind));
     if (!allowed) return fail(403, AGENT_REFUSED);
     if (
@@ -289,6 +304,19 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
     ) {
       return fail(403, `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`);
     }
+    // The librarian writes Brief pages and nothing else (ADR 0045); its wrapper still reports on its session.
+    if (
+      caller.librarian === true &&
+      !librarianMayCall(request.method, {
+        brief: briefRoute !== null,
+        librarian: librarianRoute !== null,
+        wrapperReport: agentRoute !== null && LIBRARIAN_WRAPPER_REPORTS.has(agentRoute.kind),
+        stream: route === "GET /api/stream",
+        toolCall: claimRoute?.kind === "tool-call",
+      })
+    ) {
+      return fail(403, LIBRARIAN_REFUSED);
+    }
   }
 
   if (taskRoute) return handleTaskRoute(request, inner, channel, caller);
@@ -299,6 +327,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);
   if (skillRoute !== null) return handleSkillRoute(skillRoute, request, inner, channel, caller);
   if (briefRoute !== null) return handleBriefRoute(briefRoute, request, inner, channel, caller);
+  if (librarianRoute !== null) return handleLibrarianRoute(librarianRoute, request, inner, env, repo, channel, caller);
   if (settingsRoute !== null) {
     return handleSettingsRoute(settingsRoute, request, channel, caller, { env, repo, dev: devMode(env, url) });
   }

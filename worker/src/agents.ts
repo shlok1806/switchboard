@@ -73,6 +73,7 @@ type AgentRow = {
   can_receive_interrupts: number;
   last_seen_at: number;
   started_at: string;
+  librarian: string | null;
 };
 
 export const AGENTS_SCHEMA = `
@@ -108,7 +109,7 @@ export function createAgentsTable(sql: SqlStorage): void {
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
   // ADR 0012: context. ADR 0013: the pending approval. ADR 0015: the Host that runs it.
   // ADR 0018: its role, and the lead that started it. ADR 0024: the Agent it continues.
-  // ADR 0037: the Host that answers for its Local Events.
+  // ADR 0037: the Host that answers for its Local Events. ADR 0045: the librarian.
   for (const column of [
     "account",
     "model",
@@ -121,6 +122,7 @@ export function createAgentsTable(sql: SqlStorage): void {
     "parent",
     "continues",
     "history_host",
+    "librarian",
   ]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
@@ -197,6 +199,7 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.role != null && isAgentRole(row.role) ? { role: row.role } : {}),
     ...(row.parent == null ? {} : { parent: row.parent as AgentId }),
     ...(row.continues == null ? {} : { continues: row.continues as AgentId }),
+    ...(row.librarian == null ? {} : { librarian: true as const }),
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
     canReceiveInterrupts: row.can_receive_interrupts === 1,
@@ -258,6 +261,24 @@ export class AgentRoster {
       };
     }
 
+    // One librarian at a time (ADR 0045), and an Agent that was one stays one.
+    const librarian = existing?.librarian != null || request.librarian === true;
+    if (librarian) {
+      const other = this.host.sql
+        .exec<{ id: string }>(
+          "SELECT id FROM agents INDEXED BY agents_live WHERE presence != 'gone' AND librarian IS NOT NULL AND id != ? LIMIT 1",
+          id,
+        )
+        .toArray()[0];
+      if (other !== undefined) {
+        return {
+          ok: false,
+          status: 409,
+          reason: `${other.id} is this Channel's librarian already. Stop it before starting another.`,
+        };
+      }
+    }
+
     // A Nickname another Agent holds is not set, and does not stop the session (ADR 0009).
     const self: Renamer = { actor: { kind: "agent", agentId: id }, capture: null };
     let nicknameRefused: string | undefined;
@@ -288,8 +309,8 @@ export class AgentRoster {
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
         `UPDATE agents SET nickname = ?, account = ?, model = ?, effort = ?, usage = ?, proxy_mode = ?,
-             secret_masking = ?, can_receive_interrupts = ?, host = ?, history_host = ?, presence = 'live',
-             last_seen_at = ?
+             secret_masking = ?, can_receive_interrupts = ?, host = ?, history_host = ?, librarian = ?,
+             presence = 'live', last_seen_at = ?
          WHERE id = ?`,
         nickname,
         account,
@@ -301,14 +322,16 @@ export class AgentRoster {
         interrupts,
         host,
         historyHost,
+        librarian ? "1" : null,
         now,
         id,
       );
     } else {
       this.host.sql.exec(
         `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, usage, host, history_host,
-                             presence, proxy_mode, secret_masking, can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
+                             librarian, presence, proxy_mode, secret_masking, can_receive_interrupts, last_seen_at,
+                             started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
@@ -320,6 +343,7 @@ export class AgentRoster {
         usage,
         host,
         historyHost,
+        librarian ? "1" : null,
         request.proxyMode ?? DEFAULT_PROXY_MODE,
         secretMasking,
         interrupts,
