@@ -69,6 +69,10 @@ function cases() {
   for (const view of ["hosts", "brief", "memory", "skills"]) list.push({ page: view, hash: view, state: "read-error", want: "error" });
   // A skill open in the inspector, at an older version, with every file in full.
   list.push({ page: "skill", hash: "skills/release-notes/1", state: "ready" });
+  // The Agent page's thinking orb in each state that has one (ADR 0047): `agent` above is the
+  // Agent that needs you (listening); these are an idle one (breathing) and a running one (working).
+  list.push({ page: "agent-idle", hash: "agents/shlok%2Fcodex%2Fc91e", state: "ready" });
+  list.push({ page: "agent-running", hash: "agents/maya%2Fclaude%2F2b8d", state: "ready" });
   // An area's page of the Brief, with its age and author.
   list.push({ page: "brief-area", hash: "brief/api-client", state: "ready" });
   // The Channel's settings (ADR 0044), reached from the account menu rather than a key.

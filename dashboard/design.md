@@ -111,6 +111,16 @@ One state per Agent, read in this order: needs, stale, running, idle, gone. A Ta
 status (open, claimed, review, done) is a separate column, never mixed with the Agent's.
 CLI identity (claude, codex, gemini) is a word in the secondary line, never a colour chip.
 
+The thinking orb (ADR 0047). An Agent that has something going on also shows a dotted orb
+from `thinking-orbs`, in ink and never in a state colour: running is `working`, needs you or
+needs {person} is `listening`, idle is `breathing`; stale, paused and gone show none. It sits
+beside the glyph and the word and never replaces them, so it is decorative (`aria-hidden`).
+20px before the Agent's name in a row, at the top right of a canvas node and after the word
+on the phone canvas list; 64px before the head of the Agent's page (20px on a phone,
+where 64 crowds the name). A row keeps the orb's
+room when there is none, so names stay in line. It is the one thing that moves on its own;
+with reduced motion it is a still frame.
+
 ## Components
 
 Top bar (every screen, 44px, not sticky; below 640px it becomes the phone bar, see Phone). Left: the wordmark (a 16px jack

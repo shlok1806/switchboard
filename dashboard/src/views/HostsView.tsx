@@ -11,7 +11,7 @@ import { Button } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { GroupLine, byPerson, shortName } from "@/components/domain/fleet";
 import { StartAgentButton, WithCode } from "@/components/domain/start-agent";
-import { Glyph, State, useAgentStates } from "@/components/domain/state";
+import { Glyph, Orb, State, useAgentStates } from "@/components/domain/state";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
@@ -313,8 +313,9 @@ function Inspector({ host: h, agents, onClose }: { host: Host; agents: Agent[]; 
         ) : (
           <ul className="-mt-3">
             {agents.map((a) => (
-              <li key={a.id} className="flex items-baseline justify-between gap-3 border-b border-rule py-2 text-row">
-                <a href={href({ view: "agent", id: a.id })} className="min-w-0 font-semibold [overflow-wrap:anywhere] text-ink hover:underline">
+              <li key={a.id} className="flex items-start gap-2 border-b border-rule py-2 text-row">
+                <Orb state={states.get(a.id) ?? "gone"} reserve />
+                <a href={href({ view: "agent", id: a.id })} className="min-w-0 flex-1 font-semibold [overflow-wrap:anywhere] text-ink hover:underline">
                   {shortName(a)}
                 </a>
                 <State state={states.get(a.id) ?? "gone"} person={a.person} />

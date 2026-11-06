@@ -21,7 +21,7 @@ import { EmptyState, EmptyView } from "@/components/shell/states";
 import { RenameDialog } from "@/components/domain/rename";
 import { FirstAgentAction, PauseResumeButton, StartAgentButton, StopAgentButton, useMayControl } from "@/components/domain/start-agent";
 import { GroupLine, Secondary, StackedRow, agentName, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
-import { Glyph, State, useNeedsYou } from "@/components/domain/state";
+import { Glyph, Orb, State, useNeedsYou } from "@/components/domain/state";
 import { AgentUsage } from "@/components/domain/usage";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
@@ -487,14 +487,19 @@ const Row = memo(function Row({
         <State state={state} person={a.person} />
       </td>
       <td className={cell}>
-        <a
-          href={href({ view: "agent", id: a.id })}
-          onClick={(e) => e.stopPropagation()}
-          className={cn("text-row font-semibold [overflow-wrap:anywhere] hover:underline", state === "gone" ? "text-ink-2" : "text-ink")}
-        >
-          {shortName(a)}
-        </a>
-        {!compact && <Secondary agent={a} />}
+        <div className="flex items-start gap-2">
+          <Orb state={state} reserve />
+          <div className="min-w-0">
+            <a
+              href={href({ view: "agent", id: a.id })}
+              onClick={(e) => e.stopPropagation()}
+              className={cn("text-row font-semibold [overflow-wrap:anywhere] hover:underline", state === "gone" ? "text-ink-2" : "text-ink")}
+            >
+              {shortName(a)}
+            </a>
+            {!compact && <Secondary agent={a} />}
+          </div>
+        </div>
       </td>
       <td className={cell}>
         <WorkingOn line={line} note={!compact} />

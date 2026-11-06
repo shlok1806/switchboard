@@ -22,7 +22,7 @@ import { IssueLink } from "@/components/domain/pending";
 import { RenameDialog } from "@/components/domain/rename";
 import { HandOffButton, PauseResumeButton, StopAgentButton } from "@/components/domain/start-agent";
 import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
-import { Glyph, State, useAgentState, useAgentStates } from "@/components/domain/state";
+import { Glyph, Orb, State, useAgentState, useAgentStates } from "@/components/domain/state";
 import { TerminalPanel } from "@/components/domain/terminal";
 import { useNow } from "@/components/domain/usage";
 import { Section } from "@/components/shell/section";
@@ -79,6 +79,9 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
   const { historicalAgents: agents } = useChannel();
   const claimsOf = useClaimsOf();
   const state = useAgentState(agent);
+  // The orb is the head's avatar at 64px; a phone has no room beside the name for one, so it
+  // takes the 20px orb a line has.
+  const phone = useIsMobile();
   const [part, setPart] = useState<Part>("terminal");
   const [renaming, setRenaming] = useState(false);
   // While Stop asks, its question is the header's only action: the others step aside until it
@@ -165,23 +168,26 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-[var(--gutter)] pt-3 pb-10">
-        <header className="flex flex-wrap items-start gap-x-6 gap-y-3">
-          <div className="flex min-w-0 flex-[1_1_420px] flex-col gap-1">
-            <h1 ref={heading} tabIndex={-1} className="flex min-w-0 flex-wrap items-center gap-x-2.5 text-head font-semibold [overflow-wrap:anywhere] text-ink outline-none">
-              <Glyph state={state} />
-              {agent.nickname ?? agent.id}
-              <span title={`Last seen ${ago(agent.lastSeenAt)}`}>
-                <State state={state} person={agent.person} glyph={false} className="text-row" />
-              </span>
-            </h1>
-            <p className="text-small text-ink-3">
-              {shown.map(([key, fact], i) => (
-                <Fragment key={key}>
-                  {i > 0 && " · "}
-                  {fact}
-                </Fragment>
-              ))}
-            </p>
+        <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex min-w-0 flex-[1_1_420px] items-start gap-2 sm:items-center sm:gap-4">
+            <Orb state={state} size={phone ? 20 : 64} className="max-sm:mt-0.5" />
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <h1 ref={heading} tabIndex={-1} className="flex min-w-0 flex-wrap items-center gap-x-2.5 text-head font-semibold [overflow-wrap:anywhere] text-ink outline-none">
+                <Glyph state={state} />
+                {agent.nickname ?? agent.id}
+                <span title={`Last seen ${ago(agent.lastSeenAt)}`}>
+                  <State state={state} person={agent.person} glyph={false} className="text-row" />
+                </span>
+              </h1>
+              <p className="text-small text-ink-3">
+                {shown.map(([key, fact], i) => (
+                  <Fragment key={key}>
+                    {i > 0 && " · "}
+                    {fact}
+                  </Fragment>
+                ))}
+              </p>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {canDirect && !stopAsking && (
@@ -372,6 +378,7 @@ function Children({ agents }: { agents: Agent[] }) {
           return (
             <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-rule py-2 text-row">
               <State state={states.get(a.id) ?? "gone"} person={a.person} />
+              <Orb state={states.get(a.id) ?? "gone"} />
               <a href={href({ view: "agent", id: a.id })} className="font-semibold text-ink hover:underline">
                 {shortName(a)}
               </a>

@@ -66,6 +66,25 @@ export function stateWord(state: GlyphState, person?: PersonName): string {
   }
 }
 
+/**
+ * The thinking orb an Agent's state shows beside its glyph and word (ADR 0047): a running
+ * turn works, a prompt waiting on a Person listens, an idle session breathes. A Stale,
+ * Paused or Gone Agent runs nothing, so it shows none.
+ */
+export function orbOf(state: AgentState): "working" | "listening" | "breathing" | undefined {
+  switch (state) {
+    case "running":
+      return "working";
+    case "needs":
+    case "needs-other":
+      return "listening";
+    case "idle":
+      return "breathing";
+    default:
+      return undefined;
+  }
+}
+
 /** Sorts Agents by state, in reading order. */
 export function byState(a: AgentState, b: AgentState): number {
   return AGENT_STATES.indexOf(a) - AGENT_STATES.indexOf(b);
