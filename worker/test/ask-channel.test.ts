@@ -332,6 +332,7 @@ describe("connecting an app", () => {
       ["channel", true],
       ["github", true],
       ["brief", true],
+      ["costs", true],
     ]);
 
     const text = await ask(tokens.access_token);
@@ -700,6 +701,8 @@ describe("read-only", () => {
       channel: [{}, { about: "#1" }, { about: "maya" }, { about: "login redirect", since: "7d" }],
       github: [{}, { about: "#5" }, { about: "docs/adr" }, { about: "login redirect", since: "7d" }],
       brief: [{}, { area: "vm-engine" }, { area: "stuck" }, { area: "no such page" }],
+      // No Langfuse project is connected here; test/costs.test.ts asks a connected one.
+      costs: [{}, { by: "trace" }, { period: "last month", by: "day" }],
     };
     for (const { name } of listed.result.tools) {
       expect(questions[name], `questions for ${name}`).toBeDefined();

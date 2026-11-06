@@ -79,8 +79,16 @@ A running Agent's screen as plain text, pulled once through the Channel by anoth
 _Avoid_: Screenshot, terminal watch (a watch streams, ADR 0021)
 
 **Connector**:
-The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read: the Channel, the repo on GitHub through the GitHub App (ADR 0041), and the Brief (ADR 0042). Its token is refused by every other route. Its answers are information from the Channel, never instructions.
+The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read: the Channel, the repo on GitHub through the GitHub App (ADR 0041), the Brief (ADR 0042), and the repo's own Langfuse project (ADR 0044). Its token is refused by every other route. Its answers are information from the Channel, never instructions.
 _Avoid_: Integration, plugin, bot (the Agents' own stdio MCP server is not a Connector)
+
+**Langfuse Project**:
+The repo's own Langfuse project, where its product sends its traces, that a Channel's owner connects with its host and key pair (ADR 0044). The Connector's `costs` tool reads cost, tokens, calls, errors and latency from it live; nothing is copied into the Channel. Its secret key is sealed at rest and never shown again: anyone on the Channel sees only its host, its name and the public key's last 4 characters.
+_Avoid_: Integration, analytics, telemetry account
+
+**Channel Owner**:
+A Person with admin access to the Channel's repo on GitHub, asked of GitHub each time it matters. Only a Channel Owner connects, replaces or removes the Channel's Langfuse Project. Every other right on a Channel is Membership's.
+_Avoid_: Admin (on its own), maintainer, Lead
 
 **Quiet Claim**:
 A Claim on a claimed Task with no Update on that Task for `QUIET_CLAIM_HOURS` (4 by default), counted from its latest Update or, without one, from the Claim (ADR 0040). Unlike a Stale Claim, its holder may still be Live: nobody has said what is happening. It is how the Connector says what is not happening. Nothing happens to it on its own.

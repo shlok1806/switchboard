@@ -8,6 +8,7 @@
 //   /r/<owner>/<repo>/api/memory    the notes Agents write for each other (memory-api.ts)
 //   /r/<owner>/<repo>/api/skills    skills shared on the Channel (skills-api.ts, ADR 0039)
 //   /r/<owner>/<repo>/api/brief     the Brief's pages, which Agents write (brief-api.ts, ADR 0042)
+//   /r/<owner>/<repo>/api/settings  the Channel's settings, its Langfuse project (settings-api.ts, ADR 0044)
 //   POST /api/github/webhook        GitHub's deliveries, routed by their repository
 //   /r/<owner>/<repo>/mcp           the read-only MCP connector of that Channel (mcp/server.ts, ADR 0040)
 //   /oauth/..., /.well-known/oauth-* its OAuth sign-in (mcp/oauth.ts)
@@ -44,6 +45,7 @@ import { MCP_PATH } from "./mcp/paths";
 import { handleMcp } from "./mcp/server";
 import { GET_MEMORY_ROUTE, handleMemoryRoute, POST_MEMORY_ROUTE } from "./memory-api";
 import { relaySettings } from "./relay/relay";
+import { handleSettingsRoute, matchSettingsRoute } from "./settings-api";
 import { handleSkillRoute, matchSkillRoute } from "./skills-api";
 import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
@@ -234,10 +236,13 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const hostRoute = matchHostRoute(request.method, path);
   const skillRoute = matchSkillRoute(request.method, path);
   const briefRoute = matchBriefRoute(request.method, path);
+  // A Person's only, so an Agent token is refused below as for any route not on its list.
+  const settingsRoute = matchSettingsRoute(request.method, path);
   if (
     !ROUTES.has(route) &&
     skillRoute === null &&
     briefRoute === null &&
+    settingsRoute === null &&
     !taskRoute &&
     hostRoute === null &&
     agentRoute === null &&
@@ -294,6 +299,9 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);
   if (skillRoute !== null) return handleSkillRoute(skillRoute, request, inner, channel, caller);
   if (briefRoute !== null) return handleBriefRoute(briefRoute, request, inner, channel, caller);
+  if (settingsRoute !== null) {
+    return handleSettingsRoute(settingsRoute, request, channel, caller, { env, repo, dev: devMode(env, url) });
+  }
 
   switch (route) {
     case "POST /api/join":

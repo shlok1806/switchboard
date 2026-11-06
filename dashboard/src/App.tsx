@@ -23,6 +23,7 @@ const MemoryView = lazy(() => import("@/views/MemoryView").then((m) => ({ defaul
 const SkillsView = lazy(() => import("@/views/SkillsView").then((m) => ({ default: m.SkillsView })));
 const BriefView = lazy(() => import("@/views/BriefView").then((m) => ({ default: m.BriefView })));
 const HostsView = lazy(() => import("@/views/HostsView").then((m) => ({ default: m.HostsView })));
+const SettingsView = lazy(() => import("@/views/SettingsView").then((m) => ({ default: m.SettingsView })));
 
 /**
  * Which page the route is: a new one moves focus to the page (see App), a new selection on
@@ -120,6 +121,7 @@ export default function App() {
           {route.view === "brief" && <BriefView page={route.page} />}
           {route.view === "skills" && <SkillsView name={route.name} version={route.version} />}
           {route.view === "hosts" && <HostsView selected={route.host} />}
+          {route.view === "settings" && <SettingsView />}
           {route.view === "missing" && (
             <ErrorPage missing
               title="No such page"

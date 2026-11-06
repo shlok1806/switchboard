@@ -136,6 +136,25 @@ export class Access {
     return this.answer(person, allowed);
   }
 
+  /**
+   * Whether `person` is the Channel's owner: an admin of its repo, asked of GitHub now,
+   * never cached, since only an owner's own action needs it (ADR 0044). Under the
+   * dev-only fake sign-in without GitHub, everyone is.
+   */
+  async isOwner(
+    person: PersonName,
+    dev: boolean,
+  ): Promise<{ ok: true; owner: boolean } | { ok: false; reason: string }> {
+    const gitHub = this.host.gitHub();
+    if (gitHub === null) return dev ? { ok: true, owner: true } : { ok: false, reason: APP_NOT_CONFIGURED };
+    try {
+      return { ok: true, owner: (await gitHub.permission(person)) === "admin" };
+    } catch (error) {
+      console.error(`Owner check for ${person} failed`, error);
+      return { ok: false, reason: "Could not check your role on the repo with GitHub. Try again." };
+    }
+  }
+
   /** Re-checks each Person in `persons` whose answer is due, closing the streams of anyone refused. */
   async recheck(persons: Iterable<PersonName>): Promise<void> {
     for (const person of persons) {

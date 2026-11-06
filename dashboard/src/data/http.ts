@@ -37,6 +37,8 @@ import type {
   SkillResponse,
   SkillsResponse,
   BriefResponse,
+  ConnectLangfuseRequest,
+  LangfuseSettingsResponse,
   TerminalInputFrame,
   TerminalWatchFrame,
   Verdict,
@@ -55,6 +57,7 @@ import {
   SKILLS_PATH,
   skillPath,
   BRIEF_PATH,
+  LANGFUSE_SETTINGS_PATH,
   summaryPath,
 } from "@shared/index";
 import type {
@@ -64,6 +67,7 @@ import type {
   ConnectionState,
   EventPage,
   HistoryScope,
+  LangfuseResult,
   SpawnResult,
   TerminalFrame,
   TerminalLink,
@@ -442,6 +446,32 @@ export class HttpChannelSource implements ChannelSource {
     if (status === 404) return null;
     if (status >= 400) throw new Error(reasonOf(body, status));
     return body as BriefResponse;
+  }
+
+  async langfuse(): Promise<LangfuseSettingsResponse | null> {
+    const { status, body } = await this.call<LangfuseSettingsResponse>(LANGFUSE_SETTINGS_PATH);
+    // A Worker from before the Channel's settings (ADR 0044): the page says so.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as LangfuseSettingsResponse;
+  }
+
+  async connectLangfuse(request: ConnectLangfuseRequest): Promise<LangfuseResult> {
+    return this.changeLangfuse({ method: "PUT", body: JSON.stringify(request) });
+  }
+
+  async removeLangfuse(): Promise<LangfuseResult> {
+    return this.changeLangfuse({ method: "DELETE" });
+  }
+
+  private async changeLangfuse(init: RequestInit): Promise<LangfuseResult> {
+    try {
+      const { status, body } = await this.call<LangfuseSettingsResponse>(LANGFUSE_SETTINGS_PATH, init);
+      if (status < 400 && body && "canManage" in body) return { ok: true, settings: body };
+      return { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
   }
 
   async spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult> {

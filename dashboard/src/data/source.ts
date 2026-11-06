@@ -6,9 +6,11 @@ import type {
   ChannelEvent,
   ChannelSnapshot,
   ClaimRefusal,
+  ConnectLangfuseRequest,
   CreateTaskRequest,
   HistoryGap,
   HostsResponse,
+  LangfuseSettingsResponse,
   MemoryQuery,
   MemoryResponse,
   PersonAction,
@@ -29,6 +31,9 @@ import type {
 
 /** A spawn answers with the Agent once it is on the Channel, or with the Host still starting it (ADR 0015). */
 export type SpawnResult = { ok: true; answer: SpawnAgentResponse } | { ok: false; reason: string };
+
+/** Connecting or removing the Langfuse project answers with the setting as it is now, or why not. */
+export type LangfuseResult = { ok: true; settings: LangfuseSettingsResponse } | { ok: false; reason: string };
 
 /** A Claim or release answers with the Task as it is now, or a refusal naming the holder. */
 export type ClaimResult = { ok: true; task: Task } | ClaimRefusal;
@@ -150,6 +155,12 @@ export interface ChannelSource {
   skill(name: string, version?: number): Promise<SkillResponse>;
   /** `GET /api/brief`: the Brief's pages, current versions, the overview first (ADR 0042); null when the Worker has none. */
   brief(): Promise<BriefResponse | null>;
+  /** `GET /api/settings/langfuse`: the Channel's Langfuse project, never its secret key, and whether this Person may change it (ADR 0044); null when the Worker has none. */
+  langfuse(): Promise<LangfuseSettingsResponse | null>;
+  /** `PUT /api/settings/langfuse`: the owner connects the Channel's Langfuse project, or replaces its keys. */
+  connectLangfuse(request: ConnectLangfuseRequest): Promise<LangfuseResult>;
+  /** `DELETE /api/settings/langfuse`: the owner removes it. */
+  removeLangfuse(): Promise<LangfuseResult>;
   /** `POST /api/agents/spawn`: start an Agent on one of this Person's own Hosts, or one that allows them (ADR 0028). */
   spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult>;
   /** `POST /api/agents/:id/stop`: ask the Host that runs an Agent to stop it: this Person's, or on a Host that allows them. */

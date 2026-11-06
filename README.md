@@ -133,7 +133,8 @@ Anyone on a Channel can ask about the repo's work from the Claude desktop or web
 ChatGPT or Claude Code, without running an Agent: "what is in progress and what is
 stuck?", "what happened on #142 today?", "what has maya been doing?", "what merged
 this week, and what is failing CI?", "what does the ADR about stale claims say?",
-"what is this product, and where does the VM engine stand?".
+"what is this product, and where does the VM engine stand?", "what did verifier runs
+cost last month, by model?".
 Each Channel has a read-only MCP connector at
 
 ```text
@@ -178,7 +179,7 @@ Then run `/mcp` in a session (or `claude mcp login switchboard-greenroom` in a
 shell), pick the server, and sign in in the browser it opens. Claude Code keeps and
 refreshes the token itself.
 
-The connector has three tools, `channel`, `github` and `brief`. The first two take two
+The connector has four tools, `channel`, `github`, `brief` and `costs`. The first two take two
 optional arguments, `about` and `since`, and the app picks the tool from your question.
 
 `channel` reads what the Channel keeps:
@@ -221,6 +222,50 @@ with that area's page, and `brief(area: "stuck")` with what is stuck and not
 happening. Each page says when it was last written and by which Agent, and comes
 with links for the Tasks, pull requests and ADRs it names. A call reads at most a
 few dozen rows and writes none; the connector cannot write a page.
+
+`costs` reads what running the product costs from the repo's own Langfuse project,
+live, through Langfuse's Metrics API (ADR 0044). Nothing is copied into the Channel.
+It answers with cost (US dollars, as Langfuse prices it), tokens in and out,
+generation calls, traces, errors (observations at level ERROR) and latency (p50 and
+p95), grouped by model, trace name, day or week, with links to the project in
+Langfuse:
+
+| You ask | It calls |
+|---|---|
+| "What did verifier runs cost last month, by model?" | `costs(period: "last month", by: "model")` |
+| "How is spend trending this month?" | `costs(period: "this month", by: "day")` |
+| "Which trace costs the most, and how slow is it?" | `costs(period: "30d", by: "trace")` |
+| "What did the bench runs cost this week?" | `costs(period: "this week", environment: "bench")` |
+
+- `period`: a span (`24h`, `7d`), `today`, `yesterday`, `this week`, `last week`,
+  `this month`, `last month`, a month (`2026-10`), a day (`2026-10-14`) or a range
+  (`2026-10-01..2026-10-14`), all in UTC. 30 days by default, at most 366.
+- `by`: `model` (the default), `trace`, `day` (up to 92 days) or `week`.
+- `environment`: the Langfuse environment, `production` by default. Greenroom sends
+  its bench runs as `bench`.
+
+A call makes three requests to Langfuse, reads the Channel's one Langfuse row besides
+the rows that admit it, and writes none. When no project is connected it says so;
+when Langfuse refuses the keys, rate-limits the project or is down, it says that in
+a sentence.
+
+**Connecting the repo's Langfuse project** (the Channel's owner, an admin of the repo
+on GitHub):
+
+1. In Langfuse, open the project, then **Settings**, **API Keys**, and create a key
+   pair. Langfuse shows the secret key once.
+2. On the Dashboard, open your account menu (on a phone, **More**) and choose
+   **Channel settings**, or go to `https://<worker>/<owner>/<repo>#/settings`.
+3. Under **Langfuse**, pick the host (Langfuse Cloud EU, US or HIPAA, or a
+   self-hosted address), paste the public key (`pk-lf-...`) and the secret key
+   (`sk-lf-...`), and choose **Connect**.
+
+The Worker checks the keys with Langfuse before it keeps them, seals the secret key
+with a key derived from its SESSION_SECRET, and never sends it back: the page shows
+the host, the project's name and the public key's last 4 characters. **Replace keys**
+and **Remove** are there for the owner. Everyone else on the Channel sees whether a
+project is connected. Rotating the Worker's SESSION_SECRET makes the sealed key
+unreadable, and the owner connects it again.
 
 Sign-ins last 30 days from the app's last refresh, and stop working
 within minutes of losing write access to the repo.

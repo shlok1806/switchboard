@@ -53,6 +53,8 @@ const only = process.env.SHOTS_ONLY?.split(",");
 function expected(page, state) {
   if (state === "ready") return null;
   if (page in PAGES && state === "empty") return "error";
+  // A Channel with no Langfuse project shows the form to connect one: a drawn page.
+  if (page === "settings" && state === "empty") return null;
   return state;
 }
 
@@ -69,6 +71,9 @@ function cases() {
   list.push({ page: "skill", hash: "skills/release-notes/1", state: "ready" });
   // An area's page of the Brief, with its age and author.
   list.push({ page: "brief-area", hash: "brief/api-client", state: "ready" });
+  // The Channel's settings (ADR 0044), reached from the account menu rather than a key.
+  for (const state of STATES) list.push({ page: "settings", hash: "settings", state });
+  list.push({ page: "settings", hash: "settings", state: "read-error", want: "error" });
   return list.filter((c) => !only || only.includes(c.page));
 }
 

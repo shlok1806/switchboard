@@ -5,7 +5,7 @@
  * reaches them. The only coloured count is the number of lines that need you.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Bot, BookOpen, Check, FileText, Puzzle, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
+import { Bot, BookOpen, Check, FileText, Puzzle, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, Settings, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +42,7 @@ export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
 export function viewOf(route: Route): ViewId | undefined {
   if (route.view === "task") return "tasks";
   if (route.view === "agent") return "agents";
-  if (route.view === "missing") return undefined;
+  if (route.view === "missing" || route.view === "settings") return undefined;
   return route.view;
 }
 
@@ -199,6 +199,8 @@ export function TabBar({ route }: { route: Route }) {
   const current = viewOf(route);
   const c = useCounts();
   const tabs = VIEWS.filter((v) => TABS.includes(v.id));
+  // The settings page is under More too.
+  const more = route.view === "settings" || (current !== undefined && !TABS.includes(current));
   const tab = (on: boolean) =>
     cn(
       "relative flex min-h-11 flex-col items-center justify-center text-small font-medium hover:no-underline",
@@ -230,7 +232,7 @@ export function TabBar({ route }: { route: Route }) {
           </span>
         </a>
       ))}
-      <MoreMenu className={tab(current !== undefined && !TABS.includes(current))} current={current !== undefined && !TABS.includes(current)} />
+      <MoreMenu className={tab(more)} current={more} />
     </nav>
   );
 }
@@ -310,6 +312,13 @@ function MenuItems({ withViews }: { withViews?: boolean }) {
         </>
       )}
       <DropdownMenuSeparator />
+      <DropdownMenuItem asChild>
+        <a href={href({ view: "settings" })}>
+          <Settings className="size-4 text-ink-3" aria-hidden />
+          Channel settings
+        </a>
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
       <DropdownMenuLabel className="py-1 text-small font-normal text-ink-3">Theme</DropdownMenuLabel>
       {THEMES.map((t) => (
         <DropdownMenuItem key={t.id} onSelect={() => set(t.id)}>
@@ -330,7 +339,7 @@ function MenuItems({ withViews }: { withViews?: boolean }) {
   );
 }
 
-/** Your menu: the theme, and signing out. */
+/** Your menu: the Channel's settings, the theme, and signing out. */
 export function AccountMenu({ children }: { children: React.ReactNode }) {
   return (
     <DropdownMenu>
@@ -342,7 +351,7 @@ export function AccountMenu({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** The phone's More tab: the views the tab bar leaves out, the theme, and signing out. */
+/** The phone's More tab: the views the tab bar leaves out, the Channel's settings, the theme, and signing out. */
 function MoreMenu({ className, current }: { className: string; current: boolean }) {
   return (
     <DropdownMenu>

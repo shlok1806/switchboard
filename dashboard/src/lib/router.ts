@@ -18,6 +18,8 @@ export type Route =
   /** The skills Persons share (ADR 0039), one open in the inspector at a version. */
   | { view: "skills"; name?: string; version?: number }
   | { view: "hosts"; host?: string }
+  /** The Channel's settings: its Langfuse project, which only its owner changes (ADR 0044). */
+  | { view: "settings" }
   /** An address that is no page of the Dashboard: the error page says so. */
   | { view: "missing"; path: string };
 
@@ -55,6 +57,8 @@ export function parse(hash: string): Route {
       return /^[1-9]\d*$/.test(b) ? { view: "skills", name: a, version: Number(b) } : { view: "missing", path };
     case "hosts":
       return { view: "hosts", host: a };
+    case "settings":
+      return a ? { view: "missing", path } : { view: "settings" };
     case "now":
     case "":
       return { view: "now" };
@@ -93,6 +97,8 @@ export function href(route: Route): string {
       return `#/skills/${encodeURIComponent(route.name)}${route.version === undefined ? "" : `/${route.version}`}`;
     case "hosts":
       return route.host ? `#/hosts/${encodeURIComponent(route.host)}` : "#/hosts";
+    case "settings":
+      return "#/settings";
     case "missing":
       return `#${route.path}`;
   }
