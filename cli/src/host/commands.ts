@@ -456,6 +456,19 @@ export function librarianCommand(args: string[]): Promise<number> {
       },
       60_000,
     );
+    // A Channel older than the librarian drops `librarian` and starts a plain Agent with every tool
+    // dontAsk allows it. That is no librarian: it is stopped here, whatever the Channel said.
+    if (answer.agent !== undefined && answer.agent.librarian !== true) {
+      await client
+        .request(`${agentPath(answer.agent.id)}/stop`, { method: "POST" })
+        .catch((error) =>
+          console.error(`switchboard: could not stop ${answer.agent?.id}: ${(error as Error).message}`),
+        );
+      throw new CommandError(
+        `${answer.host} started ${answer.agent.id} as a plain Agent, not the librarian, so it was asked to stop. ` +
+          "The Channel at this URL does not know the librarian yet (ADR 0045); try again once it runs the release that has it.",
+      );
+    }
     const where = `on ${answer.host}. It keeps the Brief of ${repo} current and writes nothing else.`;
     console.log(
       answer.agent === undefined

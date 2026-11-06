@@ -626,6 +626,16 @@ describe("InterruptTyper, waking an idle session", () => {
     expect(await t.wake(() => WAKE)).toEqual({ typed: true });
   });
 
+  it("stays at its prompt while a background subagent's tools run, and not while the main thread's do", async () => {
+    const { typer: t } = typer();
+    t.hook({ hook_event_name: "PreToolUse", tool_name: "Bash", agent_id: "a1b2" });
+    t.hook({ hook_event_name: "PostToolUse", tool_name: "Bash", agent_id: "a1b2" });
+    expect(await t.wake(() => WAKE)).toEqual({ typed: true });
+    t.hook({ hook_event_name: "Stop" });
+    t.hook({ hook_event_name: "PostToolUse", tool_name: "Bash" });
+    expect(await t.wake(inVain)).toEqual({ typed: false, reason: "busy" });
+  });
+
   it("types nothing when there is nothing left to type", async () => {
     const { typer: t, written } = typer();
     expect(await t.wake(() => null)).toEqual({ typed: false, reason: "empty" });

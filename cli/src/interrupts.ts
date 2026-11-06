@@ -604,7 +604,11 @@ export class InterruptTyper {
     // Claude Code sends its idle_prompt Notification only while it waits at its prompt
     // (no turn running, no dialog open), after about a minute: it changes nothing.
     const waiting = event === "Notification" && input.notification_type === "idle_prompt";
-    if (event !== "SessionEnd" && !waiting) this.line.setIdle(idle);
+    // A subagent's hooks say nothing of the main thread: one running in the background, say
+    // from a hook or a plugin, while the session waits at its prompt, must not read as a turn,
+    // since no Stop would ever end it.
+    const subagent = typeof input.agent_id === "string" && input.agent_id !== "";
+    if (event !== "SessionEnd" && !waiting && !subagent) this.line.setIdle(idle);
     switch (event) {
       case "SessionStart":
         this.started = true;

@@ -30,7 +30,7 @@ import type { ComparedFile } from "../src/github/index";
 import { installGitHub, sign } from "../src/github/index";
 import { type As, bearer, channelStub, forgetTokens, remember, url } from "./client";
 import { FakeGitHub, type WebhookDelivery } from "./fake-github";
-import { cleanUp, FakeHost } from "./hosts-harness";
+import { cleanUp, FakeHost, waitFor, wrapperRegisters } from "./hosts-harness";
 
 const WEBHOOK_SECRET = "test-webhook-secret";
 /** The tests' BRIEF_WRITES_PER_DAY (vitest.config.ts). */
@@ -393,5 +393,25 @@ describe("one librarian", () => {
     const byLead = await post("/api/agents/spawn", lead, { cli: "claude-code", cwd: "/work/app", librarian: true });
     expect(byLead.status).toBe(403);
     expect((await byLead.json<ErrorResponse>()).reason).toContain("Only a Person starts the Channel's librarian");
+  });
+
+  it("fails the spawn and stops the Agent when a Host too old for the librarian starts a plain one", async () => {
+    const host = await FakeHost.registered("shlok1806", "studio", ["/work"], "acceptEdits");
+    await host.connect();
+    const spawning = post(
+      "/api/agents/spawn",
+      { person: "shlok1806" },
+      { cli: "claude-code", cwd: "/work/app", librarian: true },
+    );
+    const spawn = await host.nextSpawn();
+    // An older Host knows nothing of `librarian`: its wrapper registers a plain Agent for the spawn.
+    const started = await wrapperRegisters("shlok1806", "studio", spawn.spawn);
+    const response = await spawning;
+    expect(response.status).toBe(502);
+    expect((await response.json<ErrorResponse>()).reason).toContain(
+      `started ${started.agent.id} without the librarian's mode, so it was stopped`,
+    );
+    const stop = await waitFor(() => host.frames.find((f) => f.type === "host.stop"));
+    expect(stop).toMatchObject({ agent: started.agent.id });
   });
 });
