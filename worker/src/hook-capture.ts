@@ -74,6 +74,8 @@ export interface HookCaptureHost {
       payload: EventPayloads[K];
     },
   ): ChannelEvent | null;
+  /** The Event the Channel recorded under `id` before, for a message sent again, or null. */
+  recorded(id: string): ChannelEvent | null;
 }
 
 /** Hook Event IDs are UUIDs picked by the wrapper. */
@@ -193,6 +195,8 @@ export class HookCapture {
     // What the Agent did is about the Task it works on as the Events arrive (#56).
     const task = this.host.currentTask(agent as AgentId);
     const recorded: string[] = [];
+    // As recorded, so the wrapper keeps them in its machine's local store (ADR 0037).
+    const events: ChannelEvent[] = [];
     for (const event of parsed.value) {
       // A session starts and ends once (#54): the wrapper records both, with what these said.
       // An older wrapper still sends them: acknowledged, not recorded twice.
@@ -210,8 +214,10 @@ export class HookCapture {
       if (stored?.type === "file.edit") this.touch(stored.actor, stored);
       // Null means the Channel already had it: recorded either way.
       recorded.push(event.id);
+      const kept = stored ?? this.host.recorded(event.id);
+      if (kept !== null) events.push(kept);
     }
-    return { type: "hook.ack", recorded };
+    return { type: "hook.ack", recorded, events };
   }
 
   /** The files Agent `id` has edited, most recently edited first. */

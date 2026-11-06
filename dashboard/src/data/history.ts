@@ -3,7 +3,7 @@
 // Task reads that scope's own pages from the Channel and merges them with what is
 // loaded, which also brings in new Events as they arrive.
 
-import type { AgentId, ChannelEvent } from "@shared/index";
+import type { AgentId, ChannelEvent, HistoryGap } from "@shared/index";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { HistoryScope } from "./source";
 import { useChannel, useStore } from "./store";
@@ -13,6 +13,8 @@ export interface ScopedHistory {
   events: ChannelEvent[];
   /** The Channel has older Events in this scope. */
   more: boolean;
+  /** The Local Events it could not read, because their machine is away (ADR 0037). */
+  unavailable: HistoryGap[];
   loading: boolean;
   loadOlder: () => void;
 }
@@ -21,6 +23,7 @@ interface Pages {
   key: string;
   events: ChannelEvent[];
   olderBefore?: number;
+  unavailable?: HistoryGap[];
   loading: boolean;
 }
 
@@ -42,7 +45,14 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
         const page = await store.source.scopedEvents(stableScope, before);
         setPages((p) =>
           p.key === key
-            ? { key, events: [...page.events, ...p.events], olderBefore: page.olderBefore, loading: false }
+            ? {
+                key,
+                events: [...page.events, ...p.events],
+                olderBefore: page.olderBefore,
+                // What the first page could not read is what the view is missing now.
+                unavailable: before === undefined ? page.unavailable : p.unavailable,
+                loading: false,
+              }
             : p,
         );
         return true;
@@ -82,6 +92,7 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
   return {
     events: merged,
     more: current && pages.olderBefore !== undefined,
+    unavailable: (current && pages.unavailable) || [],
     loading: !current || pages.loading,
     loadOlder: () => {
       if (current && !pages.loading && pages.olderBefore !== undefined) void read(pages.olderBefore);

@@ -101,14 +101,20 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
     const task = intParam(url, "task", 0);
     if (task === null) return fail(400, '"task" must be a Task number.');
     if (agent !== null && task > 0) return fail(400, "Ask for an Agent's or a Task's Events, not both.");
-    const events =
+    // Merged with the Local Events the machines keep (ADR 0037).
+    const page =
       agent !== null
         ? await channel.latestEventsOfAgent(agent as AgentId, tail, before)
         : task > 0
           ? await channel.latestEventsOfTask(task as TaskNumber, tail, before)
           : await channel.latestEvents(tail, before);
-    if (!Array.isArray(events)) return indexMissing(events);
-    return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? 0 });
+    if (!("events" in page)) return indexMissing(page);
+    const { events, unavailable } = page;
+    return json<HistoryResponse>({
+      events,
+      cursor: events.at(-1)?.seq ?? 0,
+      ...(unavailable.length === 0 ? {} : { unavailable }),
+    });
   }
   const after = intParam(url, "after", 0);
   const limit = intParam(url, "limit", MAX_HISTORY_LIMIT);
@@ -156,6 +162,8 @@ async function handleStream(request: Request, url: URL, channel: ChannelStub, ca
   target.searchParams.set("person", caller.person);
   if (caller.agent !== undefined) target.searchParams.set("agent", caller.agent);
   if (host !== null) target.searchParams.set("host", host);
+  // A Host that answers history reads (ADR 0037).
+  if (host !== null && url.searchParams.get("history") === "1") target.searchParams.set("history", "1");
   if (after !== null) target.searchParams.set("after", after);
   return channel.fetch(target, { headers: { Upgrade: "websocket" } });
 }

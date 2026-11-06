@@ -17,6 +17,7 @@ import type {
   DirectiveMessage,
   ErrorResponse,
   HeartbeatRequest,
+  HistoryRequestMessage,
   HookCaptureReply,
   InterruptAttached,
   InterruptMessage,
@@ -63,7 +64,8 @@ export type ChannelMessage =
   | TerminalWatchersMessage
   | TerminalInputFrame
   | TerminalReadRequestMessage
-  | TranscriptRequestMessage;
+  | TranscriptRequestMessage
+  | HistoryRequestMessage;
 
 export class ChannelError extends Error {
   constructor(

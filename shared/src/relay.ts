@@ -214,6 +214,8 @@ export const INTERRUPT_ANSWER_MS = 15_000;
 export interface InterruptAttach {
   type: "interrupt.attach";
   agent: AgentId;
+  /** The wrapper keeps its Agent's Local Events and answers history reads (ADR 0037). */
+  history?: true;
 }
 
 /**

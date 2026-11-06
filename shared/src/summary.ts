@@ -5,7 +5,7 @@
 // framed as information from the Channel, never an instruction (ADR 0005).
 
 import { CLI_SHORT_NAMES } from "./agents";
-import type { Agent, AgentId, Task, TaskNumber } from "./domain";
+import type { Agent, AgentId, ChannelEvent, Task, TaskNumber } from "./domain";
 import { cleanNoteText, describeNote, type MemoryNote } from "./memory";
 
 /** The most Updates, files and notes one summary holds. */
@@ -37,6 +37,42 @@ export interface AgentSummary {
   notes: MemoryNote[];
   /** The Agents that continue it (ADR 0024). */
   successors: AgentId[];
+  /**
+   * Its latest tool calls, commands, edits and turns, newest first, read from the
+   * machine that keeps them (ADR 0037). Absent when that machine was not reached.
+   */
+  activity?: SummaryActivity[];
+  /** Why its latest activity could not be read: its machine is away (ADR 0037). */
+  historyUnavailable?: string;
+}
+
+/** The most recent activity lines one summary holds. */
+export const SUMMARY_MAX_ACTIVITY = 10;
+
+/** One thing an Agent did, as its summary tells it. */
+export interface SummaryActivity {
+  at: string;
+  text: string;
+}
+
+/** An Agent's Local Event as one activity line, or null for one that tells nothing (a model record, a Verdict). */
+export function describeActivity(event: ChannelEvent): SummaryActivity | null {
+  const at = event.at;
+  switch (event.type) {
+    case "tool.call":
+      return { at, text: `${event.payload.tool} ${event.payload.arg}${event.payload.ok ? "" : " (failed)"}`.trim() };
+    case "command":
+      return {
+        at,
+        text: `ran ${event.payload.command}${event.payload.exitCode === undefined ? "" : ` (exit ${event.payload.exitCode})`}`,
+      };
+    case "file.edit":
+      return { at, text: `edited ${event.payload.path} (+${event.payload.additions} -${event.payload.deletions})` };
+    case "turn.end":
+      return { at, text: `ended turn ${event.payload.turn}` };
+    default:
+      return null;
+  }
 }
 
 /** The path that reads an Agent's summary. */
@@ -121,6 +157,13 @@ function sections(summary: AgentSummary): Section[] {
       ),
     },
     { heading: "Its other notes, newest first:", lines: rest.map((note) => describeNote(note)) },
+    {
+      heading: "What it did last, newest first:",
+      lines:
+        summary.historyUnavailable !== undefined
+          ? [`- ${line(summary.historyUnavailable, 200)}`]
+          : (summary.activity ?? []).map((item) => `- ${item.at}: ${line(item.text, 200)}`),
+    },
     {
       heading: "Files it edited, most recently first:",
       lines: summary.files.length === 0 ? [] : [`- ${summary.files.map((file) => line(file, 300)).join(", ")}`],

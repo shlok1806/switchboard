@@ -159,6 +159,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
     host,
     spawn,
     continues,
+    historyHost,
   } = body;
   const cleanedUsage = cleanUsage(usage);
   const cleanedContext = cleanContext(context);
@@ -198,6 +199,9 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
   if (spawn !== undefined && (typeof spawn !== "string" || host === undefined)) {
     return { ok: false, reason: '"spawn" must be the ID of the spawn its "host" was asked for.' };
   }
+  if (historyHost !== undefined && (typeof historyHost !== "string" || !HOST_NAME_PATTERN.test(historyHost))) {
+    return { ok: false, reason: '"historyHost" must be the name of one of your Hosts.' };
+  }
   if (continues !== undefined && (typeof continues !== "string" || continues.split("/").length !== 3)) {
     return { ok: false, reason: '"continues" must be the ID of the Agent this session carries on.' };
   }
@@ -222,6 +226,7 @@ function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentReque
       ...(host === undefined ? {} : { host }),
       ...(spawn === undefined ? {} : { spawn: spawn as string }),
       ...(continues === undefined ? {} : { continues: continues as AgentId }),
+      ...(historyHost === undefined ? {} : { historyHost }),
     },
   };
 }

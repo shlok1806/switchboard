@@ -168,7 +168,8 @@ describe("recording Hook Events", () => {
       hook("session.end", { reason: "exit", detail: "prompt_input_exit" }),
     ];
 
-    expect(await shlok.hooks(agent, events)).toEqual({ type: "hook.ack", recorded: events.map((e) => e.id) });
+    const ack = await shlok.hooks(agent, events);
+    expect(ack).toMatchObject({ type: "hook.ack", recorded: events.map((e) => e.id) });
 
     // A session's start and end are the wrapper's, once each (#54): an older wrapper's are acknowledged only.
     const recorded = await shlok.hookEvents();
@@ -177,6 +178,8 @@ describe("recording Hook Events", () => {
     for (const event of recorded) {
       expect(event).toMatchObject({ capture: "hook", actor: { kind: "agent", agentId: agent } });
     }
+    // The ack hands the wrapper the Events as recorded, for its machine's local store (ADR 0037).
+    expect(ack.type === "hook.ack" && ack.events).toEqual(recorded);
   });
 
   it("records a message sent again after a reconnect once, and counts its file edits once", async () => {
@@ -187,8 +190,11 @@ describe("recording Hook Events", () => {
     shlok.reconnect();
 
     const again = shlok;
-    expect(await again.hooks(agent, events)).toEqual({ type: "hook.ack", recorded: events.map((e) => e.id) });
+    const ack = await again.hooks(agent, events);
+    expect(ack).toMatchObject({ type: "hook.ack", recorded: events.map((e) => e.id) });
     expect(await again.hookEvents()).toHaveLength(2);
+    // A resend whose first ack was lost still hands the wrapper the Events as recorded.
+    expect(ack.type === "hook.ack" && ack.events).toEqual(await again.hookEvents());
     expect(await again.files(agent)).toEqual([["README.md", 1]]);
   });
 

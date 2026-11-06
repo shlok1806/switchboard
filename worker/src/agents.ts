@@ -62,6 +62,7 @@ type AgentRow = {
   context: string | null;
   approval: string | null;
   host: string | null;
+  history_host: string | null;
   role: string | null;
   parent: string | null;
   continues: string | null;
@@ -87,6 +88,7 @@ export const AGENTS_SCHEMA = `
     context TEXT,
     approval TEXT,
     host TEXT,
+    history_host TEXT,
     role TEXT,
     parent TEXT,
     continues TEXT,
@@ -105,6 +107,7 @@ export function createAgentsTable(sql: SqlStorage): void {
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
   // ADR 0012: context. ADR 0013: the pending approval. ADR 0015: the Host that runs it.
   // ADR 0018: its role, and the lead that started it. ADR 0024: the Agent it continues.
+  // ADR 0037: the Host that answers for its Local Events.
   for (const column of [
     "account",
     "model",
@@ -116,6 +119,7 @@ export function createAgentsTable(sql: SqlStorage): void {
     "role",
     "parent",
     "continues",
+    "history_host",
   ]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
@@ -188,6 +192,7 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.approval == null ? {} : { approval: JSON.parse(row.approval) as PendingApproval }),
     presence: row.presence as Presence,
     ...(row.host == null ? {} : { host: row.host as HostId }),
+    ...(row.history_host == null ? {} : { historyHost: row.history_host as HostId }),
     ...(row.role != null && isAgentRole(row.role) ? { role: row.role } : {}),
     ...(row.parent == null ? {} : { parent: row.parent as AgentId }),
     ...(row.continues == null ? {} : { continues: row.continues as AgentId }),
@@ -273,11 +278,16 @@ export class AgentRoster {
     const interrupts = request.interrupts === true ? 1 : 0;
     // Which Host runs the session now: a session resumed in a terminal has none.
     const host = request.host === undefined ? null : hostIdFor(person, request.host);
+    // Which Host answers for its Local Events (ADR 0037): the one that runs it, else the machine's.
+    const historyHost =
+      host ??
+      (request.historyHost === undefined ? (existing?.history_host ?? null) : hostIdFor(person, request.historyHost));
     if (existing) {
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
         `UPDATE agents SET nickname = ?, account = ?, model = ?, effort = ?, usage = ?, proxy_mode = ?,
-             secret_masking = ?, can_receive_interrupts = ?, host = ?, presence = 'live', last_seen_at = ?
+             secret_masking = ?, can_receive_interrupts = ?, host = ?, history_host = ?, presence = 'live',
+             last_seen_at = ?
          WHERE id = ?`,
         nickname,
         account,
@@ -288,14 +298,15 @@ export class AgentRoster {
         secretMasking,
         interrupts,
         host,
+        historyHost,
         now,
         id,
       );
     } else {
       this.host.sql.exec(
-        `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, usage, host, presence,
-                             proxy_mode, secret_masking, can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
+        `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, usage, host, history_host,
+                             presence, proxy_mode, secret_masking, can_receive_interrupts, last_seen_at, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
@@ -306,6 +317,7 @@ export class AgentRoster {
         effort,
         usage,
         host,
+        historyHost,
         request.proxyMode ?? DEFAULT_PROXY_MODE,
         secretMasking,
         interrupts,

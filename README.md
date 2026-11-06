@@ -7,7 +7,7 @@ defined in [CONTEXT.md](CONTEXT.md).
 
 ## Getting started
 
-You need Node.js 22 or newer, git, a GitHub account with write access to the
+You need Node.js 22.13 or newer (for its built-in SQLite), git, a GitHub account with write access to the
 Channel's repo, and at least one of Claude Code, Codex, Cursor or Gemini CLI.
 
 ### 1. Install the CLI
@@ -370,6 +370,31 @@ and Hosts on a Channel run at most `HOST_AGENTS_LIVE_CAP` Agents at once (20).
 - An Agent on a Host shows the Host's name on its row, and its page has a **Stop** button
   for its own Person.
 - `switchboard host uninstall` unloads the LaunchAgent and removes the Host.
+
+### History: what stays on your machine
+
+The per-call record of an Agent's work stays on the machine it ran on (ADR 0037):
+each tool call, shell command, turn end and file edit, the model-request digests of
+the Proxy Capture, and the Relay's rule Drops about them. They still stream live to
+everyone's Dashboard. Their record is kept in one SQLite file on your machine,
+`~/.config/switchboard/events.db`, for 30 days. When someone opens an Agent's history,
+the Channel's feed or an `agent_summary`, the Channel asks the machine for that
+history over the socket it already holds. While the Agent runs, its wrapper answers.
+After that, the machine's Host answers, if one is installed for the Channel there
+(`switchboard host install`).
+
+Everything others must agree on stays on the Channel for everyone: Tasks, Claims and
+Steps, Updates, Directives, memory notes, Agents and their Presence, the files each
+Agent touched, and Jev's Verdicts.
+
+When your machine is asleep or offline, its Agents' per-call history cannot be read.
+The Dashboard then shows a line such as "offline: history unavailable until
+shlok1806/laptop is back" where those Events would be, and `agent_summary` prints
+the same line. The Agent's Updates, Claims and touched files still show. An Agent
+started in a terminal on a machine with no Host has readable history only while it
+runs. A machine that runs a `switchboard` from before this change has no store until
+you update it: run `npm ci` in `switchboard/cli`, then restart `switchboard run` and
+`switchboard host run`.
 
 ### Leads: an Agent that runs a team
 

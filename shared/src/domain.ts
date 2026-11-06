@@ -77,6 +77,11 @@ export interface Agent {
   presence: Presence;
   /** The Host that runs it (ADR 0015). Absent for an Agent started in a terminal. */
   host?: HostId;
+  /**
+   * The Host that answers for its Local Events once its wrapper is gone (ADR 0037): the
+   * one that runs it, or the one installed on the machine it ran on. Absent when none.
+   */
+  historyHost?: HostId;
   /** The role its Person granted it (ADR 0018). Absent for a plain Agent. */
   role?: AgentRole;
   /** The lead that started it (ADR 0018). Absent for an Agent a Person started. */
@@ -656,6 +661,11 @@ export interface Verdict {
   /** Why Jev gave no answer, for a `fallback`. */
   error?: string;
   latencyMs?: number;
+  /**
+   * Set on a `rule` Drop about a Local Event (ADR 0037): kept with that Event on its
+   * Agent's machine, not on the Channel.
+   */
+  local?: true;
 }
 
 /** Relay settings visible to Persons (`GET /api/relay`). Never carries a secret. */

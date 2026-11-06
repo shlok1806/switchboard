@@ -236,6 +236,12 @@ export interface RegisterAgentRequest {
   /** The spawn request this session answers: the `agent.spawn` Event's ID, from the Host. */
   spawn?: string;
   /**
+   * The name of the caller's Host installed on this machine for this Channel, which
+   * answers for the Agent's Local Events once its wrapper is gone (ADR 0037). Omitted
+   * when the machine has none; a Host that runs the session answers anyway.
+   */
+  historyHost?: string;
+  /**
    * The Agent whose work this session carries on (`switchboard run --from`, ADR 0024).
    * Kept the first time only; an Agent the Channel does not know is refused.
    */

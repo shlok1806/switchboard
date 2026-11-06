@@ -246,11 +246,15 @@ describe("recording Proxy Events", () => {
     const shlok = wrapper("shlok");
     const agent = await shlok.register(SESSION);
     const event = digest();
-    expect(await shlok.proxy(agent.id, event)).toEqual({ type: "proxy.ack", id: event.id });
-    expect(await shlok.proxy(agent.id, event)).toEqual({ type: "proxy.ack", id: event.id });
+    const first = await shlok.proxy(agent.id, event);
+    const again = await shlok.proxy(agent.id, event);
+    expect(first).toMatchObject({ type: "proxy.ack", id: event.id });
 
     const recorded = await shlok.proxyEvents();
     expect(recorded).toHaveLength(1);
+    // Each ack hands the wrapper the Event as recorded, for its machine's local store (ADR 0037).
+    expect(first.type === "proxy.ack" && first.event).toEqual(recorded[0]);
+    expect(again.type === "proxy.ack" && again.event).toEqual(recorded[0]);
     expect(recorded[0]).toMatchObject({
       id: event.id,
       type: "proxy.digest",
@@ -268,7 +272,7 @@ describe("recording Proxy Events", () => {
 
     await shlok.setMode(agent.id, "raw");
     const allowed = raw();
-    expect(await shlok.proxy(agent.id, allowed)).toEqual({ type: "proxy.ack", id: allowed.id });
+    expect(await shlok.proxy(agent.id, allowed)).toMatchObject({ type: "proxy.ack", id: allowed.id });
 
     // Back to digest: raw content stops at once, even from a wrapper that has not heard yet.
     await shlok.setMode(agent.id, "digest");
@@ -338,7 +342,7 @@ describe("the Task a Proxy Event is about (#88)", () => {
     const shlok = wrapper("shlok");
     const agent = (await shlok.register(SESSION, { proxyMode: "raw" })).id;
     const taskOf = async (event: ProxyEvent) => {
-      expect(await shlok.proxy(agent, event)).toEqual({ type: "proxy.ack", id: event.id });
+      expect(await shlok.proxy(agent, event)).toMatchObject({ type: "proxy.ack", id: event.id });
       return (await shlok.proxyEvents()).find((e) => e.id === event.id)?.task ?? null;
     };
 

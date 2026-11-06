@@ -28,6 +28,7 @@ import { useNow } from "@/components/domain/usage";
 import { Section } from "@/components/shell/section";
 import { ErrorPage } from "@/components/shell/states";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { HistoryGaps } from "@/components/domain/history-gaps";
 import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
 import { CAPTURE_LABEL, CLI_LABEL, ago, hostName } from "@/lib/format";
@@ -410,6 +411,7 @@ function History({ scoped }: { scoped: Scoped }) {
           </Chip>
         ))}
       </div>
+      <HistoryGaps gaps={scoped.unavailable} />
       {history.length === 0 ? (
         <p className="border-t border-rule py-6 text-row text-ink-3">{scoped.loading ? "Reading the History" : "Nothing yet."}</p>
       ) : (

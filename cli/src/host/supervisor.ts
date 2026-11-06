@@ -26,10 +26,11 @@
 import { randomUUID } from "node:crypto";
 import { renameSync } from "node:fs";
 import * as pty from "@lydell/node-pty";
-import type { AgentId, HostSpawnedMessage } from "../../../shared/src/index";
+import type { AgentId, HistoryPageMessage, HistoryRequestMessage, HostSpawnedMessage } from "../../../shared/src/index";
 import {
   agentIdFor,
   channelApiBase,
+  channelKey,
   directiveHeading,
   LIVE_PING,
   LIVE_PONG,
@@ -37,6 +38,7 @@ import {
 } from "../../../shared/src/index";
 import { ChannelClient, targetOf } from "../channel-client";
 import type { Config } from "../config";
+import { type LocalStore, openLocalStore } from "../local-store";
 import { cachedAttachList } from "../terminal/attach-keys";
 import { checkAllowChange } from "./allow";
 import { checkControl, checkFolderAndMode, checkSpawn, type LocalLimits, resolveRoots } from "./check";
@@ -168,6 +170,8 @@ export class HostSupervisor {
   private readonly attachList = cachedAttachList();
   private readonly allowSeqs = new Map<string, number>();
   private readonly hostId: string;
+  /** The machine's store of its Agents' Local Events, which the Host answers history reads from (ADR 0037). */
+  private store: LocalStore | null = null;
 
   constructor(private readonly options: SupervisorOptions) {
     // Compared after resolving links, so a root reached through a symlink still counts.
@@ -198,6 +202,7 @@ export class HostSupervisor {
         // Gone already.
       }
     }
+    this.store = openLocalStore(this.options.log, this.options.env);
     for (const entry of saved) this.known.set(entry.agent, entry);
     for (const entry of saved) {
       // A Paused Agent stays paused through a restart: only a resume request brings it back.
@@ -229,6 +234,8 @@ export class HostSupervisor {
         }),
     );
     await Promise.all(exits);
+    this.store?.close();
+    this.store = null;
   }
 
   /** The Agents running now. */
@@ -245,7 +252,12 @@ export class HostSupervisor {
     if (this.closed) return;
     this.pending = undefined;
     const { config, settings } = this.options;
-    const query = new URLSearchParams({ token: config.session, host: settings.name });
+    const query = new URLSearchParams({
+      token: config.session,
+      host: settings.name,
+      // It answers the Channel's history reads from the machine's store (ADR 0037).
+      ...(this.store === null ? {} : { history: "1" }),
+    });
     const base = `${config.url.replace(/\/+$/, "")}${channelApiBase(settings.repo)}`;
     const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/stream?${query}`);
     this.socket = ws;
@@ -278,6 +290,7 @@ export class HostSupervisor {
         else if (frame.type === "host.pause") this.control("pause", frame);
         else if (frame.type === "host.resume") this.control("resume", frame);
         else if (frame.type === "host.allow") void this.changeAllow(frame);
+        else if (frame.type === "history.request") this.answerHistory(frame as unknown as HistoryRequestMessage);
       } catch (error) {
         this.options.log(
           `could not handle a ${type} frame: ${error instanceof Error ? error.message : "unknown error"}`,
@@ -295,6 +308,20 @@ export class HostSupervisor {
     ws.addEventListener("error", () => {
       // "close" follows and reconnects.
     });
+  }
+
+  /** A page of the Local Events this machine keeps for the Channel, for any of its Agents (ADR 0037). */
+  private answerHistory(request: HistoryRequestMessage): void {
+    if (typeof request.id !== "string" || typeof request.before !== "number" || typeof request.limit !== "number")
+      return;
+    const repo = channelKey(this.options.settings.repo) ?? this.options.settings.repo;
+    let frame: HistoryPageMessage;
+    try {
+      frame = { type: "history.page", id: request.id, events: this.store?.page(repo, request) ?? [] };
+    } catch (error) {
+      frame = { type: "history.page", id: request.id, error: (error as Error).message.slice(0, 300) };
+    }
+    this.send(frame as unknown as Record<string, unknown>);
   }
 
   private send(frame: Record<string, unknown>): void {

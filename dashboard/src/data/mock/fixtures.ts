@@ -202,6 +202,8 @@ export const agents: Agent[] = [
     id: A.shlokCodexOld,
     person: "shlok",
     cli: "codex",
+    // Its tool calls and edits are kept on shlok's laptop, which is offline (ADR 0037).
+    historyHost: "shlok/laptop",
     presence: "gone",
     proxyMode: "digest",
     secretMasking: true,

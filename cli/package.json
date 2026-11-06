@@ -8,7 +8,7 @@
     "switchboard": "dist/switchboard.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/switchboard.js && esbuild src/hooks/hook-command.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/switchboard-hook.js",

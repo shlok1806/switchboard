@@ -230,6 +230,7 @@ export class HttpChannelSource implements ChannelSource {
       accounts,
       cursor: latest.cursor,
       ...olderThan(latest.events),
+      ...(latest.unavailable === undefined ? {} : { unavailable: latest.unavailable }),
     };
   }
 
@@ -250,7 +251,10 @@ export class HttpChannelSource implements ChannelSource {
     );
     const oldest = page.events[0]?.seq;
     const events = page.events.filter((e) => e.type !== "verdict");
-    return page.events.length === SCOPED_PAGE && oldest !== undefined ? { events, olderBefore: oldest } : { events };
+    const unavailable = page.unavailable === undefined ? {} : { unavailable: page.unavailable };
+    return page.events.length === SCOPED_PAGE && oldest !== undefined
+      ? { events, olderBefore: oldest, ...unavailable }
+      : { events, ...unavailable };
   }
 
   async eventsById(ids: readonly string[]): Promise<ChannelEvent[]> {

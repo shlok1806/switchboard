@@ -15,6 +15,7 @@ import { Composer } from "@/components/domain/composer";
 import { EventDetail } from "@/components/domain/event";
 import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
 import { ownedName } from "@/components/domain/fleet";
+import { HistoryGaps } from "@/components/domain/history-gaps";
 import { CAPTURES, EventRow, InterruptRow, LogHead, TurnRow, type TurnItem } from "@/components/domain/log";
 import { HolderLabel } from "@/components/domain/task";
 import { InspectorFrame, InspectorMissing } from "@/components/shell/inspector";
@@ -279,6 +280,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
               interrupts.length > 0 && `${interrupts.length} ${interrupts.length === 1 ? "Interrupt" : "Interrupts"}`,
             ]}
           />
+          <HistoryGaps gaps={snapshot?.unavailable} className="-mt-2 py-0" />
           {/* A Channel with no Events has nothing to group or filter. */}
           <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-2.5", bare && "hidden")}>
             <div role="group" aria-label="Group" className="flex gap-1.5">
