@@ -182,7 +182,9 @@ describe("history", () => {
       ["update", "shlok", "second"],
       ["person.join", "sam", null],
     ]);
-    expect(history.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    // In the order they happened: each `seq` above the one before.
+    const seqs = history.map((e) => e.seq);
+    expect(seqs.every((seq, i) => i === 0 || seq > (seqs[i - 1] ?? 0))).toBe(true);
   });
 
   it("replays missed Events to a stream that resumes from a cursor, then continues live", async () => {

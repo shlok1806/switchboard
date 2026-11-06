@@ -43,6 +43,7 @@ import type {
 import {
   agentIdFor,
   DEFAULT_PROXY_MODE,
+  HEARTBEAT_INTERVAL_MS,
   hostIdFor,
   isAgentRole,
   MAX_LEAD_DEPTH,
@@ -698,11 +699,20 @@ export class AgentRoster {
   /**
    * Checks that `person` may act for Agent `id`, and counts it as heard from: an Agent
    * whose hooks report work is not silent. It does not change Presence.
+   *
+   * The sign of life is written only when the row has not heard from the Agent for two
+   * heartbeat intervals (and ten times within the silence an Agent is Gone after), not
+   * at every Hook or Proxy message: the row and its two indexes cost three rows written
+   * each time, and a wrapper that heartbeats keeps the row fresh anyway (ADR 0037).
    */
   touch(person: PersonName, id: AgentId): { ok: true; agent: Agent } | Refusal {
     const found = this.owned(person, id);
     if (!found.ok) return found;
-    this.host.sql.exec("UPDATE agents SET last_seen_at = MAX(last_seen_at, ?) WHERE id = ?", Date.now(), id);
+    const now = Date.now();
+    const resolution = Math.min(2 * HEARTBEAT_INTERVAL_MS, this.host.goneAfterMs / 10);
+    if (now - found.row.last_seen_at >= resolution) {
+      this.host.sql.exec("UPDATE agents SET last_seen_at = MAX(last_seen_at, ?) WHERE id = ?", now, id);
+    }
     return { ok: true, agent: rowToAgent(found.row) };
   }
 

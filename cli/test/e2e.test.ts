@@ -171,8 +171,21 @@ async function history(): Promise<HistoryResponse> {
   }
 }
 
+/**
+ * Agent `id`'s Events, as its page on the Dashboard reads them: the Channel's, merged
+ * with the Local Events its machine keeps (ADR 0037), oldest first.
+ */
 async function agentEvents(id: string): Promise<ChannelEvent[]> {
-  const { events } = await history();
+  const events: ChannelEvent[] = [];
+  let before: number | undefined;
+  for (;;) {
+    const query = `tail=${MAX_HISTORY_LIMIT}&agent=${encodeURIComponent(id)}${before === undefined ? "" : `&before=${before}`}`;
+    const page = await api<HistoryResponse>(`/api/events?${query}`);
+    events.unshift(...page.events);
+    const oldest = page.events[0]?.seq;
+    if (page.events.length < MAX_HISTORY_LIMIT || oldest === undefined) break;
+    before = oldest;
+  }
   return events.filter((e) => e.actor.kind === "agent" && e.actor.agentId === id);
 }
 
@@ -738,6 +751,12 @@ describe("the Hook Capture", () => {
     await term.waitForOutput(/hook SessionStart exit=0/);
     term.type("turn\r");
     await term.waitForOutput(/FAKE-CLAUDE turn done/);
+    // Every hook type reached the Channel, labelled with the Hook Capture, in order, and
+    // is read back from this machine's store through the wrapper while it runs (ADR 0037).
+    const events = await waitFor("the turn's end in the Agent's history", async () => {
+      const found = await hookEvents(id);
+      return found.some((e) => e.type === "turn.end") ? found : undefined;
+    });
     term.type("quit\r");
     expect(await term.exited).toBe(0);
 
@@ -766,12 +785,10 @@ describe("the Hook Capture", () => {
       else expect(run[4]).toBeUndefined();
     }
 
-    // Every hook type reached the Channel, labelled with the Hook Capture, in order. The
-    // session's start and end are the wrapper's, once each, with what the hooks said (#54).
+    // The session's start and end are the wrapper's, once each, with what the hooks said (#54).
     await waitFor("the session's end on the Channel", async () =>
       (await wrapperEvents(id)).some((e) => e.type === "session.end") ? true : undefined,
     );
-    const events = await hookEvents(id);
     for (const event of events) expect(event.capture).toBe("hook");
     const longCommand = `echo ${"a".repeat(2000)}`;
     expect(events.map((e) => [e.type, e.payload])).toEqual([
@@ -798,8 +815,12 @@ describe("the Hook Capture", () => {
       ["session.start", null, { cwd, resumed: false, source: "startup" }],
       ["session.end", null, { reason: "exit", detail: "prompt_input_exit" }],
     ]);
-    const ended = all.findIndex((e) => e.type === "session.end");
-    expect(all.findIndex((e) => e.capture === "hook" && e.type === "turn.end")).toBeLessThan(ended);
+    const ended = all.find((e) => e.type === "session.end")?.seq ?? 0;
+    expect(events.find((e) => e.type === "turn.end")?.seq ?? Number.MAX_SAFE_INTEGER).toBeLessThan(ended);
+    // With the session gone and no Host on this machine, its Local Events cannot be read, and the read says so.
+    expect(all.some((e) => e.capture === "hook")).toBe(false);
+    const away = await api<HistoryResponse>(`/api/events?tail=50&agent=${encodeURIComponent(id)}`);
+    expect(away.unavailable?.map((gap) => gap.reason)).toEqual([`offline: history unavailable until ${id} is back`]);
 
     // The Agent's touched files, from its file edits, most recently edited first.
     const touched = await api<TouchedFilesResponse>(`${agentPath(id as AgentId)}/touched-files`);
