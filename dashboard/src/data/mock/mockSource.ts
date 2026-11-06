@@ -13,6 +13,9 @@ import type {
   MemoryQuery,
   MemoryResponse,
   PersonAction,
+  Skill,
+  SkillResponse,
+  SkillsResponse,
   SpawnAgentRequest,
   StreamMessage,
   Task,
@@ -45,6 +48,7 @@ import {
 } from "../source";
 import { accounts, ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
+import { SKILL_VERSIONS } from "./skills";
 import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
 import { mockTerminal } from "./terminal";
 
@@ -463,6 +467,31 @@ export class MockChannelSource implements ChannelSource {
       .sort((a, b) => (words.length > 0 ? b.score - a.score : 0) || b.n.seq - a.n.seq)
       .map((m) => m.n);
     return clone({ notes: notes.slice(0, limit), ...(notes.length > limit ? { more: true as const } : {}) });
+  }
+
+  /** Like the Worker: each skill's latest version, by name, without its files. */
+  async skills(): Promise<SkillsResponse> {
+    await new Promise((r) => setTimeout(r, 120));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    if (this.opts.state === "empty") return { skills: [] };
+    const latest = new Map<string, Skill>();
+    for (const v of SKILL_VERSIONS) if ((latest.get(v.name)?.version ?? 0) < v.version) latest.set(v.name, v);
+    const skills = [...latest.values()]
+      .sort((a, b) => (a.name < b.name ? -1 : 1))
+      .map(({ files: _files, ...summary }) => summary);
+    return clone({ skills });
+  }
+
+  /** Like the Worker: one version in full, or why there is none. */
+  async skill(name: string, version?: number): Promise<SkillResponse> {
+    await new Promise((r) => setTimeout(r, 80));
+    const all = SKILL_VERSIONS.filter((v) => v.name === name);
+    if (all.length === 0) throw new Error(`No skill is named ${name} on this Channel.`);
+    const versions = all.map((v) => v.version).sort((a, b) => a - b);
+    const wanted = version ?? versions.at(-1);
+    const skill = all.find((v) => v.version === wanted);
+    if (!skill) throw new Error(`${name} has no version ${wanted}; it has ${versions.join(", ")}.`);
+    return clone({ skill, versions });
   }
 
   /** Like the Worker and the Host: checked, then an Agent that registers a moment later. */

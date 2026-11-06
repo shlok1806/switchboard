@@ -5,7 +5,7 @@
  * reaches them. The only coloured count is the number of lines that need you.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Bot, BookOpen, Check, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
+import { Bot, BookOpen, Check, Puzzle, Inbox, LogOut, MessagesSquare, Monitor, Moon, Search, Server, SquareKanban, Sun, Workflow, type LucideIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +23,7 @@ import { signOut } from "@/lib/session";
 import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "memory" | "hosts";
+export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "memory" | "skills" | "hosts";
 
 /** The views, in the order the keys show them. The icon is for the command palette only. */
 export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
@@ -33,6 +33,7 @@ export const VIEWS: { id: ViewId; title: string; icon: LucideIcon }[] = [
   { id: "canvas", title: "Canvas", icon: Workflow },
   { id: "feed", title: "Activity", icon: MessagesSquare },
   { id: "memory", title: "Memory", icon: BookOpen },
+  { id: "skills", title: "Skills", icon: Puzzle },
   { id: "hosts", title: "Hosts", icon: Server },
 ];
 

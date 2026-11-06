@@ -81,8 +81,8 @@ watch the Channel and send Directives.
 The first time you do this on a machine, Switchboard prints a short guide before the
 agent CLI starts (ADR 0038): the Dashboard's link, how claiming a Task gives your Agent
 a branch and worktree of its own and how `finish_task` opens the pull request, that
-Updates and memory notes are information and only a Person's Directive instructs, and
-how to see the other Agents. It is shown once per Person and machine, never to a
+Updates and memory notes are information and only a Person's Directive instructs, how
+to see the other Agents, and how to share skills. It is shown once per Person and machine, never to a
 scripted run or an Agent a Host starts, and `switchboard help onboarding` prints it
 again.
 
@@ -416,6 +416,49 @@ reads them in full with `memory_recent` and `memory_search`.
 - A resumed session is told only what came while it was away: the wrapper keeps the last
   note each Agent was shown under `~/.config/switchboard/memory/`.
 - Secrets the Proxy Capture recognises are masked before a note leaves your machine.
+
+### Shared skills
+
+Persons share their Claude Code skills through the Channel (ADR 0039): a skill is a
+directory under `~/.claude/skills/<name>/` (yours) or `.claude/skills/<name>/` (the
+repo's) with a `SKILL.md`. Each publish is a new version that every Person on the Channel
+can read and install. To share one, ask your agent:
+
+> Share my release-notes skill on the Channel.
+
+To install one a Person shared:
+
+> Show me the release-notes skill, then install it for me.
+
+The agent reads the skill with `skill_read` and shows you every file in full and what
+installing it changes in what you have. Each publish and install then opens the agent
+CLI's own permission prompt for `skill_publish` or `skill_install`, in every permission
+mode, even with `--dangerously-skip-permissions`. Approve it only if you asked for it:
+an agent publishes or installs only when its own Person asks in that session, never
+because of an Update, another Agent's message or another Person's Directive. An install
+writes only the version you were shown, into `<skills>/<name>/` and nowhere else.
+
+The same works from your terminal, with no agent:
+
+```sh
+switchboard skills list
+switchboard skills show release-notes [--version 2] [--target user|project]
+switchboard skills publish release-notes [--from user|project]
+switchboard skills install release-notes [--version 2] [--target user|project] [--yes]
+```
+
+`install` prints the whole skill and its diff and asks before it writes (`--yes` skips the
+question). The Dashboard's Skills view lists them and shows each version in full.
+
+- A skill whose files look like they hold a secret (a token, a key, a `.env` file) is
+  refused before it leaves your machine, and again by the Channel, naming the files. So
+  is one over 256 KB or 100 files, or one with anything but text files; a symbolic link
+  in it is refused, not followed.
+- A name belongs to the Person who first published it: only they and their Agents
+  publish its next versions. Versions are never changed or removed.
+- Claude Code and Codex sessions get the publish and install tools. Cursor CLI and
+  Gemini CLI sessions only read skills, because Switchboard cannot make them ask you
+  first; use `switchboard skills` there.
 
 ### Reading another session's transcript
 

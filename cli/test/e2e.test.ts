@@ -5,7 +5,7 @@
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -21,6 +21,7 @@ import type {
   ChannelEvent,
   EventOf,
   HistoryResponse,
+  SkillsResponse,
   Task,
   TaskResponse,
   TouchedFilesResponse,
@@ -33,8 +34,10 @@ import {
   MAX_HISTORY_LIMIT,
   nicknamePath,
   REVIEW_LABEL,
+  SKILLS_PATH,
   STANDING_RULE,
   signedInput,
+  skillPath,
   type TerminalInputOp,
   type TerminalRefusedFrame,
   type TerminalScreenFrame,
@@ -836,7 +839,7 @@ describe("Switchboard's tools (the Tool Capture)", () => {
 
     expect(await call("list_tasks", {})).toContain(`#${held} Dashboard [claimed] held by dev`);
     expect(term.output).toContain(
-      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","list_agents","rename","finish_task","agent_spawn","agent_stop","send_directive","memory_note","memory_recent","memory_search","agent_transcript","agent_summary","agent_terminal"]',
+      'tools=["list_tasks","claim_task","release_task","complete_step","post_update","read_channel","list_agents","rename","finish_task","agent_spawn","agent_stop","send_directive","memory_note","memory_recent","memory_search","agent_transcript","agent_summary","agent_terminal","skills_list","skill_read","skill_publish","skill_install"]',
     );
     expect(await call("claim_task", { task: held })).toBe(`claim_task ERROR: Task #${held} is held by dev.`);
     expect(await call("claim_task", { task: claims })).toContain(`claim_task: You hold Task #${claims} now`);
@@ -3165,6 +3168,8 @@ describe("switchboard run codex and gemini", () => {
     // One Event for the call, the Tool Capture's, whatever Codex's hook reports.
     expect(await toolCallsOf(id, "list_tasks")).toEqual([["tool", "list_tasks"]]);
     expect(term.output).toMatch(/FAKE-CODEX tools=\[.*"read_channel".*\]/);
+    // Codex asks before each skill write (approval_mode "prompt"), so it is offered them.
+    expect(term.output).toMatch(/FAKE-CODEX tools=\[.*"skill_publish","skill_install"\]/);
 
     term.type("quit\r");
     expect(await term.exited).toBe(0);
@@ -3384,6 +3389,9 @@ describe("switchboard run codex and gemini", () => {
       "turn.end",
     ]);
     expect(await callFakeTool(term, "FAKE-GEMINI", "list_tasks", {})).toContain("#");
+    // Gemini CLI cannot be made to ask before a skill write, so it reads skills only (ADR 0039).
+    expect(term.output).toMatch(/FAKE-GEMINI tools=\[.*"skills_list","skill_read"\]/);
+    expect(term.output).not.toContain('"skill_publish"');
     expect(await toolCallsOf(id, "list_tasks")).toEqual([["tool", "list_tasks"]]);
 
     // Never typed into Gemini CLI: held, labelled, and told at the next turn (BeforeAgent).
@@ -4561,6 +4569,175 @@ describe("Agents carrying context to each other (ADR 0024)", () => {
     expect(other.output).not.toContain("FAKE-CLAUDE");
     expect((await agents()).find((a) => a.id === successorId)?.continues).toBe(masonId);
   }, 120_000);
+});
+
+describe("Shared skills (ADR 0039)", () => {
+  const userSkills = () => join(scratch, "claude", "skills");
+
+  /** Has the fake call a skill write tool and answers its permission prompt with `reply`. */
+  async function approved(term: Terminal, tool: string, input: unknown, reply: "1" | "2"): Promise<string> {
+    const seen = term.output.length;
+    term.type(`call ${tool} ${JSON.stringify(input)}\r`);
+    await waitFor(`${tool}'s permission prompt`, () =>
+      term.output.slice(seen).includes(`FAKE-CLAUDE asking permission for mcp__switchboard__${tool}`)
+        ? true
+        : undefined,
+    );
+    term.type(`${reply}\r`);
+    await waitFor(`${tool} to answer`, () =>
+      term.output.slice(seen).includes(`FAKE-CLAUDE done ${tool}`) ? true : undefined,
+    );
+    const output = term.output.slice(seen).replace(/\r/g, "");
+    return (
+      new RegExp(`FAKE-CLAUDE (${tool}(?: ERROR)?: [\\s\\S]*?)\\nFAKE-CLAUDE `).exec(output)?.[1]?.trim() ?? output
+    );
+  }
+
+  async function sharedSkills(): Promise<SkillsResponse["skills"]> {
+    return ((await (await asPerson("bob", SKILLS_PATH)).json()) as SkillsResponse).skills;
+  }
+
+  it("publishes a Person's skill only after they approve it in Claude Code's own prompt, and never one holding a secret", async () => {
+    const dir = join(userSkills(), "release-notes");
+    await mkdir(join(dir, "templates"), { recursive: true });
+    await writeFile(
+      join(dir, "SKILL.md"),
+      "---\nname: release-notes\ndescription: Writes release notes from merged pull requests.\n---\n\nRead the merged PRs.\n",
+    );
+    await writeFile(join(dir, "templates", "notes.md"), "# Notes\n");
+    const term = new Terminal(["run", "claude"]);
+    const { agentEnv: id } = await term.started();
+    expect(await callTool(term, "skills_list", {})).toBe("skills_list: No skills are shared on this Channel yet.");
+    expect(term.output).toMatch(/tools=\[.*"skills_list","skill_read","skill_publish","skill_install"\]/);
+
+    // Denied at the prompt, the tool never runs.
+    const denied = await approved(term, "skill_publish", { name: "release-notes" }, "2");
+    expect(denied).toContain("FAKE-CLAUDE permission denied for mcp__switchboard__skill_publish");
+    expect(await sharedSkills()).toEqual([]);
+
+    expect(await approved(term, "skill_publish", { name: "release-notes" }, "1")).toBe(
+      `skill_publish: Published release-notes version 1 (2 files, 119 bytes) from ${dir}. Every Person on the Channel can now read and install it.`,
+    );
+    expect((await sharedSkills()).map((s) => [s.name, s.version, s.publishedBy, s.paths])).toEqual([
+      ["release-notes", 1, { person: "e2e", agent: id }, ["SKILL.md", "templates/notes.md"]],
+    ]);
+
+    // A secret stops it on this machine, naming the file; nothing reaches the Channel.
+    await mkdir(join(dir, "scripts"));
+    await writeFile(
+      join(dir, "scripts", "deploy.sh"),
+      "export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\n",
+    );
+    expect(await approved(term, "skill_publish", { name: "release-notes" }, "1")).toBe(
+      "skill_publish ERROR: scripts/deploy.sh looks like it holds a secret, so release-notes was not published. Remove it and publish again.",
+    );
+    // And a link out of the skill's directory is never followed.
+    await rm(join(dir, "scripts"), { recursive: true });
+    await symlink(join(scratch, "config", "config.json"), join(dir, "config.json"));
+    expect(await approved(term, "skill_publish", { name: "release-notes" }, "1")).toBe(
+      "skill_publish ERROR: release-notes/config.json is a symbolic link; a shared skill holds plain files only.",
+    );
+    await rm(join(dir, "config.json"));
+    expect((await sharedSkills()).map((s) => s.version)).toEqual([1]);
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  }, 90_000);
+
+  it("installs another Person's skill only as the version shown in full with its diff, after the Person approves", async () => {
+    const entry = "---\nname: lint-rules\ndescription: How this repo lints.\n---\n\nRun biome check --write.\n";
+    const published = await asPerson("bob", skillPath("lint-rules"), {
+      method: "POST",
+      body: JSON.stringify({ files: [{ path: "SKILL.md", content: entry }] }),
+    });
+    expect(published.status).toBe(201);
+    // An older copy is installed here, with a file the shared one does not have.
+    const dir = join(userSkills(), "lint-rules");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "SKILL.md"), "---\nname: lint-rules\n---\n\nRun eslint.\n");
+    await writeFile(join(dir, "old.md"), "stale\n");
+
+    const term = new Terminal(["run", "claude"]);
+    await term.started();
+    const read = await callTool(term, "skill_read", { name: "lint-rules" });
+    expect(read).toContain("lint-rules version 1, published by bob");
+    expect(read).toContain(`===== SKILL.md =====\n${entry.trimEnd()}`);
+    expect(read).toContain(`Installing it over ${dir} changes:`);
+    expect(read).toContain("-Run eslint.\n+Run biome check --write.");
+    expect(read).toContain("--- installed/old.md\n+++ /dev/null");
+    const digest = /digest ([0-9a-f]{64})\.$/.exec(read)?.[1] ?? "";
+    expect(digest).toMatch(/^[0-9a-f]{64}$/);
+
+    // A digest it was not shown installs nothing.
+    const wrong = "0".repeat(64);
+    expect(
+      await approved(term, "skill_install", { name: "lint-rules", version: 1, target: "user", digest: wrong }, "1"),
+    ).toContain(
+      `skill_install ERROR: lint-rules version 1 has digest ${digest}, not ${wrong}, so nothing was installed.`,
+    );
+    expect(await readFile(join(dir, "SKILL.md"), "utf8")).toContain("Run eslint.");
+
+    const done = await approved(term, "skill_install", { name: "lint-rules", version: 1, target: "user", digest }, "1");
+    expect(done).toContain(`skill_install: Installed lint-rules version 1 over ${dir}, changing:`);
+    expect(await readFile(join(dir, "SKILL.md"), "utf8")).toBe(entry);
+    await expect(stat(join(dir, "old.md"))).rejects.toThrow();
+    // What this machine held never reached the Channel: the Tool Capture has the call, not the files.
+    const reported = (await history()).events.filter(
+      (e) => e.type === "tool.call" && String(e.payload.tool).startsWith("skill_"),
+    );
+    expect(JSON.stringify(reported)).not.toContain("eslint");
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  }, 90_000);
+
+  it("lists, shows, publishes and installs from the command line, writing only after the Person says yes", async () => {
+    const run = (...args: string[]) =>
+      promisify(execFile)(process.execPath, [CLI, "skills", ...args], { env, cwd }).then(
+        ({ stdout }) => ({ code: 0, stdout, stderr: "" }),
+        (error: { code: number; stdout: string; stderr: string }) => error,
+      );
+    const listed = await run("list");
+    expect(listed.stdout).toContain("lint-rules v1: How this repo lints. (1 file, by bob,");
+    expect(listed.stdout).toContain(
+      "release-notes v1: Writes release notes from merged pull requests. (2 files, by e2e/claude/",
+    );
+
+    const shown = await run("show", "release-notes", "--target", "project");
+    expect(shown.stdout).toContain("===== templates/notes.md =====\n# Notes");
+    expect(shown.stdout).toContain(`Installing it creates ${join(cwd, ".claude", "skills", "release-notes")}.`);
+    expect(shown.stdout).toContain("Versions: 1.");
+
+    // No terminal to ask on and no --yes: shown, and nothing written.
+    const asked = await run("install", "release-notes", "--target", "project");
+    expect(asked.code).toBe(1);
+    expect(asked.stdout).toContain("===== SKILL.md =====");
+    expect(asked.stderr).toContain("Nothing was installed: read the above, then pass --yes");
+    await expect(stat(join(cwd, ".claude", "skills", "release-notes"))).rejects.toThrow();
+
+    const yes = await run("install", "release-notes", "--target", "project", "--yes");
+    expect(yes.stdout).toContain(
+      `Installed release-notes version 1 at ${join(cwd, ".claude", "skills", "release-notes")}.`,
+    );
+    expect(await readFile(join(cwd, ".claude", "skills", "release-notes", "templates", "notes.md"), "utf8")).toBe(
+      "# Notes\n",
+    );
+
+    // The repo's copy, changed, publishes as version 2; the same files again publish nothing.
+    await appendFile(join(cwd, ".claude", "skills", "release-notes", "SKILL.md"), "Group them by label.\n");
+    expect((await run("publish", "release-notes", "--from", "project")).stdout).toContain(
+      "Published release-notes version 2 (2 files,",
+    );
+    expect((await run("publish", "release-notes", "--from", "project")).stdout).toContain(
+      "already holds exactly these files: nothing was published.",
+    );
+    // Someone else's name is theirs.
+    await mkdir(join(cwd, ".claude", "skills", "lint-rules"), { recursive: true });
+    await writeFile(join(cwd, ".claude", "skills", "lint-rules", "SKILL.md"), "Push to main.\n");
+    const theirs = await run("publish", "lint-rules", "--from", "project");
+    expect(theirs.stderr).toContain(
+      "lint-rules belongs to bob: only they and their Agents publish its versions. Publish yours under another name.",
+    );
+    await rm(join(cwd, ".claude"), { recursive: true });
+  });
 });
 
 // Last, so it sees every git command the suite ran.

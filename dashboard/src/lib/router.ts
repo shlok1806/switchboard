@@ -13,6 +13,8 @@ export type Route =
   | { view: "agent"; id: string; focus?: "directive" }
   | { view: "canvas"; agent?: string }
   | { view: "memory"; note?: string }
+  /** The skills Persons share (ADR 0039), one open in the inspector at a version. */
+  | { view: "skills"; name?: string; version?: number }
   | { view: "hosts"; host?: string }
   /** An address that is no page of the Dashboard: the error page says so. */
   | { view: "missing"; path: string };
@@ -43,6 +45,10 @@ export function parse(hash: string): Route {
       return { view: "feed", event: a };
     case "memory":
       return a ? { view: "memory", note: a } : { view: "memory" };
+    case "skills":
+      if (!a) return { view: "skills" };
+      if (b === undefined) return { view: "skills", name: a };
+      return /^[1-9]\d*$/.test(b) ? { view: "skills", name: a, version: Number(b) } : { view: "missing", path };
     case "hosts":
       return { view: "hosts", host: a };
     case "now":
@@ -76,6 +82,9 @@ export function href(route: Route): string {
       return route.agent ? `#/canvas/${encodeURIComponent(route.agent)}` : "#/canvas";
     case "memory":
       return route.note ? `#/memory/${encodeURIComponent(route.note)}` : "#/memory";
+    case "skills":
+      if (!route.name) return "#/skills";
+      return `#/skills/${encodeURIComponent(route.name)}${route.version === undefined ? "" : `/${route.version}`}`;
     case "hosts":
       return route.host ? `#/hosts/${encodeURIComponent(route.host)}` : "#/hosts";
     case "missing":

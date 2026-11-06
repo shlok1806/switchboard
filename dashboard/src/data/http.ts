@@ -34,6 +34,8 @@ import type {
   ClaimRefusal,
   MemoryQuery,
   MemoryResponse,
+  SkillResponse,
+  SkillsResponse,
   TerminalInputFrame,
   TerminalWatchFrame,
   Verdict,
@@ -49,6 +51,8 @@ import {
   releasePath,
   rolePath,
   memoryQueryString,
+  SKILLS_PATH,
+  skillPath,
   summaryPath,
 } from "@shared/index";
 import type {
@@ -410,6 +414,20 @@ export class HttpChannelSource implements ChannelSource {
     if (status === 404) return null;
     if (status >= 400) throw new Error(reasonOf(body, status));
     return body as MemoryResponse;
+  }
+
+  async skills(): Promise<SkillsResponse | null> {
+    const { status, body } = await this.call<SkillsResponse>(SKILLS_PATH);
+    // A Worker from before shared skills (ADR 0039): the Dashboard leaves them out.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as SkillsResponse;
+  }
+
+  async skill(name: string, version?: number): Promise<SkillResponse> {
+    const { status, body } = await this.call<SkillResponse>(skillPath(name, version));
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as SkillResponse;
   }
 
   async spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult> {

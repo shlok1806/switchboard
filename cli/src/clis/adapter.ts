@@ -108,6 +108,12 @@ export interface CliAdapter {
   /** Whether the Proxy Capture can read this CLI's model traffic. */
   proxy: boolean;
   /**
+   * Whether Switchboard can make this CLI ask its Person before every call of the skill
+   * tools that publish or write (ADR 0039), whatever its permission mode. Only then does
+   * its session get them; elsewhere the Person runs `switchboard skills` instead.
+   */
+  promptsForSkillWrites: boolean;
+  /**
    * What this CLI sets in its own child processes' environment to describe the
    * session they run in. `switchboard run` always starts a new top-level session, so
    * when it runs inside another session (an Agent starting an Agent) the wrapper

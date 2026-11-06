@@ -12,6 +12,7 @@
 //   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
 //   switchboard attach allow|revoke|list|prompts   (ADR 0021)
 //   switchboard help onboarding   (ADR 0038)
+//   switchboard skills list|show|publish|install   (ADR 0039)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
@@ -33,6 +34,7 @@ import { runMcpServer } from "./mcp-server";
 import { dashboardUrl, onboardingGuide } from "./onboarding";
 import { renameAgent } from "./rename";
 import { runCli } from "./run";
+import { SKILLS_USAGE, skillsCommand } from "./skills-command";
 import { ATTACH_USAGE, attachCommand } from "./terminal/attach-keys";
 
 const USAGE = `Usage:
@@ -51,6 +53,7 @@ const USAGE = `Usage:
 ${HOST_USAGE.replace("Usage:\n", "")}
 ${ROLE_USAGE.replace("Usage:\n", "")}
 ${ATTACH_USAGE.replace("Usage:\n", "")}
+${SKILLS_USAGE.replace("Usage:\n", "")}
 
 \`login\` signs you in with GitHub (a code to enter at github.com), once: the session
 works for every Channel on that host whose repo you have write access to. The
@@ -208,6 +211,8 @@ async function main(argv: string[]): Promise<number> {
       return roleCommand(rest);
     case "attach":
       return attachCommand(rest);
+    case "skills":
+      return skillsCommand(rest);
     case "mcp":
       return runMcpServer();
     case "run": {

@@ -13,6 +13,8 @@ import type {
   PersonAction,
   PersonName,
   SetHostAllowRequest,
+  SkillResponse,
+  SkillsResponse,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StreamMessage,
@@ -138,6 +140,10 @@ export interface ChannelSource {
   hosts(): Promise<HostsResponse | null>;
   /** `GET /api/memory`: the notes Agents left for each other (ADR 0019), latest or matching `q`; null when the Worker has none. */
   memory(query: MemoryQuery): Promise<MemoryResponse | null>;
+  /** `GET /api/skills`: each skill Persons share on the Channel, its latest version (ADR 0039); null when the Worker has none. */
+  skills(): Promise<SkillsResponse | null>;
+  /** `GET /api/skills/:name`: one version of a skill with its files (the latest when `version` is left out), and every version. */
+  skill(name: string, version?: number): Promise<SkillResponse>;
   /** `POST /api/agents/spawn`: start an Agent on one of this Person's own Hosts, or one that allows them (ADR 0028). */
   spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult>;
   /** `POST /api/agents/:id/stop`: ask the Host that runs an Agent to stop it: this Person's, or on a Host that allows them. */

@@ -39,6 +39,9 @@ export function onboardingGuide(about: GuideFor): string {
     "                 Agents from the Dashboard; your word always wins.",
     "  Other Agents   Ask your agent to list_agents, or to read another Agent's agent_summary,",
     "                 to see who works on what and which files they touch.",
+    "  Skills         Ask your agent to share one of your skills, or to install one a Person",
+    "                 shared. It shows you the skill in full first, and Claude Code or Codex asks",
+    "                 you to approve each publish or install. `switchboard skills list` lists them.",
     "",
     "This guide is shown once on this machine. `switchboard help onboarding` shows it again.",
   ];
