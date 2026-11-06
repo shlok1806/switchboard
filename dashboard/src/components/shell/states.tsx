@@ -165,6 +165,7 @@ const VIEW_NAME: Record<Route["view"], string> = {
   agent: "Agent",
   canvas: "Canvas",
   memory: "Memory",
+  skills: "Skills",
   hosts: "Hosts",
   missing: "Page",
 };
@@ -190,6 +191,8 @@ function Body({ view }: { view: Route["view"] }) {
           <Table rows={5} wide={false} />
         </div>
       );
+    case "skills":
+      return <Table rows={4} wide={false} />;
     case "agents":
     case "hosts":
       return (

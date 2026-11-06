@@ -43,6 +43,13 @@ describe("the route", () => {
     expect(parse(href({ view: "hosts", host: "maya/maya-mbp" }))).toEqual({ view: "hosts", host: "maya/maya-mbp" });
   });
 
+  it("opens a shared skill at its latest version or an older one", () => {
+    expect(parse(href({ view: "skills" }))).toEqual({ view: "skills" });
+    expect(parse(href({ view: "skills", name: "release-notes" }))).toEqual({ view: "skills", name: "release-notes" });
+    expect(parse(href({ view: "skills", name: "release-notes", version: 1 }))).toEqual({ view: "skills", name: "release-notes", version: 1 });
+    expect(parse("#/skills/release-notes/latest")).toEqual({ view: "missing", path: "/skills/release-notes/latest" });
+  });
+
   it("selects an Agent in the table, or opens its page ready for a Directive", () => {
     const id = "maya/claude/2b8d";
     expect(parse(href({ view: "agents", selected: id }))).toEqual({ view: "agents", selected: id });

@@ -213,6 +213,8 @@ export const cursor: CliAdapter = {
   remoteDeny: false,
   memoryNudges: [],
   proxy: false,
+  // `--approve-mcps` approves every tool of the server, with no exception per tool.
+  promptsForSkillWrites: false,
   sessionFromHooks: true,
 
   plan: (args, ctx) => planCursorSession(args, ctx),

@@ -50,6 +50,9 @@ import type {
   ReportedPresence,
   ReportedUsage,
   SetHostAllowRequest,
+  Skill,
+  SkillFile,
+  SkillSummary,
   SpawnAgentRequest,
   StreamMessage,
   Task,
@@ -101,6 +104,7 @@ import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from ".
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
+import { SKILLS_SCHEMA, type SkillResult, Skills } from "./skills";
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
 import { type NewTask, type TaskResult, Tasks, workingTasks } from "./tasks";
@@ -425,6 +429,7 @@ export class Channel extends DurableObject<Env> {
   private readonly status: StatusComments;
   /** The notes Agents write for each other (ADR 0019). */
   private readonly memory: Memory;
+  private readonly skills: Skills;
   /** How long a transcript read waits for the wrapper's page: TRANSCRIPT_WAIT_MS, or shorter in tests. */
   private readonly transcriptWaitMs: number;
   /** Transcript reads waiting for their wrapper's page, by request ID. In memory: a read lasts one request. */
@@ -456,6 +461,8 @@ export class Channel extends DurableObject<Env> {
     ctx.storage.sql.exec(RELAY_SCHEMA);
     ctx.storage.sql.exec(DIRECTIVES_SCHEMA);
     ctx.storage.sql.exec(MEMORY_SCHEMA);
+    ctx.storage.sql.exec(SKILLS_SCHEMA);
+    this.skills = new Skills(ctx.storage.sql);
     const notesPerDay = Number(env.MEMORY_NOTES_PER_DAY);
     this.memory = new Memory(
       ctx.storage.sql,
@@ -1283,6 +1290,25 @@ export class Channel extends DurableObject<Env> {
       return false;
     }
     return answered;
+  }
+
+  /** Each shared skill's latest version (ADR 0039). */
+  listSkills(): SkillSummary[] {
+    return this.skills.list();
+  }
+
+  /** One version of a shared skill with its files, the latest when `version` is left out. */
+  readSkill(name: string, version?: number): SkillResult<{ skill: Skill; versions: number[] }> {
+    return this.skills.read(name, version);
+  }
+
+  /** Publishes the next version of a skill for `caller`, a Person or one of their Agents. */
+  publishSkill(
+    caller: Caller,
+    name: string,
+    files: SkillFile[],
+  ): Promise<SkillResult<{ skill: SkillSummary; published: boolean }>> {
+    return this.skills.publish(caller, name, files);
   }
 
   /** The Channel's notes, for any Person or Agent on it (ADR 0019). */

@@ -12,9 +12,9 @@ import {
   RAW_PROXY_CAP_BYTES,
   truncate,
 } from "../../../shared/src/index";
+import { maskSecrets } from "../../../shared/src/mask";
 import { toolArg } from "../hooks/summarize";
 import type { RequestedModel, TurnParser } from "./api";
-import { maskSecrets } from "./mask";
 
 type Usage = {
   input_tokens?: number;

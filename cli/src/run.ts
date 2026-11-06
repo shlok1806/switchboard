@@ -1011,7 +1011,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             }),
       });
       // Switchboard's MCP tools for this session only (the Tool Capture).
-      tools = prepareSessionTools(cwd, repo, env);
+      tools = prepareSessionTools(cwd, repo, env, { skillWrites: adapter.promptsForSkillWrites });
       const installed = await adapter.install({
         ...ctx,
         args: plan.args,

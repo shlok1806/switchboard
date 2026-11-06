@@ -9,7 +9,9 @@
 //            calls an MCP tool, then ends the turn (PostToolUse and Stop hooks)
 //   call <tool> <json>
 //         -> calls a Switchboard MCP tool from the `--mcp-config` servers, starting
-//            the server the way Claude Code does (stdio), then its PostToolUse hook
+//            the server the way Claude Code does (stdio), then its PostToolUse hook.
+//            A tool a `permissions.ask` rule names asks first, as Claude Code does in
+//            every permission mode: the next line answers, "1" allowing it
 //   prompt <text>
 //         -> the Person submits a prompt: runs the UserPromptSubmit hooks, whose
 //            output Claude Code adds to the model's context
@@ -203,7 +205,28 @@ async function mcpClient(server) {
   return client;
 }
 
+/** Whether a `permissions.ask` rule in its settings names `tool`: Claude Code then asks, in every mode. */
+function asks(tool) {
+  return (settings.permissions?.ask ?? []).includes(tool);
+}
+
 async function callTool(name, input) {
+  const tool = `mcp__switchboard__${name}`;
+  if (asks(tool)) {
+    // Like Claude Code's dialog for an `ask` rule: the next line answers it, "1" allowing it once.
+    console.log(`FAKE-CLAUDE asking permission for ${tool}`);
+    doing = "dialog";
+    const reply = await new Promise((resolve) => {
+      dialogAnswer = resolve;
+    });
+    doing = "nothing";
+    if (reply.trim() !== "1") {
+      console.log(`FAKE-CLAUDE permission denied for ${tool}`);
+      console.log(`FAKE-CLAUDE done ${name}`);
+      return;
+    }
+    console.log(`FAKE-CLAUDE permission allowed for ${tool}`);
+  }
   try {
     const result = await (await mcpClient("switchboard")).callTool({ name, arguments: input });
     const text = result.content.map((c) => c.text).join("\n");

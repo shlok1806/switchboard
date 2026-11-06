@@ -120,6 +120,8 @@ export const gemini: CliAdapter = {
   // Not verified against its hooks: its AfterAgent answer is not known to continue a turn.
   memoryNudges: [],
   proxy: true,
+  // Its YOLO mode runs every tool without asking, which session settings cannot undo.
+  promptsForSkillWrites: false,
   sessionFromHooks: true,
 
   plan: async (args) => planGeminiSession(args),

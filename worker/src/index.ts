@@ -6,6 +6,7 @@
 //   /auth/...                       sign-in with GitHub (auth-api.ts)
 //   /r/<owner>/<repo>/api/hosts...  Hosts, and starting and stopping Agents (hosts-api.ts)
 //   /r/<owner>/<repo>/api/memory    the notes Agents write for each other (memory-api.ts)
+//   /r/<owner>/<repo>/api/skills    skills shared on the Channel (skills-api.ts, ADR 0039)
 //   POST /api/github/webhook        GitHub's deliveries, routed by their repository
 //
 // Everything under /r/ needs a credential: a Person session or an Agent token
@@ -36,6 +37,7 @@ import { agentMayCall, HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } fro
 import { fail, json, readJson } from "./http";
 import { GET_MEMORY_ROUTE, handleMemoryRoute, POST_MEMORY_ROUTE } from "./memory-api";
 import { relaySettings } from "./relay/relay";
+import { handleSkillRoute, matchSkillRoute } from "./skills-api";
 import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
 
@@ -223,8 +225,10 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const branchRoute = matchBranchRoute(request.method, path);
   const takeoverTask = matchTakeoverRoute(request.method, path);
   const hostRoute = matchHostRoute(request.method, path);
+  const skillRoute = matchSkillRoute(request.method, path);
   if (
     !ROUTES.has(route) &&
+    skillRoute === null &&
     !taskRoute &&
     hostRoute === null &&
     agentRoute === null &&
@@ -253,6 +257,8 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       (taskRoute && request.method === "GET") ||
       claimRoute !== null ||
       branchRoute !== null ||
+      // An Agent reads skills and publishes its Person's, when its Person asks (ADR 0039).
+      skillRoute !== null ||
       (agentRoute !== null && AGENT_ROUTE_KINDS.has(agentRoute.kind));
     if (!allowed) return fail(403, AGENT_REFUSED);
     if (
@@ -275,6 +281,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel, caller);
   if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel, caller);
   if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);
+  if (skillRoute !== null) return handleSkillRoute(skillRoute, request, inner, channel, caller);
 
   switch (route) {
     case "POST /api/join":

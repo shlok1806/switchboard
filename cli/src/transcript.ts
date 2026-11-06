@@ -6,7 +6,7 @@
 import { readFile, stat } from "node:fs/promises";
 import type { Cli, TranscriptEntry, TranscriptKind, TranscriptResponse } from "../../shared/src/index";
 import { cleanTranscriptText, ESCAPE_SEQUENCE, TRANSCRIPT_PAGE_BYTES } from "../../shared/src/index";
-import { MASK, maskSecrets } from "./proxy/mask";
+import { MASK, maskSecrets } from "../../shared/src/mask";
 
 /** The longest an entry of each kind runs, after redaction. */
 const MAX_CHARS: Record<TranscriptKind, number> = {
