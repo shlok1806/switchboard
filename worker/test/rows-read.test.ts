@@ -7,7 +7,7 @@
 
 import { env, reset, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   AgentId,
   AgentResponse,
@@ -19,10 +19,12 @@ import type {
 } from "../../shared/src/index";
 import { agentPath } from "../../shared/src/index";
 import { Channel } from "../src/channel";
+import { installGitHubApp } from "../src/github/index";
 import { signAccess } from "../src/mcp/tokens";
 import { installJev } from "../src/relay/jev";
 import { lastUpdate } from "../src/status-comment";
 import { BASE, bearer, channelStub, forgetTokens, REPO, remember, SESSION_SECRET, streamQuery, url } from "./client";
+import { FakeGitHubApi } from "./fake-github-api";
 import { FakeJev } from "./fake-jev";
 
 /**
@@ -502,6 +504,50 @@ it("the connector's channel tool reads a bounded number of rows, plain or narrow
   for (const [args, mentions] of cases) {
     const read = await rowsRead(async () => expect(await ask(args)).toContain(mentions));
     expect(read, JSON.stringify(args)).toBeLessThan(ASK_BUDGET);
+  }
+});
+
+it("the connector's github tool reads only what admitting the call reads: GitHub answers it", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  const api = new FakeGitHubApi();
+  api.listen();
+  installGitHubApp(await api.app());
+  api.files.set("docs/adr/0040-ask-the-channel.md", "# Ask the Channel\n");
+  api.issues.push({ number: 1, title: "Task 1", author: "shlok", createdAt: new Date().toISOString() });
+  try {
+    await runInDurableObject(channelStub(), (channel: Channel) => {
+      channel.startMcpGrant("rows-read-github", "shlok", "rows-read-client", Date.now() + 86_400_000);
+    });
+    const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-github", endpoint);
+    const send = async (message: Record<string, unknown>) => {
+      const response = await call(`/r/${REPO}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+      });
+      return (await response.json()) as { result: { isError?: boolean } };
+    };
+    const ask = async (args: Record<string, string>) => {
+      const { result } = await send({ method: "tools/call", params: { name: "github", arguments: args } });
+      expect(result.isError, JSON.stringify(args)).toBe(false);
+    };
+    // Membership is checked, and cached, by a first call, as by any caller's.
+    await ask({});
+    // What every call reads to be let in: its grant and its Person's Membership, by key.
+    const admitting = await rowsRead(() => send({ method: "ping" }));
+    expect(admitting).toBeLessThan(10);
+    const questions: Record<string, string>[] = [
+      {},
+      { about: "#1" },
+      { about: "docs/adr" },
+      { about: "ask the channel" },
+    ];
+    for (const args of questions) {
+      expect(await rowsRead(() => ask(args)), JSON.stringify(args)).toBe(admitting);
+    }
+  } finally {
+    installGitHubApp(null);
+    vi.restoreAllMocks();
   }
 });
 

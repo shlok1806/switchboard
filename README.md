@@ -131,8 +131,9 @@ http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
 
 Anyone on a Channel can ask about the repo's work from the Claude desktop or web app,
 ChatGPT or Claude Code, without running an Agent: "what is in progress and what is
-stuck?", "what happened on #142 today?", "what has maya been doing?". Each Channel
-has a read-only MCP connector at
+stuck?", "what happened on #142 today?", "what has maya been doing?", "what merged
+this week, and what is failing CI?", "what does the ADR about stale claims say?".
+Each Channel has a read-only MCP connector at
 
 ```text
 https://<worker>/r/<owner>/<repo>/mcp
@@ -176,7 +177,10 @@ Then run `/mcp` in a session (or `claude mcp login switchboard-greenroom` in a
 shell), pick the server, and sign in in the browser it opens. Claude Code keeps and
 refreshes the token itself.
 
-The connector has one tool for now, `channel`, with two optional arguments:
+The connector has two tools, `channel` and `github`. Both take two optional
+arguments, `about` and `since`, and the app picks the tool from your question.
+
+`channel` reads what the Channel keeps:
 
 - `since`: how far back Updates, Directives and notes go, as `90m`, `24h`, `7d` or an
   ISO 8601 time. 24 hours by default.
@@ -188,7 +192,28 @@ It answers with the Tasks in progress and who holds them, the Claims that are st
 latest Updates, Directives and Memory Notes, and the Agents on the Channel. Every
 item carries its Task number or Update ID and a link to the Dashboard, so the app
 can cite it and you can click through. Each answer reads at most a few hundred rows
-and writes none. Sign-ins last 30 days from the app's last refresh, and stop working
+and writes none.
+
+`github` reads the repo on GitHub, live, through the Switchboard GitHub App (ADR
+0041). Nothing is copied into the Channel, so it costs no rows:
+
+| You ask | It calls | It answers with |
+|---|---|---|
+| "What merged in the last week, and what is failing CI?" | `github()` | the pull requests merged since `since` (7 days by default) and those open, each with its CI state; the default branch and open pull requests whose checks fail, each failing check with its link; the commits on the default branch; the issues opened and closed |
+| "Is #170 passing CI? What does it close?" | `github(about: "#170")` | that issue or pull request: state, author, labels, CI and failing checks, the issues it closes, its description |
+| "What does the ADR about stale claims say?" | `github(about: "ADR stale claims")` | the docs whose paths match, the best match's text and ADR number, and the issues and pull requests GitHub's search finds |
+| "What ADRs are there?" | `github(about: "docs/adr")` | the directory's files, ADRs with their numbers |
+| "What changed in the MCP code this month?" | `github(about: "worker/src/mcp", since: "30d")` | the latest commits that changed that path, and its files |
+
+Every item carries its number or path and its GitHub link. Lists are capped (20
+pull requests, 15 commits, a file's first 24,000 characters) and say when there is
+more. When GitHub cannot answer, because the App's rate limit is used up, GitHub is
+down, or the App is not installed, the tool says so in a sentence instead of
+failing. CI state needs the App's Checks and Commit statuses read permissions
+([docs/github-app-setup.md](docs/github-app-setup.md)); without them the answer
+says CI is missing and gives the rest.
+
+Sign-ins last 30 days from the app's last refresh, and stop working
 within minutes of losing write access to the repo.
 
 ## Running an agent CLI through Switchboard
