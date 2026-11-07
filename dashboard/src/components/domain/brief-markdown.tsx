@@ -14,6 +14,18 @@ type Block =
   | { kind: "code"; text: string };
 
 /** The page's blocks, in order. */
+/** The blocks a page shows: a first heading that only repeats the page's title is left out. */
+function shownBlocks(text: string, title?: string): Block[] {
+  const blocks = briefBlocks(text);
+  const first = blocks[0];
+  return first?.kind === "heading" && title !== undefined && first.text.trim().toLowerCase() === title.trim().toLowerCase() ? blocks.slice(1) : blocks;
+}
+
+/** A page's headings, for its outline: each with the id `BriefMarkdown` gives it under `headingIds`. */
+export function briefOutline(text: string, title: string | undefined, headingIds: string): { id: string; text: string; level: number }[] {
+  return shownBlocks(text, title).flatMap((b, i) => (b.kind === "heading" ? [{ id: `${headingIds}-${i}`, text: b.text, level: b.level }] : []));
+}
+
 export function briefBlocks(text: string): Block[] {
   const blocks: Block[] = [];
   let para: string[] = [];
@@ -122,21 +134,29 @@ function Inline({ text }: { text: string }) {
  * the serif at 17/1.6 in ink-2, headings in the serif, code in the platform's monospace. A
  * first heading that only repeats the page's title is left out.
  */
-export function BriefMarkdown({ text, title }: { text: string; title?: string }) {
-  const blocks = briefBlocks(text);
-  const first = blocks[0];
-  const shown = first?.kind === "heading" && title !== undefined && first.text.trim().toLowerCase() === title.trim().toLowerCase() ? blocks.slice(1) : blocks;
+export function BriefMarkdown({ text, title, headingIds }: { text: string; title?: string; headingIds?: string }) {
+  const shown = shownBlocks(text, title);
   return (
     <div className="flex max-w-[var(--measure)] flex-col gap-4 font-display text-read text-ink-2">
       {shown.map((block, i) => {
         switch (block.kind) {
           case "heading":
             return block.level === 1 ? (
-              <h3 key={i} className="pt-3 font-display text-section font-medium text-ink">
+              <h3
+                key={i}
+                id={headingIds && `${headingIds}-${i}`}
+                tabIndex={headingIds ? -1 : undefined}
+                className="scroll-mt-6 pt-3 font-display text-section font-medium text-ink"
+              >
                 <Inline text={block.text} />
               </h3>
             ) : (
-              <h4 key={i} className="pt-2 font-sans text-title font-semibold text-ink">
+              <h4
+                key={i}
+                id={headingIds && `${headingIds}-${i}`}
+                tabIndex={headingIds ? -1 : undefined}
+                className="scroll-mt-6 pt-2 font-sans text-title font-semibold text-ink"
+              >
                 <Inline text={block.text} />
               </h4>
             );

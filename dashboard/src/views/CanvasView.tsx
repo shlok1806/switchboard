@@ -11,7 +11,7 @@ import { modelLabel } from "@shared/index";
 import { X } from "lucide-react";
 import { memo, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { Facts, Steps } from "@/components/domain/agent-sections";
 import { DenyAction, PendingApproval } from "@/components/domain/approval";
 import { contextPercent, shortName } from "@/components/domain/fleet";
@@ -702,17 +702,16 @@ export function CanvasView({ selected }: { selected?: string }) {
         ]}
       />
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div role="group" aria-label="Show" className="flex flex-wrap gap-1">
-          <Chip on={filter === "everyone"} onClick={() => setFilter("everyone")}>
-            Everyone
-          </Chip>
-          <Chip on={filter === "mine"} onClick={() => setFilter("mine")} count={mineCount}>
-            Mine
-          </Chip>
-          <Chip on={filter === "needs"} onClick={() => setFilter("needs")} count={needsCount}>
-            Needs a Person
-          </Chip>
-        </div>
+        <Segmented
+          label="Show"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: "everyone", label: "Everyone" },
+            { value: "mine", label: "Mine", n: mineCount },
+            { value: "needs", label: "Needs a Person", n: needsCount },
+          ]}
+        />
         <span className="text-small font-medium text-ink-2 max-sm:hidden">Laid out by Host</span>
         <div className="ml-auto flex flex-wrap items-center gap-2 max-sm:ml-0">
           {!mobile && <Button onClick={fitAll}>Fit</Button>}

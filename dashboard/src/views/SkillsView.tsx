@@ -9,7 +9,7 @@
 import type { Skill, SkillPublisher, SkillSummary, SkillsResponse } from "@shared/index";
 import { useEffect, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { shortName } from "@/components/domain/fleet";
 import { RowFrame } from "@/components/domain/log";
 import { InspectorFrame, InspectorMissing, SheetClose } from "@/components/shell/inspector";
@@ -203,14 +203,13 @@ function SkillInspector({ name, version, sheet, onClose: close }: { name: string
             <SkillLine skill={read.skill} named={false} />
           </div>
           {read.versions.length > 1 && (
-            <div role="group" aria-label="Version" className="flex flex-wrap gap-1.5">
-              {read.versions.map((v) => (
-                <Chip key={v} on={v === read.skill.version} onClick={() => go({ view: "skills", name, version: v === latest ? undefined : v })}>
-                  v{v}
-                  {v === latest && " latest"}
-                </Chip>
-              ))}
-            </div>
+            <Segmented
+              label="Version"
+              value={String(read.skill.version)}
+              onChange={(v) => go({ view: "skills", name, version: Number(v) === latest ? undefined : Number(v) })}
+              options={read.versions.map((v) => ({ value: String(v), label: v === latest ? `v${v} latest` : `v${v}` }))}
+              className="self-start"
+            />
           )}
           <Section title="Install" as="h3" bodyClassName="flex flex-col gap-2">
             {install && <CopyCommand command={install} />}

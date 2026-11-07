@@ -9,7 +9,7 @@ import type { Agent, ChannelEvent, EventType, Person, Task } from "@shared/index
 import { noteFromEvent } from "@shared/index";
 import { useMemo, useState } from "react";
 import { buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { PendingApproval } from "@/components/domain/approval";
 import { contextPercent, GroupLine, groupByPerson, type Line, Secondary, StackedRow, shortName, since, useLines } from "@/components/domain/fleet";
 import { RowFrame } from "@/components/domain/log";
@@ -60,10 +60,7 @@ export function NowView() {
   const needYou = queue.filter(isMine).length;
   const others = new Map<string, number>();
   for (const i of queue) if (i.kind === "ask" && !i.mine) others.set(i.agent.person, (others.get(i.agent.person) ?? 0) + 1);
-  const title = [
-    needYou > 0 ? `${needYou} ${needYou === 1 ? "line needs" : "lines need"} you` : "Nothing needs you",
-    ...[...others].map(([p, k]) => `${k} ${k === 1 ? "needs" : "need"} ${p}`),
-  ].join(", ");
+  const title = [needsYouTitle(queue.filter(isMine)), ...[...others].map(([p, k]) => `${k} ${k === 1 ? "needs" : "need"} ${p}`)].join(", ");
   const today = new Date(now).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: myZone });
 
   const count = (p: Agent["presence"]) => agents.filter((a) => a.presence === p).length;
@@ -110,14 +107,15 @@ export function NowView() {
                   </>
                 }
                 action={
-                  <span role="group" aria-label="Show" className="flex gap-1">
-                    <Chip on={mineOnly} onClick={() => setMineOnly(true)}>
-                      Mine
-                    </Chip>
-                    <Chip on={!mineOnly} onClick={() => setMineOnly(false)}>
-                      Everyone
-                    </Chip>
-                  </span>
+                  <Segmented
+                    label="Show"
+                    value={mineOnly ? "mine" : "everyone"}
+                    onChange={(v) => setMineOnly(v === "mine")}
+                    options={[
+                      { value: "mine", label: "Mine" },
+                      { value: "everyone", label: "Everyone" },
+                    ]}
+                  />
                 }
               />
               {shown.length === 0 ? (
@@ -563,4 +561,20 @@ function Memory({ events, now }: { events: ChannelEvent[]; now: number }) {
       )}
     </section>
   );
+}
+
+/** The head's sentence, in the glossary's words: "1 Pending Approval and 1 Stale Claim need you". */
+function needsYouTitle(mine: readonly QueueItem[]): string {
+  if (mine.length === 0) return "Nothing needs you";
+  const kinds: [QueueItem["kind"], string, string][] = [
+    ["ask", "Pending Approval", "Pending Approvals"],
+    ["stale", "Stale Claim", "Stale Claims"],
+    ["review", "review", "reviews"],
+  ];
+  const parts = kinds.flatMap(([kind, one, many]) => {
+    const n = mine.filter((i) => i.kind === kind).length;
+    return n === 0 ? [] : [`${n} ${n === 1 ? one : many}`];
+  });
+  const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+  return `${list} ${mine.length === 1 ? "needs" : "need"} you`;
 }

@@ -55,12 +55,16 @@ async function show(events: ChannelEvent[] = []) {
 }
 
 describe("the Now view", () => {
-  it("counts the same lines on the Now key, in the head and in the queue", async () => {
+  it("counts the same items on the Now key, in the head and in the queue", async () => {
     await show();
     const key = screen.getByRole("link", { name: /^Now/ });
     const n = Number(key.textContent!.match(/\d+/)![0]);
     expect(n).toBeGreaterThan(0);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(new RegExp(`^${n} lines need you`));
+    // The head names each kind in the glossary's words, and its counts add up to the key's.
+    const head = screen.getByRole("heading", { level: 1 }).textContent ?? "";
+    const mine = head.match(/^(.*) needs? you/)?.[1] ?? "";
+    expect(mine).toMatch(/Pending Approval|Stale Claim|review/);
+    expect([...mine.matchAll(/\d+/g)].reduce((sum, m) => sum + Number(m[0]), 0)).toBe(n);
     const queue = screen.getByRole("region", { name: "Needs a Person" });
     expect(within(queue).getByText(`${n} for you`, { exact: false })).toBeTruthy();
 

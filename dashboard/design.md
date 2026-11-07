@@ -204,17 +204,38 @@ disabled, loading, error, success. Focus is always the 2px `--focus` outline at 
 | Button, primary | ink fill, paper text | ink-2 fill | 1px down | label stays, a ring spins beside it | the reason under it, in ink with a triangle | the label says what happened ("Sent") |
 | Button, secondary | 1px rule-2 border | paper-2, ink-3 border | paper-3, 1px down | same | same | same |
 | Button, ghost | text only | paper-2 | 1px down | same | same | same |
-| Chip (filter) | 26px, 1px rule border, ink-2 | ink-3 border, ink | 1px down; pressed: ink border and ink | - | - | - |
+| Segmented control | joined options in one 1px rule-2 border, ink-2 | paper-2, ink | paper-3; picked: paper-3 inside a 1px ink ring | - | - | - |
+| Filter select | 26px, 1px rule border, ink-2, a chevron | ink-3 border, ink | set: ink border and ink | - | - | - |
 | Field | 1px rule-2 border, paper | paper-2 | - | - | border ink, the reason under it | - |
 | Row | rule under it | paper-2 | selected: paper-3 | skeleton bars | the error page | a fresh row's band fades once |
 | Tab (section, column) | ink-3 | ink | current: ink and its rule, or paper-3 | - | - | - |
+
+**Segmented control.** Every one-of-a-few choice (Show, Mine or Everyone, Group, a Tag, a
+version, Update or Directive) is one control: its options joined in one bordered box, 26px tall
+(44 on a phone), 12.5/500, a count after the word in ink-3, the picked one on paper-3 inside a
+1px ink ring. On a phone a control with more than three options is a native select that names
+the choice and the pick ("Show All 5"), so a filter never wraps onto a second row and nothing
+scrolls sideways. A filter that picks from a list (Person, Agent, Task) is a filter select.
 
 Buttons are 30px (28 small, 26 extra small; at least 44 on a phone), 13/500, radius 4, one verb,
 a label that never wraps. One primary per region. The signal is never a button.
 
 **Page head.** The title in the display face at 30 (24 on a phone), the facts on one quiet line
-under it in ink-3 joined by middle dots, the page's actions at the right (under it on a phone).
-Never a row of figure tiles.
+under it in ink-3 joined by middle dots, the page's one action (Start an Agent, New Task) at its
+right on every width, so on a phone it costs no row of its own. Never a row of figure tiles.
+Counts agree: a count in the top bar is the head's first fact, worded the same ("11 not done"),
+and the facts that follow add up to it.
+
+**Now's head** is a sentence of what waits on you, in the glossary's words: "1 Pending Approval
+and 1 Stale Claim need you, 1 needs dev." Its counts add up to the Now tab's.
+
+**List toolbar.** Under the page head: the Show control, then Find, then any view control. On a
+phone it is one row, the Show select and Find (its word kept for a screen reader only), and the
+list starts right under it.
+
+**Tasks board.** Four columns where four fit at 200px or more; a narrower desk (with the
+inspector beside, or a tablet) sets them two by two and the view scrolls as a whole, so no
+column is ever cut at an edge. A phone shows one column under column tabs.
 
 **Section head.** On a page: the display face at 20 over a 1px `--rule-2`, a meta run in ink-3,
 an optional link at the right. In an inspector or card: the grotesk at 15/600, so dense panes
@@ -253,7 +274,9 @@ one thing that may.
 
 **Reading (Brief, Memory Notes).** The display face at 17/1.6 in ink-2, at most 68ch, Markdown
 headings in the display face (level one) or the grotesk at 15/600, code in a `--paper-2` block.
-The Brief has its sections as a list on the left from 1024 up.
+The Brief has its pages as a list on the left from 1024 up, and from 1280 up the margin on the
+right holds the page's own outline ("On this page", its headings as buttons that move to them).
+A page with fewer than two headings leaves that margin empty: there is nothing to outline.
 
 **Canvas.** Hosts are frames with a 1px `--rule-2` border and their name on the top rule;
 Agents are nodes on `--paper` with a 1px `--rule-2` border, 2px ink when selected and 2px signal

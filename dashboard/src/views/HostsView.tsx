@@ -9,7 +9,7 @@ import type { Agent, Host, Person } from "@shared/index";
 import { hostAllows } from "@shared/index";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { byPerson, GroupLine, shortName } from "@/components/domain/fleet";
 import { StartAgentButton, WithCode } from "@/components/domain/start-agent";
 import { Glyph, Orb, State, useAgentStates } from "@/components/domain/state";
@@ -113,19 +113,11 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
             `${live} live`,
             `${response.running} of ${response.cap} Agents running on Hosts`,
           ]}
+          actions={<StartAgentButton />}
         />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <div role="group" aria-label="Show" className="flex flex-wrap gap-1.5">
-            {chips.map((c) => (
-              <Chip key={c.id} on={filter === c.id} onClick={() => setFilter(c.id)} count={c.n}>
-                {c.label}
-              </Chip>
-            ))}
-          </div>
+          <Segmented label="Show" value={filter} onChange={setFilter} options={chips.map((c) => ({ value: c.id, label: c.label, n: c.n }))} />
           <span className="text-small font-medium text-ink max-sm:hidden">Grouped by Person</span>
-          <span className="ml-auto max-sm:ml-0">
-            <StartAgentButton />
-          </span>
         </div>
 
         {problem && (

@@ -100,7 +100,7 @@ export function useAgentStates(): Map<string, AgentState> {
   }, [agents, tasks, me]);
 }
 
-/** How many lines need you, from the one count the Now queue gives (lib/queue). */
+/** How many items need you, from the one count the Now queue gives (lib/queue). */
 export function useNeedsYou(): number {
   const { agents, tasks } = useChannel();
   const me = useMe();

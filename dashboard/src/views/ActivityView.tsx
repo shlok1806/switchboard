@@ -11,7 +11,7 @@
 import type { AgentId, ChannelEvent, Verdict } from "@shared/index";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { Composer } from "@/components/domain/composer";
 import { EventDetail } from "@/components/domain/event";
 import { activeCount, EMPTY_FILTERS, type FeedFilters, FilterSelect, matches } from "@/components/domain/filters";
@@ -293,17 +293,16 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
           <HistoryGaps gaps={snapshot?.unavailable} className="-mt-2 py-0" />
           {/* A Channel with no Events has nothing to group or filter. */}
           <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-2.5", bare && "hidden")}>
-            <div role="group" aria-label="Group" className="flex gap-1.5">
-              <Chip on={group === "flat"} onClick={() => setGroup("flat")}>
-                Flat
-              </Chip>
-              <Chip on={group === "turn"} onClick={() => setGroup("turn")}>
-                By turn
-              </Chip>
-              <Chip on={group === "agent"} onClick={() => setGroup("agent")}>
-                By Agent
-              </Chip>
-            </div>
+            <Segmented
+              label="Group"
+              value={group}
+              onChange={setGroup}
+              options={[
+                { value: "flat", label: "Flat" },
+                { value: "turn", label: "By turn" },
+                { value: "agent", label: "By Agent" },
+              ]}
+            />
             <div className="flex flex-wrap items-center gap-1.5">
               <FilterSelect
                 label="Person"

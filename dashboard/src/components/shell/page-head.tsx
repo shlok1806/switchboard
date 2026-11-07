@@ -21,7 +21,7 @@ export function PageHead({
   const shown = facts.filter((f) => f !== null && f !== undefined && f !== false && f !== "");
   return (
     <header className={cn("flex min-w-0 flex-wrap items-end gap-x-6 gap-y-3", className)}>
-      <div className="flex min-w-0 flex-[1_1_24rem] flex-col gap-1.5">
+      <div className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1.5">
         <h1 className="font-display text-head font-medium [overflow-wrap:anywhere] text-ink max-sm:text-head-phone">{title}</h1>
         {shown.length > 0 && (
           <p className="min-w-0 text-small text-ink-3">

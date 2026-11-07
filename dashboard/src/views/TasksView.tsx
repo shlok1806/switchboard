@@ -11,7 +11,7 @@ import type { Agent, AgentId, ChannelEvent, Task } from "@shared/index";
 import { type KeyboardEvent, type ReactNode, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { ClaimAction, ClaimForAgentItems, ClaimForLabel, ClaimForMeItem, claimable, useClaims } from "@/components/domain/claim";
 import { FilterSelect } from "@/components/domain/filters";
 import { decideMove, taskGlyph } from "@/components/domain/moves";
@@ -56,6 +56,17 @@ export function TasksView() {
   const can = useCapabilities();
   const mobile = useIsMobile();
   const narrow = useInspectorSheet();
+  // Four columns need 4 x 200px; a view narrower than that sets them two by two (design.md "Tasks board").
+  const [viewWidth, setViewWidth] = useState(0);
+  // A callback ref: the board's view mounts only once the Channel has Tasks.
+  const view = useCallback((el: HTMLDivElement | null) => {
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([entry]) => setViewWidth(entry?.contentRect.width ?? 0));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const twoByTwo = !mobile && viewWidth > 0 && viewWidth < 4 * 200 + 3 * 16;
+  const stacked = mobile || twoByTwo;
   const [show, setShow] = useState<Show>("all");
   const [person, setPerson] = useState("");
   const [agent, setAgent] = useState("");
@@ -199,26 +210,21 @@ export function TasksView() {
 
   return (
     <div className="flex h-full min-h-0">
-      <div className={cn("flex min-w-0 flex-1 flex-col gap-6 px-[var(--gutter)] pt-[var(--page-top)]", mobile && "overflow-y-auto pb-12")}>
+      <div ref={view} className={cn("flex min-w-0 flex-1 flex-col gap-6 px-[var(--gutter)] pt-[var(--page-top)]", stacked && "overflow-y-auto pb-12")}>
         <PageHead
           title="Tasks"
+          // The first fact is the top bar's count; the next three add up to it, and done makes the whole board.
           facts={[
+            `${tasks.length - count("done")} not done`,
             `${count("open")} open`,
-            `${count("claimed") + count("stale")} claimed`,
-            count("stale") > 0 && `${count("stale")} stale`,
+            `${count("claimed") + count("stale")} claimed${count("stale") > 0 ? `, ${count("stale")} of them stale` : ""}`,
             `${count("review")} in review`,
             `${count("done")} done`,
           ]}
           actions={<NewTaskButton />}
         />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <div role="group" aria-label="Show" className="flex flex-wrap gap-1.5">
-            {chips.map((c) => (
-              <Chip key={c.id} on={show === c.id} onClick={() => setShow(c.id)} count={c.n}>
-                {c.label}
-              </Chip>
-            ))}
-          </div>
+          <Segmented label="Show" value={show} onChange={setShow} options={chips.map((c) => ({ value: c.id, label: c.label, n: c.n }))} />
           <div className="flex flex-wrap items-center gap-1.5">
             <FilterSelect label="Person" value={person} onChange={setPerson} allLabel="Any Person" options={persons.map((p) => ({ value: p, label: p }))} />
             {can.agents && (
@@ -238,9 +244,11 @@ export function TasksView() {
               </Button>
             )}
           </div>
-          <span className="ml-auto text-small text-ink-3 tabular-nums max-sm:hidden">
-            {shown.length === tasks.length ? `${tasks.length} Tasks` : `${shown.length} of ${tasks.length} Tasks`}
-          </span>
+          {shown.length !== tasks.length && (
+            <span className="ml-auto text-small text-ink-3 tabular-nums max-sm:hidden">
+              {shown.length} of {tasks.length} Tasks shown
+            </span>
+          )}
         </div>
         {!can.claims && (
           <p className="text-small text-ink-3">
@@ -255,10 +263,10 @@ export function TasksView() {
           </EmptyState>
         ) : (
           // A phone scrolls the whole view, head and tabs with the cards; a desktop scrolls each column.
-          <div className={cn("flex flex-col gap-4", !mobile && "min-h-0 flex-1")}>
+          <div className={cn("flex flex-col gap-4", !stacked && "min-h-0 flex-1")}>
             {mobile && <ColumnTabs columns={columns} current={phoneLane} count={laneTotal} onPick={setLane} />}
             {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: the label is set only with the tabpanel role, on a phone. */}
-            <div role={mobile ? "tabpanel" : undefined} aria-labelledby={mobile ? tabId(phoneLane) : undefined} className={cn(!mobile && "min-h-0 flex-1")}>
+            <div role={mobile ? "tabpanel" : undefined} aria-labelledby={mobile ? tabId(phoneLane) : undefined} className={cn(!stacked && "min-h-0 flex-1")}>
               <KanbanProvider<Card>
                 columns={boardColumns.map((c) => ({ id: c, name: COLUMN_LABEL[c] }))}
                 data={cards}
@@ -266,16 +274,16 @@ export function TasksView() {
                 pointerDrag={!mobile}
                 className={cn(
                   "gap-4",
-                  !mobile && "min-h-0",
-                  // A phone shows the picked column across its width; a tablet too narrow for four columns scrolls sideways.
-                  mobile ? "auto-cols-[100%]" : "auto-cols-[minmax(220px,1fr)] overflow-x-auto",
+                  // A phone shows the picked column across its width; a board too narrow for four columns sets
+                  // them two by two and the view scrolls as a whole, so no column is ever cut at an edge.
+                  mobile ? "auto-cols-[100%]" : twoByTwo ? "grid-flow-row grid-cols-2 gap-y-8" : "min-h-0 auto-cols-[minmax(0,1fr)]",
                 )}
               >
                 {(column) => {
                   const id = column.id as Column;
                   const stale = id === "claimed" ? inColumn("stale") : 0;
                   return (
-                    <KanbanBoard key={id} id={id} className={cn("rounded-none bg-transparent", !mobile && "min-h-0")}>
+                    <KanbanBoard key={id} id={id} className={cn("rounded-none bg-transparent", !stacked && "min-h-0")}>
                       {/* On a phone the column's tab names it. */}
                       {!mobile && (
                         <KanbanHeader className="flex items-center gap-2 border-b border-rule-2 px-0 pt-0 pb-2">

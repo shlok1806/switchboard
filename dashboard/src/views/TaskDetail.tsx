@@ -9,7 +9,7 @@ import type { Agent, ChannelEvent, EventType, Task } from "@shared/index";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { ClaimAction } from "@/components/domain/claim";
 import { EventBody } from "@/components/domain/event";
 import { IssueBody } from "@/components/domain/issue-body";
@@ -187,14 +187,15 @@ export function TaskDetail({ number }: { number: number }) {
                 <h2 id="timeline" className="flex-1 font-display text-section font-medium text-ink">
                   Timeline
                 </h2>
-                <div role="group" aria-label="Show" className="flex gap-1.5">
-                  <Chip on={scope === "work"} onClick={() => setScope("work")} count={work}>
-                    Work
-                  </Chip>
-                  <Chip on={scope === "all"} onClick={() => setScope("all")} count={scoped.events.length}>
-                    All
-                  </Chip>
-                </div>
+                <Segmented
+                  label="Show"
+                  value={scope}
+                  onChange={setScope}
+                  options={[
+                    { value: "work", label: "Work", n: work },
+                    { value: "all", label: "All", n: scoped.events.length },
+                  ]}
+                />
               </header>
               {timeline.length === 0 && !scoped.more ? (
                 <p className="py-4 text-row text-ink-3">{scoped.loading ? "Reading the Timeline" : "Nothing on the Channel about it yet."}</p>

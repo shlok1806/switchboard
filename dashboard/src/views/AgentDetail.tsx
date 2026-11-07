@@ -11,7 +11,7 @@ import { modelLabel } from "@shared/index";
 import { type FormEvent, Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { LeadDialog, useSetLead } from "@/components/domain/agent-role";
 import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
 import { PendingApproval } from "@/components/domain/approval";
@@ -218,13 +218,16 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
           </div>
         </header>
 
-        <nav aria-label={`Sections of ${agent.nickname ?? agent.id}`} className="flex flex-wrap gap-1">
-          <Chip on={part === "terminal"} onClick={() => setPart("terminal")}>
-            Terminal
-          </Chip>
-          <Chip on={part === "history"} onClick={() => setPart("history")} count={scoped.events.length}>
-            History
-          </Chip>
+        <nav aria-label={`Sections of ${agent.nickname ?? agent.id}`} className="flex">
+          <Segmented
+            label="Section"
+            value={part}
+            onChange={setPart}
+            options={[
+              { value: "terminal", label: "Terminal" },
+              { value: "history", label: "History", n: scoped.events.length },
+            ]}
+          />
         </nav>
 
         <div className="flex flex-wrap items-start gap-x-8 gap-y-6">
@@ -418,13 +421,7 @@ function History({ scoped }: { scoped: Scoped }) {
   );
   return (
     <section aria-label="History" className="flex min-w-0 flex-col gap-3">
-      <div role="group" aria-label="Captured by" className="flex flex-wrap gap-1">
-        {CAPTURES.map((c) => (
-          <Chip key={c} on={capture === c} onClick={() => setCapture(c)}>
-            {c}
-          </Chip>
-        ))}
-      </div>
+      <Segmented label="Captured by" value={capture} onChange={setCapture} options={CAPTURES.map((c) => ({ value: c, label: c }))} className="self-start" />
       <HistoryGaps gaps={scoped.unavailable} />
       {history.length === 0 ? (
         <p className="border-t border-rule py-6 text-row text-ink-3">{scoped.loading ? "Reading the History" : "Nothing yet."}</p>

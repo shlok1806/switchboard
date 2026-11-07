@@ -16,7 +16,7 @@ import { Rows3 } from "lucide-react";
 import { memo, type ReactNode, type Ref, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { PendingApproval } from "@/components/domain/approval";
 import { ContextWindow } from "@/components/domain/context";
 import { agentName, GroupLine, groupByPerson, type Line, Secondary, StackedRow, shortName, since, useLines } from "@/components/domain/fleet";
@@ -146,23 +146,19 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
             `${n.running} live`,
             needYou > 0 && `${needYou} ${needYou === 1 ? "needs" : "need"} you`,
           ]}
+          actions={<StartAgentButton />}
         />
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <div role="group" aria-label="Show" className="flex flex-wrap gap-1.5">
-            {chips.map((c) => (
-              <Chip key={c.id} on={filter === c.id} onClick={() => setFilter(c.id)} count={c.n}>
-                {c.label}
-              </Chip>
-            ))}
-          </div>
-          <label className="ml-auto flex items-center gap-2 text-small text-ink-3 max-sm:w-full">
-            <span>Find</span>
+        {/* On a phone one row: the filter as a select, then Find; the list starts right under it. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-3 max-sm:flex-nowrap max-sm:gap-x-2">
+          <Segmented label="Show" value={filter} onChange={setFilter} options={chips.map((c) => ({ value: c.id, label: c.label, n: c.n }))} />
+          <label className="ml-auto flex min-w-0 items-center gap-2 text-small text-ink-3 max-sm:flex-1">
+            <span className="max-sm:sr-only">Find</span>
             <input
               type="search"
               value={find}
               onChange={(e) => setFind(e.target.value)}
               placeholder="name, Task or Host"
-              className="h-[30px] w-56 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:flex-1 max-sm:text-read"
+              className="h-[30px] w-56 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:h-11 max-sm:w-full max-sm:text-read"
             />
           </label>
           {/* A view control, not a filter: compact rows are one line each, 30px. */}
@@ -175,7 +171,6 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
             <Rows3 className="size-3.5" aria-hidden />
             Compact rows
           </Button>
-          <StartAgentButton />
         </div>
 
         {shown.length === 0 ? (

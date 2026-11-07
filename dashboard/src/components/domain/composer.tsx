@@ -8,7 +8,7 @@ import type { AgentId } from "@shared/index";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { ownedName, shortName } from "@/components/domain/fleet";
 import { useCapabilities, useChannel, useStore } from "@/data/store";
 
@@ -47,14 +47,16 @@ export function Composer({ task }: { task?: number }) {
   return (
     <form onSubmit={submit} className="flex flex-col gap-2">
       {can.directives && (
-        <div role="group" aria-label="Say it as" className="flex gap-1.5">
-          <Chip on={mode === "update"} onClick={() => setMode("update")}>
-            Update
-          </Chip>
-          <Chip on={mode === "directive"} onClick={() => setMode("directive")}>
-            Directive
-          </Chip>
-        </div>
+        <Segmented
+          label="Say it as"
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: "update", label: "Update" },
+            { value: "directive", label: "Directive" },
+          ]}
+          className="self-start"
+        />
       )}
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1 text-small text-ink-3">

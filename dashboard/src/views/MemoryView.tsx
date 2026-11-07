@@ -11,7 +11,7 @@ import type { ChannelEvent, MemoryNote, MemoryTag } from "@shared/index";
 import { MEMORY_TAGS, noteFromEvent } from "@shared/index";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { shortName } from "@/components/domain/fleet";
 import { EventRow, RowFrame } from "@/components/domain/log";
 import { OlderRow } from "@/components/domain/older";
@@ -133,16 +133,12 @@ export function MemoryView({ selected }: { selected?: string }) {
             ]}
           />
           <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-            <div role="group" aria-label="Tag" className="flex flex-wrap gap-1.5">
-              <Chip on={tag === null} onClick={() => setTag(null)}>
-                All
-              </Chip>
-              {MEMORY_TAGS.map((t) => (
-                <Chip key={t} on={tag === t} onClick={() => setTag(tag === t ? null : t)}>
-                  {TAG_LABEL[t]}
-                </Chip>
-              ))}
-            </div>
+            <Segmented
+              label="Tag"
+              value={tag ?? "all"}
+              onChange={(v) => setTag(v === "all" ? null : v)}
+              options={[{ value: "all" as const, label: "All" }, ...MEMORY_TAGS.map((t) => ({ value: t, label: TAG_LABEL[t] }))]}
+            />
             <label className="ml-auto flex flex-col gap-1 text-small text-ink-3 max-sm:ml-0 max-sm:w-full">
               Find
               <input

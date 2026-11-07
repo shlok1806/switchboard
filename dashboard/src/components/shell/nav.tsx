@@ -144,7 +144,7 @@ function SectionMarks({ id, ready, desk }: { id: SectionId; ready: boolean; desk
   if (id === "tasks")
     return (
       <>
-        {desk && <Count n={c.tasks} />}
+        {desk && <Count n={c.tasks} label="not done" />}
         {c.stale > 0 && (
           <span className="inline-flex items-center gap-0.5 text-label font-semibold text-signal tabular-nums">
             <Glyph state="stale" className="size-2.5" />
