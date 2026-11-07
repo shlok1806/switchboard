@@ -38,7 +38,7 @@ jobs:
         run: npm run typecheck && npm run lint && npm test
       - name: Dashboard
         working-directory: dashboard
-        run: npm run build && npm test
+        run: npm run lint && npm run build && npm test
       # Every view in every state, light and dark, at 1440 and 390 (dashboard/scripts/shots.mjs).
       - name: Dashboard screenshots
         working-directory: dashboard

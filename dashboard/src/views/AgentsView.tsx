@@ -8,33 +8,34 @@
  * the rows stack, the inspector is not on the page, and a row opens
  * the Agent as a sheet.
  */
-import { Rows3 } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
-import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
+
 import type { Person } from "@shared/index";
+import { modelLabel } from "@shared/index";
+import { defaultRangeExtractor, type Range, useVirtualizer } from "@tanstack/react-virtual";
+import { Rows3 } from "lucide-react";
+import { memo, type ReactNode, type Ref, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { PendingApproval } from "@/components/domain/approval";
 import { ContextWindow } from "@/components/domain/context";
+import { agentName, GroupLine, groupByPerson, type Line, Secondary, StackedRow, shortName, since, useLines } from "@/components/domain/fleet";
 import { IssueButton } from "@/components/domain/pending";
-import { EmptyState, EmptyView } from "@/components/shell/states";
 import { RenameDialog } from "@/components/domain/rename";
 import { FirstAgentAction, PauseResumeButton, StartAgentButton, StopAgentButton, useMayControl } from "@/components/domain/start-agent";
-import { GroupLine, Secondary, StackedRow, agentName, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
 import { Glyph, Orb, State, useNeedsYou } from "@/components/domain/state";
 import { AgentUsage } from "@/components/domain/usage";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
+import { EmptyState, EmptyView } from "@/components/shell/states";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
-import { toast } from "sonner";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useInspectorSheet, useIsMobile } from "@/hooks/use-mobile";
 import { setDensity, useDensity } from "@/lib/density";
-import { CLI_LABEL, ago, elapsed, hostName } from "@/lib/format";
+import { ago, CLI_LABEL, elapsed, hostName } from "@/lib/format";
 import { go, href, replace } from "@/lib/router";
 import { countStates, isNeedsYou } from "@/lib/state";
-import { modelLabel } from "@shared/index";
 import { cn } from "@/lib/utils";
 
 type Filter = "all" | "needs" | "running" | "idle" | "gone" | "mine";
@@ -57,6 +58,7 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   const me = useMe();
   const can = useCapabilities();
   const mobile = useIsMobile();
+  const sheet = useInspectorSheet();
   const density = useDensity();
   const [filter, setFilter] = useState<Filter>("all");
   const [find, setFind] = useState("");
@@ -84,11 +86,7 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   const shown = useMemo(
     () =>
       lines.filter((l) => {
-        const keep =
-          filter === "all" ||
-          (filter === "needs" && isNeedsYou(l.state)) ||
-          (filter === "mine" && l.agent.person === me) ||
-          l.state === filter;
+        const keep = filter === "all" || (filter === "needs" && isNeedsYou(l.state)) || (filter === "mine" && l.agent.person === me) || l.state === filter;
         if (!keep || !q) return keep;
         return [l.agent.id, l.agent.nickname, l.agent.host, ...l.claims.map((t) => `#${t.number} ${t.title}`)].some((s) => s?.toLowerCase().includes(q));
       }),
@@ -133,14 +131,14 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   // The Agent the address names, even when a chip or the search hides its row; otherwise the
   // table's top row on a wide screen, and nothing on a phone until a row is tapped.
   const named = lines.find((l) => l.agent.id === selectedId);
-  const selected = named ?? (mobile ? undefined : byPerson[0]?.[1][0]);
+  const selected = named ?? (sheet ? undefined : byPerson[0]?.[1][0]);
   const close = () => go({ view: "agents" });
   const zones = new Map((snapshot?.persons ?? []).map((p: Person) => [p.name, p.timeZone]));
   const renamed = renaming ? agents.find((a) => a.id === renaming.id) : undefined;
 
   return (
     <div className="flex h-full min-h-0">
-      <div ref={setScroller} className="@container flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-[var(--gutter)] pt-5 pb-12">
+      <div ref={setScroller} className="@container flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto px-[var(--gutter)] pt-[var(--page-top)] pb-12">
         <PageHead
           title="Agents"
           facts={[
@@ -148,23 +146,19 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
             `${n.running} live`,
             needYou > 0 && `${needYou} ${needYou === 1 ? "needs" : "need"} you`,
           ]}
+          actions={<StartAgentButton />}
         />
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <div role="group" aria-label="Show" className="flex flex-wrap gap-1.5">
-            {chips.map((c) => (
-              <Chip key={c.id} on={filter === c.id} onClick={() => setFilter(c.id)} count={c.n}>
-                {c.label}
-              </Chip>
-            ))}
-          </div>
-          <label className="ml-auto flex items-center gap-2 text-small text-ink-3 max-sm:w-full">
-            <span>Find</span>
+        {/* On a phone one row: the filter as a select, then Find; the list starts right under it. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-3 max-sm:flex-nowrap max-sm:gap-x-2">
+          <Segmented label="Show" value={filter} onChange={setFilter} options={chips.map((c) => ({ value: c.id, label: c.label, n: c.n }))} />
+          <label className="ml-auto flex min-w-0 items-center gap-2 text-small text-ink-3 max-sm:flex-1">
+            <span className="max-sm:sr-only">Find</span>
             <input
               type="search"
               value={find}
               onChange={(e) => setFind(e.target.value)}
               placeholder="name, Task or Host"
-              className="h-[30px] w-56 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:flex-1 max-sm:text-[16px]"
+              className="h-[30px] w-56 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:h-11 max-sm:w-full max-sm:text-read"
             />
           </label>
           {/* A view control, not a filter: compact rows are one line each, 30px. */}
@@ -177,7 +171,6 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
             <Rows3 className="size-3.5" aria-hidden />
             Compact rows
           </Button>
-          <StartAgentButton />
         </div>
 
         {shown.length === 0 ? (
@@ -194,7 +187,13 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
               </Button>
             }
           >
-            {find.trim() ? <>No Agent{filter !== "all" ? " in this filter" : ""} has “{find.trim()}” in its name, Task or Host.</> : <>None of the {lines.length} Agents is in this filter.</>}
+            {find.trim() ? (
+              <>
+                No Agent{filter !== "all" ? " in this filter" : ""} has “{find.trim()}” in its name, Task or Host.
+              </>
+            ) : (
+              <>None of the {lines.length} Agents is in this filter.</>
+            )}
           </EmptyState>
         ) : mobile ? (
           <ul className="flex flex-col">
@@ -226,7 +225,7 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
         <Inspector
           key={selected.agent.id}
           line={selected}
-          onClose={mobile ? close : undefined}
+          onClose={sheet ? close : undefined}
           stopAsk={stopAsk?.id === selected.agent.id ? stopAsk : undefined}
         />
       )}
@@ -361,15 +360,27 @@ function AgentTable({
   return (
     <table className="w-full border-collapse text-left" aria-rowcount={virtual ? items.length + 1 : undefined}>
       {/* The head stays in view over a long fleet. A collapsed border scrolls away from a sticky
-          head, so its rule is drawn inside it. It sticks at the scroller's edge, over its pt-5. */}
-      <thead ref={head} className="sticky -top-5 z-10 bg-page shadow-[inset_0_-1px_0_var(--rule)]">
+          head, so its rule is drawn inside it. It sticks at the scroller's edge, over its page top. */}
+      <thead ref={head} className="sticky -top-5 z-10 bg-paper shadow-[inset_0_-1px_0_var(--rule)]">
         <tr className="text-label font-medium text-ink-3" aria-rowindex={virtual ? 1 : undefined}>
-          <th scope="col" className="w-[9.5rem] py-2 pr-3 pl-3 font-medium @max-[40rem]:w-[7.5rem]">State</th>
-          <th scope="col" className="min-w-[8rem] py-2 pr-3 font-medium">Agent</th>
-          <th scope="col" className="py-2 pr-3 font-medium">Working on</th>
-          <th scope="col" className="w-[7.5rem] py-2 pr-3 text-right font-medium @max-[40rem]:w-16">Context</th>
-          <th scope="col" className="py-2 pr-3 font-medium @max-[52rem]:hidden">Host</th>
-          <th scope="col" className="w-20 py-2 pr-3 text-right font-medium">Since</th>
+          <th scope="col" className="w-[9.5rem] py-2 pr-3 pl-3 font-medium @max-[40rem]:w-[7.5rem]">
+            State
+          </th>
+          <th scope="col" className="min-w-[8rem] py-2 pr-3 font-medium">
+            Agent
+          </th>
+          <th scope="col" className="py-2 pr-3 font-medium">
+            Working on
+          </th>
+          <th scope="col" className="w-[7.5rem] py-2 pr-3 text-right font-medium @max-[40rem]:w-16">
+            Context
+          </th>
+          <th scope="col" className="py-2 pr-3 font-medium @max-[52rem]:hidden">
+            Host
+          </th>
+          <th scope="col" className="w-20 py-2 pr-3 text-right font-medium">
+            Since
+          </th>
           <th scope="col" className="w-10 py-2 pr-1">
             <span className="sr-only">Actions</span>
           </th>
@@ -537,7 +548,12 @@ function RowMenu({ line, actions, compact }: { line: Line; actions: RowActions; 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button ref={trigger} type="button" aria-label={`Actions for ${name}`} className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "w-7 px-0", compact && "h-6")}>
+        <button
+          ref={trigger}
+          type="button"
+          aria-label={`Actions for ${name}`}
+          className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "w-7 px-0", compact && "h-6")}
+        >
           ···
         </button>
       </DropdownMenuTrigger>
@@ -621,7 +637,7 @@ function Inspector({
     <InspectorFrame label={`${agentName(a)}, in the inspector`} onClose={onClose}>
       <div className="flex flex-col gap-2">
         <div className="flex items-start gap-2">
-          <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
+          <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 font-display text-section font-medium [overflow-wrap:anywhere] text-ink">
             <Glyph state={state} />
             {agentName(a)}
             <State state={state} person={a.person} glyph={false} />
@@ -660,7 +676,10 @@ function Inspector({
           {task.steps.length > 0 ? (
             <ul>
               {task.steps.map((s, i) => (
-                <li key={s.index} className={cn("flex items-baseline gap-2.5 border-b border-rule py-2 text-row", s.done || i === firstOpen ? "text-ink" : "text-ink-3")}>
+                <li
+                  key={s.index}
+                  className={cn("flex items-baseline gap-2.5 border-b border-rule py-2 text-row", s.done || i === firstOpen ? "text-ink" : "text-ink-3")}
+                >
                   <Glyph state={s.done ? "done" : i === firstOpen ? "running" : "idle"} className="relative top-px text-ink" />
                   <span className="sr-only">{s.done ? "Done:" : i === firstOpen ? "Next:" : "Open:"}</span>
                   <span className="min-w-0 [overflow-wrap:anywhere]">{s.text}</span>

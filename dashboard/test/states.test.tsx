@@ -4,18 +4,25 @@
 // says so in each view with the one thing to do next, a Channel that cannot be reached says why
 // with Try again, and an address the Dashboard has no page for says that instead of showing Now.
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Task } from "@shared/index";
-import { ViewErrorBoundary } from "@/components/shell/states";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
+import { ViewErrorBoundary } from "@/components/shell/states";
 import { MockChannelSource, type MockState } from "@/data/mock/mockSource";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 
 const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "brief", "memory", "skills", "hosts"] as const;
 
 beforeEach(() => {
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
 });
 afterEach(() => {
   cleanup();

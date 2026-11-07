@@ -1,17 +1,17 @@
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode, type RefObject } from "react";
-import { toast } from "sonner";
 import type { Agent, AgentId, Host, PermissionMode, Task } from "@shared/index";
 import {
+  cleanAbsolutePath,
   DEFAULT_PERMISSION_MODE,
+  hostAllows,
   MAX_BRIEF_LENGTH,
   MAX_NICKNAME_LENGTH,
-  PERMISSION_MODES,
-  cleanAbsolutePath,
-  hostAllows,
   notUnderRootsReason,
+  PERMISSION_MODES,
   permissionModeWithin,
   underRoots,
 } from "@shared/index";
+import { type FormEvent, Fragment, type ReactNode, type RefObject, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
 import { Sheet } from "@/components/shell/sheet";
 import { CopyCommand } from "@/components/shell/states";
@@ -32,7 +32,7 @@ const MODE_HINT: Record<PermissionMode, string> = {
 };
 
 const FIELD =
-  "h-[30px] min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-[16px]";
+  "h-[30px] min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-read";
 
 /** Text whose `backticked` parts are commands or paths, set as code. */
 export function WithCode({ text }: { text: string }) {
@@ -71,6 +71,7 @@ function Field({ label, optional, hint, children }: { label: string; optional?: 
   return (
     // The hint sits outside the label: it may hold buttons of its own.
     <div className="flex min-w-0 flex-col gap-1.5">
+      {/* biome-ignore lint/a11y/noLabelWithoutControl: the control is the children every caller passes. */}
       <label className="flex min-w-0 flex-col gap-1 text-small text-ink-3">
         <span>
           {label}
@@ -277,8 +278,7 @@ function NoHosts({ prefill }: { prefill?: StartAgentPrefill }) {
         </>
       )}
       <p className="text-row text-ink">
-        {prefill ? "Or install a Host on the machine to start it from here" : "Install one on the machine"}, naming the folders its Agents may
-        work in:
+        {prefill ? "Or install a Host on the machine to start it from here" : "Install one on the machine"}, naming the folders its Agents may work in:
       </p>
       <code className={COMMAND}>switchboard host install --root ~/code/your-repo</code>
     </>
@@ -415,8 +415,8 @@ function StartAgentForm({
       )}
       {others && (
         <p className="text-small text-ink-3">
-          {host.person}'s machine lets you use it. The Agent runs as {host.person}, in their folders and within their limits, and the Channel
-          records that you started it.
+          {host.person}'s machine lets you use it. The Agent runs as {host.person}, in their folders and within their limits, and the Channel records that you
+          started it.
         </p>
       )}
       <div className="flex min-w-0 flex-col gap-1.5">
@@ -449,7 +449,7 @@ function StartAgentForm({
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
           placeholder="Fix the login redirect, then open a PR."
-          className="min-w-0 resize-none rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 py-1.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-[16px]"
+          className="min-w-0 resize-none rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 py-1.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-read"
         />
       </Field>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
@@ -457,7 +457,14 @@ function StartAgentForm({
           <input name="nickname" maxLength={MAX_NICKNAME_LENGTH} value={nickname} onChange={(e) => setNickname(e.target.value)} className={FIELD} />
         </Field>
         <Field label="Model" optional>
-          <input name="model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Claude Code's default" spellCheck={false} className={FIELD} />
+          <input
+            name="model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="Claude Code's default"
+            spellCheck={false}
+            className={FIELD}
+          />
         </Field>
       </div>
       <Field label="Permission mode" hint={chosenMode ? MODE_HINT[chosenMode] : undefined}>
@@ -569,7 +576,7 @@ export function PauseResumeButton({ agent }: { agent: Agent }) {
   const mayControl = useMayControl();
   const [busy, setBusy] = useState(false);
   const asking = useRef(false);
-  if (!mayControl(agent) || (agent.presence === "gone")) return null;
+  if (!mayControl(agent) || agent.presence === "gone") return null;
   const paused = agent.presence === "paused";
   const name = agent.nickname ?? agent.id;
   const act = async () => {

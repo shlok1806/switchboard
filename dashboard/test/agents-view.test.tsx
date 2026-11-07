@@ -4,10 +4,10 @@
 // Stop) that never selects the row; Compact rows drop their second line and stay that way;
 // a long fleet renders only the rows near the screen.
 
+import type { Agent, AgentId, ChannelSnapshot, StreamMessage } from "@shared/index";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentId, ChannelSnapshot, StreamMessage } from "@shared/index";
 import type { ChannelSource, ConnectionState } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { setDensity } from "@/lib/density";
@@ -132,7 +132,11 @@ describe("the row menu", () => {
     render(<AgentsView />, { wrapper: channel() });
     openMenu(await screen.findByRole("button", { name: "Actions for quill" }));
     const menu = await screen.findByRole("menu");
-    expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Open", "Directive", "Rename"]);
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Open", "Directive", "Rename"]);
     // Opening the menu selected nothing.
     expect(window.location.hash).toBe("#/agents");
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Directive" }));

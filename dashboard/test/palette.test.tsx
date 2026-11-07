@@ -5,17 +5,24 @@
 // first.
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette } from "@/components/domain/palette";
 import { MockChannelSource } from "@/data/mock/mockSource";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import type { Route } from "@/lib/router";
-import { useState } from "react";
 
 let source: MockChannelSource;
 
 beforeEach(() => {
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   const items = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => items.get(k) ?? null,
@@ -92,7 +99,11 @@ describe("the command palette", () => {
     await choose(/shlok\/claude\/7f3a/);
     expect(trail()).toMatch(/Directive to.*shlok\/api-client/);
     // Nothing to send until there is text.
-    expect(within(palette()).getByRole("option", { name: /Type the Directive/ }).getAttribute("aria-disabled")).toBe("true");
+    expect(
+      within(palette())
+        .getByRole("option", { name: /Type the Directive/ })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
     typeIn("Run the tests before pushing");
     await choose(/Send “Run the tests before pushing”/);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -133,7 +144,9 @@ describe("the command palette", () => {
     const stop = vi.spyOn(source, "stopAgent");
     fireEvent.keyDown(document, { key: "k", metaKey: true });
     await choose(/^Stop/);
-    const offered = within(palette()).getAllByRole("option").map((o) => o.textContent);
+    const offered = within(palette())
+      .getAllByRole("option")
+      .map((o) => o.textContent);
     expect(offered.every((t) => t?.startsWith("shlok/"))).toBe(true);
     await choose(/shlok\/claude\/7f3a/);
     await choose("Keep it running");

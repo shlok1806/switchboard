@@ -5,11 +5,12 @@
  * reading width with who last wrote it and when. The Dashboard only reads: Agents write the
  * pages with brief_write, and anyone asks about them through the Connector's brief tool.
  */
-import { useEffect, useState } from "react";
+
 import type { BriefAuthor, BriefPage, BriefResponse } from "@shared/index";
 import { BRIEF_OVERVIEW } from "@shared/index";
+import { useEffect, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { BriefMarkdown } from "@/components/domain/brief-markdown";
+import { BriefMarkdown, briefOutline } from "@/components/domain/brief-markdown";
 import { shortName } from "@/components/domain/fleet";
 import { PageHead } from "@/components/shell/page-head";
 import { EmptyState, EmptyView, ErrorPage, ViewSkeleton } from "@/components/shell/states";
@@ -69,7 +70,8 @@ export function BriefView({ page }: { page?: string }) {
   if (loaded.pages.length === 0) {
     return (
       <EmptyView view="Brief" title="No Brief yet" action={<HowTheBriefWorks />}>
-        The Channel's Agents write the Brief with brief_write: an overview of the product, a page per area and what is stuck. It shows here, and the Connector's brief tool answers from it.
+        The Channel's Agents write the Brief with brief_write: an overview of the product, a page per area and what is stuck. It shows here, and the Connector's
+        brief tool answers from it.
       </EmptyView>
     );
   }
@@ -81,7 +83,7 @@ export function BriefView({ page }: { page?: string }) {
   const newest = pages.reduce((a, b) => (a.updatedAt > b.updatedAt ? a : b));
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="flex w-full max-w-[72rem] flex-col gap-5 px-[var(--gutter)] pt-5 pb-12">
+      <div className="flex w-full max-w-[76rem] flex-col gap-8 px-[var(--gutter)] pt-[var(--page-top)] pb-16">
         <PageHead
           title="Brief"
           facts={[
@@ -92,7 +94,7 @@ export function BriefView({ page }: { page?: string }) {
             "Agents keep it; the Connector reads it",
           ]}
         />
-        <div className="grid gap-x-10 gap-y-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
+        <div className="grid gap-x-14 gap-y-6 lg:grid-cols-[14rem_minmax(0,1fr)] xl:grid-cols-[14rem_minmax(0,1fr)_13rem]">
           <nav aria-label="Pages" className="lg:sticky lg:top-5 lg:self-start">
             <ol className="flex flex-col border-t border-rule">
               {pages.map((p) => (
@@ -165,19 +167,53 @@ function Author({ by }: { by: BriefAuthor }) {
 
 /** One page at reading width, with when and by whom it was last written. */
 function Page({ page: p }: { page: BriefPage }) {
+  const ids = `brief-${p.page}-section`;
+  const outline = briefOutline(p.text, p.title, ids);
   return (
-    <article aria-labelledby={`brief-${p.page}`} className="flex min-w-0 flex-col gap-4">
-      <header className="flex flex-col gap-1">
-        <h2 id={`brief-${p.page}`} className="text-title font-semibold [overflow-wrap:anywhere] text-ink">
-          {p.title}
-        </h2>
-        <p className="text-small text-ink-3">
-          Written <time dateTime={p.updatedAt} title={new Date(p.updatedAt).toLocaleString()}>{ago(p.updatedAt)}</time> by <Author by={p.author} />
-          {" · "}
-          <span className="tabular-nums">version {p.version}</span>
-        </p>
-      </header>
-      <BriefMarkdown text={p.text} title={p.title} />
-    </article>
+    <>
+      <article aria-labelledby={`brief-${p.page}`} className="flex min-w-0 flex-col gap-6">
+        <header className="flex max-w-[var(--measure)] flex-col gap-2 border-b border-rule pb-5">
+          <h2 id={`brief-${p.page}`} className="font-display text-head font-medium [overflow-wrap:anywhere] text-ink max-sm:text-head-phone">
+            {p.title}
+          </h2>
+          <p className="text-small text-ink-3">
+            Written{" "}
+            <time dateTime={p.updatedAt} title={new Date(p.updatedAt).toLocaleString()}>
+              {ago(p.updatedAt)}
+            </time>{" "}
+            by <Author by={p.author} />
+            {" · "}
+            <span className="tabular-nums">version {p.version}</span>
+          </p>
+        </header>
+        <BriefMarkdown text={p.text} title={p.title} headingIds={ids} />
+      </article>
+      {/* The margin of a wide desk holds the page's own outline (design.md "Reading"). */}
+      {outline.length > 1 && (
+        <nav aria-label="On this page" className="max-xl:hidden xl:sticky xl:top-5 xl:self-start">
+          <p className="border-b border-rule pb-2 text-small font-medium text-ink-3">On this page</p>
+          <ol className="flex flex-col gap-0.5 pt-2">
+            {outline.map((h) => (
+              <li key={h.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = document.getElementById(h.id);
+                    target?.scrollIntoView({ block: "start" });
+                    target?.focus({ preventScroll: true });
+                  }}
+                  className={cn(
+                    "w-full rounded-[var(--r)] px-2 py-1.5 text-left text-small [overflow-wrap:anywhere] text-ink-2 transition-colors duration-[var(--dur)] hover:bg-paper-2 hover:text-ink",
+                    h.level > 1 && "pl-5",
+                  )}
+                >
+                  {h.text}
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      )}
+    </>
   );
 }

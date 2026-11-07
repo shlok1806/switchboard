@@ -2,10 +2,10 @@
 // Sharing a Host from the Hosts page (ADR 0028): a toggle sends the new list, signed by
 // this browser's attach key, and a refusal from the Host is shown with what to run there.
 
+import type { ChannelSnapshot, Host, SetHostAllowRequest, StreamMessage } from "@shared/index";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelSnapshot, Host, SetHostAllowRequest, StreamMessage } from "@shared/index";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { HostsView } from "@/views/HostsView";
@@ -81,7 +81,8 @@ describe("sharing a Host from the Hosts page", () => {
     render(<HostsView selected="shlok/studio" />, {
       wrapper: channel(async () => ({
         ok: false,
-        reason: "studio refused: this browser's key AAAA-BBBB-CCCC-DDDD-EEEE is not trusted on this machine. Run `switchboard attach allow AAAA-BBBB-CCCC-DDDD-EEEE` here, then try again",
+        reason:
+          "studio refused: this browser's key AAAA-BBBB-CCCC-DDDD-EEEE is not trusted on this machine. Run `switchboard attach allow AAAA-BBBB-CCCC-DDDD-EEEE` here, then try again",
       })),
     });
     const inspector = await screen.findByRole("complementary", { name: "studio, in the inspector" });

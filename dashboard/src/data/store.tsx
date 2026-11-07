@@ -1,15 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
-import type {
-  AccountUsage,
-  Agent,
-  AgentId,
-  ChannelEvent,
-  ChannelSnapshot,
-  StreamMessage,
-  Task,
-  TaskNumber,
-  Verdict,
-} from "@shared/index";
+import type { AccountUsage, Agent, AgentId, ChannelEvent, ChannelSnapshot, StreamMessage, Task, TaskNumber, Verdict } from "@shared/index";
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ChannelSource, ConnectionState } from "./source";
 
 export interface ChannelState {
@@ -108,7 +98,11 @@ export class ChannelStore {
           verdictsByEvent: byEvent,
           olderBefore,
         });
-        stop = this.source.subscribe(snap.cursor, (m) => this.apply(m), (connection) => this.set({ connection }));
+        stop = this.source.subscribe(
+          snap.cursor,
+          (m) => this.apply(m),
+          (connection) => this.set({ connection }),
+        );
       })
       .catch((e: unknown) => {
         if (!cancelled) this.set({ status: "error", error: e instanceof Error ? e.message : String(e) });
@@ -186,7 +180,7 @@ export class ChannelStore {
 }
 
 function visibleAgents(agents: Agent[], tasks: Task[]): Agent[] {
-  const holders = new Set(tasks.flatMap((task) => task.claim?.holder.kind === "agent" ? [task.claim.holder.agentId] : []));
+  const holders = new Set(tasks.flatMap((task) => (task.claim?.holder.kind === "agent" ? [task.claim.holder.agentId] : [])));
   return agents.filter((agent) => agent.presence !== "gone" || holders.has(agent.id));
 }
 

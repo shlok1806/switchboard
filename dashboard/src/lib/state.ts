@@ -29,7 +29,7 @@ export function needsPerson(state: GlyphState): boolean {
 /**
  * Whether an Agent's state waits on the Person using the Dashboard: a prompt on their own
  * Agent, or a Stale Claim, which anyone may take over. Another Person's prompt is theirs.
- * How many lines need you is `needsYouCount` in lib/queue, which also counts reviews.
+ * How many items need you is `needsYouCount` in lib/queue, which also counts reviews.
  */
 export function isNeedsYou(state: AgentState): boolean {
   return state === "needs" || state === "stale";

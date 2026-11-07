@@ -1,28 +1,41 @@
 /*
- * The inspector's frame (design.md): beside the list at 352px, or below 640px a bottom sheet
+ * The inspector's frame (design.md): beside the list at 368px, or below 1024px a bottom sheet
  * its row opens, as the Canvas's is. The sheet is a dialog over a veil and the tab bar: it holds
  * focus while it is open, Escape, the veil or Close shuts it, and focus goes back to the row.
  */
-import { useRef, type ReactNode } from "react";
+
 import { X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { createContext, type ReactNode, useContext, useRef } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { cn } from "@/lib/utils";
 
-export function InspectorFrame({ label, onClose, children }: { label: string; /** Set on a phone, where the frame is a sheet. */ onClose?: () => void; children: ReactNode }) {
+/** True inside an inspector, whose sections are titled in the body face (design.md "Section head"). */
+const InInspector = createContext(false);
+export const useInInspector = () => useContext(InInspector);
+
+export function InspectorFrame({
+  label,
+  onClose,
+  children,
+}: {
+  label: string /** Set on a phone, where the frame is a sheet. */;
+  onClose?: () => void;
+  children: ReactNode;
+}) {
   const opener = useRef<HTMLElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
   if (onClose === undefined) {
     return (
-      <aside aria-label={label} className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-6 overflow-y-auto border-l border-rule px-5 pt-5 pb-12">
-        {children}
+      <aside aria-label={label} className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-7 overflow-y-auto border-l border-rule px-6 pt-6 pb-12">
+        <InInspector.Provider value>{children}</InInspector.Provider>
       </aside>
     );
   }
   return (
     <DialogPrimitive.Root open onOpenChange={(next) => !next && onClose()}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay data-veil className="fixed inset-0 z-40 bg-black/25 dark:bg-black/55" />
+        <DialogPrimitive.Overlay data-veil className="fixed inset-0 z-40 bg-veil" />
         <DialogPrimitive.Content
           ref={content}
           aria-label={label}
@@ -42,7 +55,7 @@ export function InspectorFrame({ label, onClose, children }: { label: string; /*
           className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col gap-6 overflow-y-auto border-t border-rule-2 bg-paper px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-ink outline-none"
         >
           <DialogPrimitive.Title className="sr-only">{label}</DialogPrimitive.Title>
-          {children}
+          <InInspector.Provider value>{children}</InInspector.Provider>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
@@ -53,7 +66,12 @@ export function InspectorFrame({ label, onClose, children }: { label: string; /*
 export function SheetClose({ onClose }: { onClose?: () => void }) {
   if (!onClose) return null;
   return (
-    <button type="button" onClick={onClose} aria-label="Close" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 shrink-0 px-0 max-sm:size-11")}>
+    <button
+      type="button"
+      onClick={onClose}
+      aria-label="Close"
+      className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 shrink-0 px-0 max-sm:size-11")}
+    >
       <X className="size-4" aria-hidden />
     </button>
   );

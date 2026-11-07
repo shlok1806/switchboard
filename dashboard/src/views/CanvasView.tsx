@@ -5,43 +5,44 @@
  * Channel and creates nothing; a node opens its Agent in the inspector. Where nodes sit and
  * the camera are this browser's view state, per Channel.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { X } from "lucide-react";
+
 import type { Agent, AgentId, Task } from "@shared/index";
 import { modelLabel } from "@shared/index";
+import { X } from "lucide-react";
+import { memo, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { Facts, Steps } from "@/components/domain/agent-sections";
 import { DenyAction, PendingApproval } from "@/components/domain/approval";
 import { contextPercent, shortName } from "@/components/domain/fleet";
-import { InspectorFrame } from "@/components/shell/inspector";
-import { EmptyView } from "@/components/shell/states";
 import { FirstAgentAction, StartAgentButton } from "@/components/domain/start-agent";
 import { Glyph, Orb, State, useAgentStates, useNeedsYou } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
+import { InspectorFrame } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
+import { EmptyView } from "@/components/shell/states";
 import { useChannel, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
-  NODE_H,
-  NODE_W,
   bounds,
+  type Camera,
   claimsByAgent,
   edgePoints,
   fit,
   frameRect,
-  groups as groupOrder,
-  place,
-  zoomAt,
-  type Camera,
   type Group,
+  groups as groupOrder,
+  NODE_H,
+  NODE_W,
   type Point,
+  place,
   type Rect,
+  zoomAt,
 } from "@/lib/canvas-layout";
-import { CLI_LABEL, ago, elapsed, hostName } from "@/lib/format";
+import { ago, CLI_LABEL, elapsed, hostName } from "@/lib/format";
 import { go, href } from "@/lib/router";
-import { needsPerson, stateWord, type AgentState } from "@/lib/state";
+import { type AgentState, needsPerson, stateWord } from "@/lib/state";
 import { cn } from "@/lib/utils";
 
 interface View {
@@ -145,7 +146,11 @@ const Node = memo(function Node({
       style={{ left: at.x, top: at.y, width: NODE_W, height: NODE_H }}
       className={cn(
         "group absolute rounded-[var(--r)] border border-rule-2 bg-paper transition-opacity duration-[var(--dur)] select-none hover:bg-paper-2",
-        state === "needs" || state === "needs-other" || state === "stale" ? "border-2 border-signal" : state === "running" ? "border-2 border-running" : undefined,
+        state === "needs" || state === "needs-other" || state === "stale"
+          ? "border-2 border-signal"
+          : state === "running"
+            ? "border-2 border-running"
+            : undefined,
         selected && "outline-2 outline-offset-2 outline-ink outline-solid",
         // Gone with nothing held: only its outline goes quiet, its words stay readable.
         muted && "border-rule",
@@ -160,7 +165,12 @@ const Node = memo(function Node({
         onFocus={(e) => onFocus(e, agent.id)}
         className="absolute inset-0 cursor-grab rounded-[var(--r)] active:cursor-grabbing"
       />
-      <div className={cn("pointer-events-none relative flex h-full flex-col gap-1 text-small", state === "needs" || state === "needs-other" || state === "stale" ? "p-[11px]" : "p-3")}>
+      <div
+        className={cn(
+          "pointer-events-none relative flex h-full flex-col gap-1 text-small",
+          state === "needs" || state === "needs-other" || state === "stale" ? "p-[11px]" : "p-3",
+        )}
+      >
         <span className="flex min-w-0 items-center gap-2">
           <Glyph state={state} />
           <span className={cn("min-w-0 flex-1 truncate text-row font-semibold", state === "gone" ? "text-ink-3" : "text-ink")}>{shortName(agent)}</span>
@@ -192,7 +202,10 @@ const Node = memo(function Node({
               Review PR #{review}
             </a>
           )}
-          <a href={href({ view: "agent", id: agent.id })} className={buttonVariants({ variant: state === "running" || state === "idle" || state === "needs-other" ? "secondary" : "ghost", size: "sm" })}>
+          <a
+            href={href({ view: "agent", id: agent.id })}
+            className={buttonVariants({ variant: state === "running" || state === "idle" || state === "needs-other" ? "secondary" : "ghost", size: "sm" })}
+          >
             {state === "needs" ? "Open the terminal" : state === "running" || state === "idle" || state === "needs-other" ? "Watch" : "Open"}
           </a>
         </span>
@@ -208,7 +221,12 @@ const Node = memo(function Node({
  */
 function Frame({ group, rect, me }: { group: Group; rect: Rect; me: string }) {
   return (
-    <div data-ground data-frame={group.key} style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} className="absolute rounded-[var(--r)] border border-rule-2">
+    <div
+      data-ground
+      data-frame={group.key}
+      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+      className="absolute rounded-[var(--r)] border border-rule-2"
+    >
       <span data-ground className="absolute -top-[0.75em] left-3 flex items-baseline gap-1.5 bg-paper px-1.5 text-small whitespace-nowrap">
         <span className="font-semibold text-ink">{frameName(group)}</span>
         <span className="text-ink-3 tabular-nums">
@@ -256,7 +274,12 @@ function Minimap({ frames, camera, size, onMove }: { frames: Rect[]; camera: Cam
     onMove({ x: world.x + (e.clientX - b.left) / s, y: world.y + (e.clientY - b.top) / s });
   };
   return (
-    <div aria-hidden onPointerDown={press} className="relative cursor-pointer rounded-[var(--r)] border border-rule-2 bg-paper" style={{ width: W + 2, height: H + 2 }}>
+    <div
+      aria-hidden
+      onPointerDown={press}
+      className="relative cursor-pointer rounded-[var(--r)] border border-rule-2 bg-paper"
+      style={{ width: W + 2, height: H + 2 }}
+    >
       {frames.map((r, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: frames keep their order
         <span key={i} className="absolute border border-rule-2" style={box(r)} />
@@ -301,7 +324,10 @@ function Lanes({
         for (const a of agents) if (!a.parent || !inLane.has(a.parent)) add(a, 0);
         return (
           <section key={group.key} aria-labelledby={`lane-${group.key}`}>
-            <h2 id={`lane-${group.key}`} className="flex items-baseline gap-1.5 border-b border-rule-2 pb-2 text-small" /* taste-skill-ignore: the phone list's group rule, as the fleet's */>
+            <h2
+              id={`lane-${group.key}`}
+              className="flex items-baseline gap-1.5 border-b border-rule-2 pb-2 text-small" /* taste-skill-ignore: the phone list's group rule, as the fleet's */
+            >
               <span className="text-title font-semibold text-ink">{frameName(group)}</span>
               <span className="text-ink-3 tabular-nums">
                 {group.person === me ? `${group.person} (you)` : group.person} · {agents.length} {agents.length === 1 ? "Agent" : "Agents"}
@@ -313,7 +339,11 @@ function Lanes({
                 const task = claims.get(agent.id)?.[0];
                 const lead = agent.parent ? agents.find((p) => p.id === agent.parent) : undefined;
                 return (
-                  <li key={agent.id} className="border-b border-rule" /* taste-skill-ignore: the phone list's row rule, as the fleet's */ style={{ paddingLeft: Math.min(depth, 3) * 20 }}>
+                  <li
+                    key={agent.id}
+                    className="border-b border-rule" /* taste-skill-ignore: the phone list's row rule, as the fleet's */
+                    style={{ paddingLeft: Math.min(depth, 3) * 20 }}
+                  >
                     <a
                       href={href({ view: "canvas", agent: agent.id })}
                       aria-current={selected === agent.id ? "true" : undefined}
@@ -321,7 +351,9 @@ function Lanes({
                     >
                       <span className="flex min-w-0 items-center gap-2">
                         <Glyph state={state} />
-                        <span className={cn("min-w-0 flex-1 text-row font-semibold [overflow-wrap:anywhere]", state === "gone" ? "text-ink-3" : "text-ink")}>{shortName(agent)}</span>
+                        <span className={cn("min-w-0 flex-1 text-row font-semibold [overflow-wrap:anywhere]", state === "gone" ? "text-ink-3" : "text-ink")}>
+                          {shortName(agent)}
+                        </span>
                         <span className={cn("shrink-0 text-small tabular-nums", needsPerson(state) ? "font-semibold text-signal" : "text-ink-3")}>
                           {stateWord(state, agent.person)} · {age(agent, state)}
                         </span>
@@ -363,12 +395,17 @@ function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; stat
     <>
       <div className="flex flex-col gap-2">
         <div className="flex items-start gap-2">
-          <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
+          <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 font-display text-section font-medium [overflow-wrap:anywhere] text-ink">
             <Glyph state={state} />
             {name(agent)}
             <State state={state} person={agent.person} glyph={false} className="text-small" />
           </h2>
-          <button type="button" onClick={onClose} aria-label="Close" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 px-0 max-sm:size-11")}>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "size-7 px-0 max-sm:size-11")}
+          >
             <X className="size-4" aria-hidden />
           </button>
         </div>
@@ -388,7 +425,13 @@ function Inspector({ agent, state, tasks, sheet, onClose }: { agent: Agent; stat
           rows={[
             ["Host", agent.host ? hostName(agent.host) : "a terminal", !agent.host && "started by hand"],
             tasks[0]?.branch && ["Branch", <code key="b">{tasks[0].branch}</code>],
-            percent !== undefined && ["Context", `${percent}%`, agent.context?.tokens !== undefined && agent.context.window ? `${Math.round(agent.context.tokens / 1000)}k of ${agent.context.window >= 1_000_000 ? `${agent.context.window / 1_000_000}M` : `${Math.round(agent.context.window / 1000)}k`} tokens` : undefined],
+            percent !== undefined && [
+              "Context",
+              `${percent}%`,
+              agent.context?.tokens !== undefined && agent.context.window
+                ? `${Math.round(agent.context.tokens / 1000)}k of ${agent.context.window >= 1_000_000 ? `${agent.context.window / 1_000_000}M` : `${Math.round(agent.context.window / 1000)}k`} tokens`
+                : undefined,
+            ],
             ["Started by", parent ? shortName(parent) : agent.person, parent && "a lead"],
           ]}
         />
@@ -440,7 +483,10 @@ export function CanvasView({ selected }: { selected?: string }) {
   const groupList = useMemo(() => groupOrder(agents, tasks, me), [agents, tasks, me]);
   const at = useMemo(() => place(groupList, view.positions), [groupList, view.positions]);
   const frames = useMemo(
-    () => groupList.map((g) => ({ group: g, rect: frameRect(g.agents.map((a) => at.get(a.id) ?? ORIGIN)) })).filter((f): f is { group: Group; rect: Rect } => f.rect !== null),
+    () =>
+      groupList
+        .map((g) => ({ group: g, rect: frameRect(g.agents.map((a) => at.get(a.id) ?? ORIGIN)) }))
+        .filter((f): f is { group: Group; rect: Rect } => f.rect !== null),
     [groupList, at],
   );
   const allRects = useMemo(() => frames.map((f) => f.rect), [frames]);
@@ -580,7 +626,12 @@ export function CanvasView({ selected }: { selected?: string }) {
     }
     if (e.target !== viewport.current) return;
     const step = 64;
-    const moves: Record<string, Point> = { ArrowLeft: { x: step, y: 0 }, ArrowRight: { x: -step, y: 0 }, ArrowUp: { x: 0, y: step }, ArrowDown: { x: 0, y: -step } };
+    const moves: Record<string, Point> = {
+      ArrowLeft: { x: step, y: 0 },
+      ArrowRight: { x: -step, y: 0 },
+      ArrowUp: { x: 0, y: step },
+      ArrowDown: { x: 0, y: -step },
+    };
     if (moves[e.key]) {
       const m = moves[e.key]!;
       setCamera((c) => ({ ...c, x: c.x + m.x, y: c.y + m.y }));
@@ -635,29 +686,32 @@ export function CanvasView({ selected }: { selected?: string }) {
   }
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col gap-4 px-[var(--gutter)] pt-4 pb-6", mobile && "overflow-y-auto pb-12")}>
+    <div className={cn("flex h-full min-h-0 flex-col gap-5 px-[var(--gutter)] pt-[var(--page-top)] pb-6", mobile && "overflow-y-auto pb-12")}>
       <PageHead
         title="Canvas"
         facts={[
           hostCount > 0 && `${hostCount} ${hostCount === 1 ? "Host" : "Hosts"}`,
           `${agents.length} ${agents.length === 1 ? "Agent" : "Agents"}`,
-          needsYou > 0 && <span className="font-semibold text-signal">{needsYou} {needsYou === 1 ? "needs" : "need"} you</span>,
+          needsYou > 0 && (
+            <span className="font-semibold text-signal">
+              {needsYou} {needsYou === 1 ? "needs" : "need"} you
+            </span>
+          ),
           mobile ? "set in under the Agent that started it" : "a line is who started whom",
           !mobile && "positions are yours and kept in this browser",
         ]}
       />
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div role="group" aria-label="Show" className="flex flex-wrap gap-1">
-          <Chip on={filter === "everyone"} onClick={() => setFilter("everyone")}>
-            Everyone
-          </Chip>
-          <Chip on={filter === "mine"} onClick={() => setFilter("mine")} count={mineCount}>
-            Mine
-          </Chip>
-          <Chip on={filter === "needs"} onClick={() => setFilter("needs")} count={needsCount}>
-            Needs a Person
-          </Chip>
-        </div>
+        <Segmented
+          label="Show"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: "everyone", label: "Everyone" },
+            { value: "mine", label: "Mine", n: mineCount },
+            { value: "needs", label: "Needs a Person", n: needsCount },
+          ]}
+        />
         <span className="text-small font-medium text-ink-2 max-sm:hidden">Laid out by Host</span>
         <div className="ml-auto flex flex-wrap items-center gap-2 max-sm:ml-0">
           {!mobile && <Button onClick={fitAll}>Fit</Button>}
@@ -675,6 +729,7 @@ export function CanvasView({ selected }: { selected?: string }) {
               role="application"
               aria-roledescription="canvas"
               aria-label="Agents on the Channel, by Host. Drag to pan, arrow keys to move, plus and minus to zoom, 0 to fit."
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: the canvas is an application the keyboard pans, moves and zooms.
               tabIndex={0}
               onKeyDown={onKey}
               onPointerDown={(e) => {
@@ -697,17 +752,21 @@ export function CanvasView({ selected }: { selected?: string }) {
                 </pattern>
                 <rect width="100%" height="100%" fill="url(#canvas-dots)" />
               </svg>
-              <div data-ground className="absolute top-0 left-0 origin-top-left" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.k})` }}>
+              <div
+                data-ground
+                className="absolute top-0 left-0 origin-top-left"
+                style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.k})` }}
+              >
                 {frames.map((f) => (
                   <Frame key={f.group.key} group={f.group} rect={f.rect} me={me} />
                 ))}
                 <svg aria-hidden className="pointer-events-none absolute top-0 left-0 overflow-visible" width="1" height="1">
                   <defs>
                     <marker id="lead-head" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="7" markerHeight="7" orient="auto">
-                      <path d="M0 0 L8 4 L0 8 z" className="fill-edge" />
+                      <path d="M0 0 L8 4 L0 8 z" className="fill-ink-3" />
                     </marker>
                     <marker id="lead-head-active" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="7" markerHeight="7" orient="auto">
-                      <path d="M0 0 L8 4 L0 8 z" className="fill-edge-active" />
+                      <path d="M0 0 L8 4 L0 8 z" className="fill-ink" />
                     </marker>
                   </defs>
                   {agents.map((a) => {
@@ -725,7 +784,7 @@ export function CanvasView({ selected }: { selected?: string }) {
                         fill="none"
                         strokeWidth={active ? 2 : 1.5}
                         markerEnd={`url(#${active ? "lead-head-active" : "lead-head"})`}
-                        className={active ? "stroke-edge-active" : "stroke-edge"}
+                        className={active ? "stroke-ink" : "stroke-ink-3"}
                       />
                     );
                   })}
@@ -761,24 +820,37 @@ export function CanvasView({ selected }: { selected?: string }) {
               <div className="pointer-events-auto ml-auto flex flex-col items-end gap-2">
                 {size.w > 0 && <Minimap frames={allRects} camera={camera} size={size} onMove={centerOn} />}
                 <div className="flex items-center rounded-[var(--r)] border border-rule-2 bg-paper">
-                  <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.2)} className="h-7 w-8 text-row text-ink-2 hover:bg-paper-2 hover:text-ink">
+                  <button
+                    type="button"
+                    aria-label="Zoom out"
+                    onClick={() => zoomBy(1 / 1.2)}
+                    className="h-7 w-8 text-row text-ink-2 hover:bg-paper-2 hover:text-ink"
+                  >
                     −
                   </button>
                   <span className="w-12 text-center text-small text-ink tabular-nums" aria-live="polite">
                     {Math.round(camera.k * 100)}%
                   </span>
-                  <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.2)} className="h-7 w-8 text-row text-ink-2 hover:bg-paper-2 hover:text-ink">
+                  <button
+                    type="button"
+                    aria-label="Zoom in"
+                    onClick={() => zoomBy(1.2)}
+                    className="h-7 w-8 text-row text-ink-2 hover:bg-paper-2 hover:text-ink"
+                  >
                     +
                   </button>
                 </div>
               </div>
             </div>
           </div>
-          {chosen && <Inspector agent={chosen} state={states.get(chosen.id) ?? "gone"} tasks={claims.get(chosen.id) ?? []} sheet={false} onClose={() => select()} />}
+          {chosen && (
+            <Inspector agent={chosen} state={states.get(chosen.id) ?? "gone"} tasks={claims.get(chosen.id) ?? []} sheet={false} onClose={() => select()} />
+          )}
         </div>
       )}
-      {mobile && chosen && <Inspector agent={chosen} state={states.get(chosen.id) ?? "gone"} tasks={claims.get(chosen.id) ?? []} sheet onClose={() => select()} />}
+      {mobile && chosen && (
+        <Inspector agent={chosen} state={states.get(chosen.id) ?? "gone"} tasks={claims.get(chosen.id) ?? []} sheet onClose={() => select()} />
+      )}
     </div>
   );
 }
-

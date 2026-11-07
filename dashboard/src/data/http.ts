@@ -1,63 +1,63 @@
 import type {
-  AccountUsage,
   AccountsResponse,
+  AccountUsage,
   ActionResult,
   AgentId,
-  AgentSummary,
   AgentResponse,
   AgentRole,
+  AgentSummary,
   AgentsResponse,
-  ClaimRequest,
-  CreateTaskRequest,
-  CreateTaskResponse,
-  Task,
+  BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
+  ClaimRefusal,
+  ClaimRequest,
+  ConnectLangfuseRequest,
+  ControlAgentResponse,
+  CreateTaskRequest,
+  CreateTaskResponse,
   ErrorResponse,
   HistoryResponse,
   HostsResponse,
-  PersonsResponse,
   JoinResponse,
+  LangfuseSettingsResponse,
+  MemoryQuery,
+  MemoryResponse,
   Person,
   PersonAction,
+  PersonsResponse,
   RelayResponse,
+  SetHostAllowRequest,
+  SetHostAllowResponse,
+  SkillResponse,
+  SkillsResponse,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StopAgentResponse,
-  ControlAgentResponse,
-  SetHostAllowRequest,
-  SetHostAllowResponse,
   StreamMessage,
+  Task,
   TaskActionResponse,
   TaskListResponse,
   TaskNumber,
-  ClaimRefusal,
-  MemoryQuery,
-  MemoryResponse,
-  SkillResponse,
-  SkillsResponse,
-  BriefResponse,
-  ConnectLangfuseRequest,
-  LangfuseSettingsResponse,
   TerminalInputFrame,
   TerminalWatchFrame,
   Verdict,
 } from "@shared/index";
 import {
+  agentPath,
+  approvalDenyPath,
+  BRIEF_PATH,
+  claimPath,
+  LANGFUSE_SETTINGS_PATH,
   LIVE_PING,
   MAX_EVENT_IDS,
   MAX_HISTORY_LIMIT,
-  agentPath,
-  approvalDenyPath,
-  claimPath,
+  memoryQueryString,
   nicknamePath,
   releasePath,
   rolePath,
-  memoryQueryString,
   SKILLS_PATH,
   skillPath,
-  BRIEF_PATH,
-  LANGFUSE_SETTINGS_PATH,
   summaryPath,
 } from "@shared/index";
 import type {
@@ -164,10 +164,7 @@ export class HttpChannelSource implements ChannelSource {
    * `status` tells a missing session (401) from a Person without write access (403)
    * and a Worker without the GitHub App (503).
    */
-  static async join(
-    base: string,
-    repo: string,
-  ): Promise<{ ok: true; source: HttpChannelSource } | { ok: false; status: number; reason: string }> {
+  static async join(base: string, repo: string): Promise<{ ok: true; source: HttpChannelSource } | { ok: false; status: number; reason: string }> {
     try {
       const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const res = await fetch(`${base.replace(/\/$/, "")}/api/join`, {
@@ -245,8 +242,11 @@ export class HttpChannelSource implements ChannelSource {
   }
 
   async agent(id: AgentId) {
-    try { return (await this.get<AgentSummary>(summaryPath(id))).agent; }
-    catch { return null; }
+    try {
+      return (await this.get<AgentSummary>(summaryPath(id))).agent;
+    } catch {
+      return null;
+    }
   }
 
   async olderEvents(before: number): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">> {
@@ -256,21 +256,20 @@ export class HttpChannelSource implements ChannelSource {
 
   async scopedEvents(scope: HistoryScope, before?: number): Promise<EventPage> {
     const of = "agent" in scope ? `agent=${encodeURIComponent(scope.agent)}` : `task=${scope.task}`;
-    const page = await this.get<HistoryResponse>(
-      `/api/events?tail=${SCOPED_PAGE}&${of}${before === undefined ? "" : `&before=${before}`}`,
-    );
+    const page = await this.get<HistoryResponse>(`/api/events?tail=${SCOPED_PAGE}&${of}${before === undefined ? "" : `&before=${before}`}`);
     const oldest = page.events[0]?.seq;
     const events = page.events.filter((e) => e.type !== "verdict");
     const unavailable = page.unavailable === undefined ? {} : { unavailable: page.unavailable };
-    return page.events.length === SCOPED_PAGE && oldest !== undefined
-      ? { events, olderBefore: oldest, ...unavailable }
-      : { events, ...unavailable };
+    return page.events.length === SCOPED_PAGE && oldest !== undefined ? { events, olderBefore: oldest, ...unavailable } : { events, ...unavailable };
   }
 
   async eventsById(ids: readonly string[]): Promise<ChannelEvent[]> {
     const pages = [];
     for (let i = 0; i < ids.length; i += MAX_EVENT_IDS) {
-      const some = ids.slice(i, i + MAX_EVENT_IDS).map(encodeURIComponent).join(",");
+      const some = ids
+        .slice(i, i + MAX_EVENT_IDS)
+        .map(encodeURIComponent)
+        .join(",");
       pages.push(this.get<HistoryResponse>(`/api/events?ids=${some}`).then((r) => r.events));
     }
     return (await Promise.all(pages)).flat().sort((a, b) => a.seq - b.seq);
@@ -280,11 +279,7 @@ export class HttpChannelSource implements ChannelSource {
     return (await this.get<HistoryResponse>(`/api/events?type=wake&after=${after}&limit=${WAKES_PAGE}`)).events;
   }
 
-  subscribe(
-    cursor: number,
-    onMessage: (message: StreamMessage) => void,
-    onState: (state: ConnectionState) => void,
-  ): () => void {
+  subscribe(cursor: number, onMessage: (message: StreamMessage) => void, onState: (state: ConnectionState) => void): () => void {
     let socket: WebSocket | null = null;
     let ping: ReturnType<typeof setInterval> | undefined;
     let closed = false;
@@ -581,7 +576,6 @@ function splitVerdicts(all: ChannelEvent[]): { events: ChannelEvent[]; verdicts:
   }
   return { events, verdicts };
 }
-
 
 /** A full page of history means there may be older Events: page back from its oldest. */
 /** How many of an Agent's or a Task's Events one read loads. */

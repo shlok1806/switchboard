@@ -1,9 +1,9 @@
 // Where the canvas puts each Agent (ADR 0020): frames per Host, a lead's Agents after
 // it, and nothing drawn ever moving when others join.
 
-import { describe, expect, it } from "vitest";
 import type { Agent, AgentId, HostId, Task } from "@shared/index";
-import { edgePoints, fit, frameRect, groups, nodeRect, place, zoomAt, type Point, type Rect } from "@/lib/canvas-layout";
+import { describe, expect, it } from "vitest";
+import { edgePoints, fit, frameRect, groups, nodeRect, type Point, place, type Rect, zoomAt } from "@/lib/canvas-layout";
 import { stateOf } from "@/lib/state";
 
 let n = 0;
@@ -39,8 +39,7 @@ function apart(a: Rect, b: Rect) {
 
 function expectNoOverlap(at: Map<AgentId, Point>) {
   const rects = [...at.values()].map(nodeRect);
-  for (let i = 0; i < rects.length; i++)
-    for (let j = i + 1; j < rects.length; j++) expect(apart(rects[i]!, rects[j]!), `${i} and ${j}`).toBe(true);
+  for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) expect(apart(rects[i]!, rects[j]!), `${i} and ${j}`).toBe(true);
 }
 
 describe("canvas frames", () => {
@@ -75,7 +74,11 @@ describe("canvas frames", () => {
     const a = agent("maya");
     const b = agent("maya", { parent: a.id });
     a.parent = b.id;
-    expect(ids(groups([orphan, a, b], [], "shlok")).flat().sort()).toEqual([orphan.id, a.id, b.id].sort());
+    expect(
+      ids(groups([orphan, a, b], [], "shlok"))
+        .flat()
+        .sort(),
+    ).toEqual([orphan.id, a.id, b.id].sort());
   });
 
   it("draws a frame around its nodes, so a dragged node takes its frame with it", () => {

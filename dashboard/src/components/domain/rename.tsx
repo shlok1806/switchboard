@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import type { Agent } from "@shared/index";
 import { MAX_NICKNAME_LENGTH } from "@shared/index";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useStore } from "@/data/store";
@@ -64,7 +64,9 @@ export function RenameDialog({
         >
           <DialogHeader>
             <DialogTitle>Rename {agent.nickname ?? agent.id}</DialogTitle>
-            <DialogDescription>Anyone on the Channel can rename an Agent while it runs. Its Agent ID never changes, and Nicknames are unique.</DialogDescription>
+            <DialogDescription>
+              Anyone on the Channel can rename an Agent while it runs. Its Agent ID never changes, and Nicknames are unique.
+            </DialogDescription>
           </DialogHeader>
           <label className="flex flex-col gap-1.5">
             <span className="text-small text-ink-3">Nickname</span>
@@ -74,7 +76,7 @@ export function RenameDialog({
               maxLength={MAX_NICKNAME_LENGTH}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="h-[30px] rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-[16px]"
+              className="h-[30px] rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-read"
             />
           </label>
           <DialogFooter>

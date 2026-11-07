@@ -3,8 +3,8 @@
 // page asks the Channel for, where the Channel's terminal frames go, and that a
 // reconnected socket watches again, since the Channel forgets a closed socket's watches.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentId, StreamMessage } from "@shared/index";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpChannelSource } from "@/data/http";
 import type { TerminalFrame } from "@/data/source";
 
@@ -72,7 +72,11 @@ afterEach(() => {
 function stream() {
   const source = new HttpChannelSource("http://channel.test/r/o/r", "o/r", "shlok");
   const messages: StreamMessage[] = [];
-  const stop = source.subscribe(0, (m) => messages.push(m), () => {});
+  const stop = source.subscribe(
+    0,
+    (m) => messages.push(m),
+    () => {},
+  );
   return { source, messages, stop, socket: () => FakeSocket.all.at(-1) as FakeSocket };
 }
 

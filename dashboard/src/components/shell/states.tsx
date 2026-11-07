@@ -12,8 +12,9 @@
  *
  * The root of each carries `data-view-state`, which the screenshot tests read.
  */
-import { Component, useEffect, useId, useRef, useState, useSyncExternalStore, type ErrorInfo, type ReactNode } from "react";
+
 import { Copy } from "lucide-react";
+import { Component, type ErrorInfo, type ReactNode, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
 import { PageHead } from "@/components/shell/page-head";
@@ -28,8 +29,8 @@ function Bar({ w, h = "h-2.5", className }: { w: string; h?: string; className?:
 /** The page head: the view's name and its facts. */
 function HeadBars({ title }: { title: string }) {
   return (
-    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
-      <h1 className="text-head font-semibold text-ink">{title}</h1>
+    <div className="flex flex-col gap-2.5">
+      <h1 className="font-display text-head font-medium text-ink max-sm:text-head-phone">{title}</h1>
       <Bar w="14rem" />
     </div>
   );
@@ -39,7 +40,7 @@ function ChipBars({ n = 5 }: { n?: number }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {Array.from({ length: n }, (_, i) => (
-        <span key={i} aria-hidden className="h-[26px] w-16 rounded-[var(--r)] border border-rule max-sm:h-11" />
+        <span key={i} aria-hidden className="h-7 w-16 rounded-[var(--r)] border border-rule max-sm:h-11" />
       ))}
     </div>
   );
@@ -104,7 +105,9 @@ function Table({ rows = 6, wide = true }: { rows?: number; wide?: boolean }) {
 /** A log row: the time, who, the kind, what happened. */
 function LogRow({ i }: { i: number }) {
   return (
-    <div className="flex h-9 items-center gap-6 border-b border-rule px-1 max-sm:h-auto max-sm:flex-col max-sm:items-start max-sm:gap-2 max-sm:py-3" /* taste-skill-ignore: the rule of the row it stands in for */>
+    <div
+      className="flex h-9 items-center gap-6 border-b border-rule px-1 max-sm:h-auto max-sm:flex-col max-sm:items-start max-sm:gap-2 max-sm:py-3" /* taste-skill-ignore: the rule of the row it stands in for */
+    >
       <Bar w="3.5rem" />
       <span className="flex w-36 shrink-0 items-center gap-2">
         <span aria-hidden className="size-2.5 shrink-0 rounded-full border border-rule-2" />
@@ -142,7 +145,9 @@ function NoteBlock({ i }: { i: number }) {
 /** A narrow column at the right: sections of label and value lines. */
 function SideColumn() {
   return (
-    <aside className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-5 border-l border-rule px-5 pt-5 max-lg:hidden" /* taste-skill-ignore: the rule of the row it stands in for */>
+    <aside
+      className="flex w-[var(--inspector-w)] shrink-0 flex-col gap-5 border-l border-rule px-5 pt-5 max-lg:hidden" /* taste-skill-ignore: the rule of the row it stands in for */
+    >
       {[0, 1, 2].map((s) => (
         <div key={s} className="flex flex-col gap-3">
           <Bar w="6rem" h="h-3" />
@@ -237,7 +242,9 @@ function Body({ view }: { view: Route["view"] }) {
         <>
           <ChipBars n={6} />
           {/* A phone's board: the column tabs over one column. */}
-          <div className="grid h-11 grid-cols-4 items-center justify-items-center border-b border-rule-2 sm:hidden" /* taste-skill-ignore: the rule of the tabs it stands in for */>
+          <div
+            className="grid h-11 grid-cols-4 items-center justify-items-center border-b border-rule-2 sm:hidden" /* taste-skill-ignore: the rule of the tabs it stands in for */
+          >
             {[0, 1, 2, 3].map((i) => (
               <Bar key={i} w="3.5rem" />
             ))}
@@ -380,7 +387,7 @@ export function ViewSkeleton({ view }: { view: Route["view"] }) {
   useAnnounceLoading(VIEW_NAME[view]);
   return (
     <div data-view-state="loading" aria-busy="true" className="flex min-h-0 flex-1">
-      <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-hidden px-[var(--gutter)] pt-5 pb-12">
+      <div className="flex min-w-0 flex-1 flex-col gap-6 overflow-hidden px-[var(--gutter)] pt-[var(--page-top)] pb-12">
         <HeadBars title={VIEW_NAME[view]} />
         <div className="loading-pulse flex flex-col gap-5">
           <Body view={view} />
@@ -394,9 +401,16 @@ export function ViewSkeleton({ view }: { view: Route["view"] }) {
 /** A view with nothing to show yet: what is missing, how it comes, and the one thing to do. */
 export function EmptyState({ title, children, action, className }: { title: string; children: ReactNode; action?: ReactNode; className?: string }) {
   return (
-    <section data-view-state="empty" aria-label={title} className={cn("flex max-w-[34rem] flex-col items-start gap-1.5 border-t border-rule pt-5", className)} /* taste-skill-ignore: the top rule of the list it stands in for */>
-      <h2 className="text-title font-semibold text-ink">{title}</h2>
-      <p className="text-row text-ink-2">{children}</p>
+    <section
+      data-view-state="empty"
+      aria-label={title}
+      className={cn(
+        "flex max-w-[36rem] flex-col items-start gap-2 border-t border-rule pt-6",
+        className,
+      )} /* taste-skill-ignore: the top rule of the list it stands in for */
+    >
+      <h2 className="font-display text-section font-medium text-ink">{title}</h2>
+      <p className="max-w-[var(--measure)] text-row text-ink-2">{children}</p>
       {action && <div className="pt-3">{action}</div>}
     </section>
   );
@@ -405,7 +419,7 @@ export function EmptyState({ title, children, action, className }: { title: stri
 /** A whole view with nothing to show: its page head, then the empty state. */
 export function EmptyView({ view, title, children, action }: { view: string; title: string; children: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-[var(--gutter)] pt-5 pb-12">
+    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-[var(--gutter)] pt-[var(--page-top)] pb-12">
       <PageHead title={view} />
       <EmptyState title={title} action={action}>
         {children}
@@ -466,9 +480,14 @@ export function ErrorPage({
     if (missing) heading.current?.focus({ preventScroll: true });
   }, [missing]);
   return (
-    <div data-view-state="error" className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[var(--gutter)] pt-5 pb-12">
-      <section role={missing ? undefined : "alert"} aria-labelledby={id} className="flex max-w-[34rem] flex-col items-start gap-2">
-        <h1 ref={heading} id={id} tabIndex={missing ? -1 : undefined} className="text-head font-semibold text-ink outline-none">
+    <div data-view-state="error" className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[var(--gutter)] pt-[var(--page-top)] pb-12">
+      <section role={missing ? undefined : "alert"} aria-labelledby={id} className="flex max-w-[36rem] flex-col items-start gap-3">
+        <h1
+          ref={heading}
+          id={id}
+          tabIndex={missing ? -1 : undefined}
+          className="font-display text-head font-medium text-ink outline-none max-sm:text-head-phone"
+        >
           {title}
         </h1>
         {children && <p className="text-row text-ink-2">{children}</p>}

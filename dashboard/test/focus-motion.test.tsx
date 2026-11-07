@@ -14,7 +14,14 @@ let reduce = false;
 
 beforeEach(() => {
   reduce = false;
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query.includes("reduce") ? reduce : false,
     media: query,

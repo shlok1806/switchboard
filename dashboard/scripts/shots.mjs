@@ -230,7 +230,16 @@ async function main() {
   // what gets killed, so no helper is left to write into the profile.
   const chrome = spawn(
     chromePath(),
-    ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-sandbox", `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`, "about:blank"],
+    [
+      "--headless=new",
+      "--disable-gpu",
+      "--hide-scrollbars",
+      "--no-first-run",
+      "--no-sandbox",
+      `--remote-debugging-port=${debugPort}`,
+      `--user-data-dir=${profile}`,
+      "about:blank",
+    ],
     { stdio: "ignore", detached: true },
   );
   // How Chrome ended, once it has: startup stops waiting for a browser that is gone.

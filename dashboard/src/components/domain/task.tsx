@@ -1,9 +1,9 @@
 import type { Agent, AgentId, Holder, Task } from "@shared/index";
-import { Glyph, useAgentStates } from "@/components/domain/state";
 import { ownedName } from "@/components/domain/fleet";
+import { Glyph, useAgentStates } from "@/components/domain/state";
 import { useIndex } from "@/data/store";
 import { href } from "@/lib/router";
-import { stateWord, type GlyphState } from "@/lib/state";
+import { type GlyphState, stateWord } from "@/lib/state";
 
 export type Column = "stale" | "open" | "claimed" | "review" | "done";
 

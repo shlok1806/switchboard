@@ -4,13 +4,7 @@ import type { Skill, SkillFile } from "@shared/index";
 import { skillDescription, sortedFiles, utf8Bytes } from "@shared/index";
 import { A, ago } from "./fixtures";
 
-function version(
-  name: string,
-  n: number,
-  publishedBy: Skill["publishedBy"],
-  secondsAgo: number,
-  files: SkillFile[],
-): Skill {
+function version(name: string, n: number, publishedBy: Skill["publishedBy"], secondsAgo: number, files: SkillFile[]): Skill {
   const sorted = sortedFiles(files);
   const description = skillDescription(sorted);
   return {
@@ -22,7 +16,11 @@ function version(
     size: sorted.reduce((sum, f) => sum + utf8Bytes(f.content), 0),
     paths: sorted.map((f) => f.path),
     // A stand-in for the Worker's SHA-256: unique per version, the same shape.
-    digest: [...`${name}${n}`].map((c) => c.charCodeAt(0).toString(16)).join("").padEnd(64, "0").slice(0, 64),
+    digest: [...`${name}${n}`]
+      .map((c) => c.charCodeAt(0).toString(16))
+      .join("")
+      .padEnd(64, "0")
+      .slice(0, 64),
     files: sorted,
   };
 }

@@ -68,13 +68,13 @@ export function AgentBrief({ agent, compact = false }: { agent: Agent; compact?:
   const ran = `${agent.presence === "gone" ? "Ran" : "Running"} ${duration((agent.presence === "gone" ? Date.parse(agent.lastSeenAt) : now) - Date.parse(agent.startedAt))}`;
   return (
     <section aria-label="What this Agent is doing" className="flex min-w-0 flex-col gap-1.5 text-small text-ink-3">
-      <p className={cn("break-words", c?.task ? (compact ? "text-body text-ink" : "text-lead font-medium text-ink") : "text-body text-ink-3")}>
+      <p className={cn("break-words", c?.task ? (compact ? "text-row text-ink" : "text-title font-medium text-ink") : "text-row text-ink-3")}>
         {c?.task ?? "Brief unavailable"}
       </p>
       {c?.brief && (
         <details onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <summary className="w-fit cursor-pointer text-ink underline-offset-4 hover:underline">Show brief</summary>
-          <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-hover p-3 font-sans text-small whitespace-pre-wrap break-words text-ink-2">{c.brief}</pre>
+          <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-paper-2 p-3 font-sans text-small whitespace-pre-wrap break-words text-ink-2">{c.brief}</pre>
         </details>
       )}
       <p className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -84,7 +84,13 @@ export function AgentBrief({ agent, compact = false }: { agent: Agent; compact?:
       </p>
       {(c?.cwd || c?.branch) && (
         <p className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-          {c?.cwd && <code className="break-all font-mono" title={c.cwd}>{c.cwd}</code> /* taste-skill-ignore: a path */}
+          {
+            c?.cwd && (
+              <code className="break-all font-mono" title={c.cwd}>
+                {c.cwd}
+              </code>
+            ) /* taste-skill-ignore: a path */
+          }
           {c?.branch && <code className="break-all font-mono">{c.branch}</code> /* taste-skill-ignore: a branch name */}
         </p>
       )}

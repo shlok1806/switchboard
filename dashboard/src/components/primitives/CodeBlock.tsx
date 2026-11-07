@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useState, type ReactNode } from "react";
+import { Fragment, type ReactNode, useCallback, useState } from "react";
 
 /* ─────────────────────────────────────────────────────────
  * CODE BLOCK
@@ -50,11 +50,36 @@ const DIFF: Row[] = [
   { old: 6, cur: 7, type: "ctx", pieces: [{ text: "}" }] },
 ];
 
-const HATCH = "repeating-linear-gradient(45deg, var(--red) 0, var(--red) 1.5px, transparent 1.5px, transparent 3px)";
+const HATCH = "repeating-linear-gradient(45deg, var(--ink-3) 0, var(--ink-3) 1.5px, transparent 1.5px, transparent 3px)";
 
 /* light syntax coloring - keywords/imports/conditionals, functions, strings & numbers */
-const KEYWORDS = new Set(["import", "from", "export", "default", "async", "function", "const", "let", "var", "await", "return", "if", "else", "for", "while", "new", "throw", "try", "catch", "null", "true", "false", "undefined"]);
-const TOKEN = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`]*`|\b\d+(?:\.\d+)?\b|\b(?:import|from|export|default|async|function|const|let|var|await|return|if|else|for|while|new|throw|try|catch|null|true|false|undefined)\b|[A-Za-z_$][\w$]*(?=\s*\())/g;
+const KEYWORDS = new Set([
+  "import",
+  "from",
+  "export",
+  "default",
+  "async",
+  "function",
+  "const",
+  "let",
+  "var",
+  "await",
+  "return",
+  "if",
+  "else",
+  "for",
+  "while",
+  "new",
+  "throw",
+  "try",
+  "catch",
+  "null",
+  "true",
+  "false",
+  "undefined",
+]);
+const TOKEN =
+  /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`]*`|\b\d+(?:\.\d+)?\b|\b(?:import|from|export|default|async|function|const|let|var|await|return|if|else|for|while|new|throw|try|catch|null|true|false|undefined)\b|[A-Za-z_$][\w$]*(?=\s*\())/g;
 
 function highlight(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -66,10 +91,19 @@ function highlight(text: string): ReactNode[] {
     if (idx > last) nodes.push(<span key={k++}>{text.slice(last, idx)}</span>);
     let color: string;
     let weight: number | undefined;
-    if (/^["'`]/.test(t) || /^\d/.test(t)) color = "var(--link)"; // string / number
-    else if (KEYWORDS.has(t)) color = "var(--accent-ink)"; // keyword / import / conditional
-    else { color = "var(--ink)"; weight = 500; } // function call
-    nodes.push(<span key={k++} style={{ color, fontWeight: weight }}>{t}</span>);
+    if (/^["'`]/.test(t) || /^\d/.test(t))
+      color = "var(--ink)"; // string / number
+    else if (KEYWORDS.has(t))
+      color = "var(--accent-ink)"; // keyword / import / conditional
+    else {
+      color = "var(--ink)";
+      weight = 500;
+    } // function call
+    nodes.push(
+      <span key={k++} style={{ color, fontWeight: weight }}>
+        {t}
+      </span>,
+    );
     last = idx + t.length;
   }
   if (last < text.length) nodes.push(<span key={k++}>{text.slice(last)}</span>);
@@ -106,7 +140,18 @@ function Pieces({ pieces }: { pieces: Piece[] }) {
 
 function FileIcon() {
   return (
-    <svg aria-hidden width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-ink-3">
+    <svg
+      aria-hidden
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0 text-ink-3"
+    >
       <path d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
     </svg>
   );
@@ -160,9 +205,9 @@ export default function CodeBlock({
   const removed = diff.filter((r) => r.type === "del").length;
 
   return (
-    <div className={`${className} overflow-hidden rounded-md bg-panel`}>
+    <div className={`${className} overflow-hidden rounded-md bg-paper-2`}>
       {/* header - file · (diff stat | copy) */}
-      <div className="flex min-h-11 items-center gap-2 bg-hover px-4 py-2 text-small">
+      <div className="flex min-h-11 items-center gap-2 bg-paper-2 px-4 py-2 text-small">
         <span className="inline-flex min-w-0 items-center gap-[7px]">
           <FileIcon />
           <code className="min-w-0 font-mono leading-snug break-words text-ink">
@@ -191,13 +236,38 @@ export default function CodeBlock({
             aria-label="Copy code"
             onClick={copy}
             className={`-mr-1 ml-auto flex h-6 items-center gap-1 rounded-md px-1.5 text-small
-              font-medium transition-colors duration-100 hover:bg-hover
+              font-medium transition-colors duration-100 hover:bg-paper-2
               ${copied ? "text-ink" : "text-ink-3 hover:text-ink"}`}
           >
             {copied ? (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+              <svg
+                aria-hidden="true"
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
             ) : (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+              <svg
+                aria-hidden="true"
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="9" y="9" width="12" height="12" rx="2.5" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
             )}
             {copied ? text.copied : text.copy}
           </button>
@@ -208,7 +278,7 @@ export default function CodeBlock({
       <div className="py-3 text-small leading-[1.65] text-ink-2">
         {isDiff ? (
           <div className="relative">
-            <span className="pointer-events-none absolute inset-y-0 left-5 w-0.5 bg-hover" />
+            <span className="pointer-events-none absolute inset-y-0 left-5 w-0.5 bg-paper-2" />
             {diff.map((r, i) => {
               const add = r.type === "add";
               const del = r.type === "del";
@@ -220,11 +290,10 @@ export default function CodeBlock({
                   className={`relative grid grid-cols-[20px_minmax(0,1fr)] items-start
                     ${add ? "bg-paper-2" : del ? "bg-paper-2" : ""}`}
                 >
-                  {(add || del) && (
-                    <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: add ? "var(--green)" : HATCH }} />
-                  )}
+                  {(add || del) && <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: add ? "var(--ink-2)" : HATCH }} />}
                   <span className={`select-none text-center text-small tabular-nums ${add ? "text-ink" : del ? "text-ink" : "text-ink-3"}`}>{num ?? ""}</span>
-                  <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">{/* taste-skill-ignore: a code line */}
+                  <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">
+                    {/* taste-skill-ignore: a code line */}
                     <Pieces pieces={r.pieces} />
                   </code>
                 </div>
@@ -233,11 +302,14 @@ export default function CodeBlock({
           </div>
         ) : (
           <div className="relative">
-            <span className="pointer-events-none absolute inset-y-0 left-5 w-0.5 bg-hover" />
+            <span className="pointer-events-none absolute inset-y-0 left-5 w-0.5 bg-paper-2" />
             {lines.map((line, i) => (
               <div key={i} className="grid grid-cols-[20px_minmax(0,1fr)] items-start">
                 <span className="select-none text-center text-small tabular-nums text-ink-3">{i + 1}</span>
-                <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">{/* taste-skill-ignore: a code line */}{highlight(line)}</code>
+                <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">
+                  {/* taste-skill-ignore: a code line */}
+                  {highlight(line)}
+                </code>
               </div>
             ))}
           </div>

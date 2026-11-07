@@ -1,8 +1,8 @@
 // Usage (ADR 0011): an Agent's account, what it used, and the account's limits as
 // Claude Code's `/usage` reports them.
 
-import { useEffect, useState } from "react";
 import type { Agent, SessionUsage, UsageLimit } from "@shared/index";
+import { useEffect, useState } from "react";
 import { useChannel } from "@/data/store";
 import { ago, compact } from "@/lib/format";
 import { dollars, isStale, limitsFor, meterTone, resetText } from "@/lib/usage";
@@ -41,18 +41,9 @@ export function Meter({
     <div className={cn("flex min-w-0 flex-col gap-1", stale && "opacity-55")} data-tone={tone} data-stale={stale || undefined}>
       <div className="flex min-w-0 items-baseline justify-between gap-2">
         <span className="min-w-0 [overflow-wrap:anywhere] text-small text-ink-2">{label}</span>
-        <span className="shrink-0 text-small font-medium text-ink tabular-nums">
-          {Math.round(limit.percent)}%
-        </span>
+        <span className="shrink-0 text-small font-medium text-ink tabular-nums">{Math.round(limit.percent)}%</span>
       </div>
-      <div
-        className="h-1 overflow-hidden bg-rule"
-        role="meter"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={limit.percent}
-      >
+      <div className="h-1 overflow-hidden bg-rule" role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={limit.percent}>
         {/* A high reading is a number, not a colour (design.md): every tone fills in ink-2. */}
         <div className="h-full bg-ink-2" style={{ width: `${width}%` }} />
       </div>
@@ -62,11 +53,7 @@ export function Meter({
 }
 
 function StaleLabel({ readAt, now }: { readAt: string; now: number }) {
-  return (
-    <span className="text-small whitespace-nowrap text-ink-3">
-      Stale · read {ago(readAt, now)}
-    </span>
-  );
+  return <span className="text-small whitespace-nowrap text-ink-3">Stale · read {ago(readAt, now)}</span>;
 }
 
 function tokens(s: SessionUsage): string {
@@ -76,7 +63,10 @@ function tokens(s: SessionUsage): string {
 function Used({ session }: { session?: SessionUsage }) {
   if (!session) return <span className="text-ink-3">No usage yet</span>;
   return (
-    <span className="tabular-nums" title={`${session.inputTokens} input, ${session.cacheReadTokens} cache read, ${session.cacheWriteTokens} cache write, ${session.outputTokens} output tokens`}>
+    <span
+      className="tabular-nums"
+      title={`${session.inputTokens} input, ${session.cacheReadTokens} cache read, ${session.cacheWriteTokens} cache write, ${session.outputTokens} output tokens`}
+    >
       {session.requests} {session.requests === 1 ? "request" : "requests"} · {tokens(session)}
       {session.costUsd !== undefined && ` · ${dollars(session.costUsd)}`}
     </span>

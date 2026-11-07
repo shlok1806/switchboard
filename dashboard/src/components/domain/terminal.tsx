@@ -78,8 +78,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
   );
   const type = useCallback(
     (text: string) => {
-      for (let at = 0; at < text.length; at += TERMINAL_INPUT_MAX)
-        send(undefined, text.slice(at, at + TERMINAL_INPUT_MAX));
+      for (let at = 0; at < text.length; at += TERMINAL_INPUT_MAX) send(undefined, text.slice(at, at + TERMINAL_INPUT_MAX));
     },
     [send],
   );
@@ -138,8 +137,7 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
     setTyping(false);
   };
   const where = agent.host ? hostName(agent.host) : "in a terminal";
-  const keyboard =
-    holder === null ? "free" : mine ? "yours" : holder.key === null ? `${holder.person}, at the terminal` : `${holder.person}'s`;
+  const keyboard = holder === null ? "free" : mine ? "yours" : holder.key === null ? `${holder.person}, at the terminal` : `${holder.person}'s`;
 
   return (
     <section
@@ -147,7 +145,8 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
       tabIndex={-1}
       aria-label={`${agent.nickname ?? agent.id}'s terminal`}
       // The ink focus ring would vanish on the dark screen in the light theme.
-      className="[--focus:var(--term-fg)] flex min-w-0 flex-col overflow-hidden rounded-[var(--r-2)] bg-term-bg text-term-fg">
+      className="[--focus:var(--term-fg)] flex min-w-0 flex-col overflow-hidden rounded-[var(--r-2)] bg-term-bg text-term-fg"
+    >
       <div className="flex min-h-9 flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-rule px-4 py-2 text-small text-term-dim">
         <h2 className="text-small font-medium text-term-fg">{where}</h2>
         {screen && (
@@ -162,10 +161,16 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
         )}
         {screen?.prompt && <span className="text-term-signal">A dialog is open</span>}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {watching && screen !== null && (mine ? <TermButton onClick={release}>Release the keyboard</TermButton> : <TermButton onClick={take}>
+          {watching &&
+            screen !== null &&
+            (mine ? (
+              <TermButton onClick={release}>Release the keyboard</TermButton>
+            ) : (
+              <TermButton onClick={take}>
                 Take the keyboard
-                <kbd className="ml-2 rounded-[2px] border border-current px-1 pt-0.5 pb-px text-[11.5px] leading-none opacity-55">t</kbd>
-              </TermButton>)}
+                <kbd className="ml-2 rounded-[2px] border border-current px-1 pt-0.5 pb-px text-label leading-none opacity-55">t</kbd>
+              </TermButton>
+            ))}
           <TermButton quiet onClick={() => setWatching((w) => !w)} pressed={watching}>
             {watching ? "Stop watching" : "Watch"}
           </TermButton>
@@ -176,9 +181,14 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
           {agent.presence === "gone" ? "Gone. Its terminal shows again when it resumes." : "Not watching. Watch to see the screen its wrapper shows."}
         </p>
       ) : screen === null ? (
-        <p className="px-4 py-6 text-small text-term-dim">{agent.presence === "gone" ? "Gone. Waiting for it to resume." : "Waiting for the wrapper's screen"}</p>
+        <p className="px-4 py-6 text-small text-term-dim">
+          {agent.presence === "gone" ? "Gone. Waiting for it to resume." : "Waiting for the wrapper's screen"}
+        </p>
       ) : (
         <pre
+          // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: a pre keeps the screen's spacing, and the keys typed into it go to the Agent.
+          role="textbox"
+          aria-multiline="true"
           tabIndex={canType ? 0 : -1}
           aria-label="Screen"
           aria-readonly={!canType}
@@ -207,7 +217,9 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
               </p>
               <div className="flex min-w-0 items-start gap-2">
                 <code className="min-w-0 flex-1 rounded-[var(--r)] bg-term-bg-2 px-2.5 py-1.5 [overflow-wrap:anywhere] text-term-fg">{command}</code>
-                <TermButton onClick={() => void navigator.clipboard?.writeText(command ?? "").then(() => setCopied(true))}>{copied ? "Copied" : "Copy"}</TermButton>
+                <TermButton onClick={() => void navigator.clipboard?.writeText(command ?? "").then(() => setCopied(true))}>
+                  {copied ? "Copied" : "Copy"}
+                </TermButton>
               </div>
             </>
           )}
@@ -215,9 +227,9 @@ export function TerminalPanel({ agent }: { agent: Agent }) {
       )}
       {refused && <p className="border-t border-term-rule px-4 py-2 text-small text-term-fg">{refused}</p>}
       <p className="border-t border-term-rule px-4 py-2 text-small text-term-dim">
-        <span className="block max-w-[72ch]">
-          Keys you type are signed with this browser's key, and {owner ? "your" : `${agent.person}'s`} wrapper takes them only once
-          that key is allowed. Secrets on the screen are masked on {owner ? "your" : `${agent.person}'s`} machine before it leaves.
+        <span className="block max-w-[var(--measure)]">
+          Keys you type are signed with this browser's key, and {owner ? "your" : `${agent.person}'s`} wrapper takes them only once that key is allowed. Secrets
+          on the screen are masked on {owner ? "your" : `${agent.person}'s`} machine before it leaves.
           {mine && " Others wait until you release the keyboard, or a minute passes without your keys."}
         </span>
       </p>

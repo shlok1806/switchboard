@@ -95,14 +95,31 @@ function usageOf(email: string, requests: number, outputTokens: number, inputTok
     email,
     plan: accounts.find((a) => a.email === email)?.plan,
     ...(limits ? { limits } : {}),
-    session: { requests, inputTokens: Math.round(inputTokens * 0.04), outputTokens, cacheReadTokens: Math.round(inputTokens * 0.9), cacheWriteTokens: Math.round(inputTokens * 0.06), costUsd },
+    session: {
+      requests,
+      inputTokens: Math.round(inputTokens * 0.04),
+      outputTokens,
+      cacheReadTokens: Math.round(inputTokens * 0.9),
+      cacheWriteTokens: Math.round(inputTokens * 0.06),
+      costUsd,
+    },
     reportedAt: ago(40),
   };
 }
 
 export const agents: Agent[] = [
   {
-    context: { readAt: ago(4), tokens: 420000, window: 1000000, autoCompactions: 1, task: "Add retries to the API client", brief: "Add retries to the API client.\nKeep failed requests readable and avoid retrying writes.", activity: "Tool: Edit", cwd: "/work/switchboard/task-31", branch: "task/31-api-retries" },
+    context: {
+      readAt: ago(4),
+      tokens: 420000,
+      window: 1000000,
+      autoCompactions: 1,
+      task: "Add retries to the API client",
+      brief: "Add retries to the API client.\nKeep failed requests readable and avoid retrying writes.",
+      activity: "Tool: Edit",
+      cwd: "/work/switchboard/task-31",
+      branch: "task/31-api-retries",
+    },
     id: A.shlokClaude,
     person: "shlok",
     cli: "claude-code",
@@ -133,8 +150,22 @@ export const agents: Agent[] = [
     },
   },
   {
-    context: { readAt: ago(4), tokens: 219640, window: 258400, task: "Document the Channel", brief: "Document the Channel and how Agents receive Directives.", activity: "Updating the examples", cwd: "/work/switchboard/docs", branch: "docs/channel" },
-    usage: { accountId: "Codex · shlok · work", plan: "plus", reportedAt: ago(4), limits: { readAt: ago(4), session: { percent: 32, resetsAt: inMinutes(120) }, week: { percent: 51, resetsAt: inMinutes(60 * 70) }, models: [] } },
+    context: {
+      readAt: ago(4),
+      tokens: 219640,
+      window: 258400,
+      task: "Document the Channel",
+      brief: "Document the Channel and how Agents receive Directives.",
+      activity: "Updating the examples",
+      cwd: "/work/switchboard/docs",
+      branch: "docs/channel",
+    },
+    usage: {
+      accountId: "Codex · shlok · work",
+      plan: "plus",
+      reportedAt: ago(4),
+      limits: { readAt: ago(4), session: { percent: 32, resetsAt: inMinutes(120) }, week: { percent: 51, resetsAt: inMinutes(60 * 70) }, models: [] },
+    },
     id: A.shlokCodex,
     person: "shlok",
     cli: "codex",
@@ -215,8 +246,7 @@ export const agents: Agent[] = [
 
 /* ── Tasks ────────────────────────────────────────────────── */
 
-const steps = (done: number, ...texts: string[]) =>
-  texts.map((text, i) => ({ index: i + 1, text, done: i < done }));
+const steps = (done: number, ...texts: string[]) => texts.map((text, i) => ({ index: i + 1, text, done: i < done }));
 
 /** GitHub-derived fields the mock fills in, as the Worker's GitHub sync does. */
 type SeedTask = Omit<Task, "subtasksDone" | "stepsDone" | "url">;
@@ -248,8 +278,7 @@ const seedTasks: SeedTask[] = [
   {
     number: 12,
     title: "Rename getJson to request in the API client",
-    description:
-      "getJson now takes a RequestInit too, so it is no longer only for JSON GETs. Rename it to request and update every caller.",
+    description: "getJson now takes a RequestInit too, so it is no longer only for JSON GETs. Rename it to request and update every caller.",
     labels: ["api", "refactor"],
     blockedBy: [],
     parent: 11,
@@ -409,7 +438,6 @@ const seedTasks: SeedTask[] = [
 
 export const tasks: Task[] = seedTasks.map((t) => withCounts(t, seedTasks));
 
-
 /* ── diff helpers ─────────────────────────────────────────── */
 
 /** Build a hunk from lines prefixed with " ", "+" or "-". */
@@ -454,11 +482,7 @@ export const RENAME_PUSH_FILES: FileChange[] = [
     ]),
   ]),
   fileChange("web/src/api/index.ts", [
-    hunk(1, 1, [
-      "-export { getJson } from \"./client\";",
-      "+export { request } from \"./client\";",
-      " export { ApiError } from \"./errors\";",
-    ]),
+    hunk(1, 1, ['-export { getJson } from "./client";', '+export { request } from "./client";', ' export { ApiError } from "./errors";']),
   ]),
 ];
 
@@ -467,7 +491,7 @@ export const PAGER_PUSH_FILES: FileChange[] = [
     hunk(0, 1, [
       "+export function Pager({ page, pages, onPage }: PagerProps) {",
       "+  return (",
-      "+    <nav aria-label=\"Pages\" className=\"pager\">",
+      '+    <nav aria-label="Pages" className="pager">',
       "+      <button disabled={page === 1} onClick={() => onPage(page - 1)}>Previous</button>",
       "+      <span>{page} of {pages}</span>",
       "+      <button disabled={page === pages} onClick={() => onPage(page + 1)}>Next</button>",

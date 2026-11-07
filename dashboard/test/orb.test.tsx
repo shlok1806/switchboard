@@ -3,10 +3,10 @@
 // the orb of its state beside the state's word, the orb follows the Agent as the Channel
 // reports it, and an Agent that runs nothing (Stale, Paused) shows none.
 
+import type { Agent, AgentId, ChannelSnapshot, StreamMessage, Task } from "@shared/index";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentId, ChannelSnapshot, StreamMessage, Task } from "@shared/index";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { AgentsView } from "@/views/AgentsView";

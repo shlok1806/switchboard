@@ -1,0 +1,40 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  // The Dashboard's checks, as the Worker's and the CLI's (ADR 0049). The repo's .gitignore is
+  // one level up.
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true, "root": ".." },
+  "files": { "includes": ["**", "!screenshots", "!dist"] },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 160 },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        // Index keys here are on lists rebuilt from text (Markdown blocks, code lines, a diff's
+        // rows) or on skeletons: none reorders, and their content repeats, so it cannot be a key.
+        "noArrayIndexKey": "off"
+      },
+      "a11y": {
+        // role="group" names a set of controls inline (a filter row, a confirm in place); a
+        // fieldset would be a block with a legend and would disable its children with it.
+        "useSemanticElements": "off"
+      },
+      "correctness": {
+        // Effects here re-run on a deliberate trigger (a sheet opening, a filter changing) that
+        // the body does not read; the rule would add or remove those dependencies.
+        "useExhaustiveDependencies": "off"
+      }
+    }
+  },
+  "javascript": { "formatter": { "quoteStyle": "double" } },
+  "css": { "parser": { "tailwindDirectives": true } },
+  "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } },
+  "overrides": [
+    {
+      // Vendored from kibo-ui (THIRD_PARTY_NOTICES.md): its card is a dnd-kit draggable, a div
+      // that takes the keyboard by design.
+      "includes": ["src/components/kibo-ui/**"],
+      "linter": { "rules": { "a11y": { "noStaticElementInteractions": "off", "useAriaPropsSupportedByRole": "off" } } }
+    }
+  ]
+}

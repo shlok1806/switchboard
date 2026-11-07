@@ -3,12 +3,13 @@
  * who, what kind and what, cells that wrap and never cut. A row opens its Event; a link in
  * it keeps its own click. On a phone a row is two lines: who and kind with the age, then what.
  */
-import type { ReactNode } from "react";
+
 import type { AgentId, Capture, ChannelEvent, Verdict } from "@shared/index";
+import type { ReactNode } from "react";
 import { ownedName } from "@/components/domain/fleet";
 import { HolderLabel } from "@/components/domain/task";
 import { useIndex } from "@/data/store";
-import { CAPTURE_LABEL, DOWNGRADE_LABEL, EVENT_TYPE_LABEL, ago, clock, prob, summarize } from "@/lib/format";
+import { ago, CAPTURE_LABEL, clock, DOWNGRADE_LABEL, EVENT_TYPE_LABEL, prob, summarize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export const CAPTURES: Capture[] = ["proxy", "hook", "tool"];
@@ -87,11 +88,11 @@ export function Who({ event }: { event: ChannelEvent }) {
 function What({ event }: { event: ChannelEvent }) {
   const { agentById } = useIndex();
   if (event.type === "command" || event.type === "tool.call" || event.type === "file.edit")
-    return <code className="max-w-[72ch] text-small [overflow-wrap:anywhere] text-ink">{summarize(event)}</code>;
+    return <code className="max-w-[var(--measure)] text-small [overflow-wrap:anywhere] text-ink">{summarize(event)}</code>;
   if (event.type === "directive") {
     const to = agentById.get(event.payload.to);
     return (
-      <span className="max-w-[72ch] [overflow-wrap:anywhere] text-ink">
+      <span className="max-w-[var(--measure)] [overflow-wrap:anywhere] text-ink">
         <span className="text-ink-3">to {to ? ownedName(to) : event.payload.to}: </span>
         {event.payload.text}
       </span>
@@ -103,13 +104,13 @@ function What({ event }: { event: ChannelEvent }) {
       return to ? ownedName(to) : id;
     });
     return (
-      <span className="max-w-[72ch] [overflow-wrap:anywhere] text-ink">
+      <span className="max-w-[var(--measure)] [overflow-wrap:anywhere] text-ink">
         <span className="text-ink-3">to {names.join(", ")}: </span>
         {event.payload.text}
       </span>
     );
   }
-  return <span className="max-w-[72ch] [overflow-wrap:anywhere] text-ink">{summarize(event)}</span>;
+  return <span className="max-w-[var(--measure)] [overflow-wrap:anywhere] text-ink">{summarize(event)}</span>;
 }
 
 /** The Task an Event is on, and what the Relay did with it, in words. */
@@ -144,7 +145,7 @@ export function EventRow({
           </span>
           <span className="flex shrink-0 items-baseline gap-2">
             <Marks event={e} verdicts={verdicts} />
-            <time dateTime={e.at} className="text-ink-3 tabular-nums">
+            <time dateTime={e.at} className="text-ink-3">
               {ago(e.at)}
             </time>
           </span>
@@ -154,7 +155,7 @@ export function EventRow({
     );
   return (
     <RowFrame selected={selected} fresh={fresh} onPick={onPick} className={GRID}>
-      <time dateTime={e.at} title={ago(e.at)} className="text-small text-ink-3 tabular-nums">
+      <time dateTime={e.at} title={ago(e.at)} className="text-small text-ink-3">
         {clock(e.at)}
       </time>
       <span className="min-w-0 text-small">
@@ -168,7 +169,19 @@ export function EventRow({
 }
 
 /** The Relay typed an Event into an Agent's running session, or meant to and queued it instead. */
-export function InterruptRow({ verdict: v, event: e, selected, onPick, mobile }: { verdict: Verdict; event: ChannelEvent; selected: boolean; onPick: () => void; mobile: boolean }) {
+export function InterruptRow({
+  verdict: v,
+  event: e,
+  selected,
+  onPick,
+  mobile,
+}: {
+  verdict: Verdict;
+  event: ChannelEvent;
+  selected: boolean;
+  onPick: () => void;
+  mobile: boolean;
+}) {
   const kind = v.downgraded ? "Queued instead" : "Interrupt";
   const odds = v.probabilities ? `Jev ${prob(v.probabilities.interrupt)}` : undefined;
   const said = `${whoName(e)}'s ${EVENT_TYPE_LABEL[e.type].toLowerCase()}`;
@@ -192,14 +205,14 @@ export function InterruptRow({ verdict: v, event: e, selected, onPick, mobile }:
     );
   return (
     <RowFrame selected={selected} onPick={onPick} className={GRID}>
-      <time dateTime={v.at} title={ago(v.at)} className="text-small text-ink-3 tabular-nums">
+      <time dateTime={v.at} title={ago(v.at)} className="text-small text-ink-3">
         {clock(v.at)}
       </time>
       <span className="min-w-0 text-small">
         <HolderLabel holder={{ kind: "agent", agentId: v.agent }} />
       </span>
       <span className="text-small font-semibold text-ink">{kind}</span>
-      <span className="max-w-[72ch] [overflow-wrap:anywhere] text-ink">{what}</span>
+      <span className="max-w-[var(--measure)] [overflow-wrap:anywhere] text-ink">{what}</span>
       {odds ? <span className="text-small whitespace-nowrap text-ink-3 tabular-nums">{odds}</span> : <span />}
     </RowFrame>
   );
@@ -233,9 +246,7 @@ export function TurnRow({
     .map((c) => `${by(c).length} ${CAPTURE_LABEL[c]}`)
     .join(", ");
   // What the turn said: its Update, or its model's last reply. A model call that only asked for tools said nothing.
-  const said = [...item.events]
-    .reverse()
-    .find((e) => e.type === "update" || ((e.type === "proxy.digest" || e.type === "proxy.raw") && e.payload.reply !== ""));
+  const said = [...item.events].reverse().find((e) => e.type === "update" || ((e.type === "proxy.digest" || e.type === "proxy.raw") && e.payload.reply !== ""));
   const what = said ? summarize(said) : summarize(item.events.at(-1)!);
   const toggle = (
     <button
@@ -256,11 +267,11 @@ export function TurnRow({
             <span className="min-w-0 flex-1">
               <HolderLabel holder={{ kind: "agent", agentId: item.agent }} /> <span className="font-semibold text-ink">· Turn</span>
             </span>
-            <time dateTime={first.at} className="shrink-0 text-ink-3 tabular-nums">
+            <time dateTime={first.at} className="shrink-0 text-ink-3">
               {ago(first.at)}
             </time>
           </span>
-          <span className="max-w-[72ch] [overflow-wrap:anywhere] text-ink">{what}</span>
+          <span className="max-w-[var(--measure)] [overflow-wrap:anywhere] text-ink">{what}</span>
           <span className="flex items-baseline justify-between gap-3 text-small text-ink-3 tabular-nums">
             {counts}
             {toggle}
@@ -268,7 +279,7 @@ export function TurnRow({
         </div>
       ) : (
         <div className={cn(GRID, "min-h-9 py-2 text-row")}>
-          <time dateTime={first.at} title={ago(first.at)} className="text-small text-ink-3 tabular-nums">
+          <time dateTime={first.at} title={ago(first.at)} className="text-small text-ink-3">
             {clock(first.at)}
           </time>
           <span className="min-w-0 text-small">
@@ -276,7 +287,7 @@ export function TurnRow({
           </span>
           <span className="text-small font-semibold text-ink">Turn</span>
           <span className="min-w-0">
-            <span className="block max-w-[72ch] [overflow-wrap:anywhere] text-ink">{what}</span>
+            <span className="block max-w-[var(--measure)] [overflow-wrap:anywhere] text-ink">{what}</span>
             <span className="block text-small text-ink-3 tabular-nums">
               {item.events.length} Events: {counts}
               {first.task !== undefined && ` · #${first.task}`}
@@ -287,33 +298,30 @@ export function TurnRow({
       )}
       {open && (
         <>
-          <h2 className="sr-only">
-            Model turn {item.turn}, by its Capture
-          </h2>
-        <div className="grid gap-x-4 gap-y-3 pb-3 sm:grid-cols-3 sm:pl-[calc(4.75rem+0.75rem+0.75rem)]">
-          {CAPTURES.map((c) => (
-            <section key={c} aria-label={`${CAPTURE_LABEL[c]} Capture`} className="min-w-0">
-              <h3 className="border-b border-rule-2 pb-1.5 text-small font-semibold text-ink">
-                {CAPTURE_LABEL[c]} <span className="font-normal text-ink-3 tabular-nums">{by(c).length}</span>
-              </h3>
-              {by(c).length === 0 ? (
-                <p className="py-2 text-small text-ink-3">Nothing from this Capture.</p>
-              ) : (
-                <ol>
-                  {by(c).map((e) => (
-                    <RowFrame key={e.id} selected={e.id === selected} onPick={() => onPick(e.id)} className="flex flex-col gap-0.5 px-1.5">
-                      <span className="text-small font-medium text-ink-2">{EVENT_TYPE_LABEL[e.type]}</span>
-                      <What event={e} />
-                    </RowFrame>
-                  ))}
-                </ol>
-              )}
-            </section>
-          ))}
-        </div>
+          <h2 className="sr-only">Model turn {item.turn}, by its Capture</h2>
+          <div className="grid gap-x-4 gap-y-3 pb-3 sm:grid-cols-3 sm:pl-[calc(4.75rem+0.75rem+0.75rem)]">
+            {CAPTURES.map((c) => (
+              <section key={c} aria-label={`${CAPTURE_LABEL[c]} Capture`} className="min-w-0">
+                <h3 className="border-b border-rule-2 pb-1.5 text-small font-semibold text-ink">
+                  {CAPTURE_LABEL[c]} <span className="font-normal text-ink-3 tabular-nums">{by(c).length}</span>
+                </h3>
+                {by(c).length === 0 ? (
+                  <p className="py-2 text-small text-ink-3">Nothing from this Capture.</p>
+                ) : (
+                  <ol>
+                    {by(c).map((e) => (
+                      <RowFrame key={e.id} selected={e.id === selected} onPick={() => onPick(e.id)} className="flex flex-col gap-0.5 px-1.5">
+                        <span className="text-small font-medium text-ink-2">{EVENT_TYPE_LABEL[e.type]}</span>
+                        <What event={e} />
+                      </RowFrame>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            ))}
+          </div>
         </>
       )}
     </li>
   );
 }
-

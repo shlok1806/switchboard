@@ -3,10 +3,10 @@
 // each at its latest version with who published it; a skill opens with every file in full and
 // the command that installs it, at the version picked; and a Worker without shared skills says so.
 
+import type { Agent, AgentId, ChannelSnapshot, Skill, SkillResponse, SkillsResponse } from "@shared/index";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentId, ChannelSnapshot, Skill, SkillResponse, SkillsResponse } from "@shared/index";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { SkillsView } from "@/views/SkillsView";
@@ -54,7 +54,13 @@ const v = (version: number, files: Skill["files"]): Skill => ({
   files,
 });
 
-const versions = [v(1, [{ path: "SKILL.md", content: ENTRY.replace("Group them by label.\n", "") }]), v(2, [{ path: "SKILL.md", content: ENTRY }, { path: "templates/notes.md", content: "## {{tag}}\n" }])];
+const versions = [
+  v(1, [{ path: "SKILL.md", content: ENTRY.replace("Group them by label.\n", "") }]),
+  v(2, [
+    { path: "SKILL.md", content: ENTRY },
+    { path: "templates/notes.md", content: "## {{tag}}\n" },
+  ]),
+];
 
 const skills = async (): Promise<SkillsResponse> => {
   const { files: _files, ...latest } = versions[1]!;

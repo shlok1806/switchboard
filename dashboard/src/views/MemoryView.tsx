@@ -6,11 +6,12 @@
  * note reloads the first page. A note opens in the inspector (#/memory/<note>), or on a phone
  * in a sheet, with the Events around it: its author's and its Task's, just before and after.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+
 import type { ChannelEvent, MemoryNote, MemoryTag } from "@shared/index";
 import { MEMORY_TAGS, noteFromEvent } from "@shared/index";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { shortName } from "@/components/domain/fleet";
 import { EventRow, RowFrame } from "@/components/domain/log";
 import { OlderRow } from "@/components/domain/older";
@@ -21,8 +22,8 @@ import { EmptyState, EmptyView, ErrorPage, ViewSkeleton } from "@/components/she
 import { useEventDetail } from "@/data/history";
 import type { HistoryScope } from "@/data/source";
 import { useChannel, useIndex, useStore } from "@/data/store";
-import { TAG_LABEL, ago, clock } from "@/lib/format";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { ago, clock, TAG_LABEL } from "@/lib/format";
 import { go, href } from "@/lib/router";
 
 const PAGE = 30;
@@ -122,7 +123,7 @@ export function MemoryView({ selected }: { selected?: string }) {
   return (
     <div className="flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-        <div className="flex w-full max-w-[60rem] flex-col gap-5 px-[var(--gutter)] pt-5 pb-12">
+        <div className="flex w-full max-w-[60rem] flex-col gap-5 px-[var(--gutter)] pt-[var(--page-top)] pb-12">
           <PageHead
             title="Memory"
             facts={[
@@ -132,16 +133,12 @@ export function MemoryView({ selected }: { selected?: string }) {
             ]}
           />
           <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-            <div role="group" aria-label="Tag" className="flex flex-wrap gap-1.5">
-              <Chip on={tag === null} onClick={() => setTag(null)}>
-                All
-              </Chip>
-              {MEMORY_TAGS.map((t) => (
-                <Chip key={t} on={tag === t} onClick={() => setTag(tag === t ? null : t)}>
-                  {TAG_LABEL[t]}
-                </Chip>
-              ))}
-            </div>
+            <Segmented
+              label="Tag"
+              value={tag ?? "all"}
+              onChange={(v) => setTag(v === "all" ? null : v)}
+              options={[{ value: "all" as const, label: "All" }, ...MEMORY_TAGS.map((t) => ({ value: t, label: TAG_LABEL[t] }))]}
+            />
             <label className="ml-auto flex flex-col gap-1 text-small text-ink-3 max-sm:ml-0 max-sm:w-full">
               Find
               <input
@@ -151,7 +148,7 @@ export function MemoryView({ selected }: { selected?: string }) {
                 value={find}
                 onChange={(e) => setFind(e.target.value)}
                 placeholder="retries client.ts"
-                className="h-[30px] w-60 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:w-full max-sm:text-[16px]"
+                className="h-[30px] w-60 min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:w-full max-sm:text-read"
               />
             </label>
           </div>
@@ -175,7 +172,13 @@ export function MemoryView({ selected }: { selected?: string }) {
                 </Button>
               }
             >
-              {q ? <>Nothing on the Channel matches “{find.trim()}”{tag ? ` with the tag ${TAG_LABEL[tag]}` : ""}.</> : <>No note has the tag {tag && TAG_LABEL[tag]} yet.</>}
+              {q ? (
+                <>
+                  Nothing on the Channel matches “{find.trim()}”{tag ? ` with the tag ${TAG_LABEL[tag]}` : ""}.
+                </>
+              ) : (
+                <>No note has the tag {tag && TAG_LABEL[tag]} yet.</>
+              )}
             </EmptyState>
           ) : (
             <ol className="border-t border-rule" aria-label="Notes">
@@ -185,9 +188,7 @@ export function MemoryView({ selected }: { selected?: string }) {
               {loaded.more &&
                 (q ? (
                   // The Worker ranks a search's matches, so there is no older page of them to ask for.
-                  <li className="py-3 text-small text-ink-3">
-                    The best {notes.length} matches. Narrow the search for more.
-                  </li>
+                  <li className="py-3 text-small text-ink-3">The best {notes.length} matches. Narrow the search for more.</li>
                 ) : (
                   <OlderRow loading={older} onClick={loadOlder} what="notes" />
                 ))}
@@ -214,7 +215,7 @@ function HowNotesWork() {
 /** One note as a row: its text, the files it names, then its tags, author, Task and age. */
 export function Note({ note: n, selected, onPick }: { note: MemoryNote; selected: boolean; onPick: () => void }) {
   return (
-    <RowFrame selected={selected} onPick={onPick} className="flex flex-col gap-1.5 px-2 py-3.5">
+    <RowFrame selected={selected} onPick={onPick} className="flex flex-col gap-2 px-3 py-5">
       <NoteBody note={n} />
     </RowFrame>
   );
@@ -227,7 +228,7 @@ function NoteBody({ note: n }: { note: MemoryNote }) {
   const task = n.task !== undefined ? taskByNumber.get(n.task) : undefined;
   return (
     <>
-      <p className="max-w-[72ch] text-row break-words whitespace-pre-line text-ink">{n.text}</p>
+      <p className="max-w-[var(--measure)] font-display text-read break-words whitespace-pre-line text-ink">{n.text}</p>
       {n.files && n.files.length > 0 && (
         <ul aria-label="Files" className="flex flex-wrap gap-x-3 gap-y-0.5">
           {n.files.map((f) => (
@@ -303,7 +304,14 @@ function NoteInspector({ id, sheet, onClose: close }: { id: string; sheet: boole
   const around = (() => {
     if (!note) return { state: "none" as const };
     if (at >= 0) {
-      return { state: "loaded" as const, before: events.slice(0, at).filter(near).slice(-AROUND), after: events.slice(at + 1).filter(near).slice(0, AROUND) };
+      return {
+        state: "loaded" as const,
+        before: events.slice(0, at).filter(near).slice(-AROUND),
+        after: events
+          .slice(at + 1)
+          .filter(near)
+          .slice(0, AROUND),
+      };
     }
     if (readBefore?.id !== note.id) return { state: "reading" as const };
     if (!readBefore.events) return { state: "failed" as const };
@@ -341,7 +349,7 @@ function NoteInspector({ id, sheet, onClose: close }: { id: string; sheet: boole
       ) : !note ? null : (
         <>
           <header className="flex items-start gap-2">
-            <h2 className="min-w-0 flex-1 text-title font-semibold text-ink">Note</h2>
+            <h2 className="min-w-0 flex-1 font-display text-section font-medium text-ink">Note</h2>
             <SheetClose onClose={onClose} />
           </header>
           <div className="flex flex-col gap-1.5">
@@ -351,15 +359,31 @@ function NoteInspector({ id, sheet, onClose: close }: { id: string; sheet: boole
             {around.state === "none" || around.state === "reading" ? (
               <p className="text-small text-ink-3">Reading what came before it</p>
             ) : around.state === "failed" ? (
-              <p className="text-small text-ink-3">Could not read what came before it. It is in <a href={href({ view: "agent", id: note.author })} className="text-ink hover:underline">its author's history</a>.</p>
+              <p className="text-small text-ink-3">
+                Could not read what came before it. It is in{" "}
+                <a href={href({ view: "agent", id: note.author })} className="text-ink hover:underline">
+                  its author's history
+                </a>
+                .
+              </p>
             ) : around.before.length + around.after.length === 0 ? (
-              <p className="text-small text-ink-3">Nothing else from its author{note.task !== undefined && " or on its Task"} {around.state === "older" ? "came before it" : "is loaded"}.</p>
+              <p className="text-small text-ink-3">
+                Nothing else from its author{note.task !== undefined && " or on its Task"} {around.state === "older" ? "came before it" : "is loaded"}.
+              </p>
             ) : (
               <ol className="border-t border-rule">
                 {around.before.map(row)}
                 <li className="list-none border-b border-rule px-1 py-2 text-small font-medium text-ink">This note, {clock(note.at)}</li>
                 {around.after.map(row)}
-                {around.state === "older" && <li className="list-none px-1 py-2 text-small text-ink-3">What came after it is not loaded. It is in <a href={href({ view: "agent", id: note.author })} className="text-ink hover:underline">its author's history</a>.</li>}
+                {around.state === "older" && (
+                  <li className="list-none px-1 py-2 text-small text-ink-3">
+                    What came after it is not loaded. It is in{" "}
+                    <a href={href({ view: "agent", id: note.author })} className="text-ink hover:underline">
+                      its author's history
+                    </a>
+                    .
+                  </li>
+                )}
               </ol>
             )}
           </Section>

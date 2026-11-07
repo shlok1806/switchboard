@@ -1,7 +1,7 @@
-// The Now view's queue (design.md): every line that waits on a Person, in the order a
+// The Now view's queue (design.md): everything that waits on a Person, in the order a
 // Person answers them. Your own Asks first, then Stale Claims (anyone may take one over),
 // then pull requests in review, then the Asks that only another Person can answer. The
-// count of lines that need you comes from this queue too, so the Now key, the page head
+// count of what needs you comes from this queue too, so the Now key, the page head
 // and the queue never disagree.
 import type { Agent, AgentId, ChannelEvent, PersonName, Task } from "@shared/index";
 import { heldByMe } from "@/lib/state";
@@ -27,7 +27,7 @@ function since(events: readonly ChannelEvent[]) {
 }
 
 /**
- * What waits on a Person, oldest first within a kind: the line that has waited longest is
+ * What waits on a Person, oldest first within a kind: what has waited longest is
  * answered first. A Gone Agent's prompt is left out, as `stateOf` leaves it out: nobody can
  * answer it any more. Ages come from the `claim.stale` and `task.review` Events when the
  * Channel still holds them, else from the Task's last change.
@@ -36,8 +36,7 @@ export function needsQueue(agents: readonly Agent[], tasks: readonly Task[], me:
   const agentById = new Map<AgentId, Agent>(agents.map((a) => [a.id, a]));
   const at = since(events);
   const items: QueueItem[] = [];
-  for (const a of agents)
-    if (a.approval && a.presence !== "gone") items.push({ kind: "ask", agent: a, mine: a.person === me, at: a.approval.openedAt });
+  for (const a of agents) if (a.approval && a.presence !== "gone") items.push({ kind: "ask", agent: a, mine: a.person === me, at: a.approval.openedAt });
   for (const t of tasks) {
     if (t.claim?.stale && t.status !== "done") items.push({ kind: "stale", task: t, at: at.stale.get(t.number) ?? t.updatedAt });
     else if (t.status === "review")
@@ -56,7 +55,7 @@ export function isMine(item: QueueItem): boolean {
   return item.kind === "ask" ? item.mine : item.kind === "stale" ? true : item.yours;
 }
 
-/** How many lines need you: the one count the Now key, the page heads and the canvas show. */
+/** How many items need you: the one count the Now key, the page heads and the canvas show. */
 export function needsYouCount(agents: readonly Agent[], tasks: readonly Task[], me: PersonName): number {
   return needsQueue(agents, tasks, me).filter(isMine).length;
 }

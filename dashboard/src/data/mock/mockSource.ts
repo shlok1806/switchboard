@@ -1,23 +1,23 @@
 import type {
-  SetHostAllowRequest,
-  CreateTaskRequest,
   ActionResult,
   Agent,
   AgentId,
   AgentRole,
+  BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
+  ConnectLangfuseRequest,
+  CreateTaskRequest,
   Holder,
   Host,
   HostId,
   HostsResponse,
+  LangfuseConnection,
+  LangfuseSettingsResponse,
   MemoryQuery,
   MemoryResponse,
   PersonAction,
-  BriefResponse,
-  ConnectLangfuseRequest,
-  LangfuseConnection,
-  LangfuseSettingsResponse,
+  SetHostAllowRequest,
   Skill,
   SkillResponse,
   SkillsResponse,
@@ -28,18 +28,18 @@ import type {
   VerdictProbabilities,
 } from "@shared/index";
 import {
-  DEFAULT_HOST_AGENTS_LIVE_CAP,
-  DEFAULT_PERMISSION_MODE,
   agentIdFor,
   cleanLangfuseConnect,
   cleanNickname,
-  LANGFUSE_KEY_END,
+  DEFAULT_HOST_AGENTS_LIVE_CAP,
+  DEFAULT_PERMISSION_MODE,
   holderName,
   hostIdFor,
-  noteFromEvent,
-  offlineReason,
-  notUnderRootsReason,
+  LANGFUSE_KEY_END,
   MAX_MEMORY_LIMIT,
+  noteFromEvent,
+  notUnderRootsReason,
+  offlineReason,
   permissionModeWithin,
   sameNickname,
   underRoots,
@@ -56,14 +56,14 @@ import {
   type TerminalFrame,
   type TerminalLink,
 } from "../source";
-import { accounts, ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
-import { RELAY, relay } from "./relay";
-import { SKILL_VERSIONS } from "./skills";
 import { BRIEF_PAGES } from "./brief";
-import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
+import { accounts, agent as agentActor, ME, makeEvent, person, persons, REPO, agents as seedAgents, tasks as seedTasks, T0, withCounts } from "./fixtures";
+import { RELAY, relay } from "./relay";
+import { AMBIENT, type Beat, HISTORY, LIVE } from "./script";
+import { SKILL_VERSIONS } from "./skills";
 import { mockTerminal } from "./terminal";
 
-const clone = <T,>(v: T): T => structuredClone(v);
+const clone = <T>(v: T): T => structuredClone(v);
 
 /**
  * A simulated Channel. It replays a scripted history, then plays live Events on a
@@ -160,7 +160,9 @@ export class MockChannelSource implements ChannelSource {
 
   /** The simulated Channel's Hosts that are away. */
   private offlineHosts(): HostId[] {
-    return this.allHosts().filter((host) => !host.live).map((host) => host.id);
+    return this.allHosts()
+      .filter((host) => !host.live)
+      .map((host) => host.id);
   }
 
   /** The simulated Channel's snapshot holds its whole history. */
@@ -231,11 +233,17 @@ export class MockChannelSource implements ChannelSource {
             build: (at) =>
               a.tool === "Bash"
                 ? makeEvent("command", agentActor(a.agent as Agent["id"]), "hook", { command: a.arg }, { at, task: a.task })
-                : makeEvent("tool.call", agentActor(a.agent as Agent["id"]), "hook", {
-                    tool: a.tool,
-                    arg: a.arg,
-                    ok: true,
-                  }, { at, task: a.task }),
+                : makeEvent(
+                    "tool.call",
+                    agentActor(a.agent as Agent["id"]),
+                    "hook",
+                    {
+                      tool: a.tool,
+                      arg: a.arg,
+                      ok: true,
+                    },
+                    { at, task: a.task },
+                  ),
           },
           new Date().toISOString(),
           true,
@@ -330,15 +338,19 @@ export class MockChannelSource implements ChannelSource {
         if (!task?.claim) return { ok: false, reason: `Task #${action.task} has no Claim.` };
         if (!task.claim.stale) return { ok: false, reason: "Only a Stale Claim can be taken over." };
         const from = task.claim.holder;
-        const lastUpdate = [...this.events]
-          .reverse()
-          .find((e) => e.type === "update" && e.task === task.number && e.actor.kind === "agent");
-        const event = makeEvent("takeover", me, null, {
-          from,
-          to: action.to,
-          stepsCompleted: task.steps.filter((s) => s.done).map((s) => s.text),
-          lastUpdate: lastUpdate?.type === "update" ? lastUpdate.payload.text : undefined,
-        }, { at, task: task.number });
+        const lastUpdate = [...this.events].reverse().find((e) => e.type === "update" && e.task === task.number && e.actor.kind === "agent");
+        const event = makeEvent(
+          "takeover",
+          me,
+          null,
+          {
+            from,
+            to: action.to,
+            stepsCompleted: task.steps.filter((s) => s.done).map((s) => s.text),
+            lastUpdate: lastUpdate?.type === "update" ? lastUpdate.payload.text : undefined,
+          },
+          { at, task: task.number },
+        );
         task.claim = { task: task.number, holder: action.to, claimedAt: at, stale: false };
         task.updatedAt = at;
         this.record(event, undefined, true);
@@ -439,8 +451,7 @@ export class MockChannelSource implements ChannelSource {
     if (task.status === "done") return { ok: false, reason: `Task #${number} is done.` };
     if (!task.claim) return { ok: false, reason: `Task #${number} is not claimed.` };
     const h = task.claim.holder;
-    const mine =
-      h.kind === "person" ? h.person === this.me : this.agents.find((a) => a.id === h.agentId)?.person === this.me;
+    const mine = h.kind === "person" ? h.person === this.me : this.agents.find((a) => a.id === h.agentId)?.person === this.me;
     if (!mine) {
       const name = h.kind === "agent" ? h.agentId : h.person;
       return { ok: false, reason: `Task #${number} is held by ${name}. Only its holder can release it.`, heldBy: h };
@@ -457,10 +468,22 @@ export class MockChannelSource implements ChannelSource {
   /** This machine's Host, the other Persons' Hosts the demo Agents run on, and a laptop of shlok's that has been Offline for two days. */
   private allHosts(): Host[] {
     if (this.opts.state === "empty") return [];
-    const host = (id: `${string}/${string}`, roots: string[], extra: Partial<Host> = {}): Host => ({ ...this.host, id, person: id.split("/")[0]!, name: id.split("/")[1]!, roots, ...extra });
+    const host = (id: `${string}/${string}`, roots: string[], extra: Partial<Host> = {}): Host => ({
+      ...this.host,
+      id,
+      person: id.split("/")[0]!,
+      name: id.split("/")[1]!,
+      roots,
+      ...extra,
+    });
     const twoDays = new Date(T0 - 2 * 86_400_000).toISOString();
     const others = [
-      host("shlok/laptop", ["/Users/shlok/code"], { live: false, lastSeenAt: twoDays, registeredAt: new Date(T0 - 40 * 86_400_000).toISOString(), maxPermissionMode: "default" }),
+      host("shlok/laptop", ["/Users/shlok/code"], {
+        live: false,
+        lastSeenAt: twoDays,
+        registeredAt: new Date(T0 - 40 * 86_400_000).toISOString(),
+        maxPermissionMode: "default",
+      }),
       host("maya/maya-mbp", ["/Users/maya/src/app", "/Users/maya/src/design"], { maxPermissionMode: "default" }),
       host("dev/devbox", ["/home/dev/app"], { maxPermissionMode: "auto" }),
     ];
@@ -512,9 +535,7 @@ export class MockChannelSource implements ChannelSource {
     if (this.opts.state === "empty") return { skills: [] };
     const latest = new Map<string, Skill>();
     for (const v of SKILL_VERSIONS) if ((latest.get(v.name)?.version ?? 0) < v.version) latest.set(v.name, v);
-    const skills = [...latest.values()]
-      .sort((a, b) => (a.name < b.name ? -1 : 1))
-      .map(({ files: _files, ...summary }) => summary);
+    const skills = [...latest.values()].sort((a, b) => (a.name < b.name ? -1 : 1)).map(({ files: _files, ...summary }) => summary);
     return clone({ skills });
   }
 
@@ -629,11 +650,7 @@ export class MockChannelSource implements ChannelSource {
     };
     this.agents.push(agent);
     this.emit({ type: "agent", agent: clone(agent) });
-    this.record(
-      makeEvent("agent.spawned", agentActor(agent.id), null, { spawn: spawn.id, host: host.id, agent: agent.id }, { at }),
-      undefined,
-      true,
-    );
+    this.record(makeEvent("agent.spawned", agentActor(agent.id), null, { spawn: spawn.id, host: host.id, agent: agent.id }, { at }), undefined, true);
     // Its wrapper started with `--from`: the Channel records the Hand-off as it registers (ADR 0024).
     if (request.from) this.record(makeEvent("agent.handoff", agentActor(agent.id), null, { from: request.from }, { at }), undefined, true);
     return { ok: true, answer: { ok: true, spawn: spawn.id, host: host.id, agent: clone(agent) } };
@@ -733,17 +750,34 @@ export class MockChannelSource implements ChannelSource {
     );
     this.tasks.push(task);
     this.emit({ type: "task", task });
-    this.record(
-      makeEvent("task.create", person(this.me), null, { title, url: task.url, via: "channel" }, { at, task: number }),
-      undefined,
-      true,
-    );
+    this.record(makeEvent("task.create", person(this.me), null, { title, url: task.url, via: "channel" }, { at, task: number }), undefined, true);
     return { ok: true, task };
   }
 }
 
 // Words for the extra Agents' Nicknames, so a long fleet reads like one.
-const FLEET_WORDS = ["atlas", "birch", "cobalt", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper", "kestrel", "lumen", "meadow", "nimbus", "onyx", "pebble", "quartz", "raven", "sable", "tundra"];
+const FLEET_WORDS = [
+  "atlas",
+  "birch",
+  "cobalt",
+  "delta",
+  "ember",
+  "fjord",
+  "garnet",
+  "harbor",
+  "indigo",
+  "juniper",
+  "kestrel",
+  "lumen",
+  "meadow",
+  "nimbus",
+  "onyx",
+  "pebble",
+  "quartz",
+  "raven",
+  "sable",
+  "tundra",
+];
 
 /**
  * The seed Agents and generated ones up to `size`, spread over the three People, mostly Live,
@@ -769,7 +803,12 @@ function withFleet(seed: Agent[], size: number): Agent[] {
       canReceiveInterrupts: true,
       lastSeenAt: at(i % 50),
       startedAt: at(30 + ((i * 7) % 600)),
-      context: { readAt: at(i % 50), tokens: 40_000 + ((i * 7919) % 800_000), window: 1_000_000, activity: i % 3 === 0 ? "Running the tests" : "Reading the code" },
+      context: {
+        readAt: at(i % 50),
+        tokens: 40_000 + ((i * 7919) % 800_000),
+        window: 1_000_000,
+        activity: i % 3 === 0 ? "Running the tests" : "Reading the code",
+      },
     } as Agent);
   }
   return out;
