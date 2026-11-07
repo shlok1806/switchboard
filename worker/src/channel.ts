@@ -2059,7 +2059,9 @@ export class Channel extends DurableObject<Env> {
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     try {
-      ws.close(code, reason);
+      // The close is answered, or the client's connection never ends (ADR 0052). A code the
+      // client may not send back (1005 "no code", 1006, 1015) is answered with 1000.
+      ws.close(answerableCode(code), reason);
     } catch {
       // Already closed.
     }
@@ -2400,4 +2402,15 @@ function send(
     // The socket is closing; its close handler cleans up.
     return false;
   }
+}
+
+/**
+ * The code to answer a client's close with: its own, unless no endpoint may send it (RFC
+ * 6455 7.4): 1005 and 1006 stand for a close without a code or without a frame, and 1004
+ * and 1015 are reserved. Answering with one of those throws, the close is never answered,
+ * and the client's connection stays open until the client process ends (ADR 0052).
+ */
+export function answerableCode(code: number): number {
+  const sendable = (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999);
+  return sendable ? code : 1000;
 }

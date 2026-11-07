@@ -20,11 +20,15 @@ import type {
   ReportedPresence,
   ReportedUsage,
 } from "../../shared/src/index";
-import { type ChannelClient, ChannelError } from "./channel-client";
+import { type ChannelClient, ChannelError, LocalExhaustionError } from "./channel-client";
+import { Backoff } from "./channel-net";
 import type { NextTurnItems } from "./next-turn";
 
 /** The most session IDs `registerPicked` tries before it gives up. */
 const MAX_PICKS = 5;
+
+/** A Channel that does not answer is tried again at most this many heartbeat intervals apart (ADR 0052). */
+const MAX_HEARTBEAT_BACKOFF = 10;
 
 export interface AgentSession {
   cli: Cli;
@@ -76,6 +80,9 @@ export class AgentLink {
   readContext?: () => Promise<{ context: AgentContext; usage?: ReportedUsage }>;
   private timer: ReturnType<typeof setInterval> | undefined;
   private inFlight: Promise<void> = Promise.resolve();
+  /** Heartbeats wait longer after each failure in a row, and none is sent before `nextTry` (ADR 0052). */
+  private readonly backoff: Backoff;
+  private nextTry = 0;
 
   constructor(
     private readonly client: ChannelClient,
@@ -89,7 +96,9 @@ export class AgentLink {
      * lost to a Takeover while it was Gone, and Queued Events.
      */
     private readonly onNextTurn: (items: NextTurnItems) => void = () => {},
-  ) {}
+  ) {
+    this.backoff = new Backoff(heartbeatMs, heartbeatMs * MAX_HEARTBEAT_BACKOFF);
+  }
 
   /** The Channel changed the Agent (say, renamed it): keep it, for registering again. */
   agentChanged(agent: Agent): void {
@@ -239,6 +248,31 @@ export class AgentLink {
     }
   }
 
+  /**
+   * The Channel did not answer, or this machine could not reach it: wait longer before
+   * the next try, and say so once, not at every beat. The session itself goes on.
+   */
+  private unreachable(error: ChannelError): void {
+    const exhausted = error instanceof LocalExhaustionError;
+    const wait = exhausted ? this.backoff.longest() : this.backoff.next();
+    this.nextTry = Date.now() + wait;
+    if (this.backoff.count === 1 || exhausted) {
+      this.log(
+        `cannot reach the Channel: ${error.message}. The session goes on; trying again less and less often, at most every ${Math.round(
+          (this.heartbeatMs * MAX_HEARTBEAT_BACKOFF) / 1000,
+        )}s`,
+      );
+    }
+  }
+
+  /** A heartbeat got through: back to the usual pace, and say so if it had not been. */
+  private reached(): void {
+    const failed = this.backoff.count;
+    this.backoff.reset();
+    this.nextTry = 0;
+    if (failed > 0) this.log(`reached the Channel again after ${failed} failed ${failed === 1 ? "try" : "tries"}`);
+  }
+
   private handOver({ lostClaims, deliveries, directives }: NextTurnItems): void {
     if (lostClaims !== undefined && lostClaims.length > 0) {
       this.log(`lost Claims on ${lostClaims.map((lost) => `#${lost.task}`).join(", ")} to a Takeover`);
@@ -256,10 +290,13 @@ export class AgentLink {
   }
 
   private async send(): Promise<void> {
+    // Backing off from a Channel that does not answer: this beat waits for a later one.
+    if (Date.now() < this.nextTry) return;
     try {
       // Registering again answers a spawn: a failed try is tried again on the next beat.
       if (!this.agent || this.spawnUnanswered()) {
         await this.registerNow();
+        this.reached();
         // A fresh registration is Live; say so if we are not.
         if (this.presence === "live") return;
       }
@@ -274,9 +311,14 @@ export class AgentLink {
       if (usage !== undefined && usage === this.usage) this.usageUnsent = false;
       this.agentChanged(answer.agent);
       this.handOver(answer);
+      this.reached();
     } catch (error) {
       const lost =
         this.agent !== null && error instanceof ChannelError && (error.status === 404 || error.status === 401);
+      if (error instanceof ChannelError && error.status === 0) {
+        this.unreachable(error);
+        return;
+      }
       this.log(`heartbeat failed: ${(error as Error).message}`);
       if (lost) {
         // The Channel does not know this Agent (its state was reset), or revoked its

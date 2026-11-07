@@ -123,8 +123,9 @@ one Agent only, and stops working when the Agent goes Gone (ADR 0007). Switchboa
 writes to GitHub as the Switchboard GitHub App, so Issues show `switchboard[bot]`;
 setting the App up is in [docs/github-app-setup.md](docs/github-app-setup.md).
 
-For local work, `wrangler dev` with `DEV_FAKE_GITHUB=true` adds a dev-only fake
-sign-in that answers only on localhost: `switchboard login --url
+For local work, `npm run dev -- --var DEV_FAKE_GITHUB:true` in `worker/` runs
+`wrangler dev` with a dev-only fake sign-in that answers only on localhost, and stops
+it when its terminal closes (ADR 0052): `switchboard login --url
 http://localhost:8787/<owner>/<repo> --dev-login <any login>`.
 
 ## Ask the Channel

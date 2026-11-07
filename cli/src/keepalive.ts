@@ -4,6 +4,7 @@
 // they time out for good (ADR 0048). Every open socket pings the Channel, which answers
 // each ping with a pong; one that hears nothing back for a few pings is given up.
 
+import type WebSocket from "ws";
 import { LIVE_PING } from "../../shared/src/index";
 
 /** How often an open socket pings the Channel. */
@@ -11,6 +12,11 @@ export const STREAM_PING_MS = 30_000;
 
 /** Ping intervals without a word from the Channel, a pong or any frame, before the socket is given up. */
 const SILENT_PINGS = 2.5;
+
+/** How long a socket may hear nothing, opening included, before it is given up (ADR 0048, ADR 0052). */
+export function silentAfterMs(everyMs: number): number {
+  return everyMs * SILENT_PINGS;
+}
 
 /** The ping interval: SWITCHBOARD_STREAM_PING_SECONDS when set, so a test need not wait minutes. */
 export function streamPingMs(env: NodeJS.ProcessEnv): number {

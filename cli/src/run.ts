@@ -282,6 +282,13 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   }
   const { repo } = choice;
   log(`using ${describeChoice(choice)} at ${config.url}`);
+  if (isLocalChannel(config.url)) {
+    // A local Worker is a developer's `wrangler dev`: say so where the Person looks (ADR 0052).
+    console.error(
+      `switchboard: this session's Channel is a local Worker at ${config.url}, not the shared one. ` +
+        "If it stops answering, the session goes on and Switchboard tries it less and less often.",
+    );
+  }
   if (choice.reason !== "default" || choice.note !== undefined) {
     console.error(dim(`switchboard: using ${describeChoice(choice)}`));
   }
@@ -1271,4 +1278,14 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   sessionTools?.dispose();
   log(`exited ${exitCode}`);
   return refusedContinuation === undefined ? exitCode : 2;
+}
+
+/** Whether `url` names this machine: a Channel there is a local `wrangler dev`, not the shared Worker. */
+export function isLocalChannel(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "[::1]" || /^127\./.test(hostname);
+  } catch {
+    return false;
+  }
 }
