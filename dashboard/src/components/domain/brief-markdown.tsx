@@ -79,7 +79,7 @@ function Inline({ text }: { text: string }) {
     const key = parts.length;
     if (code) {
       parts.push(
-        <code key={key} className="rounded-[2px] bg-paper-2 px-1 py-px font-mono text-[0.92em] [overflow-wrap:anywhere] text-ink" /* taste-skill-ignore: inline code */>
+        <code key={key} className="rounded-[3px] bg-paper-2 px-1 py-px font-mono [overflow-wrap:anywhere] text-ink" /* taste-skill-ignore: inline code */>
           {code.slice(1, -1)}
         </code>,
       );
@@ -102,7 +102,11 @@ function Inline({ text }: { text: string }) {
       );
     } else if (task) {
       parts.push(
-        <a key={key} href={href({ view: "task", number: Number(task.slice(1)) })} className="text-ink tabular-nums underline decoration-rule-2 hover:decoration-ink">
+        <a
+          key={key}
+          href={href({ view: "task", number: Number(task.slice(1)) })}
+          className="text-ink tabular-nums underline decoration-rule-2 hover:decoration-ink"
+        >
           {task}
         </a>,
       );
@@ -113,25 +117,26 @@ function Inline({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-/** A page's Markdown at reading width. A first heading that only repeats the page's title is left out. */
+/**
+ * A page's Markdown at reading width, as the team's knowledge reads (design.md "Reading"):
+ * the serif at 17/1.6 in ink-2, headings in the serif, code in the platform's monospace. A
+ * first heading that only repeats the page's title is left out.
+ */
 export function BriefMarkdown({ text, title }: { text: string; title?: string }) {
   const blocks = briefBlocks(text);
   const first = blocks[0];
-  const shown =
-    first?.kind === "heading" && title !== undefined && first.text.trim().toLowerCase() === title.trim().toLowerCase()
-      ? blocks.slice(1)
-      : blocks;
+  const shown = first?.kind === "heading" && title !== undefined && first.text.trim().toLowerCase() === title.trim().toLowerCase() ? blocks.slice(1) : blocks;
   return (
-    <div className="flex max-w-[68ch] flex-col gap-3 text-row leading-relaxed text-ink-2">
+    <div className="flex max-w-[var(--measure)] flex-col gap-4 font-display text-read text-ink-2">
       {shown.map((block, i) => {
         switch (block.kind) {
           case "heading":
             return block.level === 1 ? (
-              <h3 key={i} className="pt-2 text-title font-semibold text-ink">
+              <h3 key={i} className="pt-3 font-display text-section font-medium text-ink">
                 <Inline text={block.text} />
               </h3>
             ) : (
-              <h4 key={i} className="pt-1 text-row font-semibold text-ink">
+              <h4 key={i} className="pt-2 font-sans text-title font-semibold text-ink">
                 <Inline text={block.text} />
               </h4>
             );
@@ -148,18 +153,21 @@ export function BriefMarkdown({ text, title }: { text: string; title?: string })
               </li>
             ));
             return block.ordered ? (
-              <ol key={i} className="flex list-decimal flex-col gap-1 pl-5">
+              <ol key={i} className="flex list-decimal flex-col gap-1.5 pl-6">
                 {items}
               </ol>
             ) : (
-              <ul key={i} className="flex list-disc flex-col gap-1 pl-5">
+              <ul key={i} className="flex list-disc flex-col gap-1.5 pl-6">
                 {items}
               </ul>
             );
           }
-          case "code":
+          default:
             return (
-              <pre key={i} className="overflow-x-auto rounded-[var(--r)] border border-rule bg-paper-2 px-3 py-2 font-mono text-small whitespace-pre text-ink" /* taste-skill-ignore: a code block */>
+              <pre
+                key={i}
+                className="overflow-x-auto rounded-[var(--r)] bg-paper-2 px-3 py-2.5 font-mono text-small whitespace-pre text-ink" /* taste-skill-ignore: a code block */
+              >
                 {block.text}
               </pre>
             );

@@ -1,5 +1,16 @@
 [
   {
+    "date": "2026-11-06",
+    "macrostructure": "Workbench (app shell) in five sections",
+    "theme": "custom \"Desk\"",
+    "theme_axes": "light and dark / display serif + grotesk / warm neutral, carmine signal",
+    "vibe": "editorial product: a reading serif for structure and knowledge, a calm grotesk for the work, one red pencil for a Person needed",
+    "enrichment": "none (the live Agents are the content)",
+    "nav": "five section tabs + section bar + Cmd-K (desk), the same five as a bottom tab bar (phone)",
+    "footer": "none (app)",
+    "brief": "Switchboard Dashboard v4 - first-principles rebuild for teams: see and steer every Agent, read the shared knowledge (ADR 0049)"
+  },
+  {
     "date": "2026-09-30",
     "macrostructure": "Workbench (app shell)",
     "theme": "custom",

@@ -6,22 +6,23 @@
  * a trail over the input. Backspace in an empty input, or Escape, goes back one step. Agents
  * this viewer picked lately come first.
  */
-import { useEffect, useState, type ReactNode } from "react";
-import { toast } from "sonner";
-import { ArrowLeftRight, ChevronRight, Eye, Monitor, Moon, Plus, Rows2, Rows3, Send, Settings, Square, Sun, UserRoundCheck } from "lucide-react";
+
 import type { Agent, Task } from "@shared/index";
+import { ArrowLeftRight, ChevronRight, Eye, Monitor, Moon, Plus, Rows2, Rows3, Send, Settings, Square, Sun, UserRoundCheck } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
+import { toast } from "sonner";
+import { ownedName } from "@/components/domain/fleet";
+import { openStartAgent, useMayControl } from "@/components/domain/start-agent";
 import { VIEWS } from "@/components/shell/nav";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
-import { openStartAgent, useMayControl } from "@/components/domain/start-agent";
-import { ownedName } from "@/components/domain/fleet";
 import { useHostsSupported } from "@/data/hosts";
 import { useCapabilities, useChannel, useMe, useStore } from "@/data/store";
-import { channelBase, channelRepo, wantsMock } from "@/lib/session";
-import { go, type Route } from "@/lib/router";
 import { setDensity, useDensity } from "@/lib/density";
-import { useTheme, type ThemeChoice } from "@/lib/theme";
 import { PRESENCE_LABEL } from "@/lib/format";
 import { pickedAgent, recentAgents } from "@/lib/recent";
+import { go, type Route } from "@/lib/router";
+import { channelBase, channelRepo, wantsMock } from "@/lib/session";
+import { type ThemeChoice, useTheme } from "@/lib/theme";
 
 const THEMES: { id: ThemeChoice; label: string; icon: typeof Sun }[] = [
   { id: "system", label: "System theme", icon: Monitor },
@@ -240,7 +241,9 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
     const list = forCommand[step.command];
     body = (
       <>
-        <CommandEmpty>{list.length === 0 ? (step.command === "stop" ? "None of your Agents runs on a Host." : "No Agent is on the Channel.") : "No Agent matches."}</CommandEmpty>
+        <CommandEmpty>
+          {list.length === 0 ? (step.command === "stop" ? "None of your Agents runs on a Host." : "No Agent is on the Channel.") : "No Agent matches."}
+        </CommandEmpty>
         {agentGroups(list, (a) => pickAgent(step.command, a), "")}
       </>
     );
@@ -318,10 +321,15 @@ export function CommandPalette({ open, onOpenChange, route }: { open: boolean; o
             )}
           {channels.map((repo) => command(`channel ${repo}`, `Switch to ${repo}`, ArrowLeftRight, () => window.location.assign(`/${repo}`), false))}
         </CommandGroup>
-        {agents.length > 0 && agentGroups(agents, (a) => {
-          pickedAgent(a.id);
-          run({ view: "agent", id: a.id });
-        }, "Agent")}
+        {agents.length > 0 &&
+          agentGroups(
+            agents,
+            (a) => {
+              pickedAgent(a.id);
+              run({ view: "agent", id: a.id });
+            },
+            "Agent",
+          )}
         {tasks.length > 0 && (
           <CommandGroup heading="Tasks">
             {[...tasks]

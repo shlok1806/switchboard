@@ -235,15 +235,11 @@ export function summarize(e: ChannelEvent): string {
     case "approval.closed":
       return "Approval prompt closed";
     case "approval.denied":
-      return e.payload.message
-        ? `Denied ${e.payload.agent}'s approval prompt: ${e.payload.message}`
-        : `Denied ${e.payload.agent}'s approval prompt`;
+      return e.payload.message ? `Denied ${e.payload.agent}'s approval prompt: ${e.payload.message}` : `Denied ${e.payload.agent}'s approval prompt`;
     case "agent.spawn":
       return `Asked ${hostName(e.payload.host)} to start ${e.payload.nickname ?? "an Agent"} in ${e.payload.cwd}`;
     case "agent.spawned":
-      return e.payload.parent === undefined
-        ? `Started on ${hostName(e.payload.host)}`
-        : `Started on ${hostName(e.payload.host)} by ${e.payload.parent}`;
+      return e.payload.parent === undefined ? `Started on ${hostName(e.payload.host)}` : `Started on ${hostName(e.payload.host)} by ${e.payload.parent}`;
     case "agent.spawn.failed":
       return `${hostName(e.payload.host)} could not start an Agent: ${e.payload.reason}`;
     case "agent.stop":

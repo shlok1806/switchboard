@@ -1,16 +1,10 @@
-import { Glyph } from "@/components/domain/state";
-import { useState, type ReactNode } from "react";
-import { toast } from "sonner";
 import type { Agent, AgentId, Task } from "@shared/index";
 import { Bot, ChevronDown, UserRound } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Glyph } from "@/components/domain/state";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useCapabilities, useChannel, useMe, useStore } from "@/data/store";
 import { holderName } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -57,9 +51,7 @@ export function useClaims() {
 
 /** The Channel's reason already names the holder; say it only when it does not. */
 function refusal(result: { reason: string; heldBy?: Parameters<typeof holderName>[0] }): string {
-  return result.heldBy && !result.reason.includes(holderName(result.heldBy))
-    ? `${result.reason} Held by ${holderName(result.heldBy)}.`
-    : result.reason;
+  return result.heldBy && !result.reason.includes(holderName(result.heldBy)) ? `${result.reason} Held by ${holderName(result.heldBy)}.` : result.reason;
 }
 
 /** True when a Person can claim this Task from the Dashboard right now. */
@@ -117,25 +109,13 @@ export function ClaimAction({ task }: { task: Task }) {
 
   return (
     <div className="flex w-full items-stretch">
-      <Button
-        variant="action"
-        size="sm"
-        className={cn("flex-1", mine.length > 0 && "rounded-r-none")}
-        disabled={busy}
-        onClick={() => void run()}
-      >
+      <Button variant="action" size="sm" className={cn("flex-1", mine.length > 0 && "rounded-r-none")} disabled={busy} onClick={() => void run()}>
         {busy ? "Claiming" : "Claim"}
       </Button>
       {mine.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              variant="action"
-              size="sm"
-              aria-label="Claim for one of your Agents"
-              className="ml-0.5 rounded-l-none px-2"
-              disabled={busy}
-            >
+            <Button variant="action" size="sm" aria-label="Claim for one of your Agents" className="ml-0.5 rounded-l-none px-2" disabled={busy}>
               <ChevronDown className="size-4" aria-hidden />
             </Button>
           </DropdownMenuTrigger>

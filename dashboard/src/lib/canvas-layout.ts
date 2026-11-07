@@ -196,7 +196,7 @@ export function place(list: Group[], saved: Record<string, Point>): Map<AgentId,
     const origin = anySaved ? opening(size) : home;
     let i = 0;
     for (const a of missing)
-      for (;; i++) {
+      for (; ; i++) {
         const p = slot(origin, g.agents.length, i);
         if (free(g, p)) {
           out.set(a.id, p);
@@ -218,11 +218,21 @@ export function edgePoints(from: Point, to: Point): Point[] {
   const tx = to.x + NODE_W / 2;
   if (to.y >= from.y + NODE_H + 8) {
     const mid = (from.y + NODE_H + to.y) / 2;
-    return [{ x: fx, y: from.y + NODE_H }, { x: fx, y: mid }, { x: tx, y: mid }, { x: tx, y: to.y }];
+    return [
+      { x: fx, y: from.y + NODE_H },
+      { x: fx, y: mid },
+      { x: tx, y: mid },
+      { x: tx, y: to.y },
+    ];
   }
   if (to.y + NODE_H + 8 <= from.y) {
     const mid = (to.y + NODE_H + from.y) / 2;
-    return [{ x: fx, y: from.y }, { x: fx, y: mid }, { x: tx, y: mid }, { x: tx, y: to.y + NODE_H }];
+    return [
+      { x: fx, y: from.y },
+      { x: fx, y: mid },
+      { x: tx, y: mid },
+      { x: tx, y: to.y + NODE_H },
+    ];
   }
   const fy = from.y + NODE_H / 2;
   const ty = to.y + NODE_H / 2;
@@ -230,7 +240,12 @@ export function edgePoints(from: Point, to: Point): Point[] {
   const a = right ? from.x + NODE_W : from.x;
   const b = right ? to.x : to.x + NODE_W;
   const mid = (a + b) / 2;
-  return [{ x: a, y: fy }, { x: mid, y: fy }, { x: mid, y: ty }, { x: b, y: ty }];
+  return [
+    { x: a, y: fy },
+    { x: mid, y: fy },
+    { x: mid, y: ty },
+    { x: b, y: ty },
+  ];
 }
 
 /** The smallest box around `rects`, or null when there are none. */

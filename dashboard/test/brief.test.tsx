@@ -4,10 +4,10 @@
 // Task references as links, opens another page from the list, and says when there is no
 // such page or the read failed. A Channel with no pages is in states.test.tsx.
 
+import type { Agent, AgentId, BriefPage, BriefResponse, ChannelSnapshot } from "@shared/index";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Agent, AgentId, BriefPage, BriefResponse, ChannelSnapshot } from "@shared/index";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { BriefView } from "@/views/BriefView";
@@ -86,18 +86,30 @@ describe("the Brief view", () => {
   it("reads the page picked, leaving out a first heading that repeats its title", async () => {
     render(<BriefView page="api-client" />, { wrapper: channel(brief) });
     const article = await screen.findByRole("article", { name: "API client" });
-    expect(within(article).getAllByRole("heading").map((h) => h.textContent)).toEqual(["API client"]);
+    expect(
+      within(article)
+        .getAllByRole("heading")
+        .map((h) => h.textContent),
+    ).toEqual(["API client"]);
     expect(within(article).getByRole("link", { name: "#16" })).toBeTruthy();
     expect(screen.queryByText(/being cleaned up/)).toBeNull();
     expect(within(screen.getByRole("navigation", { name: "Pages" })).getByRole("link", { current: "page" }).textContent).toMatch(/^API client/);
   });
 
   it("never draws a page's HTML or a link that is not to a web address", async () => {
-    const tricky = page({ page: "overview", title: "Overview", text: '<img src=x onerror="alert(1)"> [run](javascript:alert(1)) [docs](https://example.com/docs)' });
+    const tricky = page({
+      page: "overview",
+      title: "Overview",
+      text: '<img src=x onerror="alert(1)"> [run](javascript:alert(1)) [docs](https://example.com/docs)',
+    });
     render(<BriefView />, { wrapper: channel(async () => ({ pages: [tricky] })) });
     const article = await screen.findByRole("article", { name: "Overview" });
     expect(article.querySelector("img")).toBeNull();
-    expect(within(article).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual([`#/agents/${encodeURIComponent(librarian.id)}`, "https://example.com/docs"]);
+    expect(
+      within(article)
+        .getAllByRole("link")
+        .map((a) => a.getAttribute("href")),
+    ).toEqual([`#/agents/${encodeURIComponent(librarian.id)}`, "https://example.com/docs"]);
     expect(within(article).getByText(/<img src=x/)).toBeTruthy();
   });
 

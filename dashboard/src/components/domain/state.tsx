@@ -2,13 +2,14 @@
  * The one state vocabulary (ADR 0023, design.md): shape says why, fill says whose, and the
  * signal colour means only that a Person is needed. Every view draws a state with these.
  */
+
+import type { Agent } from "@shared/index";
 import { useMemo } from "react";
 import { ThinkingOrb } from "thinking-orbs";
-import type { Agent } from "@shared/index";
 import { useChannel, useMe } from "@/data/store";
 import { claimsByAgent } from "@/lib/canvas-layout";
 import { needsYouCount } from "@/lib/queue";
-import { needsPerson, orbOf, stateOf, stateWord, type AgentState, type GlyphState } from "@/lib/state";
+import { type AgentState, type GlyphState, needsPerson, orbOf, stateOf, stateWord } from "@/lib/state";
 import { cn } from "@/lib/utils";
 
 /** The state's glyph: 12px, decorative (the word beside it carries the meaning). */

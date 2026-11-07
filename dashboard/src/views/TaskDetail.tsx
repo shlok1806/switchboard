@@ -4,9 +4,10 @@
  * take a Stale Claim over, switch to its branch, post an Update on it, or send its Agent a
  * Directive. Below 640px the aside follows the Task, except a Stale Claim, which leads.
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { toast } from "sonner";
+
 import type { Agent, ChannelEvent, EventType, Task } from "@shared/index";
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { ClaimAction } from "@/components/domain/claim";
@@ -17,14 +18,14 @@ import { OlderRow } from "@/components/domain/older";
 import { IssueLink } from "@/components/domain/pending";
 import { Glyph, State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
-import { COLUMN_LABEL, HolderLabel, columnOf, currentStep, openBlockers, shownLabels } from "@/components/domain/task";
+import { COLUMN_LABEL, columnOf, currentStep, HolderLabel, openBlockers, shownLabels } from "@/components/domain/task";
 import { VerdictTable } from "@/components/domain/verdict";
 import { Section } from "@/components/shell/section";
 import { ErrorPage } from "@/components/shell/states";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
 import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
-import { EVENT_TYPE_LABEL, ago, clock, summarize } from "@/lib/format";
+import { ago, clock, EVENT_TYPE_LABEL, summarize } from "@/lib/format";
 import { href } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
@@ -104,14 +105,14 @@ export function TaskDetail({ number }: { number: number }) {
 
   return (
     <div key={number} className="h-full overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-[var(--gutter)] pt-3 pb-10">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-7 px-[var(--gutter)] pt-[var(--page-top)] pb-10">
         <header className="flex flex-wrap items-start gap-x-6 gap-y-3">
           <div className="flex min-w-0 flex-[1_1_420px] flex-col gap-1">
             {/* Inline, not flex: a long title wraps under itself and keeps its glyph and state on its lines. */}
-            <h1 className="min-w-0 text-head font-semibold [overflow-wrap:anywhere] text-ink">
+            <h1 className="min-w-0 font-display text-head font-medium [overflow-wrap:anywhere] text-ink max-sm:text-head-phone">
               <Glyph state={taskGlyph(task, me, agentById)} className="relative -top-0.5 mr-2.5" />
               {task.title}
-              <State state={taskGlyph(task, me, agentById)} word={COLUMN_LABEL[col]} glyph={false} className="ml-2.5 text-row whitespace-nowrap" />
+              <State state={taskGlyph(task, me, agentById)} word={COLUMN_LABEL[col]} glyph={false} className="ml-2.5 font-sans text-row whitespace-nowrap" />
             </h1>
             <p className="text-small text-ink-3">
               {facts.join(" · ")}
@@ -130,14 +131,20 @@ export function TaskDetail({ number }: { number: number }) {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {claim?.stale ? <TakeoverAction task={task} size="md" compact /> : <span className="w-28 empty:hidden"><ClaimAction task={task} /></span>}
+            {claim?.stale ? (
+              <TakeoverAction task={task} size="md" compact />
+            ) : (
+              <span className="w-28 empty:hidden">
+                <ClaimAction task={task} />
+              </span>
+            )}
           </div>
         </header>
 
         <div className="flex flex-wrap items-start gap-x-8 gap-y-6">
           <div className="flex min-w-0 flex-[7_1_560px] flex-col gap-6">
             {task.description.trim() ? (
-              <div className="max-w-[72ch]">
+              <div className="max-w-[var(--measure)]">
                 <IssueBody text={task.description} />
               </div>
             ) : (
@@ -177,7 +184,7 @@ export function TaskDetail({ number }: { number: number }) {
 
             <section className="flex min-w-0 flex-col" aria-labelledby="timeline">
               <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-rule-2 pb-2">
-                <h2 id="timeline" className="flex-1 text-title font-semibold text-ink">
+                <h2 id="timeline" className="flex-1 font-display text-section font-medium text-ink">
                   Timeline
                 </h2>
                 <div role="group" aria-label="Show" className="flex gap-1.5">
@@ -273,7 +280,10 @@ function StepList({ task, holder }: { task: Task; holder: React.ReactNode }) {
         {task.steps.map((s, i) => {
           const next = i === current;
           return (
-            <li key={s.index} className={cn("flex flex-wrap items-baseline gap-x-2.5 border-b border-rule py-2.5 text-row", s.done || next ? "text-ink" : "text-ink-3")}>
+            <li
+              key={s.index}
+              className={cn("flex flex-wrap items-baseline gap-x-2.5 border-b border-rule py-2.5 text-row", s.done || next ? "text-ink" : "text-ink-3")}
+            >
               <Glyph state={s.done ? "done" : next ? "running" : "idle"} className="relative top-px" />
               <span className="sr-only">{s.done ? "Done:" : next ? "In progress:" : "To do:"}</span>
               <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{s.text}</span>
@@ -318,7 +328,7 @@ function Branch({ branch }: { branch: string }) {
 }
 
 const FIELD =
-  "min-h-[76px] resize-y rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 py-2 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-[16px]";
+  "min-h-[76px] resize-y rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 py-2 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-read";
 
 /** Post an Update on the Task: everyone on the Channel reads it, nobody has to act on it. */
 function UpdateForm({ task }: { task: Task }) {
@@ -438,13 +448,21 @@ function TimelineItem({ event: e, threshold }: { event: ChannelEvent; threshold:
         <span className="font-semibold text-ink">{EVENT_TYPE_LABEL[e.type]}</span>
         <span className="text-ink-3">·</span>
         <span className="min-w-0 text-ink-2">
-          {e.actor.kind === "agent" ? <HolderLabel holder={{ kind: "agent", agentId: e.actor.agentId }} /> : e.actor.kind === "person" ? e.actor.person : "GitHub"}
+          {e.actor.kind === "agent" ? (
+            <HolderLabel holder={{ kind: "agent", agentId: e.actor.agentId }} />
+          ) : e.actor.kind === "person" ? (
+            e.actor.person
+          ) : (
+            "GitHub"
+          )}
         </span>
-        <time dateTime={e.at} className="ml-auto text-ink-3 tabular-nums" title={clock(e.at)}>
+        <time dateTime={e.at} className="ml-auto text-ink-3" title={clock(e.at)}>
           {ago(e.at)}
         </time>
       </div>
-      <p className={cn("max-w-[72ch] text-row [overflow-wrap:anywhere]", e.type === "update" || e.type === "directive" ? "text-ink" : "text-ink-2")}>{summarize(e)}</p>
+      <p className={cn("max-w-[var(--measure)] text-row [overflow-wrap:anywhere]", e.type === "update" || e.type === "directive" ? "text-ink" : "text-ink-2")}>
+        {summarize(e)}
+      </p>
       {(e.type === "push" || e.type === "merge" || e.type === "takeover") && (
         <Reasoning>
           <ReasoningTrigger className="text-small text-ink-3">{files > 0 ? `${files} ${files === 1 ? "file" : "files"}` : "The hand-off"}</ReasoningTrigger>

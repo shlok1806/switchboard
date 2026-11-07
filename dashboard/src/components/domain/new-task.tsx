@@ -1,16 +1,9 @@
-import { useState, type FormEvent } from "react";
-import { Plus } from "lucide-react";
-import { toast } from "sonner";
 import { MAX_TASK_TITLE_LENGTH } from "@shared/index";
+import { Plus } from "lucide-react";
+import { type FormEvent, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useStore } from "@/data/store";
 import { go } from "@/lib/router";
 
@@ -60,18 +53,20 @@ export function NewTaskButton() {
                 maxLength={MAX_TASK_TITLE_LENGTH}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="h-10 rounded-md border border-line-strong bg-field px-3 text-body text-ink max-md:text-[16px]"
+                className="h-10 rounded-md border border-rule-2 bg-paper px-3 text-row text-ink max-md:text-read"
               />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-small font-medium">Description <span className="font-normal text-ink-3">optional</span></span>
+              <span className="text-small font-medium">
+                Description <span className="font-normal text-ink-3">optional</span>
+              </span>
               <textarea
                 name="description"
                 rows={4}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="- [ ] Steps as a checklist"
-                className="resize-none rounded-md border border-line-strong bg-field px-3 py-2 text-body text-ink placeholder:text-ink-3 max-md:text-[16px]"
+                className="resize-none rounded-md border border-rule-2 bg-paper px-3 py-2 text-row text-ink placeholder:text-ink-3 max-md:text-read"
               />
             </label>
             {problem && (

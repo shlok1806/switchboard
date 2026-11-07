@@ -3,15 +3,15 @@
 // queue all count the same lines, a review someone else asks of you among them; a note Agents
 // left opens in Memory.
 
+import type { AgentId, ChannelEvent, ChannelSnapshot, Task } from "@shared/index";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentId, ChannelEvent, ChannelSnapshot, Task } from "@shared/index";
 import { TopBar } from "@/components/shell/nav";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { agents, ME, persons, tasks } from "@/data/mock/fixtures";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
-import { ME, agents, persons, tasks } from "@/data/mock/fixtures";
 import { NowView } from "@/views/NowView";
 
 /** A Task maya's Agent finished: its review is shlok's to give. */

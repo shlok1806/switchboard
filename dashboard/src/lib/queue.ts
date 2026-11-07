@@ -36,8 +36,7 @@ export function needsQueue(agents: readonly Agent[], tasks: readonly Task[], me:
   const agentById = new Map<AgentId, Agent>(agents.map((a) => [a.id, a]));
   const at = since(events);
   const items: QueueItem[] = [];
-  for (const a of agents)
-    if (a.approval && a.presence !== "gone") items.push({ kind: "ask", agent: a, mine: a.person === me, at: a.approval.openedAt });
+  for (const a of agents) if (a.approval && a.presence !== "gone") items.push({ kind: "ask", agent: a, mine: a.person === me, at: a.approval.openedAt });
   for (const t of tasks) {
     if (t.claim?.stale && t.status !== "done") items.push({ kind: "stale", task: t, at: at.stale.get(t.number) ?? t.updatedAt });
     else if (t.status === "review")

@@ -43,11 +43,8 @@ export function setDensity(density: Density) {
 }
 
 export function useDensity(): Density {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    current,
-  );
+  return useSyncExternalStore((l) => {
+    listeners.add(l);
+    return () => listeners.delete(l);
+  }, current);
 }

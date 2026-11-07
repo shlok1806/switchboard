@@ -1,7 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/spline-sans";
-@import "@fontsource-variable/spline-sans-mono";
+@import "@fontsource-variable/newsreader/opsz.css";
+@import "@fontsource-variable/schibsted-grotesk";
 @import "./styles/tokens.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -9,12 +9,35 @@
 /* ── base ─────────────────────────────────────────────────── */
 
 @layer base {
-  /* Tailwind v4 borders default to currentColor; the few lines left (tables, fields) are the line token. */
+  /* Layered, so a utility (the main region's outline-none) still wins over it. */
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  /* The platform's monospace, for literal code only (design.md). Set smaller than the
+     text around it, since a monospace runs wider and darker than the grotesk at one size. */
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--font-code);
+    font-size: 0.875em;
+  }
+
+  /* Italic appears nowhere (design.md): emphasis, even in Markdown an Agent wrote, is weight. */
+  em,
+  i {
+    font-style: normal;
+    font-weight: 600;
+  }
+
+  /* Tailwind v4 borders default to currentColor; every line is a rule unless it says otherwise. */
   *,
   ::before,
   ::after,
   ::backdrop {
-    border-color: var(--line);
+    border-color: var(--rule);
   }
 }
 
@@ -30,13 +53,14 @@ body {
 }
 
 body {
-  background: var(--page);
+  background: var(--paper);
   color: var(--ink);
-  font-family: var(--font-sans);
+  font-family: var(--font-body);
   font-size: var(--text-row);
-  line-height: 1.45;
-  /* Counts and times line up in columns everywhere (ADR 0023). */
-  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  /* Figures are tabular only where they line up in a column (the tabular-nums utility):
+     Schibsted Grotesk's tabular set also widens commas, stops and colons, so running text
+     keeps its proportional figures. */
 }
 
 #root {
@@ -53,6 +77,14 @@ h2,
 h3,
 h4 {
   text-wrap: balance;
+  /* Headings are always roman (design.md). */
+  font-style: normal;
+}
+
+/* The display face sets its optical size from its own size, so a 30px title and 17px prose
+   each get the cut drawn for them. */
+.font-display {
+  font-optical-sizing: auto;
 }
 
 p {
@@ -63,19 +95,6 @@ a {
   text-underline-position: from-font;
   text-decoration-skip-ink: auto;
   text-underline-offset: 3px;
-}
-
-:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-/* Spline Sans Mono, for literal code only (design.md). */
-code,
-kbd,
-pre,
-samp {
-  font-family: var(--font-mono);
 }
 
 .tabular {
@@ -123,7 +142,7 @@ samp {
   }
 }
 .row-fresh {
-  animation: row-fresh 600ms var(--ease-out) both;
+  animation: row-fresh var(--dur-slow) var(--ease-out) both;
 }
 
 /* A loading placeholder fades gently in and out, slower than a Live dot so the two never read alike.

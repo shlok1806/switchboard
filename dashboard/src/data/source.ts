@@ -3,6 +3,7 @@ import type {
   Agent,
   AgentId,
   AgentRole,
+  BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
   ClaimRefusal,
@@ -18,7 +19,6 @@ import type {
   SetHostAllowRequest,
   SkillResponse,
   SkillsResponse,
-  BriefResponse,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StreamMessage,
@@ -130,11 +130,7 @@ export interface ChannelSource {
   /** The first Wakes after `seq` `after`, oldest first. */
   wakesAfter(after: number): Promise<ChannelEvent[]>;
   /** Follow the stream after `cursor`. Returns an unsubscribe function. */
-  subscribe(
-    cursor: number,
-    onMessage: (message: StreamMessage) => void,
-    onState: (state: ConnectionState) => void,
-  ): () => void;
+  subscribe(cursor: number, onMessage: (message: StreamMessage) => void, onState: (state: ConnectionState) => void): () => void;
   act(action: PersonAction): Promise<ActionResult>;
   /** Create a Task. The Channel creates the GitHub Issue first. */
   createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }>;

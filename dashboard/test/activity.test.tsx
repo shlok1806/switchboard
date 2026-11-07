@@ -6,10 +6,10 @@
 // Events are read; or by Agent, a section each; new Events wait under a button while the log
 // is being read; on a phone a row opens its Event as a sheet; an Agent's History uses the same rows.
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { StrictMode, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, StreamMessage, Verdict } from "@shared/index";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { type ReactNode, StrictMode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TopBar } from "@/components/shell/nav";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore, useChannel } from "@/data/store";
@@ -44,7 +44,12 @@ const ev = (type: string, actor: Agent, payload: object, extra: Partial<ChannelE
   }) as unknown as ChannelEvent;
 
 const turnHistory = () => [
-  ev("proxy.digest", quill, { model: "claude-opus", inputTokens: 900, outputTokens: 40, reply: "Paging the users table by 50.", toolCalls: [], maskedSecrets: 0 }, { capture: "proxy", turn: "t1" }),
+  ev(
+    "proxy.digest",
+    quill,
+    { model: "claude-opus", inputTokens: 900, outputTokens: 40, reply: "Paging the users table by 50.", toolCalls: [], maskedSecrets: 0 },
+    { capture: "proxy", turn: "t1" },
+  ),
   ev("file.edit", quill, { path: "web/src/users.tsx", additions: 4, deletions: 1 }, { turn: "t1" }),
   ev("update", quill, { text: "Users page loads 50 at a time." }, { capture: "tool", turn: "t1" }),
   ev("command", moth, { command: "npm test" }),
@@ -256,7 +261,12 @@ describe("the log by model turn", () => {
 
   it("names the tools a model call only asked for, and sums its turn up by what the model said", async () => {
     const digest = (reply: string, toolCalls: { name: string; arg: string }[]) =>
-      ev("proxy.digest", quill, { model: "claude-opus", inputTokens: 900, outputTokens: 40, reply, toolCalls, maskedSecrets: 0 }, { capture: "proxy", turn: "t2" });
+      ev(
+        "proxy.digest",
+        quill,
+        { model: "claude-opus", inputTokens: 900, outputTokens: 40, reply, toolCalls, maskedSecrets: 0 },
+        { capture: "proxy", turn: "t2" },
+      );
     const events = [
       digest("Checking the users page.", []),
       digest("", [

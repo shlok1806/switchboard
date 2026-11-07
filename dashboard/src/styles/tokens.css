@@ -1,168 +1,80 @@
 /*
- * Switchboard's design system, v3 "Ringdown" (ADR 0023; the full system is dashboard/design.md).
- * Every colour, size, radius and duration the Dashboard uses is a token here.
+ * Switchboard's design system, v4 "Desk" (ADR 0049; the full system is dashboard/design.md).
+ * Every colour, face, size, radius and duration the Dashboard uses is a token here, and
+ * nothing else in src/ names a raw colour or a font.
  *
- * Direction: a board of lines. Every Agent is a line, and the only colour on the board is the
- * ring of a line that needs a Person. Everything a machine does is monochrome and dense, set in
- * one grotesk and its own mono; everything a human must do is the one hot colour, a shape and a
- * word. (taste-skill-ignore: prose)
+ * Direction: an editor's desk. What needs a Person is marked in one red pencil; the work the
+ * Agents do is set in a calm grotesk, dense where it is data; the structure of the page and
+ * the knowledge the team keeps are set in a reading serif. (taste-skill-ignore: prose)
  *
  * Layers, in order:
- *   1. colour        cool neutrals at hue 250-258, one signal at hue 345, the terminal
- *   2. scales        type, space, radius, elevation, motion, layout
- *   3. earlier names the v1 and v2 names, pointed at Ringdown until each view is rebuilt
+ *   1. colour  warm neutrals at hue 85, the signal at hue 25, running at hue 155, the terminal
+ *   2. faces   one display face, one body face; code uses the platform's own monospace
+ *   3. scales  space, radius, elevation, motion, layout
+ *   4. Tailwind names for every token above
  */
 
 :root {
   /* ── 1. colour (light) ───────────────────────────────────── */
-  --paper: oklch(98.5% 0.003 250); /* the ground */
-  --paper-2: oklch(96% 0.004 250); /* command blocks, hover */
-  --paper-3: oklch(93% 0.006 250); /* the selected row, a pressed secondary */
-  --rule: oklch(88.5% 0.006 250); /* row and section rules, the meter track, chip borders */
-  --rule-2: oklch(78% 0.009 250); /* input and secondary-button borders, group rules */
-  --ink-4: oklch(60% 0.013 255); /* disabled, the Gone ring; never running text (3.8:1) */
-  --ink-3: oklch(49% 0.015 255); /* meta, labels, column heads (6.0:1) */
-  --ink-2: oklch(37% 0.017 255); /* secondary text, the meter fill, primary hover */
-  --ink: oklch(21% 0.02 258); /* text, the primary button, the pressed key, the focus ring */
-  /* The one chromatic colour: it always and only means "a Person is needed". */
-  --signal: oklch(54% 0.235 345);
+  --paper: oklch(99% 0.002 85); /* the ground */
+  --paper-2: oklch(96.6% 0.004 85); /* hover, command blocks, a raised band */
+  --paper-3: oklch(93.6% 0.006 85); /* the selected row, a pressed control */
+  --rule: oklch(90% 0.006 85); /* row rules, chip borders, meter tracks */
+  --rule-2: oklch(80% 0.008 85); /* section rules, field and secondary-button borders */
+  --ink-4: oklch(62% 0.01 85); /* the Gone ring, disabled; never words that must be read (3.5:1) */
+  --ink-3: oklch(50% 0.012 85); /* meta, labels, column heads (5.8:1) */
+  --ink-2: oklch(38% 0.012 85); /* secondary text, reading prose, the meter fill (9.7:1) */
+  --ink: oklch(22% 0.012 85); /* names, headings, the primary button, focus (16.8:1) */
+  /* The red pencil: it always and only means "a Person is needed" (ADR 0023, kept by ADR 0049). */
+  --signal: oklch(52% 0.2 25);
   --signal-fg: var(--paper);
-  /* The second colour (ADR 0023, 2026-10-16): an Agent that is running, taking a turn right now. */
-  --running: oklch(48% 0.14 150);
+  /* Running (ADR 0023, 2026-10-16): an Agent taking a turn right now. Never a fill, never text alone. */
+  --running: oklch(50% 0.13 155);
   --focus: var(--ink);
+  /* The veil behind a sheet dims the page without lightening it. */
+  --veil: oklch(15% 0.01 85 / 0.28);
 
   /* The terminal is dark in both themes. */
-  --term-bg: oklch(18% 0.013 255);
-  --term-bg-2: oklch(26% 0.012 255);
-  --term-fg: oklch(90% 0.006 250);
-  --term-dim: oklch(66% 0.01 250);
-  --term-signal: oklch(78% 0.17 345);
-  --term-rule: oklch(30% 0.012 255);
+  --term-bg: oklch(18% 0.006 85);
+  --term-bg-2: oklch(25% 0.006 85);
+  --term-fg: oklch(90% 0.004 85);
+  --term-dim: oklch(66% 0.006 85);
+  --term-signal: oklch(76% 0.14 25);
+  --term-rule: oklch(30% 0.006 85);
 
-  /* ── 2. scales ──────────────────────────────────────────── */
-  --font-ui-face: "Spline Sans Variable";
-  /* Spline Sans Mono: commands, paths, branches, hashes, ids, keyboard hints, the terminal. Never prose. */
-  --font-code-face: "Spline Sans Mono Variable"; /* taste-skill-ignore: the face for literal code only */
+  /* ── 2. faces ───────────────────────────────────────────── */
+  /* Newsreader: page titles, section heads, an Agent's or Task's name on its page, and the
+     Brief's and Memory's reading text. Roman only. */
+  --font-display: "Newsreader Variable", "Iowan Old Style", Georgia, serif;
+  /* Schibsted Grotesk: everything else, the product's voice. */
+  --font-body: "Schibsted Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+  /* Literal code and the terminal only, in the platform's own monospace: no third face is loaded. */
+  --font-code: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; /* taste-skill-ignore: the face for literal code only */
 
-  /* space: Tailwind's 4px spacing step (p-1 is 4px), so no space variables of its own */
+  /* ── 3. scales ──────────────────────────────────────────── */
+  /* space: Tailwind's 4px step (p-1 is 4px); the page's own rhythm is named here */
+  --gutter: 32px;
+  --page-top: 32px;
+  --section-gap: 40px;
 
-  /* radius: 3 on controls, chips, command blocks and glyph squares; 6 on the terminal only */
-  --r: 3px;
+  /* radius: 4 on controls, chips, fields and command blocks; 6 on the terminal and sheets' tops */
+  --r: 4px;
   --r-2: 6px;
 
-  /* elevation: flat; one shadow, for what floats (menus, the palette, a dragged node) (taste-skill-ignore: prose) */
-  --shadow-float: 0 8px 24px oklch(20% 0.01 255 / 0.18);
+  /* elevation: flat; one shadow, for what floats (menus, the palette, a dragged node) */
+  --shadow-float: 0 10px 30px oklch(20% 0.01 85 / 0.14), 0 1px 3px oklch(20% 0.01 85 / 0.08);
 
-  /* motion: colour and a 1px press only; the signal never pulses */
+  /* motion: colour, opacity and a 1px press; the signal never pulses */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur: 140ms;
+  --dur-slow: 600ms;
 
   /* layout */
-  --topbar-h: 44px;
-  --tabbar-h: calc(56px + env(safe-area-inset-bottom));
-  --inspector-w: 352px;
-  --gutter: 24px;
-  --row: 36px;
-
-  /* ── 3. earlier names, on Ringdown ──────────────────────── */
-  /* The v1 and v2 names the views still use. There is no red, green, amber or blue: a status
-     is ink, and only a Person being needed is the signal. Each goes as its view is rebuilt. */
-  --page: var(--paper);
-  --panel: var(--paper-2);
-  --canvas: var(--paper-2);
-  --surface: var(--paper);
-  --inset: var(--paper-2);
-  --inset-2: var(--paper-3);
-  --hover: var(--paper-2);
-  --hover-2: var(--paper-3);
-  --field: var(--paper);
-  --line: var(--rule);
-  --line-strong: var(--rule-2);
-  --track: var(--rule);
-  --link: var(--ink);
-  --link-tint: var(--paper-2);
-  --accent: var(--ink);
-  --accent-ink: var(--ink);
-  --accent-tint: var(--paper-2);
-  --on-accent: var(--paper);
-  --action: var(--ink);
-  --action-hover: var(--ink-2);
-  --on-action: var(--paper);
-  --attention: var(--signal);
-  --attention-ink: var(--signal);
-  --attention-tint: var(--paper-2);
-  --live: var(--ink);
-  --live-tint: var(--paper-2);
-  --idle: var(--ink-3);
-  --gone: var(--ink-4);
-  --stale: var(--signal);
-  --stale-tint: var(--paper-2);
-  --on-stale: var(--paper);
-  --review: var(--signal);
-  --review-tint: var(--paper-2);
-  --done: var(--ink);
-  --queued: var(--ink-3);
-  --green: var(--ink);
-  --green-tint: var(--paper-2);
-  --orange: var(--ink-2);
-  --orange-tint: var(--paper-2);
-  --red: var(--ink);
-  --red-tint: var(--paper-2);
-  --on-red: var(--paper);
-  --state-live: var(--ink);
-  --state-needs: var(--signal);
-  --state-needs-dot: var(--signal);
-  --state-idle: var(--ink-3);
-  --state-gone: var(--ink-4);
-  --state-queued: var(--ink-3);
-  --state-errored: var(--ink);
-  --state-stale: var(--signal);
-  --state-done: var(--ink);
-  --state-review: var(--signal);
-  --verdict-drop: var(--ink-4);
-  --verdict-queue: var(--ink-2);
-  --verdict-interrupt: var(--signal);
-  --cli-claude: var(--ink-3);
-  --cli-codex: var(--ink-3);
-  --cli-gemini: var(--ink-3);
-  --cli-cursor: var(--ink-3);
-  --cli-other: var(--ink-3);
-  --canvas-bg: var(--paper);
-  --canvas-dot: var(--rule);
-  --canvas-grid: var(--rule);
-  --node-bg: var(--paper);
-  --node-hover: var(--paper-2);
-  --node-selected: var(--ink);
-  --frame-bg: var(--paper);
-  --frame-ink: var(--ink-3);
-  --frame-label: var(--ink-3);
-  --edge: var(--ink-3);
-  --edge-lead: var(--ink-3);
-  --edge-active: var(--ink);
-  --edge-conflict: var(--signal);
-  --tooltip-bg: var(--ink);
-  --tooltip-fg: var(--paper);
-  --tooltip-muted: var(--rule-2);
-  --tooltip-border: var(--ink);
-
-  /* shadcn/ui variable names, pointed at ours */
-  --background: var(--paper);
-  --foreground: var(--ink);
-  --card: var(--paper);
-  --card-foreground: var(--ink);
-  --popover: var(--paper);
-  --popover-foreground: var(--ink);
-  --primary: var(--ink);
-  --primary-foreground: var(--paper);
-  --secondary: var(--paper-2);
-  --secondary-foreground: var(--ink);
-  --muted: var(--paper-2);
-  --muted-foreground: var(--ink-3);
-  --destructive: var(--ink);
-  --border: var(--rule);
-  --input: var(--rule-2);
-  --ring: var(--focus);
-  --radius: var(--r);
+  --topbar-h: 52px;
+  --tabbar-h: calc(60px + env(safe-area-inset-bottom));
+  --inspector-w: 368px;
+  --row: 38px;
+  --measure: 68ch;
 
   color-scheme: light;
 }
@@ -171,31 +83,46 @@
   --row: 30px;
 }
 
+@media (max-width: 1023.98px) {
+  :root {
+    --gutter: 24px;
+    --page-top: 24px;
+  }
+}
+
 @media (max-width: 639.98px) {
   :root {
     --gutter: 16px;
+    --page-top: 20px;
+    --section-gap: 32px;
+    --topbar-h: 52px;
   }
 }
 
 .dark {
-  --paper: oklch(18% 0.012 255);
-  --paper-2: oklch(21% 0.012 255);
-  --paper-3: oklch(25.5% 0.013 255);
-  --rule: oklch(32% 0.012 255);
-  --rule-2: oklch(41% 0.012 255);
-  --ink-4: oklch(56% 0.012 255);
-  --ink-3: oklch(70% 0.012 255);
-  --ink-2: oklch(81% 0.01 255);
-  --ink: oklch(94% 0.006 250);
-  --signal: oklch(74% 0.19 345);
-  --running: oklch(76% 0.17 150);
-  --term-bg: oklch(13% 0.012 255);
-  --shadow-float: 0 8px 24px oklch(5% 0.01 255 / 0.5);
+  --paper: oklch(17.5% 0.006 85);
+  --paper-2: oklch(20.5% 0.006 85);
+  --paper-3: oklch(24.5% 0.007 85);
+  --rule: oklch(31% 0.007 85);
+  --rule-2: oklch(40% 0.008 85);
+  --ink-4: oklch(56% 0.008 85);
+  --ink-3: oklch(70% 0.008 85);
+  --ink-2: oklch(82% 0.006 85);
+  --ink: oklch(94% 0.004 85);
+  --signal: oklch(72% 0.16 25);
+  --running: oklch(76% 0.14 155);
+  --veil: oklch(5% 0.01 85 / 0.6);
+  --term-bg: oklch(13.5% 0.006 85);
+  --shadow-float: 0 10px 30px oklch(5% 0.01 85 / 0.55), 0 1px 3px oklch(5% 0.01 85 / 0.4);
 
   color-scheme: dark;
 }
 
+/* ── 4. Tailwind names ──────────────────────────────────────── */
 @theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
   --color-paper: var(--paper);
   --color-paper-2: var(--paper-2);
   --color-paper-3: var(--paper-3);
@@ -209,6 +136,7 @@
   --color-signal-fg: var(--signal-fg);
   --color-running: var(--running);
   --color-focus: var(--focus);
+  --color-veil: var(--veil);
   --color-term-bg: var(--term-bg);
   --color-term-bg-2: var(--term-bg-2);
   --color-term-fg: var(--term-fg);
@@ -216,139 +144,47 @@
   --color-term-signal: var(--term-signal);
   --color-term-rule: var(--term-rule);
 
-  /* earlier names (layer 3) */
-  --color-page: var(--page);
-  --color-panel: var(--panel);
-  --color-canvas: var(--canvas);
-  --color-surface: var(--surface);
-  --color-inset: var(--inset);
-  --color-inset-2: var(--inset-2);
-  --color-hover: var(--hover);
-  --color-hover-2: var(--hover-2);
-  --color-field: var(--field);
-  --color-line: var(--line);
-  --color-line-strong: var(--line-strong);
-  --color-track: var(--track);
-  --color-link: var(--link);
-  --color-link-tint: var(--link-tint);
-  --color-accent: var(--accent);
-  --color-accent-ink: var(--accent-ink);
-  --color-accent-tint: var(--accent-tint);
-  --color-on-accent: var(--on-accent);
-  --color-action: var(--action);
-  --color-action-hover: var(--action-hover);
-  --color-on-action: var(--on-action);
-  --color-attention: var(--attention);
-  --color-attention-ink: var(--attention-ink);
-  --color-attention-tint: var(--attention-tint);
-  --color-live: var(--live);
-  --color-live-tint: var(--live-tint);
-  --color-idle: var(--idle);
-  --color-gone: var(--gone);
-  --color-stale: var(--stale);
-  --color-stale-tint: var(--stale-tint);
-  --color-on-stale: var(--on-stale);
-  --color-review: var(--review);
-  --color-review-tint: var(--review-tint);
-  --color-done: var(--done);
-  --color-queued: var(--queued);
-  --color-green: var(--green);
-  --color-green-tint: var(--green-tint);
-  --color-orange: var(--orange);
-  --color-orange-tint: var(--orange-tint);
-  --color-red: var(--red);
-  --color-red-tint: var(--red-tint);
-  --color-on-red: var(--on-red);
-  --color-state-live: var(--state-live);
-  --color-state-needs: var(--state-needs);
-  --color-state-needs-dot: var(--state-needs-dot);
-  --color-state-idle: var(--state-idle);
-  --color-state-gone: var(--state-gone);
-  --color-state-queued: var(--state-queued);
-  --color-state-errored: var(--state-errored);
-  --color-state-stale: var(--state-stale);
-  --color-state-done: var(--state-done);
-  --color-state-review: var(--state-review);
-  --color-verdict-drop: var(--verdict-drop);
-  --color-verdict-queue: var(--verdict-queue);
-  --color-verdict-interrupt: var(--verdict-interrupt);
-  --color-cli-claude: var(--cli-claude);
-  --color-cli-codex: var(--cli-codex);
-  --color-cli-gemini: var(--cli-gemini);
-  --color-cli-cursor: var(--cli-cursor);
-  --color-cli-other: var(--cli-other);
-  --color-canvas-bg: var(--canvas-bg);
-  --color-canvas-dot: var(--canvas-dot);
-  --color-canvas-grid: var(--canvas-grid);
-  --color-node-bg: var(--node-bg);
-  --color-node-hover: var(--node-hover);
-  --color-node-selected: var(--node-selected);
-  --color-frame-bg: var(--frame-bg);
-  --color-frame-ink: var(--frame-ink);
-  --color-frame-label: var(--frame-label);
-  --color-edge: var(--edge);
-  --color-edge-lead: var(--edge-lead);
-  --color-edge-active: var(--edge-active);
-  --color-edge-conflict: var(--edge-conflict);
+  --font-*: initial;
+  --font-display: var(--font-display);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-code); /* taste-skill-ignore: the face for literal code only */
 
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-
-  --font-sans: var(--font-ui-face), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-code-face), ui-monospace, Menlo, monospace; /* taste-skill-ignore: the face for literal code only */
-
-  /* six steps: label 12.5, meta 13, row 14 (the default), title 15, head 20, figure 32 */
+  /* Nine steps. Body face unless named: label 12.5, small 13, row 14 (the default),
+     title 15, read 17 (reading prose), section 20 (display), head 30 (display; 24 on a phone),
+     figure 32. */
+  --text-*: initial;
   --text-label: 0.78125rem;
   --text-label--line-height: 1.4;
   --text-small: 0.8125rem;
-  --text-small--line-height: 1.45;
+  --text-small--line-height: 1.5;
   --text-row: 0.875rem;
-  --text-row--line-height: 1.45;
+  --text-row--line-height: 1.5;
   --text-title: 0.9375rem;
   --text-title--line-height: 1.4;
-  --text-head: 1.25rem;
-  --text-head--line-height: 1.25;
-  --text-head--letter-spacing: -0.01em;
+  --text-read: 1.0625rem;
+  --text-read--line-height: 1.6;
+  --text-section: 1.25rem;
+  --text-section--line-height: 1.3;
+  --text-head: 1.875rem;
+  --text-head--line-height: 1.15;
+  --text-head--letter-spacing: -0.012em;
+  --text-head-phone: 1.5rem;
+  --text-head-phone--line-height: 1.2;
+  --text-head-phone--letter-spacing: -0.01em;
   --text-figure: 2rem;
   --text-figure--line-height: 1.1;
-  /* earlier steps, on the new scale until their views are rebuilt */
-  --text-body: 0.875rem;
-  --text-body--line-height: 1.45;
-  --text-lead: 0.9375rem;
-  --text-lead--line-height: 1.4;
-  --text-display: 1.25rem;
-  --text-display--line-height: 1.25;
-  --text-display--letter-spacing: -0.01em;
-  --text-xs: 0.78125rem;
-  --text-sm: 0.8125rem;
-  --text-base: 0.875rem;
 
-  /* radius: 3 everywhere, 6 on the terminal */
+  --radius-*: initial;
   --radius-xs: var(--r);
   --radius-sm: var(--r);
   --radius-md: var(--r);
   --radius-lg: var(--r);
   --radius-xl: var(--r-2);
   --radius-2xl: var(--r-2);
+  --radius-full: 9999px;
 
+  --shadow-*: initial;
   --shadow-float: var(--shadow-float);
-  --shadow-md: var(--shadow-float);
-  --shadow-lg: var(--shadow-float);
-  --shadow-overlay: var(--shadow-float);
 
   --ease-out: var(--ease-out);
 }

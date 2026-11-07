@@ -1,13 +1,4 @@
-import type {
-  Agent,
-  ChannelEvent,
-  Overlap,
-  RelayConfig,
-  Task,
-  Verdict,
-  VerdictOption,
-  VerdictProbabilities,
-} from "@shared/index";
+import type { Agent, ChannelEvent, Overlap, RelayConfig, Task, Verdict, VerdictOption, VerdictProbabilities } from "@shared/index";
 import { DEFAULT_INTERRUPT_INTERVAL_SECONDS, DEFAULT_INTERRUPT_THRESHOLD, UNRELAYED_EVENT_TYPES } from "@shared/index";
 import { AGENT_FILES, AGENT_SYMBOLS } from "./fixtures";
 
@@ -37,9 +28,7 @@ function removedSymbols(event: ChannelEvent): string[] {
   const collect = (type: "add" | "del") => {
     const out = new Set<string>();
     for (const f of event.payload.files)
-      for (const h of f.hunks)
-        for (const l of h.lines)
-          if (l.type === type) for (const m of l.text.matchAll(ident)) out.add(m[1] ?? m[2]);
+      for (const h of f.hunks) for (const l of h.lines) if (l.type === type) for (const m of l.text.matchAll(ident)) out.add(m[1] ?? m[2]);
     return out;
   };
   const added = collect("add");
@@ -55,20 +44,14 @@ function overlapFor(event: ChannelEvent, agent: Agent): Overlap {
   };
 }
 
-const pick = (p: VerdictProbabilities): VerdictOption =>
-  (Object.entries(p) as [VerdictOption, number][]).sort((a, b) => b[1] - a[1])[0][0];
+const pick = (p: VerdictProbabilities): VerdictOption => (Object.entries(p) as [VerdictOption, number][]).sort((a, b) => b[1] - a[1])[0][0];
 
 /**
  * A stand-in for the Relay: overlap in code first, skip Jev when there is none,
  * otherwise use scripted or heuristic probabilities, then apply the threshold
  * and the CLI downgrade exactly as the spec describes.
  */
-export function relay(
-  event: ChannelEvent,
-  agents: Agent[],
-  tasks: Task[],
-  scripted: Record<string, VerdictProbabilities> = {},
-): Verdict[] {
+export function relay(event: ChannelEvent, agents: Agent[], tasks: Task[], scripted: Record<string, VerdictProbabilities> = {}): Verdict[] {
   const verdicts: Verdict[] = [];
   // As the real Relay: no Verdicts on Directives (addressed and always delivered), model
   // context, or per-call lifecycle Events such as tool calls and commands.

@@ -25,10 +25,7 @@ export function signIn(repo: string): void {
 }
 
 /** What one poll of the device flow came back with. */
-export type DevicePollResult =
-  | { kind: "pending"; slowDown: boolean }
-  | { kind: "signed-in" }
-  | { kind: "failed"; reason: string };
+export type DevicePollResult = { kind: "pending"; slowDown: boolean } | { kind: "signed-in" } | { kind: "failed"; reason: string };
 
 /** The two calls behind "Sign in with a code"; the sign-in screen takes them as a prop. */
 export interface DeviceSignIn {

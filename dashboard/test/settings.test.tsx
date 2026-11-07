@@ -3,10 +3,10 @@
 // project's host, name and the public key's end; only the owner connects it, replaces its keys
 // or removes it, and the secret key typed in is sent once and never shown again.
 
+import type { ChannelSnapshot, ConnectLangfuseRequest, LangfuseConnection, LangfuseSettingsResponse } from "@shared/index";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelSnapshot, ConnectLangfuseRequest, LangfuseConnection, LangfuseSettingsResponse } from "@shared/index";
 import type { ChannelSource, LangfuseResult } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { SettingsView } from "@/views/SettingsView";
@@ -88,10 +88,12 @@ describe("the Langfuse setting", () => {
   });
 
   it("lets the owner replace the keys or remove the project, after saying what removing does", async () => {
-    const connectLangfuse = vi.fn(async (request: ConnectLangfuseRequest): Promise<LangfuseResult> => ({
-      ok: true,
-      settings: { canManage: true, langfuse: { ...project, publicKeyEnd: request.publicKey.slice(-4) } },
-    }));
+    const connectLangfuse = vi.fn(
+      async (request: ConnectLangfuseRequest): Promise<LangfuseResult> => ({
+        ok: true,
+        settings: { canManage: true, langfuse: { ...project, publicKeyEnd: request.publicKey.slice(-4) } },
+      }),
+    );
     const removeLangfuse = vi.fn(async (): Promise<LangfuseResult> => ({ ok: true, settings: { langfuse: null, canManage: true } }));
     render(<SettingsView />, { wrapper: channel({ langfuse: answer({ langfuse: project, canManage: true }), connectLangfuse, removeLangfuse }) });
 

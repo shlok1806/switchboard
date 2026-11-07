@@ -5,33 +5,34 @@
  * the context window, the account, where it runs and what the Relay heard from it. History
  * is the other section. Below 640px the right column follows the left.
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { toast } from "sonner";
+
 import type { Agent, AgentId, ChannelEvent } from "@shared/index";
 import { modelLabel } from "@shared/index";
+import { type FormEvent, Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
 import { LeadDialog, useSetLead } from "@/components/domain/agent-role";
+import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
 import { PendingApproval } from "@/components/domain/approval";
 import { ContextWindow } from "@/components/domain/context";
-import { EventRow } from "@/components/domain/log";
 import { contextPercent, shortName, useClaimsOf } from "@/components/domain/fleet";
+import { HistoryGaps } from "@/components/domain/history-gaps";
+import { EventRow } from "@/components/domain/log";
 import { OlderRow } from "@/components/domain/older";
-import { useIsMobile } from "@/hooks/use-mobile";
 import { IssueLink } from "@/components/domain/pending";
 import { RenameDialog } from "@/components/domain/rename";
 import { HandOffButton, PauseResumeButton, StopAgentButton } from "@/components/domain/start-agent";
-import { Facts, type Row, Steps } from "@/components/domain/agent-sections";
 import { Glyph, Orb, State, useAgentState, useAgentStates } from "@/components/domain/state";
 import { TerminalPanel } from "@/components/domain/terminal";
 import { useNow } from "@/components/domain/usage";
 import { Section } from "@/components/shell/section";
 import { ErrorPage } from "@/components/shell/states";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { HistoryGaps } from "@/components/domain/history-gaps";
 import { useScopedHistory } from "@/data/history";
 import { useCapabilities, useChannel, useIndex, useMe, useStore } from "@/data/store";
-import { CAPTURE_LABEL, CLI_LABEL, ago, hostName } from "@/lib/format";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { ago, CAPTURE_LABEL, CLI_LABEL, hostName } from "@/lib/format";
 import { scrollMotion } from "@/lib/motion";
 import { go, href } from "@/lib/router";
 import { isStale, limitsFor, resetText } from "@/lib/usage";
@@ -49,8 +50,12 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
     if (current) return;
     let active = true;
     if (typeof store.source.agent !== "function") return;
-    store.source.agent(id as AgentId).then((agent) => { if (active) setHistorical(agent); });
-    return () => { active = false; };
+    store.source.agent(id as AgentId).then((agent) => {
+      if (active) setHistorical(agent);
+    });
+    return () => {
+      active = false;
+    };
   }, [current, id, store]);
   const agent = current ?? historical;
   if (agent === undefined) return null;
@@ -167,16 +172,20 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-[var(--gutter)] pt-3 pb-10">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-7 px-[var(--gutter)] pt-[var(--page-top)] pb-10">
         <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="flex min-w-0 flex-[1_1_420px] items-start gap-2 sm:items-center sm:gap-4">
             <Orb state={state} size={phone ? 20 : 64} className="max-sm:mt-0.5" />
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <h1 ref={heading} tabIndex={-1} className="flex min-w-0 flex-wrap items-center gap-x-2.5 text-head font-semibold [overflow-wrap:anywhere] text-ink outline-none">
+              <h1
+                ref={heading}
+                tabIndex={-1}
+                className="flex min-w-0 flex-wrap items-center gap-x-2.5 font-display text-head font-medium [overflow-wrap:anywhere] text-ink outline-none max-sm:text-head-phone"
+              >
                 <Glyph state={state} />
                 {agent.nickname ?? agent.id}
                 <span title={`Last seen ${ago(agent.lastSeenAt)}`}>
-                  <State state={state} person={agent.person} glyph={false} className="text-row" />
+                  <State state={state} person={agent.person} glyph={false} className="font-sans text-row" />
                 </span>
               </h1>
               <p className="text-small text-ink-3">
@@ -349,9 +358,7 @@ function MoreActions({ agent, onRename }: { agent: Agent; onRename: () => void }
             ) : (
               <DropdownMenuItem onSelect={() => setGranting(true)}>Make it a lead</DropdownMenuItem>
             ))}
-          {mine && can.proxyMode && (
-            <DropdownMenuItem onSelect={() => void setMode()}>{raw ? "Share digests only" : "Share raw turns"}</DropdownMenuItem>
-          )}
+          {mine && can.proxyMode && <DropdownMenuItem onSelect={() => void setMode()}>{raw ? "Share digests only" : "Share raw turns"}</DropdownMenuItem>}
           <DropdownMenuItem onSelect={onRename}>Rename</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -476,7 +483,7 @@ function DirectiveForm({ agent, events, inputRef }: { agent: Agent; events: Chan
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit(e);
           }}
           placeholder="Run the tests before touching web/src/pages."
-          className="min-h-[76px] resize-y rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 py-2 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-[16px]"
+          className="min-h-[76px] resize-y rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 py-2 text-row text-ink placeholder:text-ink-4 hover:bg-paper-2 max-sm:text-read"
         />
         <div className="flex items-center gap-3">
           <Button type="submit" variant="primary" size="sm" disabled={busy || !text.trim()}>
@@ -503,7 +510,11 @@ function Account({ agent }: { agent: Agent }) {
     <Section title="Account" meta={stale && limits && `stale, read ${ago(limits.readAt, now)}`}>
       <Facts
         rows={[
-          (usage.email ?? usage.accountId) && ["Signed in", usage.email ?? usage.accountId, usage.plan && `${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)} plan`],
+          (usage.email ?? usage.accountId) && [
+            "Signed in",
+            usage.email ?? usage.accountId,
+            usage.plan && `${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)} plan`,
+          ],
           limit("5-hour", limits?.session),
           limit("Week", limits?.week),
           usage.session && ["Requests", usage.session.requests, "this session"],
@@ -537,11 +548,14 @@ function Relay({ agent, events, partial }: { agent: Agent; events: ChannelEvent[
           // Only the Events it sent itself; the History count also has Directives and renames about it.
           ["Sent", `${plus(own.length, partial)} Events`, last && (ago(last.at) === "now" ? "the last one just now" : `the last one ${ago(last.at)}`)],
           captures.length > 0 && ["Captures", captures.join(", ")],
-          can.verdicts && ["Heard", `${plus(interrupts, olderBefore !== undefined)} Interrupts, ${plus(queued, olderBefore !== undefined)} Queued`, !agent.canReceiveInterrupts && `${CLI_LABEL[agent.cli]} gets Interrupts as Queue`],
+          can.verdicts && [
+            "Heard",
+            `${plus(interrupts, olderBefore !== undefined)} Interrupts, ${plus(queued, olderBefore !== undefined)} Queued`,
+            !agent.canReceiveInterrupts && `${CLI_LABEL[agent.cli]} gets Interrupts as Queue`,
+          ],
           ["Proxy mode", agent.proxyMode === "raw" ? "Raw, full turns" : "Digest", !agent.secretMasking && "Secret masking is off"],
         ]}
       />
     </Section>
   );
 }
-

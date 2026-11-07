@@ -5,10 +5,11 @@
  * of the repo) connects it, replaces its keys or removes it. The secret key is typed once and
  * never comes back: the Worker keeps it sealed and no route returns it.
  */
-import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
-import { toast } from "sonner";
+
 import type { LangfuseConnection, LangfuseSettingsResponse } from "@shared/index";
 import { LANGFUSE_CLOUD_HOSTS } from "@shared/index";
+import { type FormEvent, type ReactNode, useEffect, useId, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
@@ -19,7 +20,7 @@ import { channelRepo } from "@/lib/session";
 
 const ADR = "https://github.com/shlok1806/switchboard/blob/main/docs/adr/0044-the-costs-tool-reads-the-repos-own-langfuse.md";
 const FIELD =
-  "h-[30px] w-full min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-[16px]";
+  "h-[30px] w-full min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-read";
 const SELF_HOSTED = "self-hosted";
 
 export function SettingsView() {
@@ -73,13 +74,10 @@ export function SettingsView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="flex w-full max-w-[44rem] flex-col gap-6 px-[var(--gutter)] pt-5 pb-12">
+      <div className="flex w-full max-w-[44rem] flex-col gap-6 px-[var(--gutter)] pt-[var(--page-top)] pb-12">
         <PageHead
           title="Settings"
-          facts={[
-            repo && <code key="repo">{repo}</code>,
-            loaded.canManage ? "you are its owner" : "only the Channel's owner changes these",
-          ]}
+          facts={[repo && <code key="repo">{repo}</code>, loaded.canManage ? "you are its owner" : "only the Channel's owner changes these"]}
         />
         <LangfuseSection settings={loaded} onChange={setLoaded} />
       </div>
@@ -95,8 +93,8 @@ function LangfuseSection({ settings, onChange }: { settings: LangfuseSettingsRes
     <Section title="Langfuse" meta={connected ? "connected" : "not connected"}>
       <div className="flex flex-col gap-4">
         <p className="text-row text-ink-2">
-          The Connector's costs tool reads what running the product costs, live from the repo's own Langfuse project: cost, tokens, calls, errors and
-          latency by model, trace name, day or week. Nothing is copied into the Channel.{" "}
+          The Connector's costs tool reads what running the product costs, live from the repo's own Langfuse project: cost, tokens, calls, errors and latency by
+          model, trace name, day or week. Nothing is copied into the Channel.{" "}
           <a href={ADR} target="_blank" rel="noreferrer" className="text-ink underline-offset-2 hover:underline">
             How it works
           </a>
@@ -128,8 +126,18 @@ function LangfuseSection({ settings, onChange }: { settings: LangfuseSettingsRes
 /** What anyone sees of a connected project: never its secret key. */
 function Connected({ project }: { project: LangfuseConnection }) {
   const rows: [string, ReactNode][] = [
-    ["Project", <span key="p" className="font-medium text-ink">{project.project.name}</span>],
-    ["Host", <code key="h" className="[overflow-wrap:anywhere] text-ink">{project.host}</code>],
+    [
+      "Project",
+      <span key="p" className="font-medium text-ink">
+        {project.project.name}
+      </span>,
+    ],
+    [
+      "Host",
+      <code key="h" className="[overflow-wrap:anywhere] text-ink">
+        {project.host}
+      </code>,
+    ],
     [
       "Public key",
       <code key="k" className="text-ink">
@@ -137,7 +145,12 @@ function Connected({ project }: { project: LangfuseConnection }) {
         {project.publicKeyEnd}
       </code>,
     ],
-    ["Secret key", <span key="s" className="text-ink-2">kept sealed, never shown</span>],
+    [
+      "Secret key",
+      <span key="s" className="text-ink-2">
+        kept sealed, never shown
+      </span>,
+    ],
     [
       "Connected",
       <span key="c" className="text-ink-2">
@@ -179,7 +192,9 @@ function OwnerActions({ onReplace, onRemoved }: { onReplace: () => void; onRemov
   if (confirming) {
     return (
       <div className="flex flex-col gap-3">
-        <p className="text-row text-ink">Remove the project? Its keys are deleted from the Channel, and the costs tool stops answering until it is connected again.</p>
+        <p className="text-row text-ink">
+          Remove the project? Its keys are deleted from the Channel, and the costs tool stops answering until it is connected again.
+        </p>
         <div className="flex flex-wrap gap-2">
           <Button variant="primary" busy={busy} onClick={() => void remove()}>
             Remove
@@ -206,15 +221,7 @@ function OwnerActions({ onReplace, onRemoved }: { onReplace: () => void; onRemov
   );
 }
 
-function ConnectForm({
-  replacing,
-  onCancel,
-  onSaved,
-}: {
-  replacing: boolean;
-  onCancel?: () => void;
-  onSaved: (s: LangfuseSettingsResponse) => void;
-}) {
+function ConnectForm({ replacing, onCancel, onSaved }: { replacing: boolean; onCancel?: () => void; onSaved: (s: LangfuseSettingsResponse) => void }) {
   const store = useStore();
   const id = useId();
   const [region, setRegion] = useState(LANGFUSE_CLOUD_HOSTS[0]?.host ?? SELF_HOSTED);
@@ -244,7 +251,8 @@ function ConnectForm({
   return (
     <form onSubmit={(e) => void submit(e)} aria-label={replacing ? "Replace the Langfuse keys" : "Connect Langfuse"} className="flex min-w-0 flex-col gap-4">
       <p className="text-small text-ink-3">
-        In Langfuse, open the project's Settings, then API Keys, and create a key pair. The secret key is checked with Langfuse, kept sealed, and never shown again.
+        In Langfuse, open the project's Settings, then API Keys, and create a key pair. The secret key is checked with Langfuse, kept sealed, and never shown
+        again.
       </p>
       <div className="flex min-w-0 flex-col gap-1.5">
         <label htmlFor={`${id}-host`} className="text-small text-ink-3">

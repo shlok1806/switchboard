@@ -1,14 +1,14 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { PhoneBar, TabBar, TopBar } from "@/components/shell/nav";
-import { ErrorPage, LateSkeleton, LoadingStatus, ViewErrorBoundary, ViewSkeleton } from "@/components/shell/states";
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { CommandPalette } from "@/components/domain/palette";
 import { StartAgentSheet } from "@/components/domain/start-agent";
+import { PhoneBar, SectionBar, TabBar, TopBar } from "@/components/shell/nav";
+import { ErrorPage, LateSkeleton, LoadingStatus, ViewErrorBoundary, ViewSkeleton } from "@/components/shell/states";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useChannel, useIndex } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { href, useRoute, type Route } from "@/lib/router";
+import { href, type Route, useRoute } from "@/lib/router";
 import { channelRepo, signOut } from "@/lib/session";
 
 // One chunk per route, loaded on first visit.
@@ -40,31 +40,6 @@ function pageOf(route: Route): string {
     default:
       return route.view;
   }
-}
-
-/** Where you are, inside a Task or an Agent: the way back, as a quiet trail over the page head. */
-function Crumb({ route, taskTitle }: { route: Route; taskTitle?: string }) {
-  if (route.view !== "task" && route.view !== "agent") return null;
-  const parent = route.view === "task" ? { label: "Tasks", to: href({ view: "tasks" }) } : { label: "Agents", to: href({ view: "agents" }) };
-  return (
-    <nav aria-label="Breadcrumb" className="flex min-h-10 w-full shrink-0 items-end gap-1.5 px-[var(--gutter)] text-small text-ink-3">
-      <a href={parent.to} className="hover:text-ink">
-        {parent.label}
-      </a>
-      <span aria-hidden>/</span>
-      {route.view === "task" ? (
-        <span className="min-w-0 [overflow-wrap:anywhere] text-ink-2">
-          #{route.number} {taskTitle}
-        </span>
-      ) : (
-        <>
-          <span>{route.id.split("/")[0]}</span>
-          <span aria-hidden>/</span>
-          <code className="min-w-0 [overflow-wrap:anywhere] text-ink-2">{route.id}</code>
-        </>
-      )}
-    </nav>
-  );
 }
 
 export default function App() {
@@ -123,7 +98,8 @@ export default function App() {
           {route.view === "hosts" && <HostsView selected={route.host} />}
           {route.view === "settings" && <SettingsView />}
           {route.view === "missing" && (
-            <ErrorPage missing
+            <ErrorPage
+              missing
               title="No such page"
               actions={
                 <a href={href({ view: "now" })} className={buttonVariants({ variant: "primary" })}>
@@ -140,8 +116,9 @@ export default function App() {
 
   return (
     <TooltipProvider delayDuration={500}>
-      <div className="flex h-dvh flex-col bg-page">
+      <div className="flex h-dvh flex-col bg-paper">
         <LoadingStatus />
+        {/* biome-ignore lint/a11y/useValidAnchor: a skip link keeps its href for a reader that follows it; the click moves focus without changing the route. */}
         <a
           href="#main"
           onClick={(e) => {
@@ -152,18 +129,9 @@ export default function App() {
         >
           Skip to the page
         </a>
-        {mobile ? (
-          <PhoneBar repo={repo} onSearch={() => setPalette(true)} />
-        ) : (
-          <TopBar route={route} repo={repo} onSearch={() => setPalette(true)} />
-        )}
-        <Crumb route={route} taskTitle={route.view === "task" ? taskByNumber.get(route.number)?.title : undefined} />
-        <main
-          ref={main}
-          id="main"
-          tabIndex={-1}
-          className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] outline-none sm:pb-0"
-        >
+        {mobile ? <PhoneBar repo={repo} onSearch={() => setPalette(true)} /> : <TopBar route={route} repo={repo} onSearch={() => setPalette(true)} />}
+        <SectionBar route={route} taskTitle={route.view === "task" ? taskByNumber.get(route.number)?.title : undefined} />
+        <main ref={main} id="main" tabIndex={-1} className="flex min-h-0 flex-1 flex-col pb-[var(--tabbar-h)] outline-none sm:pb-0">
           {content}
         </main>
         {mobile && <TabBar route={route} />}

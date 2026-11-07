@@ -4,12 +4,13 @@
  * start and how loose they may run. The inspector at the right reads the selected Host;
  * below 640px the rows stack and carry all of it themselves.
  */
-import { useEffect, useState } from "react";
+
 import type { Agent, Host, Person } from "@shared/index";
 import { hostAllows } from "@shared/index";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/atoms/Button";
 import { Chip } from "@/components/atoms/Chip";
-import { GroupLine, byPerson, shortName } from "@/components/domain/fleet";
+import { byPerson, GroupLine, shortName } from "@/components/domain/fleet";
 import { StartAgentButton, WithCode } from "@/components/domain/start-agent";
 import { Glyph, Orb, State, useAgentStates } from "@/components/domain/state";
 import { InspectorFrame, SheetClose } from "@/components/shell/inspector";
@@ -18,8 +19,8 @@ import { Section } from "@/components/shell/section";
 import { CopyCommand, EmptyState, EmptyView, ErrorPage, ViewSkeleton } from "@/components/shell/states";
 import { useHosts } from "@/data/hosts";
 import { useChannel, useMe, useStore } from "@/data/store";
+import { useInspectorSheet, useIsMobile } from "@/hooks/use-mobile";
 import { attachKey, nextSeq } from "@/lib/attach-key";
-import { useIsMobile } from "@/hooks/use-mobile";
 import { ago } from "@/lib/format";
 import { go, href, replace } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -40,6 +41,7 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
   const { agents, snapshot } = useChannel();
   const me = useMe();
   const mobile = useIsMobile();
+  const sheet = useInspectorSheet();
   const [attempt, setAttempt] = useState(0);
   const { hosts: response, problem } = useHosts(attempt);
   // An address naming a Host the Channel does not have is corrected to the plain view, as on Agents.
@@ -91,17 +93,19 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
     { id: "offline", label: "Offline", n: all.length - live },
     { id: "mine", label: "Mine", n: all.filter((h) => h.person === me).length },
   ];
-  const shown = all.filter((h) => filter === "all" || (filter === "live" && h.live) || (filter === "offline" && !h.live) || (filter === "mine" && h.person === me));
+  const shown = all.filter(
+    (h) => filter === "all" || (filter === "live" && h.live) || (filter === "offline" && !h.live) || (filter === "mine" && h.person === me),
+  );
   const byPerson = groupHosts(shown, me);
   // The Host a link names, even one the chips hide; else the first shown, beside the list only.
   const named = all.find((h) => h.id === selectedId);
-  const selected = named ?? (mobile ? undefined : shown[0]);
+  const selected = named ?? (sheet ? undefined : shown[0]);
   const close = () => go({ view: "hosts" });
   const zones = new Map((snapshot?.persons ?? []).map((p: Person) => [p.name, p.timeZone]));
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-[var(--gutter)] pt-5 pb-12">
+      <div className="flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto px-[var(--gutter)] pt-[var(--page-top)] pb-12">
         <PageHead
           title="Hosts"
           facts={[
@@ -150,11 +154,21 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-rule text-label font-medium text-ink-3">
-                <th scope="col" className="w-[7.5rem] py-2 pr-3 pl-3 font-medium">State</th>
-                <th scope="col" className="py-2 pr-3 font-medium">Host</th>
-                <th scope="col" className="py-2 pr-3 font-medium">Agents</th>
-                <th scope="col" className="py-2 pr-3 font-medium max-[1100px]:hidden">Folders</th>
-                <th scope="col" className="w-28 py-2 pr-3 text-right font-medium">Last seen</th>
+                <th scope="col" className="w-[7.5rem] py-2 pr-3 pl-3 font-medium">
+                  State
+                </th>
+                <th scope="col" className="py-2 pr-3 font-medium">
+                  Host
+                </th>
+                <th scope="col" className="py-2 pr-3 font-medium">
+                  Agents
+                </th>
+                <th scope="col" className="py-2 pr-3 font-medium max-[1100px]:hidden">
+                  Folders
+                </th>
+                <th scope="col" className="w-28 py-2 pr-3 text-right font-medium">
+                  Last seen
+                </th>
               </tr>
             </thead>
             {byPerson.map(([person, group]) => (
@@ -172,7 +186,7 @@ export function HostsView({ selected: selectedId }: { selected?: string }) {
           </table>
         )}
       </div>
-      {selected && <Inspector key={selected.id} host={selected} agents={onHost(selected)} onClose={mobile ? close : undefined} />}
+      {selected && <Inspector key={selected.id} host={selected} agents={onHost(selected)} onClose={sheet ? close : undefined} />}
     </div>
   );
 }
@@ -199,7 +213,11 @@ function AgentsOn({ agents }: { agents: Agent[] }) {
       {agents.map((a, i) => (
         <span key={a.id}>
           {i > 0 && ", "}
-          <a href={href({ view: "agent", id: a.id })} onClick={(e) => e.stopPropagation()} className={cn("hover:underline", a.presence === "gone" ? "text-ink-3" : "text-ink")}>
+          <a
+            href={href({ view: "agent", id: a.id })}
+            onClick={(e) => e.stopPropagation()}
+            className={cn("hover:underline", a.presence === "gone" ? "text-ink-3" : "text-ink")}
+          >
             {shortName(a)}
           </a>
         </span>
@@ -273,7 +291,9 @@ function StackedHost({ host: h, agents }: { host: Host; agents: Agent[] }) {
           <span className={cn("block text-row font-semibold [overflow-wrap:anywhere]", h.live ? "text-ink" : "text-ink-2")}>{h.name}</span>
           <span className="block text-small text-ink-3">{MODE_LABEL[h.maxPermissionMode]}</span>
         </span>
-        <span className={cn("text-row [overflow-wrap:anywhere]", agents.length ? "text-ink" : "text-ink-3")}>{agents.length ? agents.map(shortName).join(", ") : "No Agents"}</span>
+        <span className={cn("text-row [overflow-wrap:anywhere]", agents.length ? "text-ink" : "text-ink-3")}>
+          {agents.length ? agents.map(shortName).join(", ") : "No Agents"}
+        </span>
         <Folders roots={h.roots} />
       </button>
     </li>
@@ -293,7 +313,7 @@ function Inspector({ host: h, agents, onClose }: { host: Host; agents: Agent[]; 
     <InspectorFrame label={`${h.name}, in the inspector`} onClose={onClose}>
       <div className="flex flex-col gap-2">
         <div className="flex items-start gap-2">
-          <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 text-title font-semibold [overflow-wrap:anywhere] text-ink">
+          <h2 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 font-display text-section font-medium [overflow-wrap:anywhere] text-ink">
             <Glyph state={h.live ? "running" : "gone"} />
             {h.name}
             <State state={h.live ? "running" : "gone"} word={h.live ? "Live" : "Offline"} glyph={false} />
@@ -372,7 +392,10 @@ function Sharing({ host: h }: { host: Host }) {
   const [now, setNow] = useState({ allow: h.allow, allowChannel: h.allowChannel });
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string>();
-  const people = (snapshot?.persons ?? []).map((p: Person) => p.name).filter((n) => n !== h.person).sort();
+  const people = (snapshot?.persons ?? [])
+    .map((p: Person) => p.name)
+    .filter((n) => n !== h.person)
+    .sort();
 
   const apply = async (allow: string[], allowChannel: boolean) => {
     if (busy || repo === undefined) return;
@@ -392,8 +415,7 @@ function Sharing({ host: h }: { host: Host }) {
     setBusy(false);
   };
 
-  const toggle = (name: string) =>
-    apply(now.allow.includes(name) ? now.allow.filter((n) => n !== name) : [...now.allow, name], now.allowChannel);
+  const toggle = (name: string) => apply(now.allow.includes(name) ? now.allow.filter((n) => n !== name) : [...now.allow, name], now.allowChannel);
 
   return (
     <div className="flex flex-col gap-2">
