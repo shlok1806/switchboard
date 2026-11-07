@@ -77,9 +77,13 @@ function checkName(name: string): void {
   }
 }
 
+/** Where npm installs a package's dependencies; never part of a shared skill. */
+const INSTALLED_PACKAGES = "node_modules";
+
 /**
  * The files of the skill directory `root/name`, by path inside it. Reads nothing
  * outside it: a symbolic link, or anything but a plain file or directory, is refused.
+ * A `node_modules` directory, at any depth, is left out, links and all.
  * Only `root/name` itself may be a link to a directory, the way `npx skills add`
  * installs a skill; its files are read from where it points.
  * With `missing: "empty"`, a skill that is not there has no files.
@@ -105,6 +109,8 @@ export async function readSkillDir(
   let bytes = 0;
   const walk = async (at: string): Promise<void> => {
     for (const entry of await readdir(at, { withFileTypes: true })) {
+      // Installed packages are not the skill: npm rebuilds them from its package.json (ADR 0051).
+      if (entry.name === INSTALLED_PACKAGES) continue;
       const path = join(at, entry.name);
       const inside = relative(dir, path).split(sep).join("/");
       if (entry.isSymbolicLink())

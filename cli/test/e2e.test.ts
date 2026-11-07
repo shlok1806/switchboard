@@ -5078,6 +5078,22 @@ describe("Shared skills (ADR 0039)", () => {
     await rm(join(dir, "config.json"));
     expect((await sharedSkills()).map((s) => s.version)).toEqual([1]);
 
+    // Installed packages are left out, links and all: npm rebuilds them from package.json.
+    const shots = join(userSkills(), "page-shots");
+    await mkdir(join(shots, "node_modules", "playwright-core"), { recursive: true });
+    await mkdir(join(shots, "node_modules", ".bin"));
+    await writeFile(
+      join(shots, "SKILL.md"),
+      "---\nname: page-shots\ndescription: Screenshots a page.\n---\n\nShoot it.\n",
+    );
+    await writeFile(join(shots, "package.json"), '{ "dependencies": { "playwright-core": "^1.55.0" } }\n');
+    await writeFile(join(shots, "node_modules", "playwright-core", "cli.js"), "export {};\n");
+    await symlink("../playwright-core/cli.js", join(shots, "node_modules", ".bin", "playwright-core"));
+    expect(await approved(term, "skill_publish", { name: "page-shots" }, "1")).toMatch(
+      /^skill_publish: Published page-shots version 1 \(2 files, \d+ bytes\)/,
+    );
+    expect((await sharedSkills()).find((s) => s.name === "page-shots")?.paths).toEqual(["SKILL.md", "package.json"]);
+
     // A skill installed as a link to its directory elsewhere, as `npx skills add` installs one,
     // publishes that directory's files: only the skill's own directory may be a link.
     const linked = join(scratch, "agents-skills", "pr-checklist");
@@ -5106,6 +5122,9 @@ describe("Shared skills (ADR 0039)", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), "---\nname: lint-rules\n---\n\nRun eslint.\n");
     await writeFile(join(dir, "old.md"), "stale\n");
+    // Packages installed into it are this machine's, not the skill's: an install leaves them.
+    await mkdir(join(dir, "node_modules", "biome"), { recursive: true });
+    await writeFile(join(dir, "node_modules", "biome", "index.js"), "export {};\n");
 
     const term = new Terminal(["run", "claude"]);
     await term.started();
@@ -5131,6 +5150,8 @@ describe("Shared skills (ADR 0039)", () => {
     expect(done).toContain(`skill_install: Installed lint-rules version 1 over ${dir}, changing:`);
     expect(await readFile(join(dir, "SKILL.md"), "utf8")).toBe(entry);
     await expect(stat(join(dir, "old.md"))).rejects.toThrow();
+    expect(read).not.toContain("node_modules");
+    expect(await readFile(join(dir, "node_modules", "biome", "index.js"), "utf8")).toBe("export {};\n");
     // What this machine held never reached the Channel: the Tool Capture has the call, not the files.
     const reported = (await history()).events.filter(
       (e) => e.type === "tool.call" && String(e.payload.tool).startsWith("skill_"),
