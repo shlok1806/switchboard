@@ -36,8 +36,10 @@ import {
   MAX_SPAWN_FAILURE_LENGTH,
 } from "../../../shared/src/index";
 import { ChannelClient, targetOf } from "../channel-client";
+import { Backoff } from "../channel-net";
+import { closeSocket, dropSocket, openSocket, WebSocket as Socket, type WebSocket } from "../channel-socket";
 import type { Config } from "../config";
-import { type Keepalive, keepalive, streamPingMs } from "../keepalive";
+import { type Keepalive, keepalive, silentAfterMs, streamPingMs } from "../keepalive";
 import { type LocalStore, openLocalStore } from "../local-store";
 import { cachedAttachList } from "../terminal/attach-keys";
 import { checkAllowChange } from "./allow";
@@ -162,7 +164,8 @@ export class HostSupervisor {
   private readonly resumes = new Map<AgentId, number[]>();
   private socket: WebSocket | null = null;
   private closed = false;
-  private retry = 0;
+  /** Each failed attach in a row waits longer, with jitter, up to a minute (ADR 0052). */
+  private readonly backoff = new Backoff(1_000, 60_000);
   private pending: ReturnType<typeof setTimeout> | undefined;
   /** This machine's own limits, from `switchboard host install`: never the Channel's copy (ADR 0017). */
   private limits: LocalLimits;
@@ -221,7 +224,7 @@ export class HostSupervisor {
   async shutdown(): Promise<void> {
     this.closed = true;
     clearTimeout(this.pending);
-    this.socket?.close();
+    if (this.socket !== null) closeSocket(this.socket, "the Host is stopping");
     const exits = [...this.running.values()].map(
       (r) =>
         new Promise<void>((resolve) => {
@@ -260,27 +263,35 @@ export class HostSupervisor {
       ...(this.store === null ? {} : { history: "1" }),
     });
     const base = `${config.url.replace(/\/+$/, "")}${channelApiBase(settings.repo)}`;
-    const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/stream?${query}`);
+    const pingMs = streamPingMs(this.options.env);
+    const ws = openSocket(`${base.replace(/^http/, "ws")}/api/stream?${query}`, silentAfterMs(pingMs));
     this.socket = ws;
     let alive: Keepalive | undefined;
+    let heard = false;
     ws.addEventListener("open", () => {
-      this.retry = 0;
       this.options.log(`attached to ${settings.repo} at ${config.url} as ${this.hostId}`);
       // A pause whose confirmation went out while detached: say so again (the Channel ignores repeats).
       for (const paused of this.pausedAgents()) this.send({ type: "host.paused", agent: paused.agent });
-      alive = keepalive(ws, streamPingMs(this.options.env), (quiet) => {
+      alive = keepalive(ws, pingMs, (quiet) => {
         if (this.closed || this.socket !== ws) return;
         // Half-open: its close may never come, so it is let go and replaced now (ADR 0048).
         this.options.log(`heard nothing from the Channel for ${Math.round(quiet / 1000)}s; reconnecting`);
         this.socket = null;
-        ws.close();
+        dropSocket(ws);
         clearTimeout(this.pending);
-        this.pending = setTimeout(() => this.connect(), 0);
+        this.pending = setTimeout(() => this.connect(), this.backoff.next());
       });
     });
     ws.addEventListener("message", (event) => {
       alive?.heard();
-      if (event.data === LIVE_PONG) return;
+      if (event.data === LIVE_PONG) {
+        // Only a socket the Channel answers a ping on resets the backoff: one that opens and goes silent does not.
+        if (!heard) {
+          heard = true;
+          this.backoff.reset();
+        }
+        return;
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(String(event.data));
@@ -310,9 +321,11 @@ export class HostSupervisor {
     ws.addEventListener("close", (event) => {
       alive?.stop();
       if (this.closed || this.socket !== ws) return;
-      this.retry += 1;
-      const delay = Math.min(60_000, 1000 * 2 ** this.retry);
-      this.options.log(`detached from the Channel (${event.code} ${event.reason}); trying again in ${delay / 1000} s`);
+      this.socket = null;
+      const delay = this.backoff.next();
+      this.options.log(
+        `detached from the Channel (${event.code} ${event.reason}); trying again in ${Math.round(delay / 100) / 10} s`,
+      );
       this.pending = setTimeout(() => this.connect(), delay);
     });
     ws.addEventListener("error", () => {
@@ -335,7 +348,7 @@ export class HostSupervisor {
   }
 
   private send(frame: Record<string, unknown>): void {
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(frame));
+    if (this.socket?.readyState === Socket.OPEN) this.socket.send(JSON.stringify(frame));
   }
 
   private fail(spawn: string, reason: string): void {

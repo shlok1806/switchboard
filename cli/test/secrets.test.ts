@@ -43,6 +43,7 @@ const notSecrets: { name: string; input: string }[] = [
   { name: "a call", input: 'const key = crypto.randomUUID();\nclient_secret = response.get("clientSecret")' },
   {
     name: "an environment reference",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, kept as written
     input: 'API_KEY="$API_KEY"\nTOKEN=${{ secrets.GITHUB_TOKEN }}\napiKey: process.env.OPENAI_API_KEY_2024',
   },
   { name: "an ARN", input: "SecretKey: arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/api-key-AbCdEf" },

@@ -282,6 +282,14 @@ class Terminal {
     this.term.write(text);
   }
 
+  kill(): void {
+    try {
+      this.term.kill();
+    } catch {
+      // Already gone.
+    }
+  }
+
   waitForOutput(pattern: RegExp): Promise<RegExpMatchArray> {
     return waitFor(`terminal output ${pattern}`, () => this.output.match(pattern) ?? undefined).catch((error) => {
       throw new Error(`${error.message}. The terminal shows:\n${this.output}`);
@@ -4990,6 +4998,185 @@ describe("A wrapper whose socket goes half-open", () => {
       relay.close();
     }
   }, 60_000);
+});
+
+/**
+ * A TCP relay to the Channel that can stop answering, the way a wedged `wrangler dev`
+ * did (ADR 0052). `mute()` lets new sockets attach, then says nothing more on them, nor
+ * on the ones already open; HTTP requests still pass. `wedge()` lets nothing through at
+ * all: requests and sockets, open or new, connect and hang. It counts the connections the wrapper holds open to it, and when
+ * the wrapper opened each socket.
+ */
+async function stalledRelay(target: string) {
+  const { hostname, port } = new URL(target);
+  const pairs = new Map<[Socket, Socket], boolean>();
+  /** Each connection the wrapper holds open to the relay, and whether it is a socket or HTTP. */
+  const held = new Map<Socket, "socket" | "http" | "new">();
+  const streamsAt: number[] = [];
+  let mode: "pass" | "mute" | "wedge" = "pass";
+  // Nothing crosses any more, either way. What the wrapper sends is read and dropped, so
+  // the relay still sees the wrapper close its end.
+  const quiet = ([client, upstream]: [Socket, Socket]) => {
+    client.unpipe(upstream);
+    upstream.unpipe(client);
+    client.resume();
+    upstream.pause();
+  };
+  const server = createServer((client) => {
+    held.set(client, "new");
+    client.on("close", () => held.delete(client));
+    client.on("error", () => {});
+    // A socket's handshake can come on a connection that carried HTTP requests before it.
+    const opensSocket = (chunk: Buffer | string) => {
+      const text = typeof chunk === "string" ? chunk : chunk.toString("latin1");
+      return text.startsWith("GET ") && text.includes("/api/stream");
+    };
+    client.once("data", (first) => {
+      const stream = opensSocket(first);
+      held.set(client, stream ? "socket" : "http");
+      if (stream) streamsAt.push(Date.now());
+      if (mode === "wedge") return;
+      // Muted, a socket's handshake answer crosses, then nothing more.
+      const muteAfterAnswer = () => {
+        upstream.unpipe(client);
+        upstream.once("data", (answer) => {
+          client.write(answer);
+          quiet(pair);
+        });
+      };
+      const upstream = connect(Number(port), hostname, () => {
+        upstream.write(first);
+        client.pipe(upstream);
+        upstream.pipe(client);
+        if (stream && mode === "mute") muteAfterAnswer();
+      });
+      const pair: [Socket, Socket] = [client, upstream];
+      pairs.set(pair, stream);
+      client.on("data", (chunk) => {
+        if (!opensSocket(chunk)) return;
+        streamsAt.push(Date.now());
+        held.set(client, "socket");
+        pairs.set(pair, true);
+        if (mode === "mute") muteAfterAnswer();
+      });
+      upstream.on("error", () => client.destroy());
+      client.on("close", () => {
+        pairs.delete(pair);
+        upstream.destroy();
+      });
+    });
+  });
+  const relayPort = await freePort();
+  await new Promise<void>((resolve) => server.listen(relayPort, "127.0.0.1", resolve));
+  const stall = (next: "mute" | "wedge") => {
+    mode = next;
+    for (const [pair, stream] of pairs) if (stream || next === "wedge") quiet(pair);
+  };
+  return {
+    url: `http://127.0.0.1:${relayPort}`,
+    /** The connections the wrapper has open to the relay now, of `kind` when given. */
+    held: (kind?: "socket" | "http") => [...held.values()].filter((k) => kind === undefined || k === kind).length,
+    /** When each socket the wrapper opened arrived. */
+    streamsAt,
+    mute: () => stall("mute"),
+    wedge: () => stall("wedge"),
+    pass() {
+      mode = "pass";
+    },
+    close() {
+      for (const socket of held.keys()) socket.destroy();
+      server.close();
+    },
+  };
+}
+
+describe("A wrapper whose Channel stops answering (ADR 0052)", () => {
+  async function startBehind(relay: { url: string }, name: string): Promise<{ term: Terminal; config: string }> {
+    const config = join(scratch, name);
+    await mkdir(config, { recursive: true });
+    const saved = JSON.parse(await readFile(join(scratch, "config", "config.json"), "utf8"));
+    await writeFile(join(config, "config.json"), JSON.stringify({ ...saved, url: relay.url }), { mode: 0o600 });
+    const term = new Terminal(["run", "claude"], {
+      SWITCHBOARD_CONFIG_DIR: config,
+      SWITCHBOARD_STREAM_PING_SECONDS: "1",
+    });
+    return { term, config };
+  }
+
+  it("closes each socket the Channel stops answering on, and spaces its new ones out", async () => {
+    const relay = await stalledRelay(base);
+    const { term } = await startBehind(relay, "muted");
+    try {
+      const { agentEnv: id } = await term.started();
+      const screen = () => asPerson("dashboard", `${agentPath(id as AgentId)}/terminal`);
+      await waitFor("its screen", async () => ((await screen()).ok ? true : undefined));
+      const before = relay.held();
+
+      relay.mute();
+      const muted = relay.streamsAt.length;
+      let most = 0;
+      for (const until = Date.now() + 30_000; Date.now() < until; ) {
+        most = Math.max(most, relay.held());
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      const opened = relay.streamsAt.slice(muted);
+      // It gave each silent socket up, and closed it: one socket at a time, besides its HTTP connection.
+      expect(opened.length).toBeGreaterThanOrEqual(2);
+      expect(most).toBeLessThanOrEqual(before + 1);
+      // Each new socket waited longer than the one before it: at a fixed pace, one every
+      // 2.5 pings, it would have opened 10 in 30 s.
+      expect(opened.length).toBeLessThanOrEqual(6);
+
+      // The Channel answers again: the wrapper attaches, and its screen can be read.
+      relay.pass();
+      await waitFor(
+        "its screen once the Channel answers",
+        async () => ((await screen()).ok ? true : undefined),
+        45_000,
+      );
+    } finally {
+      term.kill();
+      relay.close();
+    }
+  }, 120_000);
+
+  it("waits out a Channel that takes nothing at all, says so once, and attaches again when it answers", async () => {
+    const relay = await stalledRelay(base);
+    const { term, config } = await startBehind(relay, "wedged");
+    try {
+      const { agentEnv: id } = await term.started();
+      const screen = () => asPerson("dashboard", `${agentPath(id as AgentId)}/terminal`);
+      await waitFor("its screen", async () => ((await screen()).ok ? true : undefined));
+
+      relay.wedge();
+      let most = 0;
+      for (const until = Date.now() + 30_000; Date.now() < until; ) {
+        most = Math.max(most, relay.held());
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      // A heartbeat and a socket at most wait on it at once; a request it gave up on is closed.
+      expect(most).toBeLessThanOrEqual(3);
+      const log = await readFile(join(config, "wrapper.log"), "utf8");
+      const mine = log.split("\n").filter((line) => line.includes(`[${term.pid}]`));
+      expect(mine.filter((line) => line.includes("cannot reach the Channel")).length).toBe(1);
+
+      // The session itself never stopped.
+      term.type("work\r");
+      await term.waitForOutput(/FAKE-CLAUDE working/);
+
+      relay.pass();
+      await waitFor(
+        "its screen once the Channel answers",
+        async () => ((await screen()).ok ? true : undefined),
+        90_000,
+      );
+      const after = await readFile(join(config, "wrapper.log"), "utf8");
+      expect(after).toContain(`[${term.pid}] reached the Channel again`);
+    } finally {
+      term.kill();
+      relay.close();
+    }
+  }, 180_000);
 });
 
 describe("Shared skills (ADR 0039)", () => {

@@ -33,8 +33,20 @@ import type {
   TranscriptRequestMessage,
 } from "../../shared/src/index";
 import { agentPath, channelApiBase, LIVE_PONG } from "../../shared/src/index";
+import { Backoff, exhaustedCode, exhaustionMessage } from "./channel-net";
+import { closeSocket, dropSocket, openSocket, WebSocket as Socket, type WebSocket } from "./channel-socket";
 import type { Config } from "./config";
-import { type Keepalive, keepalive, STREAM_PING_MS } from "./keepalive";
+import { type Keepalive, keepalive, STREAM_PING_MS, silentAfterMs } from "./keepalive";
+
+/** The most requests one process has in flight to the Channel at once; the rest wait their turn (ADR 0052). */
+const MAX_IN_FLIGHT = 4;
+
+/** How long a process makes no new connection to the Channel once the machine ran out of ports or descriptors. */
+const EXHAUSTED_WAIT_MS = 60_000;
+
+/** The socket's first wait after a failure, and its longest (ADR 0052). */
+const SOCKET_RETRY_MS = 1_000;
+const SOCKET_RETRY_MAX_MS = 30_000;
 
 /** Where a ChannelClient finds its Channel and its credential. */
 export interface ChannelTarget {
@@ -79,6 +91,13 @@ export class ChannelError extends Error {
   }
 }
 
+/** The machine, not the Channel, ran out of local ports or file descriptors (ADR 0052). */
+export class LocalExhaustionError extends ChannelError {
+  constructor(readonly code: string) {
+    super(0, exhaustionMessage(code));
+  }
+}
+
 export class ChannelClient {
   /** The Channel API's base: `<url>/r/<owner>/<repo>`. */
   private readonly base: string;
@@ -87,6 +106,12 @@ export class ChannelClient {
   /** The Agent's token once registered; every other call then carries it. */
   private agentToken: string | null = null;
   private readonly tokenListeners = new Set<() => void>();
+  /** Requests in flight now, and those waiting for one of them to finish. */
+  private inFlight = 0;
+  private readonly queue: (() => void)[] = [];
+  /** Until when no new connection is made: the machine ran out of ports or descriptors, and why. */
+  private exhaustedUntil = 0;
+  private exhausted = "";
 
   constructor(target: ChannelTarget) {
     this.base = `${target.url.replace(/\/+$/, "")}${channelApiBase(target.repo)}`;
@@ -113,15 +138,72 @@ export class ChannelClient {
     const headers = new Headers(init.headers);
     headers.set("Content-Type", "application/json");
     headers.set("Authorization", `Bearer ${credential}`);
-    let response: Response;
+    // The deadline counts the wait for a turn too: a call queued behind stuck ones gives up with them.
+    const signal = AbortSignal.timeout(timeoutMs);
+    await this.turn(signal);
     try {
-      response = await fetch(`${this.base}${path}`, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
-    } catch (error) {
-      throw new ChannelError(0, `Could not reach ${this.base}: ${(error as Error).message}`);
+      this.refuseWhileExhausted();
+      let response: Response;
+      try {
+        response = await fetch(`${this.base}${path}`, { ...init, headers, signal });
+      } catch (error) {
+        this.throwIfExhausted(error);
+        throw new ChannelError(0, `Could not reach ${this.base}: ${(error as Error).message}`);
+      }
+      // The body is always read, so the connection goes back to the pool for the next call.
+      const body = (await response.json().catch(() => ({ ok: false, reason: response.statusText }))) as
+        | T
+        | ErrorResponse;
+      if (!response.ok) throw new ChannelError(response.status, (body as ErrorResponse).reason, body);
+      return body as T;
+    } finally {
+      this.inFlight -= 1;
+      this.queue.shift()?.();
     }
-    const body = (await response.json().catch(() => ({ ok: false, reason: response.statusText }))) as T | ErrorResponse;
-    if (!response.ok) throw new ChannelError(response.status, (body as ErrorResponse).reason, body);
-    return body as T;
+  }
+
+  /** Waits for a free slot among MAX_IN_FLIGHT, or for `signal`'s deadline. */
+  private async turn(signal: AbortSignal): Promise<void> {
+    if (this.inFlight < MAX_IN_FLIGHT) {
+      this.inFlight += 1;
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const go = () => {
+        signal.removeEventListener("abort", give);
+        this.inFlight += 1;
+        resolve();
+      };
+      const give = () => {
+        const at = this.queue.indexOf(go);
+        if (at >= 0) this.queue.splice(at, 1);
+        reject(new ChannelError(0, `Could not reach ${this.base}: earlier calls to it have not finished`));
+      };
+      if (signal.aborted) return give();
+      signal.addEventListener("abort", give, { once: true });
+      this.queue.push(go);
+    });
+  }
+
+  /**
+   * When `error` says the machine is out of ports or descriptors: remembers it, so no new
+   * connection adds to it for a while, and throws a LocalExhaustionError that says so.
+   */
+  private throwIfExhausted(error: unknown): void {
+    const code = exhaustedCode(error);
+    if (code === null) return;
+    this.exhausted = code;
+    this.exhaustedUntil = Date.now() + EXHAUSTED_WAIT_MS;
+    throw new LocalExhaustionError(code);
+  }
+
+  private refuseWhileExhausted(): void {
+    if (Date.now() < this.exhaustedUntil) throw new LocalExhaustionError(this.exhausted);
+  }
+
+  /** How long before a new connection may be made: 0 unless the machine ran out of ports or descriptors. */
+  private exhaustedFor(): number {
+    return Math.max(0, this.exhaustedUntil - Date.now());
   }
 
   join(): Promise<JoinResponse> {
@@ -176,33 +258,57 @@ export class ChannelClient {
     const pingMs = options.pingMs ?? STREAM_PING_MS;
     let closed = false;
     let socket: WebSocket | null = null;
-    let retry = 0;
+    const backoff = new Backoff(SOCKET_RETRY_MS, SOCKET_RETRY_MAX_MS);
     let pending: ReturnType<typeof setTimeout> | undefined;
+
+    /** The next socket opens after a wait that grows with each failure in a row (ADR 0052). */
+    const retry = (exhausted = false): number => {
+      clearTimeout(pending);
+      const wait = exhausted ? Math.max(this.exhaustedFor(), backoff.longest()) : backoff.next();
+      pending = setTimeout(connect, wait);
+      return wait;
+    };
 
     const connect = () => {
       if (closed) return;
       pending = undefined;
+      if (this.exhaustedFor() > 0) {
+        retry(true);
+        return;
+      }
       const query = new URLSearchParams({ token: this.agentToken ?? this.session });
-      const ws = new WebSocket(`${this.base.replace(/^http/, "ws")}/api/stream?${query}`);
+      // A socket that has not opened by the time an open one would be given up for silence is given up too.
+      const ws = openSocket(`${this.base.replace(/^http/, "ws")}/api/stream?${query}`, silentAfterMs(pingMs));
       socket = ws;
       let alive: Keepalive | undefined;
+      let opened = false;
+      let heard = false;
+      let failure: unknown;
       ws.addEventListener("open", () => {
-        retry = 0;
+        opened = true;
         onStatus(true);
         alive = keepalive(ws, pingMs, (quiet) => {
           if (closed || socket !== ws) return;
-          // Half-open: its close may never come, so it is let go and replaced now.
-          options.log?.(`heard nothing from the Channel for ${Math.round(quiet / 1000)}s; reconnecting`);
+          // Half-open: its close may never come, so it is destroyed and replaced (ADR 0048).
           socket = null;
-          ws.close();
+          dropSocket(ws);
           onStatus(false);
-          clearTimeout(pending);
-          pending = setTimeout(connect, 0);
+          const wait = retry();
+          options.log?.(
+            `heard nothing from the Channel for ${Math.round(quiet / 1000)}s; reconnecting in ${Math.round(wait / 100) / 10}s`,
+          );
         });
       });
       ws.addEventListener("message", (event) => {
         alive?.heard();
-        if (event.data === LIVE_PONG) return;
+        if (event.data === LIVE_PONG) {
+          // Only a socket the Channel answers a ping on counts as a success: one that opens and goes silent does not.
+          if (!heard) {
+            heard = true;
+            backoff.reset();
+          }
+          return;
+        }
         try {
           onMessage(JSON.parse(String(event.data)) as ChannelMessage);
         } catch {
@@ -213,13 +319,19 @@ export class ChannelClient {
         alive?.stop();
         // A socket replaced by a reconnect has nothing more to say.
         if (closed || socket !== ws) return;
-        onStatus(false);
-        if (pending !== undefined) return;
-        retry += 1;
-        pending = setTimeout(connect, Math.min(30_000, 500 * 2 ** retry));
+        socket = null;
+        if (opened) onStatus(false);
+        const code = exhaustedCode(failure);
+        if (code !== null) {
+          this.exhaustedUntil = Date.now() + EXHAUSTED_WAIT_MS;
+          this.exhausted = code;
+          options.log?.(`stream: ${exhaustionMessage(code)}; waiting before trying again`);
+        }
+        retry(code !== null);
       });
-      ws.addEventListener("error", () => {
+      ws.addEventListener("error", (event) => {
         // "close" follows and reconnects.
+        failure = event.error ?? event.message;
       });
     };
 
@@ -227,17 +339,18 @@ export class ChannelClient {
     const reconnect = () => {
       if (closed) return;
       clearTimeout(pending);
-      retry = 0;
+      backoff.reset();
       const old = socket;
+      socket = null;
+      if (old !== null) closeSocket(old, "a new Agent token");
       pending = setTimeout(connect, 0);
-      old?.close();
     };
     this.tokenListeners.add(reconnect);
 
     if (this.agentToken !== null) connect();
     return {
       send: (frame) => {
-        if (socket?.readyState !== WebSocket.OPEN) return false;
+        if (socket?.readyState !== Socket.OPEN) return false;
         socket.send(frame);
         return true;
       },
@@ -245,7 +358,7 @@ export class ChannelClient {
         closed = true;
         this.tokenListeners.delete(reconnect);
         clearTimeout(pending);
-        socket?.close();
+        if (socket !== null) closeSocket(socket, "the session ended");
       },
     };
   }

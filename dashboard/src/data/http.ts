@@ -338,7 +338,8 @@ export class HttpChannelSource implements ChannelSource {
     return () => {
       closed = true;
       clearInterval(ping);
-      socket?.close();
+      // With a code: a close without one went unanswered before ADR 0052.
+      socket?.close(1000);
       if (this.socket === socket) this.socket = null;
     };
   }

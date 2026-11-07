@@ -131,10 +131,14 @@ one line with `\n` for newlines works). Without them, turn on the dev-only fake
 sign-in instead:
 
 ```sh
-npx wrangler dev --var DEV_FAKE_GITHUB:true
+cd worker
+npm run dev -- --var DEV_FAKE_GITHUB:true
 ```
 
-It answers only requests to localhost. The Dashboard at
+`npm run dev` names wrangler's port and pid when it starts, and stops wrangler when
+the terminal that started it closes (ADR 0052): a forgotten `wrangler dev` once held
+every local port of a Mac. A wrapper using it says on its terminal that its Channel is
+a local Worker. It answers only requests to localhost. The Dashboard at
 `http://localhost:8787/shlok1806/switchboard` then shows a "Dev sign-in" box, and the
 CLI signs in with `switchboard login --url http://localhost:8787/shlok1806/switchboard
 --dev-login <any login>`. Without the App, the Channel has no GitHub, so Tasks are

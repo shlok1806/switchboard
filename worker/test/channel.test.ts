@@ -113,6 +113,30 @@ afterEach(async () => {
   await reset();
 });
 
+describe("closing the live stream (ADR 0052)", () => {
+  /** Opens the stream as `name`, closes it from the client with `close`, and waits for the Channel's close. */
+  async function closedBy(name: string, close: (socket: WebSocket) => void): Promise<number | "no answer"> {
+    const response = await call(`/api/stream?${await streamQuery(name)}`, { headers: { Upgrade: "websocket" } });
+    const socket = response.webSocket;
+    if (!socket) throw new Error("No WebSocket in the upgrade response");
+    socket.accept();
+    const answered = new Promise<number>((resolve) => socket.addEventListener("close", (event) => resolve(event.code)));
+    close(socket);
+    return Promise.race([
+      answered,
+      new Promise<"no answer">((resolve) => setTimeout(() => resolve("no answer"), 2000)),
+    ]);
+  }
+
+  it("answers a close that carries no code, so the client's connection ends", async () => {
+    expect(await closedBy("shlok", (socket) => socket.close())).toBe(1000);
+  });
+
+  it("answers a close with the client's own code", async () => {
+    expect(await closedBy("shlok", (socket) => socket.close(4001, "bye"))).toBe(4001);
+  });
+});
+
 describe("joining", () => {
   it("refuses a forged or missing session on every route", async () => {
     const mallory = person("mallory", await signSession("some-other-secret-that-is-long-enough!!", "mallory"));

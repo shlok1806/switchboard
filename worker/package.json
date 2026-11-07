@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "tsx ../scripts/dev-worker.ts",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.scripts.json",
