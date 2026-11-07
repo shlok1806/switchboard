@@ -32,12 +32,12 @@ import {
   channelApiBase,
   channelKey,
   directiveHeading,
-  LIVE_PING,
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
 } from "../../../shared/src/index";
 import { ChannelClient, targetOf } from "../channel-client";
 import type { Config } from "../config";
+import { type Keepalive, keepalive, streamPingMs } from "../keepalive";
 import { type LocalStore, openLocalStore } from "../local-store";
 import { cachedAttachList } from "../terminal/attach-keys";
 import { checkAllowChange } from "./allow";
@@ -262,15 +262,24 @@ export class HostSupervisor {
     const base = `${config.url.replace(/\/+$/, "")}${channelApiBase(settings.repo)}`;
     const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/stream?${query}`);
     this.socket = ws;
-    let keepalive: ReturnType<typeof setInterval> | undefined;
+    let alive: Keepalive | undefined;
     ws.addEventListener("open", () => {
       this.retry = 0;
       this.options.log(`attached to ${settings.repo} at ${config.url} as ${this.hostId}`);
       // A pause whose confirmation went out while detached: say so again (the Channel ignores repeats).
       for (const paused of this.pausedAgents()) this.send({ type: "host.paused", agent: paused.agent });
-      keepalive = setInterval(() => ws.send(LIVE_PING), 30_000);
+      alive = keepalive(ws, streamPingMs(this.options.env), (quiet) => {
+        if (this.closed || this.socket !== ws) return;
+        // Half-open: its close may never come, so it is let go and replaced now (ADR 0048).
+        this.options.log(`heard nothing from the Channel for ${Math.round(quiet / 1000)}s; reconnecting`);
+        this.socket = null;
+        ws.close();
+        clearTimeout(this.pending);
+        this.pending = setTimeout(() => this.connect(), 0);
+      });
     });
     ws.addEventListener("message", (event) => {
+      alive?.heard();
       if (event.data === LIVE_PONG) return;
       let parsed: unknown;
       try {
@@ -299,7 +308,7 @@ export class HostSupervisor {
       }
     });
     ws.addEventListener("close", (event) => {
-      clearInterval(keepalive);
+      alive?.stop();
       if (this.closed || this.socket !== ws) return;
       this.retry += 1;
       const delay = Math.min(60_000, 1000 * 2 ** this.retry);

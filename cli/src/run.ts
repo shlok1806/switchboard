@@ -70,6 +70,7 @@ import { configDir, readConfig } from "./config";
 import { HookCapture } from "./hooks/capture";
 import { readSettings } from "./host/files";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
+import { streamPingMs } from "./keepalive";
 import { LibrarianWaker, librarianArgs, librarianSettings } from "./librarian";
 import { openLocalStore } from "./local-store";
 import { prepareSessionTools, type SessionTools } from "./mcp-config";
@@ -860,6 +861,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       if (connected) attach();
       else keyboard.disconnected();
     },
+    { pingMs: streamPingMs(env), log },
   );
 
   // The model each turn asks for, reported to the Channel once it holds (ADR 0010).
