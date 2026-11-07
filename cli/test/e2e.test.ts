@@ -5057,6 +5057,22 @@ describe("Shared skills (ADR 0039)", () => {
     );
     await rm(join(dir, "config.json"));
     expect((await sharedSkills()).map((s) => s.version)).toEqual([1]);
+
+    // A skill installed as a link to its directory elsewhere, as `npx skills add` installs one,
+    // publishes that directory's files: only the skill's own directory may be a link.
+    const linked = join(scratch, "agents-skills", "pr-checklist");
+    await mkdir(linked, { recursive: true });
+    await writeFile(join(linked, "SKILL.md"), "---\nname: pr-checklist\ndescription: Checks a PR.\n---\n\nRead it.\n");
+    await symlink(linked, join(userSkills(), "pr-checklist"));
+    expect(await approved(term, "skill_publish", { name: "pr-checklist" }, "1")).toMatch(
+      /^skill_publish: Published pr-checklist version 1 \(1 file, \d+ bytes\)/,
+    );
+    expect((await sharedSkills()).find((s) => s.name === "pr-checklist")?.paths).toEqual(["SKILL.md"]);
+    // A link inside it is still refused.
+    await symlink(join(scratch, "config", "config.json"), join(linked, "config.json"));
+    expect(await approved(term, "skill_publish", { name: "pr-checklist" }, "1")).toBe(
+      "skill_publish ERROR: pr-checklist/config.json is a symbolic link; a shared skill holds plain files only.",
+    );
     term.type("quit\r");
     expect(await term.exited).toBe(0);
   }, 90_000);

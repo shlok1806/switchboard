@@ -10,7 +10,7 @@
 //   digest the Person was shown.
 
 import { execFile } from "node:child_process";
-import { lstat, mkdir, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import type {
@@ -59,6 +59,8 @@ function checkName(name: string): void {
 /**
  * The files of the skill directory `root/name`, by path inside it. Reads nothing
  * outside it: a symbolic link, or anything but a plain file or directory, is refused.
+ * Only `root/name` itself may be a link to a directory, the way `npx skills add`
+ * installs a skill; its files are read from where it points.
  * With `missing: "empty"`, a skill that is not there has no files.
  */
 export async function readSkillDir(
@@ -67,8 +69,12 @@ export async function readSkillDir(
   missing: "refuse" | "empty" = "refuse",
 ): Promise<SkillFile[]> {
   checkName(name);
-  const dir = join(root, name);
-  const top = await lstat(dir).catch(() => null);
+  let dir = join(root, name);
+  let top = await lstat(dir).catch(() => null);
+  if (top?.isSymbolicLink()) {
+    dir = await realpath(dir).catch(() => dir);
+    top = await lstat(dir).catch(() => null);
+  }
   if (top === null) {
     if (missing === "empty") return [];
     throw new SkillError(`There is no skill ${name} at ${dir}.`);
