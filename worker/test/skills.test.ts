@@ -153,7 +153,7 @@ describe("publishing a skill", () => {
     // And another skill holding files the Channel already has publishes at once, with nothing uploaded.
     const other = await sendManifest("specimen-two", "maya", [text("SKILL.md", ENTRY), FONT]);
     expect(other.status).toBe(201);
-   }, 30_000);
+  }, 30_000);
 
   it("publishes nothing when the latest version already holds the same files", async () => {
     await publish("release-notes", "shlok", bundle());
