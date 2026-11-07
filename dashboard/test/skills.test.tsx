@@ -93,7 +93,7 @@ describe("the Skills view", () => {
     const { rerender } = render(<SkillsView name="release-notes" />, { wrapper: channel({ skills, skill: read, skillFiles }) });
     const inspector = await screen.findByRole("complementary", { name: "release-notes, in the inspector" });
     await waitFor(() => expect(within(inspector).getByText("templates/notes.md")).toBeTruthy());
-    expect(within(inspector).getByText(/Group them by label\./)).toBeTruthy();
+    expect(await within(inspector).findByText(/Group them by label\./)).toBeTruthy();
     expect(within(inspector).getByText("switchboard skills install release-notes")).toBeTruthy();
 
     // An older version: its own files, and the command names it.
