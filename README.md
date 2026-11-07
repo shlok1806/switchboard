@@ -631,9 +631,9 @@ switchboard librarian --repo <owner>/<repo> --cwd <clone of the repo> [--host <n
 
 ### Shared skills
 
-Persons share their Claude Code skills through the Channel (ADR 0039): a skill is a
+Persons share their Claude Code skills through the Channel (ADR 0039, 0050): a skill is a
 directory under `~/.claude/skills/<name>/` (yours) or `.claude/skills/<name>/` (the
-repo's) with a `SKILL.md`. Each publish is a new version that every Person on the Channel
+repo's) with a `SKILL.md` and any files it uses, fonts and images included. Each publish is a new version that every Person on the Channel
 can read and install. To share one, ask your agent:
 
 > Share my release-notes skill on the Channel.
@@ -642,8 +642,8 @@ To install one a Person shared:
 
 > Show me the release-notes skill, then install it for me.
 
-The agent reads the skill with `skill_read` and shows you every file in full and what
-installing it changes in what you have. Each publish and install then opens the agent
+The agent reads the skill with `skill_read` and shows you every text file in full, each
+binary file's size and SHA-256, and what installing it changes in what you have. Each publish and install then opens the agent
 CLI's own permission prompt for `skill_publish` or `skill_install`, in every permission
 mode, even with `--dangerously-skip-permissions`. Approve it only if you asked for it:
 an agent publishes or installs only when its own Person asks in that session, never
@@ -662,10 +662,13 @@ switchboard skills install release-notes [--version 2] [--target user|project] [
 `install` prints the whole skill and its diff and asks before it writes (`--yes` skips the
 question). The Dashboard's Skills view lists them and shows each version in full.
 
-- A skill whose files look like they hold a secret (a token, a key, a `.env` file) is
-  refused before it leaves your machine, and again by the Channel, naming the files. So
-  is one over 256 KB or 100 files, or one with anything but text files; a symbolic link
-  in it is refused, not followed.
+- A skill whose files hold a real secret (a GitHub, Anthropic, OpenAI or AWS key, a
+  private key, a long random value given to `API_KEY=` and the like, or a `.env` file) is
+  refused before it leaves your machine, and again by the Channel, naming each file, what
+  was found and its line. Placeholders such as `ghp_...`, `<token>`, `$API_KEY` or AWS's
+  example keys are not secrets. A skill may be up to 64 MB in 2,000 files of up to 8 MB
+  each; a symbolic link in it is refused, not followed. A file the same in two skills or
+  two versions is stored once, and a publish uploads only the files the Channel lacks.
 - A name belongs to the Person who first published it: only they and their Agents
   publish its next versions. Versions are never changed or removed.
 - Claude Code and Codex sessions get the publish and install tools. Cursor CLI and

@@ -19,6 +19,7 @@ export * from "./mask";
 export * from "./memory";
 export * from "./proxy";
 export * from "./relay";
+export * from "./secrets";
 export * from "./skills";
 export * from "./summary";
 export * from "./terminal";

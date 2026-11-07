@@ -26,9 +26,11 @@ import type {
   Person,
   PersonAction,
   PersonsResponse,
+  ReadSkillFilesResponse,
   RelayResponse,
   SetHostAllowRequest,
   SetHostAllowResponse,
+  SkillEntry,
   SkillResponse,
   SkillsResponse,
   SpawnAgentRequest,
@@ -48,6 +50,7 @@ import {
   approvalDenyPath,
   BRIEF_PATH,
   claimPath,
+  downloadSkillFiles,
   LANGFUSE_SETTINGS_PATH,
   LIVE_PING,
   MAX_EVENT_IDS,
@@ -56,6 +59,7 @@ import {
   nicknamePath,
   releasePath,
   rolePath,
+  SKILL_FILES_READ_PATH,
   SKILLS_PATH,
   skillPath,
   summaryPath,
@@ -433,6 +437,17 @@ export class HttpChannelSource implements ChannelSource {
     const { status, body } = await this.call<SkillResponse>(skillPath(name, version));
     if (status >= 400) throw new Error(reasonOf(body, status));
     return body as SkillResponse;
+  }
+
+  skillFiles(files: SkillEntry[]): Promise<Map<string, Uint8Array>> {
+    return downloadSkillFiles(files, async (request) => {
+      const { status, body } = await this.call<ReadSkillFilesResponse>(SKILL_FILES_READ_PATH, {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      if (status >= 400) throw new Error(reasonOf(body, status));
+      return body as ReadSkillFilesResponse;
+    });
   }
 
   async brief(): Promise<BriefResponse | null> {

@@ -1,12 +1,14 @@
 /*
- * The Skills view: the Claude Code skills Persons share on the Channel (ADR 0039), by name,
+ * The Skills view: the Claude Code skills Persons share on the Channel (ADR 0039, 0050), by name,
  * each at its latest version with what it does, its files and who published it. A skill opens
- * in the inspector (#/skills/<name>[/<version>]), or on a phone in a sheet, with every file in
- * full and the command that installs it. The Dashboard only reads: a Person publishes and
+ * in the inspector (#/skills/<name>[/<version>]), or on a phone in a sheet, with every text file
+ * in full (a large skill's a file at a time), each binary file by its size and SHA-256, and the
+ * command that installs it. The Dashboard only reads: a Person publishes and
  * installs from their terminal, or asks their own Agent, whose CLI asks them to approve it.
  */
 
-import type { Skill, SkillPublisher, SkillSummary, SkillsResponse } from "@shared/index";
+import type { Skill, SkillEntry, SkillPublisher, SkillSummary, SkillsResponse } from "@shared/index";
+import { describeSize } from "@shared/index";
 import { useEffect, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Segmented } from "@/components/atoms/Segmented";
@@ -131,7 +133,7 @@ function SkillLine({ skill: s, named = true }: { skill: SkillSummary; named?: bo
       <p className="text-small text-ink-3">
         {s.paths.length} {s.paths.length === 1 ? "file" : "files"}
         {" · "}
-        {size(s.size)}
+        {describeSize(s.size)}
         {" · "}
         <Publisher by={s.publishedBy} />
         {" · "}
@@ -157,11 +159,56 @@ function Publisher({ by }: { by: SkillPublisher }) {
   return <span>{by.agent ?? by.person}</span>;
 }
 
-function size(bytes: number): string {
-  return bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
+/** A skill whose text files hold this much at most is shown in full as it opens; a larger one, a file at a time. */
+const AUTO_SHOW_BYTES = 512 * 1024;
+
+type FileText = { loading: true } | { text: string } | { problem: string };
+
+/**
+ * One of a version's files: a text file in full (or a button that reads it, in a large
+ * skill), a binary by its size and SHA-256, which is all of it a Person can check.
+ */
+function SkillFileView({ file: f, text, onShow }: { file: SkillEntry; text: FileText | undefined; onShow: () => void }) {
+  const binary = f.encoding === "base64";
+  return (
+    <figure className="flex min-w-0 flex-col gap-1.5">
+      <figcaption className="flex flex-wrap items-baseline gap-x-2">
+        <code className="text-small [overflow-wrap:anywhere] text-ink-2">{f.path}</code>
+        <span className="text-small text-ink-3">
+          {describeSize(f.size)}
+          {binary && " · binary, not shown"}
+        </span>
+      </figcaption>
+      {binary ? (
+        <dl
+          aria-label={`${f.path}, binary`}
+          className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-[var(--r)] border border-rule bg-paper-2 px-3 py-2 text-small"
+        >
+          <dt className="text-ink-3">Size</dt>
+          <dd className="text-ink">{f.size.toLocaleString("en-US")} bytes</dd>
+          <dt className="text-ink-3">SHA-256</dt>
+          <dd className="font-mono break-all text-ink">{f.digest}</dd>
+        </dl>
+      ) : text === undefined ? (
+        <Button size="sm" className="self-start" onClick={onShow}>
+          Show {f.path.split("/").at(-1)}
+        </Button>
+      ) : "loading" in text ? (
+        <p className="text-small text-ink-3">Reading {f.path}</p>
+      ) : "problem" in text ? (
+        <p className="text-small text-ink-2">
+          Could not read {f.path}: {text.problem}
+        </p>
+      ) : (
+        <pre className="max-h-[28rem] overflow-auto rounded-[var(--r)] border border-rule bg-paper-2 px-3 py-2 font-mono text-small whitespace-pre-wrap [overflow-wrap:anywhere] text-ink">
+          {text.text}
+        </pre>
+      )}
+    </figure>
+  );
 }
 
-/** One version of a skill in the inspector: its versions, how to install it, and every file in full. */
+/** One version of a skill in the inspector: its versions, how to install it, and every file. */
 function SkillInspector({ name, version, sheet, onClose: close }: { name: string; version?: number; sheet: boolean; onClose: () => void }) {
   const store = useStore();
   const onClose = sheet ? close : undefined;
@@ -177,6 +224,31 @@ function SkillInspector({ name, version, sheet, onClose: close }: { name: string
       live = false;
     };
   }, [store, name, version]);
+
+  const [texts, setTexts] = useState<Map<string, FileText>>(new Map());
+  const skill = read && "skill" in read ? read.skill : undefined;
+  const binaries = skill?.files.filter((f) => f.encoding === "base64").length ?? 0;
+
+  /** Reads text files to show them in full. */
+  const show = (files: SkillEntry[]) => {
+    const wanted = files.filter((f) => f.encoding === "utf8");
+    if (wanted.length === 0) return;
+    setTexts((t) => new Map([...t, ...wanted.map((f) => [f.path, { loading: true }] as const)]));
+    store.source.skillFiles(wanted).then(
+      (bytes) => {
+        const decoder = new TextDecoder();
+        setTexts((t) => new Map([...t, ...wanted.map((f) => [f.path, { text: decoder.decode(bytes.get(f.path)) }] as const)]));
+      },
+      (e: Error) => setTexts((t) => new Map([...t, ...wanted.map((f) => [f.path, { problem: e.message }] as const)])),
+    );
+  };
+
+  // A skill's text is shown in full at once when it is small enough to read; a larger one, file by file on request.
+  useEffect(() => {
+    if (!skill) return;
+    const text = skill.files.filter((f) => f.encoding === "utf8");
+    if (text.reduce((sum, f) => sum + f.size, 0) <= AUTO_SHOW_BYTES) show(text);
+  }, [skill]);
 
   if (read && "problem" in read) {
     return (
@@ -214,25 +286,24 @@ function SkillInspector({ name, version, sheet, onClose: close }: { name: string
           <Section title="Install" as="h3" bodyClassName="flex flex-col gap-2">
             {install && <CopyCommand command={install} />}
             <p className="text-small text-ink-2">
-              Your terminal shows the whole skill, and what it changes in what you have installed, before it writes anything. Or ask your agent to install it:
-              Claude Code and Codex ask you to approve it first.
+              Your terminal shows the whole skill, and what it changes in what you have installed, before it writes anything
+              {binaries > 0 ? ", with each binary file's size and SHA-256" : ""}. Or ask your agent to install it: Claude Code and Codex ask you to approve it
+              first.
             </p>
           </Section>
           <Section
             title="Files"
-            meta={`${read.skill.files.length} ${read.skill.files.length === 1 ? "file" : "files"} · digest ${read.skill.digest.slice(0, 12)}`}
+            meta={[
+              `${read.skill.files.length} ${read.skill.files.length === 1 ? "file" : "files"}`,
+              describeSize(read.skill.size),
+              ...(binaries > 0 ? [`${binaries} binary`] : []),
+              `digest ${read.skill.digest.slice(0, 12)}`,
+            ].join(" · ")}
             as="h3"
             bodyClassName="flex flex-col gap-4"
           >
             {read.skill.files.map((f) => (
-              <figure key={f.path} className="flex min-w-0 flex-col gap-1.5">
-                <figcaption>
-                  <code className="text-small [overflow-wrap:anywhere] text-ink-2">{f.path}</code>
-                </figcaption>
-                <pre className="max-h-[28rem] overflow-auto rounded-[var(--r)] border border-rule bg-paper-2 px-3 py-2 font-mono text-small whitespace-pre-wrap [overflow-wrap:anywhere] text-ink">
-                  {f.content}
-                </pre>
-              </figure>
+              <SkillFileView key={f.path} file={f} text={texts.get(f.path)} onShow={() => show([f])} />
             ))}
           </Section>
         </>

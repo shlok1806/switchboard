@@ -69,6 +69,8 @@ function cases() {
   for (const view of ["hosts", "brief", "memory", "skills"]) list.push({ page: view, hash: view, state: "read-error", want: "error" });
   // A skill open in the inspector, at an older version, with every file in full.
   list.push({ page: "skill", hash: "skills/release-notes/1", state: "ready" });
+  // A skill with fonts and an image, each binary file shown by its size and SHA-256 (ADR 0050).
+  list.push({ page: "skill-binary", hash: "skills/type-specimen", state: "ready" });
   // The Agent page's thinking orb in each state that has one (ADR 0047): `agent` above is the
   // Agent that needs you (listening); these are an idle one (breathing) and a running one (working).
   list.push({ page: "agent-idle", hash: "agents/shlok%2Fcodex%2Fc91e", state: "ready" });

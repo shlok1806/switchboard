@@ -1,12 +1,17 @@
-// Skills shared on the Channel, on the laptop (ADR 0039): reading a skill's directory to
-// publish it, and installing a published version, showing what it changes first. The
+// Skills shared on the Channel, on the laptop (ADR 0039, 0050): reading a skill's directory
+// to publish it, and installing a published version, showing what it changes first. The
 // MCP tools and `switchboard skills` both run this code.
 //
 // - Publishing reads `<scope>/skills/<name>/` and nothing outside it: no path climbs out,
-//   and a symbolic link is refused rather than followed.
-// - It refuses a bundle the shared rules refuse (shared/src/skills.ts), secrets first,
+//   and a symbolic link is refused rather than followed. Files of any type go, text as
+//   text and anything else as base64.
+// - It refuses a skill the shared rules refuse (shared/src/skills.ts), secrets first,
 //   before anything leaves the machine. The Channel checks again.
-// - Installing writes only inside `<scope>/skills/<name>/`, and only the bundle whose
+// - A publish sends the manifest, uploads the files the Channel lacks in batches, then
+//   sends the manifest again; a read fetches the manifest, then the files it needs. Every
+//   file's SHA-256 is checked against the manifest, and the manifest against the version's
+//   digest, before anything is shown or written.
+// - Installing writes only inside `<scope>/skills/<name>/`, and only the version whose
 //   digest the Person was shown.
 
 import { execFile } from "node:child_process";
@@ -15,20 +20,33 @@ import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import type {
   PublishSkillResponse,
+  ReadSkillFilesResponse,
   Skill,
+  SkillEntry,
   SkillFile,
+  SkillFilesMissing,
   SkillResponse,
   SkillSummary,
   SkillsResponse,
+  UploadSkillFilesResponse,
 } from "../../shared/src/index";
 import {
-  checkSkill,
+  checkSkillFiles,
+  describeSize,
+  downloadSkillFiles,
   MAX_SKILL_BYTES,
+  MAX_SKILL_FILE_BYTES,
   MAX_SKILL_FILES,
+  manifestDigest,
+  SKILL_FILES_PATH,
+  SKILL_FILES_READ_PATH,
   SKILL_NAME_PATTERN,
   SKILLS_PATH,
+  sha256Hex,
   skillPath,
-  sortedFiles,
+  sortedByPath,
+  textOf,
+  uploadSkillFiles,
 } from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
 import { claudeConfigDir } from "./claude-session";
@@ -38,6 +56,9 @@ export type SkillScope = "user" | "project";
 
 /** A refusal said in words a Person can act on. */
 export class SkillError extends Error {}
+
+/** How long one request that carries files may take: up to 4 MiB of them. */
+const TRANSFER_TIMEOUT_MS = 120_000;
 
 /** The `skills` directory of `scope`: Claude Code's user directory, or the repo's `.claude/`. */
 export async function skillsDir(scope: SkillScope, ctx: { env: NodeJS.ProcessEnv; cwd: string }): Promise<string> {
@@ -94,21 +115,27 @@ export async function readSkillDir(
       }
       if (!entry.isFile()) throw new SkillError(`${name}/${inside} is not a plain file.`);
       const size = (await lstat(path)).size;
+      if (size > MAX_SKILL_FILE_BYTES) {
+        throw new SkillError(
+          `${name}/${inside} is ${describeSize(size)}; a skill's file may be at most ${describeSize(MAX_SKILL_FILE_BYTES)}.`,
+        );
+      }
       bytes += size;
       if (bytes > MAX_SKILL_BYTES)
-        throw new SkillError(`${name} is over ${MAX_SKILL_BYTES} bytes, the most a skill may be.`);
+        throw new SkillError(`${name} is over ${describeSize(MAX_SKILL_BYTES)}, the most a skill may be.`);
       if (files.length >= MAX_SKILL_FILES)
         throw new SkillError(`${name} has over ${MAX_SKILL_FILES} files, the most a skill may have.`);
-      const raw = await readFile(path);
-      const content = raw.toString("utf8");
-      if (!Buffer.from(content, "utf8").equals(raw)) {
-        throw new SkillError(`${name}/${inside} is not UTF-8 text: a shared skill holds text files only.`);
-      }
-      files.push({ path: inside, content });
+      files.push({ path: inside, bytes: new Uint8Array(await readFile(path)) });
     }
   };
   await walk(dir);
-  return sortedFiles(files);
+  return sortedByPath(files);
+}
+
+/** A skill read from this machine and checked: its files, and the manifest that publishes them. */
+export interface LocalSkill {
+  files: SkillFile[];
+  manifest: SkillEntry[];
 }
 
 /** The skill `name` of `scope`, checked as the Channel will check it, ready to publish. */
@@ -116,11 +143,11 @@ export async function localSkill(
   scope: SkillScope,
   name: string,
   ctx: { env: NodeJS.ProcessEnv; cwd: string },
-): Promise<SkillFile[]> {
+): Promise<LocalSkill> {
   const files = await readSkillDir(await skillsDir(scope, ctx), name);
-  const checked = checkSkill(name, files);
+  const checked = await checkSkillFiles(name, files);
   if (!checked.ok) throw new SkillError(checked.reason);
-  return files;
+  return { files, manifest: checked.manifest };
 }
 
 /** The request's answer; a refusal in the Channel's own words. */
@@ -137,15 +164,72 @@ export function listSkills(client: ChannelClient): Promise<SkillsResponse> {
   return asked(client.request<SkillsResponse>(SKILLS_PATH));
 }
 
-export function fetchSkill(client: ChannelClient, name: string, version?: number): Promise<SkillResponse> {
+/** A version's manifest, checked against its digest. */
+export async function fetchSkill(client: ChannelClient, name: string, version?: number): Promise<SkillResponse> {
   checkName(name);
-  return asked(client.request<SkillResponse>(skillPath(name, version)));
+  const read = await asked(client.request<SkillResponse>(skillPath(name, version)));
+  if ((await manifestDigest(read.skill.files)) !== read.skill.digest) {
+    throw new SkillError(`${name} version ${read.skill.version}'s files do not match its digest ${read.skill.digest}.`);
+  }
+  return read;
 }
 
-export function sendSkill(client: ChannelClient, name: string, files: SkillFile[]): Promise<PublishSkillResponse> {
-  return asked(
-    client.request<PublishSkillResponse>(skillPath(name), { method: "POST", body: JSON.stringify({ files }) }, 30_000),
+/**
+ * The bytes of `skill`'s files, by path: every file, or with `textOnly` the text files,
+ * all that a reader is shown. Each is checked against its SHA-256.
+ */
+export async function fetchSkillFiles(
+  client: ChannelClient,
+  skill: Skill,
+  { textOnly = false }: { textOnly?: boolean } = {},
+): Promise<Map<string, Uint8Array>> {
+  const wanted = textOnly ? skill.files.filter((file) => file.encoding === "utf8") : skill.files;
+  try {
+    return await downloadSkillFiles(wanted, (request) =>
+      asked(
+        client.request<ReadSkillFilesResponse>(
+          SKILL_FILES_READ_PATH,
+          { method: "POST", body: JSON.stringify(request) },
+          TRANSFER_TIMEOUT_MS,
+        ),
+      ),
+    );
+  } catch (error) {
+    if (error instanceof SkillError) throw error;
+    throw new SkillError((error as Error).message);
+  }
+}
+
+/**
+ * Publishes `files` as the next version of `name`: the manifest first, then the files
+ * the Channel does not hold yet, then the manifest again.
+ */
+export async function sendSkill(
+  client: ChannelClient,
+  name: string,
+  { files, manifest }: LocalSkill,
+): Promise<PublishSkillResponse> {
+  const body = JSON.stringify({ files: manifest });
+  const publish = () =>
+    client.request<PublishSkillResponse>(skillPath(name), { method: "POST", body }, TRANSFER_TIMEOUT_MS);
+  let missing: string[];
+  try {
+    return await publish();
+  } catch (error) {
+    const body = error instanceof ChannelError && error.status === 409 ? (error.body as SkillFilesMissing) : undefined;
+    if (!Array.isArray(body?.missing)) return asked(Promise.reject(error));
+    missing = body.missing;
+  }
+  await uploadSkillFiles(files, missing, (request) =>
+    asked(
+      client.request<UploadSkillFilesResponse>(
+        SKILL_FILES_PATH,
+        { method: "POST", body: JSON.stringify(request) },
+        TRANSFER_TIMEOUT_MS,
+      ),
+    ),
   );
+  return asked(publish());
 }
 
 // --- What an install changes ---
@@ -231,29 +315,138 @@ function fileDiff(path: string, before: string | undefined, after: string | unde
   return out.join("\n");
 }
 
+/** A version read to show or install at `root`: it, what is installed there, and both as an install compares them. */
+export interface InstallRead {
+  skill: Skill;
+  versions: number[];
+  dir: string;
+  installedFiles: SkillFile[];
+  installed: Map<string, FileView>;
+  shared: Map<string, FileView>;
+  /** Every file's bytes with `all`, else the text files'. */
+  bytes: Map<string, Uint8Array>;
+}
+
+/** Reads version `version` of `name` (the latest when left out) to show it, or with `all` to install it, at `root`. */
+export async function readForInstall(
+  client: ChannelClient,
+  name: string,
+  version: number | undefined,
+  root: string,
+  { all = false }: { all?: boolean } = {},
+): Promise<InstallRead> {
+  const { skill, versions } = await fetchSkill(client, name, version);
+  const installedFiles = await readSkillDir(root, name, "empty");
+  const bytes = await fetchSkillFiles(client, skill, { textOnly: !all });
+  return {
+    skill,
+    versions,
+    dir: join(root, name),
+    installedFiles,
+    installed: await installedView(installedFiles),
+    shared: sharedView(skill, bytes),
+    bytes,
+  };
+}
+
+/** A file as an install compares it: its SHA-256 and size, and its text when it is text. */
+export interface FileView {
+  digest: string;
+  size: number;
+  /** Null for a binary file, which is shown by its size and SHA-256. */
+  text: string | null;
+}
+
+/** The installed files as an install compares them. */
+export async function installedView(files: readonly SkillFile[]): Promise<Map<string, FileView>> {
+  const views = await Promise.all(
+    files.map(
+      async (file) =>
+        [
+          file.path,
+          { digest: await sha256Hex(file.bytes), size: file.bytes.length, text: textOf(file.bytes) },
+        ] as const,
+    ),
+  );
+  return new Map(views);
+}
+
+/** A published version's files as an install compares them; `bytes` holds at least its text files'. */
+export function sharedView(skill: Skill, bytes: ReadonlyMap<string, Uint8Array>): Map<string, FileView> {
+  return new Map(
+    skill.files.map((file: SkillEntry) => {
+      const content = bytes.get(file.path);
+      if (file.encoding === "utf8" && content === undefined) throw new SkillError(`${file.path} was not read.`);
+      const text = file.encoding === "utf8" ? new TextDecoder().decode(content) : null;
+      return [file.path, { digest: file.digest, size: file.size, text }] as const;
+    }),
+  );
+}
+
+/** "12,040 bytes, SHA-256 <hex>": what a binary file is shown as. */
+function binaryLine(file: FileView): string {
+  return `${file.size.toLocaleString("en-US")} bytes, SHA-256 ${file.digest}`;
+}
+
 /** What installing `after` over `before` changes, file by file, as unified diffs; empty when nothing does. */
-export function skillDiff(before: readonly SkillFile[], after: readonly SkillFile[]): string {
-  const old = new Map(before.map((file) => [file.path, file.content]));
-  const now = new Map(after.map((file) => [file.path, file.content]));
-  const paths = [...new Set([...old.keys(), ...now.keys()])].sort();
+export function skillDiff(before: ReadonlyMap<string, FileView>, after: ReadonlyMap<string, FileView>): string {
+  const paths = [...new Set([...before.keys(), ...after.keys()])].sort();
   return paths
-    .filter((path) => old.get(path) !== now.get(path))
-    .map((path) => fileDiff(path, old.get(path), now.get(path)))
+    .filter((path) => before.get(path)?.digest !== after.get(path)?.digest)
+    .map((path) => {
+      const old = before.get(path);
+      const now = after.get(path);
+      if ((old === undefined || old.text !== null) && (now === undefined || now.text !== null)) {
+        return fileDiff(path, old?.text ?? undefined, now?.text ?? undefined);
+      }
+      // A binary on either side: shown by size and SHA-256, the only way it can be.
+      const change =
+        now === undefined
+          ? `Binary file ${path} is removed (installed: ${binaryLine(old as FileView)}).`
+          : old === undefined
+            ? `Binary file ${path}: ${binaryLine(now)}.`
+            : `Binary file ${path}: ${binaryLine(now)} (installed: ${binaryLine(old)}).`;
+      return [
+        `--- ${old === undefined ? "/dev/null" : `installed/${path}`}`,
+        `+++ ${now === undefined ? "/dev/null" : `shared/${path}`}`,
+        change,
+      ].join("\n");
+    })
     .join("\n");
 }
 
-/** A published version in full: what it is, every file's content, and what installing it at `dir` changes. */
-export function describeInstall(skill: Skill, dir: string, installed: readonly SkillFile[]): string {
-  const diff = skillDiff(installed, skill.files);
+/**
+ * A published version in full: what it is, every text file's content, every binary
+ * file's size and SHA-256, and what installing it at `dir` changes.
+ */
+export function describeInstall(
+  skill: Skill,
+  dir: string,
+  installed: ReadonlyMap<string, FileView>,
+  shared: ReadonlyMap<string, FileView>,
+): string {
+  const diff = skillDiff(installed, shared);
   const by = skill.publishedBy.agent ?? skill.publishedBy.person;
+  const binaries = skill.files.filter((file) => file.encoding === "base64").length;
   const head = [
     `${skill.name} version ${skill.version}, published by ${by} at ${skill.publishedAt}. Digest ${skill.digest}.`,
     ...(skill.description === undefined ? [] : [skill.description]),
+    `${skill.files.length} ${skill.files.length === 1 ? "file" : "files"}, ${describeSize(skill.size)}` +
+      (binaries === 0
+        ? "."
+        : `, ${binaries} of them binary: shown by size and SHA-256, as they cannot be shown in full.`),
     "",
-    ...skill.files.flatMap((file) => [`===== ${file.path} =====`, file.content.replace(/\n$/, ""), ""]),
+    ...skill.files.flatMap((file) => {
+      const view = shared.get(file.path) as FileView;
+      return [
+        `===== ${file.path} =====`,
+        view.text === null ? `Binary file: ${binaryLine(view)}.` : view.text.replace(/\n$/, ""),
+        "",
+      ];
+    }),
   ];
   const change =
-    installed.length === 0
+    installed.size === 0
       ? `Installing it creates ${dir}.`
       : diff === ""
         ? `${dir} already holds exactly this version: installing it changes nothing.`
@@ -262,16 +455,27 @@ export function describeInstall(skill: Skill, dir: string, installed: readonly S
 }
 
 /**
- * Installs `skill` at `root/name`, replacing what is there: files it does not have are
- * removed, inside that directory only.
+ * Installs `skill` at `root/name` from `bytes` (every file's, checked against its
+ * SHA-256), replacing what is there: files it does not have are removed, inside that
+ * directory only.
  */
-export async function writeSkill(root: string, skill: Skill, installed: readonly SkillFile[]): Promise<string> {
+export async function writeSkill(
+  root: string,
+  skill: Skill,
+  bytes: ReadonlyMap<string, Uint8Array>,
+  installed: readonly SkillFile[],
+): Promise<string> {
   const dir = join(root, skill.name);
   for (const file of skill.files) {
     const path = join(dir, ...file.path.split("/"));
     if (relative(dir, path).startsWith("..")) throw new SkillError(`${file.path} is outside the skill's directory.`);
+    const content = bytes.get(file.path);
+    if (content === undefined) throw new SkillError(`${file.path} was not read, so nothing was installed.`);
+  }
+  for (const file of skill.files) {
+    const path = join(dir, ...file.path.split("/"));
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, file.content);
+    await writeFile(path, bytes.get(file.path) as Uint8Array);
   }
   const kept = new Set(skill.files.map((file) => file.path));
   for (const file of installed) {
