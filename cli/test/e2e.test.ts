@@ -7,7 +7,7 @@ import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
-import { type AddressInfo, createServer } from "node:net";
+import { type AddressInfo, connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -4909,6 +4909,84 @@ describe("Agents carrying context to each other (ADR 0024)", () => {
     expect(other.output).not.toContain("FAKE-CLAUDE");
     expect((await agents()).find((a) => a.id === successorId)?.continues).toBe(masonId);
   }, 120_000);
+});
+
+/**
+ * A TCP relay to the Channel whose WebSockets can go half-open on demand: each one keeps
+ * its connection, but nothing more crosses it either way, as when a laptop sleeps or
+ * changes networks under an open socket. New connections, and every HTTP request, pass.
+ */
+async function silenceableRelay(target: string): Promise<{ url: string; silence(): void; close(): void }> {
+  const { hostname, port } = new URL(target);
+  const streams: [Socket, Socket][] = [];
+  const server = createServer((client) => {
+    client.once("data", (first) => {
+      const upstream = connect(Number(port), hostname, () => {
+        upstream.write(first);
+        client.pipe(upstream);
+        upstream.pipe(client);
+      });
+      upstream.on("error", () => client.destroy());
+      client.on("error", () => upstream.destroy());
+      if (first.toString("latin1").startsWith("GET ") && first.includes("/api/stream"))
+        streams.push([client, upstream]);
+    });
+  });
+  const relayPort = await freePort();
+  await new Promise<void>((resolve) => server.listen(relayPort, "127.0.0.1", resolve));
+  return {
+    url: `http://127.0.0.1:${relayPort}`,
+    silence() {
+      for (const [client, upstream] of streams.splice(0)) {
+        client.unpipe(upstream);
+        upstream.unpipe(client);
+        client.pause();
+        upstream.pause();
+      }
+    },
+    close() {
+      server.close();
+    },
+  };
+}
+
+describe("A wrapper whose socket goes half-open", () => {
+  it("notices the silence, reconnects, and its screen can be read again", async () => {
+    const relay = await silenceableRelay(base);
+    // The same Person, on a machine that reaches the Channel through the relay.
+    const config = join(scratch, "half-open");
+    await mkdir(config, { recursive: true });
+    const saved = JSON.parse(await readFile(join(scratch, "config", "config.json"), "utf8"));
+    await writeFile(join(config, "config.json"), JSON.stringify({ ...saved, url: relay.url }), { mode: 0o600 });
+    const term = new Terminal(["run", "claude"], {
+      SWITCHBOARD_CONFIG_DIR: config,
+      SWITCHBOARD_STREAM_PING_SECONDS: "1",
+    });
+    try {
+      const { agentEnv: id } = await term.started();
+      const screen = () => asPerson("dashboard", `${agentPath(id as AgentId)}/terminal`);
+      await waitFor("its screen", async () => ((await screen()).ok ? true : undefined));
+
+      relay.silence();
+      // The Channel still holds the silent socket, so a read goes nowhere.
+      expect((await screen()).status).toBe(504);
+
+      // The wrapper hears no pong, drops the socket and attaches on a new one.
+      const read = await waitFor(
+        "its screen after the silence",
+        async () => {
+          const response = await screen();
+          return response.ok ? ((await response.json()) as { lines: string[] }) : undefined;
+        },
+        30_000,
+      );
+      expect(read.lines.join("\n")).toContain("FAKE-CLAUDE");
+      const log = await readFile(join(config, "wrapper.log"), "utf8");
+      expect(log).toMatch(/heard nothing from the Channel for \d+s; reconnecting/);
+    } finally {
+      relay.close();
+    }
+  }, 60_000);
 });
 
 describe("Shared skills (ADR 0039)", () => {

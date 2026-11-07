@@ -32,8 +32,9 @@ import type {
   TerminalWatchersMessage,
   TranscriptRequestMessage,
 } from "../../shared/src/index";
-import { agentPath, channelApiBase, LIVE_PING, LIVE_PONG } from "../../shared/src/index";
+import { agentPath, channelApiBase, LIVE_PONG } from "../../shared/src/index";
 import type { Config } from "./config";
+import { type Keepalive, keepalive, STREAM_PING_MS } from "./keepalive";
 
 /** Where a ChannelClient finds its Channel and its credential. */
 export interface ChannelTarget {
@@ -165,7 +166,12 @@ export class ChannelClient {
    * The socket speaks for the Agent, so it opens once the Agent token is here (the
    * registration), and reopens with each new one.
    */
-  follow(onMessage: (message: ChannelMessage) => void, onStatus: (connected: boolean) => void): ChannelStream {
+  follow(
+    onMessage: (message: ChannelMessage) => void,
+    onStatus: (connected: boolean) => void,
+    options: { pingMs?: number; log?: (line: string) => void } = {},
+  ): ChannelStream {
+    const pingMs = options.pingMs ?? STREAM_PING_MS;
     let closed = false;
     let socket: WebSocket | null = null;
     let retry = 0;
@@ -177,13 +183,23 @@ export class ChannelClient {
       const query = new URLSearchParams({ token: this.agentToken ?? this.session });
       const ws = new WebSocket(`${this.base.replace(/^http/, "ws")}/api/stream?${query}`);
       socket = ws;
-      let keepalive: ReturnType<typeof setInterval> | undefined;
+      let alive: Keepalive | undefined;
       ws.addEventListener("open", () => {
         retry = 0;
         onStatus(true);
-        keepalive = setInterval(() => ws.send(LIVE_PING), 30_000);
+        alive = keepalive(ws, pingMs, (quiet) => {
+          if (closed || socket !== ws) return;
+          // Half-open: its close may never come, so it is let go and replaced now.
+          options.log?.(`heard nothing from the Channel for ${Math.round(quiet / 1000)}s; reconnecting`);
+          socket = null;
+          ws.close();
+          onStatus(false);
+          clearTimeout(pending);
+          pending = setTimeout(connect, 0);
+        });
       });
       ws.addEventListener("message", (event) => {
+        alive?.heard();
         if (event.data === LIVE_PONG) return;
         try {
           onMessage(JSON.parse(String(event.data)) as ChannelMessage);
@@ -192,7 +208,7 @@ export class ChannelClient {
         }
       });
       ws.addEventListener("close", () => {
-        clearInterval(keepalive);
+        alive?.stop();
         // A socket replaced by a reconnect has nothing more to say.
         if (closed || socket !== ws) return;
         onStatus(false);
