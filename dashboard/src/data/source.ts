@@ -17,6 +17,7 @@ import type {
   PersonAction,
   PersonName,
   SetHostAllowRequest,
+  SkillEntry,
   SkillResponse,
   SkillsResponse,
   SpawnAgentRequest,
@@ -147,8 +148,10 @@ export interface ChannelSource {
   memory(query: MemoryQuery): Promise<MemoryResponse | null>;
   /** `GET /api/skills`: each skill Persons share on the Channel, its latest version (ADR 0039); null when the Worker has none. */
   skills(): Promise<SkillsResponse | null>;
-  /** `GET /api/skills/:name`: one version of a skill with its files (the latest when `version` is left out), and every version. */
+  /** `GET /api/skills/:name`: one version of a skill with its manifest (the latest when `version` is left out), and every version. */
   skill(name: string, version?: number): Promise<SkillResponse>;
+  /** `POST /api/skill-files/read`: the bytes of a version's files, by path, each checked against its SHA-256 (ADR 0050). */
+  skillFiles(files: SkillEntry[]): Promise<Map<string, Uint8Array>>;
   /** `GET /api/brief`: the Brief's pages, current versions, the overview first (ADR 0042); null when the Worker has none. */
   brief(): Promise<BriefResponse | null>;
   /** `GET /api/settings/langfuse`: the Channel's Langfuse project, never its secret key, and whether this Person may change it (ADR 0044); null when the Worker has none. */

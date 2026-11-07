@@ -19,6 +19,7 @@ import type {
   PersonAction,
   SetHostAllowRequest,
   Skill,
+  SkillEntry,
   SkillResponse,
   SkillsResponse,
   SpawnAgentRequest,
@@ -60,7 +61,7 @@ import { BRIEF_PAGES } from "./brief";
 import { accounts, agent as agentActor, ME, makeEvent, person, persons, REPO, agents as seedAgents, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
 import { AMBIENT, type Beat, HISTORY, LIVE } from "./script";
-import { SKILL_VERSIONS } from "./skills";
+import { SKILL_BYTES, SKILL_VERSIONS } from "./skills";
 import { mockTerminal } from "./terminal";
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -549,6 +550,12 @@ export class MockChannelSource implements ChannelSource {
     const skill = all.find((v) => v.version === wanted);
     if (!skill) throw new Error(`${name} has no version ${wanted}; it has ${versions.join(", ")}.`);
     return clone({ skill, versions });
+  }
+
+  /** Like the Worker's file reads: the bytes of each file, by path. */
+  async skillFiles(files: SkillEntry[]): Promise<Map<string, Uint8Array>> {
+    await new Promise((r) => setTimeout(r, 60));
+    return new Map(files.map((f) => [f.path, SKILL_BYTES.get(f.digest) ?? new Uint8Array()]));
   }
 
   /** Like the Worker: every page's current version, the overview first and the stuck page last. */

@@ -56,7 +56,7 @@ import type {
   ReportedUsage,
   SetHostAllowRequest,
   Skill,
-  SkillFile,
+  SkillEntry,
   SkillSummary,
   SpawnAgentRequest,
   StreamMessage,
@@ -117,7 +117,7 @@ import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from ".
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
-import { SKILLS_SCHEMA, type SkillResult, Skills } from "./skills";
+import { migrateSkills, SKILLS_SCHEMA, type SkillResult, Skills, type UploadedChunk } from "./skills";
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
 import { type NewTask, type TaskResult, Tasks, workingTasks } from "./tasks";
@@ -495,7 +495,8 @@ export class Channel extends DurableObject<Env> {
     ctx.storage.sql.exec(DIRECTIVES_SCHEMA);
     ctx.storage.sql.exec(MEMORY_SCHEMA);
     ctx.storage.sql.exec(SKILLS_SCHEMA);
-    this.skills = new Skills(ctx.storage.sql);
+    this.skills = new Skills(ctx.storage);
+    void ctx.blockConcurrencyWhile(() => migrateSkills(ctx.storage));
     ctx.storage.sql.exec(BRIEF_SCHEMA);
     migrateBrief(ctx.storage.sql);
     ctx.storage.sql.exec(LIBRARIAN_SCHEMA);
@@ -1342,7 +1343,7 @@ export class Channel extends DurableObject<Env> {
     return this.skills.list();
   }
 
-  /** One version of a shared skill with its files, the latest when `version` is left out. */
+  /** One version of a shared skill with its manifest, the latest when `version` is left out. */
   readSkill(name: string, version?: number): SkillResult<{ skill: Skill; versions: number[] }> {
     return this.skills.read(name, version);
   }
@@ -1351,9 +1352,21 @@ export class Channel extends DurableObject<Env> {
   publishSkill(
     caller: Caller,
     name: string,
-    files: SkillFile[],
+    files: SkillEntry[],
   ): Promise<SkillResult<{ skill: SkillSummary; published: boolean }>> {
     return this.skills.publish(caller, name, files);
+  }
+
+  /** Stores chunks of skill files, keeping each file once its bytes match its digest (ADR 0050). */
+  uploadSkillFiles(chunks: UploadedChunk[]): Promise<SkillResult<{ complete: string[] }>> {
+    return this.skills.upload(chunks);
+  }
+
+  /** Chunks of the files published skills hold. */
+  readSkillFiles(
+    chunks: { digest: string; index: number }[],
+  ): SkillResult<{ digest: string; index: number; data: Uint8Array }[]> {
+    return this.skills.readChunks(chunks);
   }
 
   /** Every page of the Brief, current versions, for any Person or Agent on the Channel (ADR 0042). */

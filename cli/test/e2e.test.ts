@@ -37,8 +37,10 @@ import {
   LIBRARIAN_BRIEF,
   LIBRARIAN_PATH,
   MAX_HISTORY_LIMIT,
+  manifestOf,
   nicknamePath,
   REVIEW_LABEL,
+  SKILL_FILES_PATH,
   SKILLS_PATH,
   STANDING_RULE,
   signedInput,
@@ -48,6 +50,7 @@ import {
   type TerminalRefusedFrame,
   type TerminalScreenFrame,
   toBase64,
+  uploadSkillFiles,
 } from "../../shared/src/index";
 import { LIBRARIAN_DENIED_TOOLS, LIBRARIAN_MCP_TOOLS } from "../src/librarian";
 import { EDIT_NUDGE } from "../src/memory";
@@ -5015,6 +5018,23 @@ describe("Shared skills (ADR 0039)", () => {
     return ((await (await asPerson("bob", SKILLS_PATH)).json()) as SkillsResponse).skills;
   }
 
+  /** Publishes text files as `person` does through the API: the manifest, the files the Channel lacks, the manifest again. */
+  async function publishAs(
+    person: string,
+    name: string,
+    files: { path: string; content: string }[],
+  ): Promise<Response> {
+    const skill = files.map((f) => ({ path: f.path, bytes: new TextEncoder().encode(f.content) }));
+    const body = JSON.stringify({ files: await manifestOf(skill) });
+    const first = await asPerson(person, skillPath(name), { method: "POST", body });
+    if (first.status !== 409) return first;
+    await uploadSkillFiles(skill, ((await first.json()) as { missing: string[] }).missing, async (request) => {
+      const stored = await asPerson(person, SKILL_FILES_PATH, { method: "POST", body: JSON.stringify(request) });
+      return stored.json() as never;
+    });
+    return asPerson(person, skillPath(name), { method: "POST", body });
+  }
+
   it("publishes a Person's skill only after they approve it in Claude Code's own prompt, and never one holding a secret", async () => {
     const dir = join(userSkills(), "release-notes");
     await mkdir(join(dir, "templates"), { recursive: true });
@@ -5040,14 +5060,14 @@ describe("Shared skills (ADR 0039)", () => {
       ["release-notes", 1, { person: "e2e", agent: id }, ["SKILL.md", "templates/notes.md"]],
     ]);
 
-    // A secret stops it on this machine, naming the file; nothing reaches the Channel.
+    // A real secret stops it on this machine, naming the file and what it found; nothing reaches the Channel.
     await mkdir(join(dir, "scripts"));
     await writeFile(
       join(dir, "scripts", "deploy.sh"),
-      "export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\n",
+      "#!/bin/sh\nexport GITHUB_TOKEN=ghp_R8f2kLq9Zt3Xw7Vn1Bc6Hd4Jm0Ps5Yg2Ue8A\n",
     );
     expect(await approved(term, "skill_publish", { name: "release-notes" }, "1")).toBe(
-      "skill_publish ERROR: scripts/deploy.sh looks like it holds a secret, so release-notes was not published. Remove it and publish again.",
+      "skill_publish ERROR: scripts/deploy.sh (a GitHub token, line 2) looks like it holds a secret, so release-notes was not published. Remove it and publish again.",
     );
     // And a link out of the skill's directory is never followed.
     await rm(join(dir, "scripts"), { recursive: true });
@@ -5079,10 +5099,7 @@ describe("Shared skills (ADR 0039)", () => {
 
   it("installs another Person's skill only as the version shown in full with its diff, after the Person approves", async () => {
     const entry = "---\nname: lint-rules\ndescription: How this repo lints.\n---\n\nRun biome check --write.\n";
-    const published = await asPerson("bob", skillPath("lint-rules"), {
-      method: "POST",
-      body: JSON.stringify({ files: [{ path: "SKILL.md", content: entry }] }),
-    });
+    const published = await publishAs("bob", "lint-rules", [{ path: "SKILL.md", content: entry }]);
     expect(published.status).toBe(201);
     // An older copy is installed here, with a file the shared one does not have.
     const dir = join(userSkills(), "lint-rules");
@@ -5122,6 +5139,69 @@ describe("Shared skills (ADR 0039)", () => {
     term.type("quit\r");
     expect(await term.exited).toBe(0);
   }, 90_000);
+
+  it("shares a skill with a font and a file over 2 MB, shown by size and SHA-256 and installed byte for byte", async () => {
+    const dir = join(userSkills(), "type-specimen");
+    await mkdir(join(dir, "fonts"), { recursive: true });
+    await mkdir(join(dir, "assets"));
+    await mkdir(join(dir, "references"));
+    const entry =
+      "---\nname: type-specimen\ndescription: Sets a type specimen in Inter.\n---\n\nUse fonts/inter.woff2.\n";
+    await writeFile(join(dir, "SKILL.md"), entry);
+    // A woff2 font, and a 3 MB image: neither is UTF-8 text.
+    const font = Buffer.concat([Buffer.from("wOF2\0\x01\xff", "latin1"), Buffer.from(randomUUID().repeat(300))]);
+    const image = Buffer.alloc(3 * 1024 * 1024 + 17);
+    for (let i = 0; i < image.length; i++) image[i] = (i * 7919) % 251;
+    await writeFile(join(dir, "fonts", "inter.woff2"), font);
+    await writeFile(join(dir, "assets", "specimen.png"), image);
+    // A placeholder where a token goes is not a secret.
+    await writeFile(
+      join(dir, "references", "setup.md"),
+      "export GITHUB_TOKEN=ghp_...\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
+    );
+
+    const term = new Terminal(["run", "claude"]);
+    await term.started();
+    expect(await approved(term, "skill_publish", { name: "type-specimen" }, "1")).toBe(
+      `skill_publish: Published type-specimen version 1 (4 files, 3.0 MB) from ${dir}. Every Person on the Channel can now read and install it.`,
+    );
+
+    // Read for the repo's skills: the text in full, each binary by its size and SHA-256.
+    const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+    const read = await callTool(term, "skill_read", { name: "type-specimen", target: "project" });
+    expect(read).toContain(`===== SKILL.md =====\n${entry.trimEnd()}`);
+    expect(read).toContain(
+      `===== fonts/inter.woff2 =====\nBinary file: ${font.length.toLocaleString("en-US")} bytes, SHA-256 ${sha(font)}.`,
+    );
+    expect(read).toContain(
+      `===== assets/specimen.png =====\nBinary file: ${image.length.toLocaleString("en-US")} bytes, SHA-256 ${sha(image)}.`,
+    );
+    expect(read).toContain("4 files, 3.0 MB, 2 of them binary: shown by size and SHA-256");
+    const target = join(cwd, ".claude", "skills", "type-specimen");
+    expect(read).toContain(`Installing it creates ${target}.`);
+    const digest = /digest ([0-9a-f]{64})\.$/.exec(read)?.[1] ?? "";
+
+    const done = await approved(
+      term,
+      "skill_install",
+      { name: "type-specimen", version: 1, target: "project", digest },
+      "1",
+    );
+    expect(done).toBe(`skill_install: Installed type-specimen version 1 at ${target}.`);
+    expect(await readFile(join(target, "fonts", "inter.woff2"))).toEqual(font);
+    expect(await readFile(join(target, "assets", "specimen.png"))).toEqual(image);
+    expect(await readFile(join(target, "SKILL.md"), "utf8")).toBe(entry);
+
+    // A changed font shows in the diff by size and SHA-256, before and after.
+    await writeFile(join(target, "fonts", "inter.woff2"), Buffer.from("wOF2\0old", "latin1"));
+    const again = await callTool(term, "skill_read", { name: "type-specimen", target: "project" });
+    expect(again).toContain(
+      `--- installed/fonts/inter.woff2\n+++ shared/fonts/inter.woff2\nBinary file fonts/inter.woff2: ${font.length.toLocaleString("en-US")} bytes, SHA-256 ${sha(font)} (installed: 8 bytes, SHA-256 ${sha(Buffer.from("wOF2\0old", "latin1"))}).`,
+    );
+    await rm(join(cwd, ".claude"), { recursive: true });
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+  }, 120_000);
 
   it("lists, shows, publishes and installs from the command line, writing only after the Person says yes", async () => {
     const run = (...args: string[]) =>

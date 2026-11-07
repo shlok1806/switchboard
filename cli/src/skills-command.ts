@@ -1,22 +1,21 @@
 // `switchboard skills`: a Person lists, reads, publishes and installs the skills shared on
-// the Channel (ADR 0039). Thin over cli/src/skills.ts, which the MCP tools run too. A
+// the Channel (ADR 0039, 0050). Thin over cli/src/skills.ts, which the MCP tools run too. A
 // Person typing the command is the Person asking, so it needs no permission prompt; an
 // install still shows the full content and what it changes, and asks before it writes
 // unless --yes says the Person has read it.
 
-import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
+import { describeSize } from "../../shared/src/index";
 import { ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ChannelClient, targetOf } from "./channel-client";
 import { readConfig } from "./config";
 import {
   describeInstall,
   describeSkills,
-  fetchSkill,
   listSkills,
   localSkill,
-  readSkillDir,
+  readForInstall,
   SkillError,
   type SkillScope,
   sendSkill,
@@ -92,25 +91,25 @@ export async function skillsCommand(args: string[]): Promise<number> {
     const skillName = name as string;
     if (verb === "publish") {
       const from = scopeOf(values.from, "from");
-      const files = await localSkill(from, skillName, ctx);
-      const { skill, published } = await sendSkill(client, skillName, files);
+      const local = await localSkill(from, skillName, ctx);
+      const { skill, published } = await sendSkill(client, skillName, local);
       console.log(
         published
-          ? `Published ${skillName} version ${skill.version} (${skill.paths.length} ${skill.paths.length === 1 ? "file" : "files"}, ${skill.size} bytes) to ${choice.repo}.`
+          ? `Published ${skillName} version ${skill.version} (${skill.paths.length} ${skill.paths.length === 1 ? "file" : "files"}, ${describeSize(skill.size)}) to ${choice.repo}.`
           : `${skillName} version ${skill.version} on ${choice.repo} already holds exactly these files: nothing was published.`,
       );
       return 0;
     }
     const target = scopeOf(values.target, "target");
-    const { skill, versions } = await fetchSkill(client, skillName, versionOf(values.version));
     const root = await skillsDir(target, ctx);
-    const installed = await readSkillDir(root, skillName, "empty");
-    console.log(describeInstall(skill, join(root, skillName), installed));
+    const read = await readForInstall(client, skillName, versionOf(values.version), root, { all: verb === "install" });
+    const { skill, versions } = read;
+    console.log(describeInstall(skill, read.dir, read.installed, read.shared));
     if (verb === "show") {
       console.log(`\nVersions: ${versions.join(", ")}.`);
       return 0;
     }
-    if (installed.length > 0 && skillDiff(installed, skill.files) === "") return 0;
+    if (read.installedFiles.length > 0 && skillDiff(read.installed, read.shared) === "") return 0;
     if (!values.yes && !(await confirm(`\nInstall ${skillName} version ${skill.version}? [y/N] `))) {
       console.error(
         process.stdin.isTTY
@@ -119,7 +118,9 @@ export async function skillsCommand(args: string[]): Promise<number> {
       );
       return 1;
     }
-    console.log(`Installed ${skillName} version ${skill.version} at ${await writeSkill(root, skill, installed)}.`);
+    console.log(
+      `Installed ${skillName} version ${skill.version} at ${await writeSkill(root, skill, read.bytes, read.installedFiles)}.`,
+    );
     return 0;
   } catch (error) {
     if (!(error instanceof SkillError || error instanceof ChannelChoiceError)) throw error;

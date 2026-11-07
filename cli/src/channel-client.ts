@@ -72,6 +72,8 @@ export class ChannelError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The refusal as the Channel sent it, for one that carries more than its reason. */
+    readonly body?: unknown,
   ) {
     super(message);
   }
@@ -118,7 +120,7 @@ export class ChannelClient {
       throw new ChannelError(0, `Could not reach ${this.base}: ${(error as Error).message}`);
     }
     const body = (await response.json().catch(() => ({ ok: false, reason: response.statusText }))) as T | ErrorResponse;
-    if (!response.ok) throw new ChannelError(response.status, (body as ErrorResponse).reason);
+    if (!response.ok) throw new ChannelError(response.status, (body as ErrorResponse).reason, body);
     return body as T;
   }
 

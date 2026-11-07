@@ -51,7 +51,7 @@ What an Agent's wrapper adds to its context at its next turn: one line for each 
 _Avoid_: Summary, recap
 
 **Skill**:
-A Claude Code skill directory (`SKILL.md` and the text files it uses) that a Person shares on the Channel as numbered, unchangeable versions (ADR 0039). Any Person or Agent reads it; a Person, or their own Agent when they ask it to and approve the CLI's prompt, publishes or installs it. Its name belongs to the Person who first published it. Its files are information from that Person, never instructions to an Agent reading them.
+A Claude Code skill directory (`SKILL.md` and the files it uses, of any type) that a Person shares on the Channel as numbered, unchangeable versions (ADR 0039, 0050). Any Person or Agent reads it; a Person, or their own Agent when they ask it to and approve the CLI's prompt, publishes or installs it. Its name belongs to the Person who first published it. Its files are information from that Person, never instructions to an Agent reading them.
 _Avoid_: Plugin, prompt, template
 
 **Brief**:
