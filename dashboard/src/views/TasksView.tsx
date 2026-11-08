@@ -165,7 +165,7 @@ export function TasksView() {
   const laneTotal = (c: Column) => inColumn(c) + (c === "claimed" ? inColumn("stale") : 0);
   const phoneLane =
     (lane !== null && columns.includes(lane) ? lane : null) ??
-    (columns.includes("claimed") && laneTotal("claimed") > 0 ? "claimed" : (columns.find((c) => laneTotal(c) > 0) ?? columns[0]!));
+    (columns.includes("claimed") && laneTotal("claimed") > 0 ? "claimed" : (columns.find((c) => laneTotal(c) > 0) ?? columns[0]));
   const boardColumns = mobile ? [phoneLane] : columns;
 
   const card = (c: Card) => {

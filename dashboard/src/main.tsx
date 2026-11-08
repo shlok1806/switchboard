@@ -160,7 +160,9 @@ function Root() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) throw new Error("index.html has no #root element");
+createRoot(root).render(
   <StrictMode>
     <Root />
   </StrictMode>,

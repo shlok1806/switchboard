@@ -46,7 +46,7 @@ export function MemoryView({ selected }: { selected?: string }) {
   const [attempt, setAttempt] = useState(0);
   // The newest note on the Channel: when it changes, the first page is read again.
   const latest = useMemo(() => {
-    for (let i = events.length - 1; i >= 0; i--) if (events[i]!.type === "memory.note") return events[i]!.seq;
+    for (let i = events.length - 1; i >= 0; i--) if (events[i].type === "memory.note") return events[i].seq;
     return undefined;
   }, [events]);
   const asked = useRef(0);

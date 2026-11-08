@@ -92,7 +92,7 @@ export function shortTitle(title: string, max = 26): string {
   if (title.length <= max) return title;
   const words = title.split(/\s+/);
   // A first word too long for the line is cut where the line ends.
-  let out = words[0]!.slice(0, max);
+  let out = words[0].slice(0, max);
   for (const w of words.slice(1)) {
     if (out.length + 1 + w.length > max) break;
     out += ` ${w}`;
@@ -633,7 +633,7 @@ export function CanvasView({ selected }: { selected?: string }) {
       ArrowDown: { x: 0, y: -step },
     };
     if (moves[e.key]) {
-      const m = moves[e.key]!;
+      const m = moves[e.key];
       setCamera((c) => ({ ...c, x: c.x + m.x, y: c.y + m.y }));
     } else if (e.key === "+" || e.key === "=") zoomBy(1.2);
     else if (e.key === "-") zoomBy(1 / 1.2);

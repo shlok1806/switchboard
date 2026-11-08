@@ -31,6 +31,12 @@
   "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } },
   "overrides": [
     {
+      // A test that asserts an element or value is there fails either way when it is not: a
+      // guard would only restate the expectation the test already makes.
+      "includes": ["test/**"],
+      "linter": { "rules": { "style": { "noNonNullAssertion": "off" } } }
+    },
+    {
       // Vendored from kibo-ui (THIRD_PARTY_NOTICES.md): its card is a dnd-kit draggable, a div
       // that takes the keyboard by design.
       "includes": ["src/components/kibo-ui/**"],

@@ -219,7 +219,7 @@ export function InterruptRow({
 }
 
 function whoName(e: ChannelEvent): string {
-  if (e.actor.kind === "agent") return e.actor.agentId.split("/")[0]!;
+  if (e.actor.kind === "agent") return e.actor.agentId.split("/")[0];
   if (e.actor.kind === "person") return e.actor.person;
   return e.actor.kind === "github" ? "GitHub" : "the Relay";
 }
@@ -240,14 +240,14 @@ export function TurnRow({
   onPick: (id: string) => void;
   mobile: boolean;
 }) {
-  const first = item.events[0]!;
+  const first = item.events[0];
   const by = (c: Capture) => item.events.filter((e) => e.capture === c);
   const counts = CAPTURES.filter((c) => by(c).length > 0)
     .map((c) => `${by(c).length} ${CAPTURE_LABEL[c]}`)
     .join(", ");
   // What the turn said: its Update, or its model's last reply. A model call that only asked for tools said nothing.
   const said = [...item.events].reverse().find((e) => e.type === "update" || ((e.type === "proxy.digest" || e.type === "proxy.raw") && e.payload.reply !== ""));
-  const what = said ? summarize(said) : summarize(item.events.at(-1)!);
+  const what = said ? summarize(said) : summarize(item.events[item.events.length - 1]);
   const toggle = (
     <button
       type="button"

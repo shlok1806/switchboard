@@ -59,11 +59,11 @@ function TableRow({ i, wide = true }: { i: number; wide?: boolean }) {
         <Bar w="3.5rem" />
       </span>
       <span className="flex w-36 shrink-0 flex-col gap-2 max-sm:w-auto">
-        <Bar w={NAMES[i % NAMES.length]!} />
+        <Bar w={NAMES[i % NAMES.length]} />
         <Bar w="6rem" h="h-2" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-2">
-        <Bar w={TASKS[i % TASKS.length]!} className="max-w-full" />
+        <Bar w={TASKS[i % TASKS.length]} className="max-w-full" />
       </span>
       {wide && (
         <span className="flex w-24 shrink-0 items-center gap-2 max-lg:hidden">
@@ -111,10 +111,10 @@ function LogRow({ i }: { i: number }) {
       <Bar w="3.5rem" />
       <span className="flex w-36 shrink-0 items-center gap-2">
         <span aria-hidden className="size-2.5 shrink-0 rounded-full border border-rule-2" />
-        <Bar w={NAMES[i % NAMES.length]!} />
+        <Bar w={NAMES[i % NAMES.length]} />
       </span>
       <Bar w="4rem" className="max-sm:hidden" />
-      <Bar w={TASKS[(i + 3) % TASKS.length]!} className="max-w-full" />
+      <Bar w={TASKS[(i + 3) % TASKS.length]} className="max-w-full" />
     </div>
   );
 }
@@ -123,7 +123,7 @@ function LogRow({ i }: { i: number }) {
 function Card({ i }: { i: number }) {
   return (
     <div className="flex flex-col gap-2.5 rounded-[var(--r)] border border-rule p-3">
-      <Bar w={TASKS[i % TASKS.length]!} className="max-w-full" />
+      <Bar w={TASKS[i % TASKS.length]} className="max-w-full" />
       <Bar w="6rem" />
       <Bar w="4rem" h="h-2" />
       <span aria-hidden className="mt-1 ml-auto h-1 w-14 bg-rule" />
@@ -136,7 +136,7 @@ function NoteBlock({ i }: { i: number }) {
   return (
     <div className="flex flex-col gap-2.5 border-b border-rule py-4" /* taste-skill-ignore: the rule of the row it stands in for */>
       <Bar w="100%" className="max-w-[38rem]" />
-      <Bar w={TASKS[i % TASKS.length]!} className="max-w-full" />
+      <Bar w={TASKS[i % TASKS.length]} className="max-w-full" />
       <Bar w="13rem" h="h-2" />
     </div>
   );
@@ -153,7 +153,7 @@ function SideColumn() {
           <Bar w="6rem" h="h-3" />
           <div className="h-px bg-rule-2" /* taste-skill-ignore: the rule of the row it stands in for */ />
           {[0, 1, 2].map((i) => (
-            <Bar key={i} w={TASKS[(s + i) % TASKS.length]!} className="max-w-full" />
+            <Bar key={i} w={TASKS[(s + i) % TASKS.length]} className="max-w-full" />
           ))}
         </div>
       ))}
@@ -187,7 +187,7 @@ function Body({ view }: { view: Route["view"] }) {
           <div className="flex flex-col gap-6">
             {[0, 1, 2].map((i) => (
               <div key={i} className="flex flex-col gap-2.5">
-                <Bar w={TASKS[i]!} />
+                <Bar w={TASKS[i]} />
                 <span aria-hidden className="h-8 rounded-[var(--r)] bg-paper-2" />
                 <Bar w="70%" />
                 <span className="flex gap-2">
@@ -248,7 +248,7 @@ function Body({ view }: { view: Route["view"] }) {
             <Bar w="12rem" h="h-4" />
             <Bar w="16rem" h="h-2" />
             {[0, 1, 2, 3, 4, 5].map((i) => (
-              <Bar key={i} w={i % 3 === 2 ? TASKS[i % TASKS.length]! : "100%"} className="max-w-full" />
+              <Bar key={i} w={i % 3 === 2 ? TASKS[i % TASKS.length] : "100%"} className="max-w-full" />
             ))}
           </div>
         </div>
@@ -317,7 +317,7 @@ function Body({ view }: { view: Route["view"] }) {
               <div className="flex flex-wrap gap-3">
                 {Array.from({ length: n }, (_, i) => (
                   <div key={i} className="flex w-52 flex-col gap-2 rounded-[var(--r)] border border-rule-2 p-3">
-                    <Bar w={NAMES[f + i]!} />
+                    <Bar w={NAMES[f + i]} />
                     <Bar w="9rem" />
                     <Bar w="5rem" h="h-2" />
                   </div>
@@ -343,7 +343,7 @@ function Body({ view }: { view: Route["view"] }) {
             {[0, 1, 2, 3].map((i) => (
               <div key={i} className="flex h-10 items-center gap-3 border-b border-rule" /* taste-skill-ignore: the rule of the row it stands in for */>
                 <span aria-hidden className="size-2.5 shrink-0 rounded-full border border-rule-2" />
-                <Bar w={TASKS[i]!} className="max-w-full" />
+                <Bar w={TASKS[i]} className="max-w-full" />
               </div>
             ))}
           </div>

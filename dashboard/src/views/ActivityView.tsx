@@ -69,7 +69,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
     const out: ChannelEvent[] = [];
     let i = events.length - 1;
     for (; i >= 0 && out.length < limit; i--) {
-      const e = events[i]!;
+      const e = events[i];
       if (matches(e, verdictsByEvent.get(e.id) ?? [], filters)) out.push(e);
     }
     return { shown: out.reverse(), all: i < 0 };
@@ -107,7 +107,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
       const key = it.kind === "interrupt" ? it.verdict.agent : it.kind === "turn" ? it.agent : whoKey(it.event);
       by.set(key, [...(by.get(key) ?? []), it]);
     }
-    return [...by.entries()].sort((a, b) => a[1].at(-1)!.seq - b[1].at(-1)!.seq);
+    return [...by.entries()].sort((a, b) => a[1][a[1].length - 1].seq - b[1][b[1].length - 1].seq);
   }, [items, group]);
 
   // Read here means read: the Activity key stops counting the Interrupts shown as rows, and

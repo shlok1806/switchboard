@@ -6,7 +6,7 @@
  * is the other section. Below 640px the right column follows the left.
  */
 
-import type { Agent, AgentId, ChannelEvent } from "@shared/index";
+import type { Agent, AgentId, AgentUsage, ChannelEvent } from "@shared/index";
 import { modelLabel } from "@shared/index";
 import { type FormEvent, Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -273,7 +273,7 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
             <Section title="Context window">
               <ContextWindow agent={agent} />
             </Section>
-            {agent.usage && <Account agent={agent} />}
+            {agent.usage && <Account agent={agent} usage={agent.usage} />}
             <Section title="Where">
               <Facts
                 rows={[
@@ -494,10 +494,9 @@ function DirectiveForm({ agent, events, inputRef }: { agent: Agent; events: Chan
 }
 
 /** The account it runs under (ADR 0011): who, its limits and what this session used. */
-function Account({ agent }: { agent: Agent }) {
+function Account({ agent, usage }: { agent: Agent; usage: AgentUsage }) {
   const { accounts, snapshot } = useChannel();
   const now = useNow();
-  const usage = agent.usage!;
   const limits = limitsFor(agent, accounts);
   const zone = snapshot?.persons.find((p) => p.name === agent.person)?.timeZone;
   const stale = limits !== undefined && isStale(limits.readAt, now);
@@ -510,7 +509,7 @@ function Account({ agent }: { agent: Agent }) {
           (usage.email ?? usage.accountId) && [
             "Signed in",
             usage.email ?? usage.accountId,
-            usage.plan && `${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)} plan`,
+            usage.plan && `${usage.plan[0].toUpperCase()}${usage.plan.slice(1)} plan`,
           ],
           limit("5-hour", limits?.session),
           limit("Week", limits?.week),

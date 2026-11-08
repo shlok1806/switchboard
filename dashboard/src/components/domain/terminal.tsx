@@ -268,7 +268,7 @@ const BORDER = /^[\s│╭╮╰╯─]*/;
  */
 export function dialogStart(lines: readonly string[]): number {
   for (let y = lines.length - 1; y >= 0; y--) {
-    const line = lines[y]!.replace(BORDER, "");
+    const line = lines[y].replace(BORDER, "");
     if (QUESTION.test(line)) return y;
     if (line.trim() !== "" && !CHOICE.test(line)) return -1;
   }

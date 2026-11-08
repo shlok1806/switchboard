@@ -490,8 +490,8 @@ export class MockChannelSource implements ChannelSource {
     const host = (id: `${string}/${string}`, roots: string[], extra: Partial<Host> = {}): Host => ({
       ...this.host,
       id,
-      person: id.split("/")[0]!,
-      name: id.split("/")[1]!,
+      person: id.split("/")[0],
+      name: id.split("/")[1],
       roots,
       ...extra,
     });
@@ -893,7 +893,7 @@ function withFleet(seed: Agent[], size: number): Agent[] {
   const people = ["shlok", "maya", "dev"];
   const at = (minutes: number) => new Date(T0 - minutes * 60_000).toISOString();
   for (let i = out.length; out.length < size; i++) {
-    const person = people[i % people.length]!;
+    const person = people[i % people.length];
     const codex = i % 5 === 4;
     const presence: Agent["presence"] = i % 9 === 0 ? "gone" : i % 4 === 0 ? "idle" : "live";
     out.push({

@@ -272,9 +272,9 @@ function AgentTable({
   useLayoutEffect(() => {
     const el = scroller;
     const thead = head.current;
-    if (!virtual || !el || !thead) return;
+    const table = thead?.parentElement;
+    if (!virtual || !el || !thead || !table) return;
     // From the table's top, which scrolls: the head is sticky, so its own place does not.
-    const table = thead.parentElement!;
     const measure = () => setMargin(Math.round(table.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop + thead.offsetHeight));
     measure();
     const seen = new ResizeObserver(measure);
@@ -291,7 +291,7 @@ function AgentTable({
     getScrollElement: () => scroller,
     // As measured: a Person line, a compact row, a comfortable row with its second line.
     estimateSize: (i) => (items[i]?.kind === "group" ? 44 : compact ? 30 : 56),
-    getItemKey: (i) => keyOf(items[i]!),
+    getItemKey: (i) => keyOf(items[i]),
     overscan: 10,
     scrollMargin: margin,
     rangeExtractor: (range: Range) => {
@@ -350,7 +350,7 @@ function AgentTable({
     let end = margin;
     for (const v of rows.getVirtualItems()) {
       if (v.start > end) body.push(<Spacer key={`gap:${v.index}`} height={v.start - end} />);
-      body.push(row(items[v.index]!, { index: v.index, ref: rows.measureElement }));
+      body.push(row(items[v.index], { index: v.index, ref: rows.measureElement }));
       end = v.end;
     }
     const total = rows.getTotalSize() + margin;
