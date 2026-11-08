@@ -31,7 +31,7 @@ async function call(path: string, as: As, init: RequestInit = {}): Promise<Respo
   return exports.default.fetch(
     new Request(url(path), {
       ...init,
-      headers: { Authorization: await bearer(as), "Content-Type": "application/json" },
+      headers: { Authorization: await bearer(as), "Content-Type": "application/json", ...init.headers },
     }),
   );
 }
@@ -163,7 +163,6 @@ describe("publishing and reading artifacts", () => {
     expect(second.artifact.version).toBe(2);
     const v1 = await call(artifactPagePath("report", 1), { person: "maya" });
     expect(await v1.text()).toBe(REPORT);
-    expect(v1.headers.get("Cache-Control")).toContain("immutable");
   });
 
   it(`keeps the last ${ARTIFACT_VERSIONS_KEPT} versions and says which when an older one is asked for`, async () => {
@@ -207,6 +206,11 @@ describe("deleting an artifact", () => {
     await published(claude, "plan", { html: "<p>second</p>" });
     await published(claude, "other", { html: "<p>stays</p>" });
     expect(await rowsOf("plan")).toEqual({ versions: 2, chunks: 3 });
+    const viewed = await call(artifactPagePath("plan", 2), { person: "maya" });
+    const cached = viewed.headers.get("ETag") ?? "";
+    expect(viewed.headers.get("Cache-Control")).not.toContain("immutable");
+    const unchanged = await call(artifactPagePath("plan", 2), { person: "maya" }, { headers: { "If-None-Match": cached } });
+    expect(unchanged.status).toBe(304);
 
     const answer = await remove({ person: "shlok" }, "plan");
     expect(answer.status, await answer.clone().text()).toBe(200);
@@ -222,6 +226,9 @@ describe("deleting an artifact", () => {
     // Republished, the name starts again at version 1 and belongs to whoever published it.
     const again = await published({ person: "maya" }, "plan", { html: "<p>maya's</p>" });
     expect(again.artifact).toMatchObject({ version: 1, owner: "maya", publishedBy: { person: "maya" } });
+    const firstOld = await call(artifactPagePath("plan", 1), { person: "shlok" }, { headers: { "If-None-Match": cached } });
+    expect(firstOld.status).toBe(200);
+    expect(await firstOld.text()).toBe("<p>maya's</p>");
   });
 
   it("refuses an Agent token, even the owner's own Agent, deleting nothing", async () => {

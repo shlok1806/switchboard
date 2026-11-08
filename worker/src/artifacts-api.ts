@@ -79,13 +79,13 @@ export async function handleArtifactRoute(
       "Content-Security-Policy": ARTIFACT_CSP,
       "X-Content-Type-Options": "nosniff",
       "Referrer-Policy": "no-referrer",
-      // A named version never changes; the latest does with the next publish.
-      "Cache-Control": version === undefined ? "private, no-cache" : "private, max-age=31536000, immutable",
+      "Cache-Control": "private, no-cache",
       ETag: `"${artifact.digest}"`,
     };
     if (url.searchParams.get("download") === "1") {
       headers["Content-Disposition"] = `attachment; filename="${artifact.name}-v${artifact.version}.html"`;
     }
+    if (request.headers.get("If-None-Match") === headers.ETag) return new Response(null, { status: 304, headers });
     return new Response(html, { headers });
   }
   if (route.kind === "delete") {

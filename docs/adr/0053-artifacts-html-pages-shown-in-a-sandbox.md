@@ -29,7 +29,7 @@ An HTML page runs code. Shown in the Dashboard's own origin, a page an Agent pub
   - its scripts cannot read the session cookie (HttpOnly) or the Dashboard's storage, where Attach Keys live (ADR 0021);
   - a request it makes to the Channel carries `Origin: null`, which every write refuses, and the Channel sends no CORS headers, so it cannot read an answer either;
   - with no `allow-same-origin` and no `allow-top-navigation`, it cannot reach the Dashboard around it or navigate it away.
-- The Dashboard frames the same URL in an `<iframe sandbox>` with the same flags, so both layers hold. A named version is served `immutable`; the latest is revalidated.
+- The Dashboard frames the same URL in an `<iframe sandbox>` with the same flags, so both layers hold. Every page is revalidated against its digest (`ETag`, `304` when unchanged), never cached as `immutable`: a delete frees the name and the next publish starts again at version 1, so a name and version can come to mean a different page.
 - What a page loads from elsewhere (a CDN script, a font) still loads: pages Agents make depend on it, and an opaque origin can do nothing on the Channel with it.
 
 ### Where they show up: the folder, on the Dashboard and on disk
