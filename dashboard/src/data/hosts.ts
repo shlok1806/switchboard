@@ -46,7 +46,7 @@ export function useHostsSupported(): boolean | null {
   const store = useStore();
   const seen = useHostsSeen();
   const [known, setKnown] = useState<boolean | null>(() => supported.get(store) ?? null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the answer never changes once known; `seen` only lets the first read share.
+  // the answer never changes once known; `seen` only lets the first read share.
   useEffect(() => {
     if (supported.has(store)) return setKnown(supported.get(store)!);
     let live = true;
@@ -74,7 +74,7 @@ export function useHosts(again?: unknown): { hosts?: HostsResponse | null; probl
   const store = useStore();
   const seen = useHostsSeen();
   const [state, setState] = useState<{ hosts?: HostsResponse | null; problem?: string }>({});
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the Host event, the Agents on Hosts and `again` are what make a read stale.
+  // the Host event, the Agents on Hosts and `again` are what make a read stale.
   useEffect(() => {
     let live = true;
     readHosts(store, seen).then(

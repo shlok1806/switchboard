@@ -276,7 +276,7 @@ export const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k)
  * The camera that shows all of `box` in a `w` by `h` viewport, never past 100%. With a
  * `floor`, it never zooms out below it: what does not fit then starts at the top left.
  */
-export function fit(box: Rect | null, w: number, h: number, floor = MIN_ZOOM, margin = 40, align: "center" | "start" = "center"): Camera {
+export function fitCamera(box: Rect | null, w: number, h: number, floor = MIN_ZOOM, margin = 40, align: "center" | "start" = "center"): Camera {
   if (!box) return { x: margin, y: margin, k: 1 };
   const k = clampZoom(Math.min(1, (w - margin * 2) / box.w, (h - margin * 2) / box.h));
   if (k < floor) return { k: floor, x: Math.max(margin, (w - box.w * floor) / 2) - box.x * floor, y: margin - box.y * floor };

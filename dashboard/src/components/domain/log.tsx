@@ -48,7 +48,7 @@ export function RowFrame({
 }) {
   return (
     <li className={cn("list-none border-b border-rule", fresh && "row-fresh")}>
-      {/* biome-ignore lint/a11y/useSemanticElements: a row holds links, which a button cannot. */}
+      {/* a row holds links, which a button cannot. */}
       <div
         role="button"
         tabIndex={0}

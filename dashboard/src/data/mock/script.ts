@@ -1,4 +1,5 @@
 import type { Actor, Capture, ChannelEvent, EventPayloads, EventType, TaskNumber, VerdictProbabilities } from "@shared/index";
+import { PAGER_STATES } from "./artifacts";
 import { A, agent, ago, makeEvent, PAGER_PUSH_FILES, person, RENAME_PUSH_FILES } from "./fixtures";
 
 /** One scripted Event, with optional Jev probabilities per receiving Agent. */
@@ -11,7 +12,11 @@ export interface Beat {
   effect?: Effect;
 }
 
-export type Effect = { kind: "step"; task: TaskNumber; step: number } | { kind: "presence"; agent: string; presence: "live" | "idle" | "gone" };
+export type Effect =
+  | { kind: "step"; task: TaskNumber; step: number }
+  | { kind: "presence"; agent: string; presence: "live" | "idle" | "gone" }
+  /** The Agent publishes the next version of artifact `name` (ADR 0053). */
+  | { kind: "artifact"; name: string; html: string };
 
 const beat = <K extends EventType>(
   t: number,
@@ -385,6 +390,15 @@ export const LIVE: Beat[] = [
     "tool",
     { step: 3, text: "Wire the Pager into users.tsx" },
     { task: 14, turn: "maya-t42", effect: { kind: "step", task: 14, step: 3 } },
+  ),
+  // The Pager's states as a page for review: it appears among the artifacts without a reload.
+  beat(
+    19,
+    "tool.call",
+    M,
+    "tool",
+    { tool: "artifact_publish", arg: "pager-states", ok: true, durationMs: 210 },
+    { task: 14, turn: "maya-t42", effect: { kind: "artifact", name: "pager-states", html: PAGER_STATES } },
   ),
 ];
 

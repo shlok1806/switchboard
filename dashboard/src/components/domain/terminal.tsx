@@ -286,7 +286,7 @@ export function Screen({ frame }: { frame: TerminalScreenFrame }) {
     const padded = here ? line.padEnd(frame.cursor.x + 1) : line;
     const tone = dialog >= 0 && y >= dialog ? "text-term-signal" : TOOL_LINE.test(line) ? "text-term-dim" : undefined;
     return (
-      // biome-ignore lint/suspicious/noArrayIndexKey: a screen row is its index
+      // a screen row is its index
       <span key={y} className={cn("block min-h-[1.55em]", tone)}>
         {here ? (
           <>

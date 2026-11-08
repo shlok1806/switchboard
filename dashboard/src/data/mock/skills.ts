@@ -8,7 +8,7 @@ import { A, ago } from "./fixtures";
 export const SKILL_BYTES = new Map<string, Uint8Array>();
 
 /** A stand-in for the Worker's SHA-256: the same shape, the same for the same bytes. */
-function standInDigest(bytes: Uint8Array): string {
+export function standInDigest(bytes: Uint8Array): string {
   let out = "";
   for (let seed = 0; out.length < 64; seed++) {
     let h = 0x811c9dc5 ^ seed;

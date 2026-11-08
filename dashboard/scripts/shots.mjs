@@ -23,10 +23,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "screenshots");
 
-const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "brief", "memory", "skills", "hosts"];
+const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "brief", "memory", "skills", "artifacts", "hosts"];
 // Pages that show one thing: ready, loading, and an error page. With nothing on the Channel
 // they have nothing to name, which is the error page too.
-const PAGES = { agent: "agents/shlok%2Fclaude%2F7f3a", task: "tasks/12" };
+const PAGES = { agent: "agents/shlok%2Fclaude%2F7f3a", task: "tasks/12", artifact: "artifacts/bundle-size" };
 const STATES = ["ready", "loading", "empty", "error"];
 const DESK = [1440, 900];
 const PHONE = [390, 844];
@@ -66,11 +66,14 @@ function cases() {
   }
   list.push({ page: "missing", hash: "no-such-page", state: "ready", want: "error" });
   // The views with a read of their own, failing while the Channel is up.
-  for (const view of ["hosts", "brief", "memory", "skills"]) list.push({ page: view, hash: view, state: "read-error", want: "error" });
+  for (const view of ["hosts", "brief", "memory", "skills", "artifacts"]) list.push({ page: view, hash: view, state: "read-error", want: "error" });
   // A skill open in the inspector, at an older version, with every file in full.
   list.push({ page: "skill", hash: "skills/release-notes/1", state: "ready" });
   // A skill with fonts and an image, each binary file shown by its size and SHA-256 (ADR 0050).
   list.push({ page: "skill-binary", hash: "skills/type-specimen", state: "ready" });
+  // An artifact at an older version, and a small tool that runs its own script in the sandbox (ADR 0053).
+  list.push({ page: "artifact-older", hash: "artifacts/bundle-size/1", state: "ready" });
+  list.push({ page: "artifact-tool", hash: "artifacts/receipt-splitter", state: "ready" });
   // The Agent page's thinking orb in each state that has one (ADR 0047): `agent` above is the
   // Agent that needs you (listening); these are an idle one (breathing) and a running one (working).
   list.push({ page: "agent-idle", hash: "agents/shlok%2Fcodex%2Fc91e", state: "ready" });

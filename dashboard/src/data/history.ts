@@ -35,7 +35,7 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
   const [pages, setPages] = useState<Pages>({ key, events: [], loading: true });
 
   // Stable for one scope, so the effects do not run again on every render.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` names the scope.
+  // `key` names the scope.
   const stableScope = useMemo(() => scope, [key]);
 
   const read = useCallback(

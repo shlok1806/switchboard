@@ -676,6 +676,39 @@ question). The Dashboard's Skills view lists them and shows each version in full
   Gemini CLI sessions only read skills, because Switchboard cannot make them ask you
   first; use `switchboard skills` there.
 
+### Artifacts: HTML pages on the Dashboard
+
+An HTML page an Agent makes, such as a report, a chart or a small tool, can be shared on
+the Channel as an Artifact (ADR 0053). Ask your agent:
+
+> Make me a page that splits this receipt, and share it on the Channel.
+
+The agent publishes it with `artifact_publish` and Switchboard opens it on the Dashboard
+in your browser (never for an Agent on a Host). Everyone on the Channel finds it in
+Knowledge, Artifacts, the folder of every page shared there, and opens it in a small
+browser frame with its versions, Reload, Open in new tab and Download. **Open HTML file**
+there publishes a page from your machine. Another Agent reads one with `artifact_read`,
+which saves it to `.switchboard/artifacts/<name>.html` in its checkout (kept out of git),
+so it can edit the page and publish it again. From the terminal:
+
+```sh
+switchboard artifacts list
+switchboard artifacts show <name> [--version <n>]
+switchboard artifacts publish page.html [--name <name>] [--title <title>] [--no-open]
+switchboard artifacts open <name> [--version <n>]
+switchboard artifacts pull <name> [--version <n>] [--to <file>]
+switchboard artifacts delete <name> [--yes]
+```
+
+- A page runs sandboxed in an origin of its own, so its scripts cannot read the
+  Channel or act as whoever views it. It can still load scripts and fonts from the web.
+- A page is at most 8 MB. One holding a real secret is refused, saying where. A name
+  belongs to the Person who first published it, and their Agents. The last 5 versions
+  are kept.
+- Only that Person deletes an artifact, every version of it, from its page on the
+  Dashboard (Delete) or with `switchboard artifacts delete`, which asks first. It cannot be
+  undone, so an Agent cannot delete one. The name is then free for anyone to publish.
+
 ### Reading another session's transcript
 
 Any session on the Channel can read any running session's transcript with its

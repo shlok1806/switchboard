@@ -3,6 +3,9 @@ import type {
   Agent,
   AgentId,
   AgentRole,
+  ArtifactPublisher,
+  ArtifactResponse,
+  ArtifactsResponse,
   BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
@@ -17,6 +20,7 @@ import type {
   MemoryQuery,
   MemoryResponse,
   PersonAction,
+  PublishArtifactRequest,
   SetHostAllowRequest,
   Skill,
   SkillEntry,
@@ -29,7 +33,9 @@ import type {
   VerdictProbabilities,
 } from "@shared/index";
 import {
+  ARTIFACT_VERSIONS_KEPT,
   agentIdFor,
+  checkArtifact,
   cleanLangfuseConnect,
   cleanNickname,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
@@ -53,10 +59,12 @@ import {
   type EventPage,
   type HistoryScope,
   type LangfuseResult,
+  type PublishArtifactResult,
   type SpawnResult,
   type TerminalFrame,
   type TerminalLink,
 } from "../source";
+import { ARTIFACT_VERSIONS, artifactVersion, type MockArtifact } from "./artifacts";
 import { BRIEF_PAGES } from "./brief";
 import { accounts, agent as agentActor, ME, makeEvent, person, persons, REPO, agents as seedAgents, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
@@ -108,6 +116,10 @@ export class MockChannelSource implements ChannelSource {
     lastSeenAt: new Date(T0).toISOString(),
   };
   private tasks: Task[] = clone(seedTasks);
+  /** Every artifact version kept, oldest first: a publish adds one and drops the oldest past the limit. */
+  private artifactVersions: MockArtifact[] = clone(ARTIFACT_VERSIONS);
+  /** Each version's page as a blob URL, made once: it opens in a frame and in a new tab, as the Worker's page does. */
+  private pageUrls = new Map<string, string>();
   private events: ChannelEvent[] = [];
   private verdicts: Verdict[] = [];
   private listeners = new Set<(m: StreamMessage) => void>();
@@ -258,8 +270,14 @@ export class MockChannelSource implements ChannelSource {
   /** Record one Event, run the Relay, apply side effects, and broadcast. */
   private apply(b: Beat, at: string, broadcast: boolean, jev?: Record<string, VerdictProbabilities>) {
     const event = b.build(at);
-    this.record(event, jev ?? b.jev, broadcast);
     const e = b.effect;
+    // An Agent's publish is kept before its tool call streams, as the Worker's is.
+    if (e?.kind === "artifact" && event.actor.kind === "agent") {
+      const id = event.actor.agentId;
+      const a = this.agents.find((x) => x.id === id);
+      this.keepArtifact(e.name, e.html, { person: a?.person ?? id.split("/")[0] ?? this.me, agent: id, ...(a?.nickname ? { nickname: a.nickname } : {}) }, at);
+    }
+    this.record(event, jev ?? b.jev, broadcast);
     if (e?.kind === "step") {
       const task = this.tasks.find((t) => t.number === e.task);
       const step = task?.steps.find((s) => s.index === e.step);
@@ -556,6 +574,86 @@ export class MockChannelSource implements ChannelSource {
   async skillFiles(files: SkillEntry[]): Promise<Map<string, Uint8Array>> {
     await new Promise((r) => setTimeout(r, 60));
     return new Map(files.map((f) => [f.path, SKILL_BYTES.get(f.digest) ?? new Uint8Array()]));
+  }
+
+  /** Like the Worker: each artifact's latest version, the latest published first. */
+  async artifacts(): Promise<ArtifactsResponse> {
+    await new Promise((r) => setTimeout(r, 100));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    if (this.opts.state === "empty") return { artifacts: [] };
+    const latest = new Map<string, MockArtifact>();
+    for (const v of this.artifactVersions) if ((latest.get(v.name)?.version ?? 0) < v.version) latest.set(v.name, v);
+    const artifacts = [...latest.values()]
+      .sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : a.publishedAt > b.publishedAt ? -1 : 0))
+      .map(({ html: _html, ...summary }) => summary);
+    return clone({ artifacts });
+  }
+
+  /** Like the Worker: one version, and every version kept, or why there is none. */
+  async artifact(name: string, version?: number): Promise<ArtifactResponse> {
+    await new Promise((r) => setTimeout(r, 80));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    const all = this.opts.state === "empty" ? [] : this.artifactVersions.filter((v) => v.name === name);
+    if (all.length === 0) throw new Error(`No artifact is named ${name} on this Channel.`);
+    const versions = all.map((v) => v.version).sort((a, b) => a - b);
+    const wanted = version ?? versions.at(-1);
+    const found = all.find((v) => v.version === wanted);
+    if (!found) throw new Error(`${name} has no version ${wanted}; it keeps ${versions.join(", ")}.`);
+    const { html: _html, ...artifact } = found;
+    return clone({ artifact, versions });
+  }
+
+  /**
+   * The page as a blob URL. In a frame it runs in the same sandbox as the Worker's page; a
+   * new tab opens it in the Dashboard's own origin, which in the demo holds nothing to read.
+   */
+  artifactPageUrl(name: string, version?: number, _download?: boolean): string {
+    const all = this.artifactVersions.filter((v) => v.name === name);
+    const found = version === undefined ? all.at(-1) : all.find((v) => v.version === version);
+    if (!found) return "about:blank";
+    const key = `${found.name}@${found.version}`;
+    let url = this.pageUrls.get(key);
+    if (url === undefined) {
+      url =
+        typeof URL.createObjectURL === "function"
+          ? URL.createObjectURL(new Blob([found.html], { type: "text/html" }))
+          : `data:text/html;charset=utf-8,${encodeURIComponent(found.html)}`;
+      this.pageUrls.set(key, url);
+    }
+    return url;
+  }
+
+  /** Like the Worker: checked, then kept as the next version, unless the latest already is this page. */
+  async publishArtifact(name: string, request: PublishArtifactRequest): Promise<PublishArtifactResult> {
+    await new Promise((r) => setTimeout(r, 300));
+    const check = checkArtifact(name, request);
+    if (!check.ok) return { ok: false, reason: check.reason };
+    const latest = this.artifactVersions.filter((v) => v.name === name).at(-1);
+    if (latest && latest.html === check.publish.html && latest.title === check.publish.title) {
+      const { html: _html, ...artifact } = latest;
+      return { ok: true, answer: clone({ artifact, published: false }) };
+    }
+    const { html: _html, ...artifact } = this.keepArtifact(name, check.publish.html, { person: this.me }, new Date().toISOString(), check.publish.title);
+    return { ok: true, answer: clone({ artifact, published: true }) };
+  }
+
+  /** Like the Worker: its owner deletes every kept version; anyone else is refused. */
+  async deleteArtifact(name: string): Promise<ActionResult> {
+    await new Promise((r) => setTimeout(r, 300));
+    const mine = this.artifactVersions.filter((v) => v.name === name);
+    const owner = mine.at(-1)?.owner;
+    if (owner === undefined) return { ok: false, reason: `No artifact is named ${name} on this Channel.` };
+    if (owner !== this.me) return { ok: false, reason: `${name} belongs to ${owner}, who published it first. Only they delete it.` };
+    this.artifactVersions = this.artifactVersions.filter((v) => v.name !== name);
+    return { ok: true };
+  }
+
+  private keepArtifact(name: string, html: string, by: ArtifactPublisher, at: string, title?: string): MockArtifact {
+    const mine = this.artifactVersions.filter((v) => v.name === name);
+    const next = artifactVersion(name, (mine.at(-1)?.version ?? 0) + 1, html, by, at, title, mine.at(-1)?.owner);
+    const dropped = new Set(mine.slice(0, Math.max(0, mine.length + 1 - ARTIFACT_VERSIONS_KEPT)));
+    this.artifactVersions = [...this.artifactVersions.filter((v) => !dropped.has(v)), next];
+    return next;
   }
 
   /** Like the Worker: every page's current version, the overview first and the stuck page last. */

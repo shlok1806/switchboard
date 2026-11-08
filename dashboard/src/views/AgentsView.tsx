@@ -94,7 +94,7 @@ export function AgentsView({ selected: selectedId }: { selected?: string }) {
   );
   const byPerson = useMemo(() => groupByPerson(shown, me), [shown, me]);
   // A Stop asked from the menu belongs to that Agent: picking another lets it go.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only a change of selection lets it go.
+  // only a change of selection lets it go.
   useEffect(() => {
     setStopAsk((ask) => (ask && ask.id !== selectedId ? undefined : ask));
   }, [selectedId]);

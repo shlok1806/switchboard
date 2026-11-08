@@ -1,15 +1,16 @@
 /*
  * The Dashboard's shell (ADR 0049, design.md "The shell"). The Dashboard has five sections,
  * one per job a Person opens it for, in the order of how often: Now (what needs you), Agents
- * (see and steer them), Tasks, Activity (catch up) and Knowledge (the Brief, the Memory Notes
- * and the shared Skills). A section with more than one view (Agents: the table, the canvas and
- * the Hosts; Knowledge: Brief, Memory, Skills) shows its views as tabs under the top bar. On a
+ * (see and steer them), Tasks, Activity (catch up) and Knowledge (the Brief, the Memory Notes,
+ * the shared Skills and Artifacts). A section with more than one view (Agents: the table, the
+ * canvas and the Hosts; Knowledge: Brief, Memory, Skills, Artifacts) shows its views as tabs under the top bar. On a
  * desk the sections are the top bar's tabs; below 640px the same five are the tab bar at the
  * bottom, so a phone reaches every view in at most two taps and has no More menu. The only
  * coloured count is the number of lines that need you.
  */
 
 import {
+  AppWindow,
   BookOpen,
   Bot,
   Check,
@@ -46,7 +47,7 @@ import { signOut } from "@/lib/session";
 import { type ThemeChoice, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "brief" | "memory" | "skills" | "hosts";
+export type ViewId = "now" | "feed" | "tasks" | "agents" | "canvas" | "brief" | "memory" | "skills" | "artifacts" | "hosts";
 export type SectionId = "now" | "agents" | "tasks" | "feed" | "knowledge";
 
 /** Every view, with the section it lives in. The icon is for the command palette only. */
@@ -60,6 +61,7 @@ export const VIEWS: { id: ViewId; title: string; section: SectionId; icon: Lucid
   { id: "brief", title: "Brief", section: "knowledge", icon: FileText },
   { id: "memory", title: "Memory", section: "knowledge", icon: BookOpen },
   { id: "skills", title: "Skills", section: "knowledge", icon: Puzzle },
+  { id: "artifacts", title: "Artifacts", section: "knowledge", icon: AppWindow },
 ];
 
 /** The five sections, in the order the bars show them; each opens at its first view. */
@@ -75,6 +77,7 @@ export const SECTIONS: { id: SectionId; title: string; home: ViewId }[] = [
 export function viewOf(route: Route): ViewId | undefined {
   if (route.view === "task") return "tasks";
   if (route.view === "agent") return "agents";
+  if (route.view === "artifact") return "artifacts";
   if (route.view === "missing" || route.view === "settings") return undefined;
   return route.view;
 }
@@ -299,6 +302,8 @@ export function SectionBar({ route, taskTitle }: { route: Route; taskTitle?: str
       </span>
     ) : route.view === "agent" ? (
       <code className="min-w-0 [overflow-wrap:anywhere] text-ink-2">{route.id}</code>
+    ) : route.view === "artifact" ? (
+      <span className="min-w-0 [overflow-wrap:anywhere] text-ink-2">{route.name}</span>
     ) : null;
   if (views.length < 2 && !trail) return null;
   const sectionTitle = SECTIONS.find((s) => s.id === section)?.title ?? "";
@@ -356,7 +361,7 @@ function Connection() {
   const { connection, status } = useChannel();
   if (connection === "live" || status === "error") return null;
   return (
-    <span role="status" className="shrink-0 text-small text-ink-3">
+    <span role="status" className="min-w-0 truncate text-small text-ink-3">
       {status === "loading" ? "Joining the Channel" : "Reconnecting"}
     </span>
   );

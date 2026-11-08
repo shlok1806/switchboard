@@ -689,7 +689,7 @@ export function StopAgentButton({
   // Stop asks once, in place: the button becomes the question and its answer.
   if (confirming) {
     return (
-      // biome-ignore lint/a11y/noStaticElementInteractions: Escape anywhere in the question takes it back.
+      // Escape anywhere in the question takes it back.
       <span
         role="group"
         aria-label={`Stop ${name}?`}

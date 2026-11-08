@@ -51,7 +51,7 @@ export function MemoryView({ selected }: { selected?: string }) {
   }, [events]);
   const asked = useRef(0);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new note is what makes the first page stale.
+  // a new note is what makes the first page stale.
   useEffect(() => {
     const ask = ++asked.current;
     store.source.memory({ q: q || undefined, tag: tag ?? undefined, limit: PAGE }).then(
@@ -283,7 +283,7 @@ function NoteInspector({ id, sheet, onClose: close }: { id: string; sheet: boole
   // read from the Channel, a page of each.
   const [readBefore, setReadBefore] = useState<{ id: string; events?: ChannelEvent[] }>();
   const older = note !== null && at < 0;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the note's id, seq, author and Task are what the read asks for.
+  // the note's id, seq, author and Task are what the read asks for.
   useEffect(() => {
     if (!note || !older) return;
     let live = true;

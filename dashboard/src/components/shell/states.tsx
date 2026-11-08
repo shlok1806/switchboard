@@ -172,6 +172,8 @@ const VIEW_NAME: Record<Route["view"], string> = {
   memory: "Memory",
   brief: "Brief",
   skills: "Skills",
+  artifacts: "Artifacts",
+  artifact: "Artifact",
   hosts: "Hosts",
   settings: "Settings",
   missing: "Page",
@@ -200,6 +202,28 @@ function Body({ view }: { view: Route["view"] }) {
       );
     case "skills":
       return <Table rows={4} wide={false} />;
+    case "artifacts":
+      return (
+        <div className="flex max-w-[56rem] flex-col border-t border-rule" /* taste-skill-ignore: the top rule of the list it stands in for */>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex flex-col gap-2.5 border-b border-rule px-2 py-4" /* taste-skill-ignore: the rule of the row it stands in for */>
+              <Bar w={TASKS[i + 2] ?? "12rem"} className="max-w-full" />
+              <Bar w="15rem" h="h-2" className="max-w-full" />
+            </div>
+          ))}
+        </div>
+      );
+    case "artifact":
+      return (
+        <>
+          <span className="flex flex-wrap gap-2">
+            {[0, 1, 2].map((i) => (
+              <span key={i} aria-hidden className="h-7 w-24 rounded-[var(--r)] border border-rule-2 max-sm:h-11" />
+            ))}
+          </span>
+          <div aria-hidden className="h-[32rem] rounded-[var(--r)] border border-rule max-sm:h-[28rem]" />
+        </>
+      );
     case "settings":
       return (
         <div className="flex max-w-[40rem] flex-col gap-3">

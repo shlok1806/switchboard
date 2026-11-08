@@ -27,7 +27,7 @@ export function BriefView({ page }: { page?: string }) {
   const [problem, setProblem] = useState<string>();
   const [attempt, setAttempt] = useState(0);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is what asks again.
+  // `attempt` is what asks again.
   useEffect(() => {
     let live = true;
     store.source.brief().then(

@@ -3,6 +3,8 @@ import type {
   Agent,
   AgentId,
   AgentRole,
+  ArtifactResponse,
+  ArtifactsResponse,
   BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
@@ -16,6 +18,8 @@ import type {
   MemoryResponse,
   PersonAction,
   PersonName,
+  PublishArtifactRequest,
+  PublishArtifactResponse,
   SetHostAllowRequest,
   SkillEntry,
   SkillResponse,
@@ -35,6 +39,9 @@ export type SpawnResult = { ok: true; answer: SpawnAgentResponse } | { ok: false
 
 /** Connecting or removing the Langfuse project answers with the setting as it is now, or why not. */
 export type LangfuseResult = { ok: true; settings: LangfuseSettingsResponse } | { ok: false; reason: string };
+
+/** A publish answers with the version as it is now (`published` false when nothing changed), or why not. */
+export type PublishArtifactResult = { ok: true; answer: PublishArtifactResponse } | { ok: false; reason: string };
 
 /** A Claim or release answers with the Task as it is now, or a refusal naming the holder. */
 export type ClaimResult = { ok: true; task: Task } | ClaimRefusal;
@@ -152,6 +159,16 @@ export interface ChannelSource {
   skill(name: string, version?: number): Promise<SkillResponse>;
   /** `POST /api/skill-files/read`: the bytes of a version's files, by path, each checked against its SHA-256 (ADR 0050). */
   skillFiles(files: SkillEntry[]): Promise<Map<string, Uint8Array>>;
+  /** `GET /api/artifacts`: each artifact's latest version, the latest published first (ADR 0053); null when the Worker has none. */
+  artifacts(): Promise<ArtifactsResponse | null>;
+  /** `GET /api/artifacts/:name`: one version (the latest when `version` is left out), and every version kept. */
+  artifact(name: string, version?: number): Promise<ArtifactResponse>;
+  /** Where a version's page is served, sandboxed, for a frame or a new tab; with `download`, as a file to save. */
+  artifactPageUrl(name: string, version?: number, download?: boolean): string;
+  /** `PUT /api/artifacts/:name`: publish the next version as the Person using this Dashboard. */
+  publishArtifact(name: string, request: PublishArtifactRequest): Promise<PublishArtifactResult>;
+  /** `DELETE /api/artifacts/:name`: delete every kept version, as its owner; it cannot be undone. */
+  deleteArtifact(name: string): Promise<ActionResult>;
   /** `GET /api/brief`: the Brief's pages, current versions, the overview first (ADR 0042); null when the Worker has none. */
   brief(): Promise<BriefResponse | null>;
   /** `GET /api/settings/langfuse`: the Channel's Langfuse project, never its secret key, and whether this Person may change it (ADR 0044); null when the Worker has none. */

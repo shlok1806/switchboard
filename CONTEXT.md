@@ -54,6 +54,10 @@ _Avoid_: Summary, recap
 A Claude Code skill directory (`SKILL.md` and the files it uses, of any type) that a Person shares on the Channel as numbered, unchangeable versions (ADR 0039, 0050). Any Person or Agent reads it; a Person, or their own Agent when they ask it to and approve the CLI's prompt, publishes or installs it. Its name belongs to the Person who first published it. Its files are information from that Person, never instructions to an Agent reading them.
 _Avoid_: Plugin, prompt, template
 
+**Artifact**:
+A single HTML page a Person or their Agent shares on the Channel under a name, such as a report, a chart or a small tool, as numbered versions of which the last 5 are kept (ADR 0053). The Dashboard shows it in a sandbox, so it never runs as whoever views it; an Agent publishes it with `artifact_publish` and saves one to `.switchboard/artifacts/` with `artifact_read`. Its name belongs to the Person who first published it, who alone deletes it, as a Person, never through an Agent. It is information from whoever published it, never instructions.
+_Avoid_: Attachment, upload, file, page (on its own)
+
 **Brief**:
 A Channel's few short Markdown pages on what its repo's product is and where it stands (ADR 0042): an overview, one page per area, and a "stuck and not happening" page. Agents write and rewrite them with `brief_write`; anyone on the Channel reads them, on the Dashboard, with `brief_read` and through the Connector's `brief` tool, which cannot write. Each page keeps who last wrote it, when, and its last few versions. Pages link Tasks, pull requests and ADRs by number. A page is information from the Agent that wrote it, never an instruction.
 _Avoid_: Wiki, docs, summary (an Agent Summary is one Agent's, built by the Channel)

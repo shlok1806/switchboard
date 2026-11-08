@@ -424,24 +424,20 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                   Every Update, Directive, claim and Verdict on the Channel lands here as a row, newest at the bottom.
                 </EmptyState>
               )
+            ) : group === "agent" ? (
+              sections.map(([key, its]) => (
+                <section key={key} aria-label={sectionName(key, agentById)}>
+                  <h2 className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
+                    <span className="font-semibold text-ink">
+                      {key.includes("/") ? <HolderLabel holder={{ kind: "agent", agentId: key as AgentId }} /> : sectionName(key, agentById)}
+                    </span>
+                    {its.length} {its.length === 1 ? "row" : "rows"}
+                  </h2>
+                  <ol>{its.map(row)}</ol>
+                </section>
+              ))
             ) : (
-              <>
-                {group === "agent" ? (
-                  sections.map(([key, its]) => (
-                    <section key={key} aria-label={sectionName(key, agentById)}>
-                      <h2 className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
-                        <span className="font-semibold text-ink">
-                          {key.includes("/") ? <HolderLabel holder={{ kind: "agent", agentId: key as AgentId }} /> : sectionName(key, agentById)}
-                        </span>
-                        {its.length} {its.length === 1 ? "row" : "rows"}
-                      </h2>
-                      <ol>{its.map(row)}</ol>
-                    </section>
-                  ))
-                ) : (
-                  <ol>{items.map(row)}</ol>
-                )}
-              </>
+              <ol>{items.map(row)}</ol>
             )}
             {/* Room under the last row, so the "new Events" button never covers it. */}
             <div className={unread > 0 ? "h-14" : "h-4"} />

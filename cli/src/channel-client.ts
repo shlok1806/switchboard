@@ -44,6 +44,8 @@ const MAX_IN_FLIGHT = 4;
 /** How long a process makes no new connection to the Channel once the machine ran out of ports or descriptors. */
 const EXHAUSTED_WAIT_MS = 60_000;
 
+const KEEP_BOM = new TextDecoder("utf-8", { ignoreBOM: true });
+
 /** The socket's first wait after a failure, and its longest (ADR 0052). */
 const SOCKET_RETRY_MS = 1_000;
 const SOCKET_RETRY_MAX_MS = 30_000;
@@ -134,7 +136,18 @@ export class ChannelClient {
     return this.requestAs<T>(this.credential(), path, init, timeoutMs);
   }
 
-  private async requestAs<T>(credential: string, path: string, init: RequestInit, timeoutMs: number): Promise<T> {
+  /** A GET whose answer is text, such as an artifact's page; a refusal is still the Channel's JSON. */
+  requestText(path: string, timeoutMs = 10_000): Promise<string> {
+    return this.requestAs<string>(this.credential(), path, {}, timeoutMs, true);
+  }
+
+  private async requestAs<T>(
+    credential: string,
+    path: string,
+    init: RequestInit,
+    timeoutMs: number,
+    text = false,
+  ): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Content-Type", "application/json");
     headers.set("Authorization", `Bearer ${credential}`);
@@ -151,6 +164,8 @@ export class ChannelClient {
         throw new ChannelError(0, `Could not reach ${this.base}: ${(error as Error).message}`);
       }
       // The body is always read, so the connection goes back to the pool for the next call.
+      // Decoded keeping a byte order mark, so the text is exactly the bytes sent.
+      if (text && response.ok) return KEEP_BOM.decode(await response.arrayBuffer()) as T;
       const body = (await response.json().catch(() => ({ ok: false, reason: response.statusText }))) as
         | T
         | ErrorResponse;

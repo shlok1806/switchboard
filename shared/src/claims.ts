@@ -91,6 +91,10 @@ export const SWITCHBOARD_TOOLS = [
   "brief_write",
   // ADR 0045: GitHub as it is now, read-only, through the Channel. Only the librarian's server lists it.
   "github_read",
+  // ADR 0053: HTML pages shared on the Channel and shown on the Dashboard in a sandbox.
+  "artifacts_list",
+  "artifact_publish",
+  "artifact_read",
 ] as const;
 
 /** The skill tools that publish or write files: never approved for the session in advance (ADR 0039). */

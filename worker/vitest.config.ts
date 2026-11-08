@@ -46,6 +46,8 @@ const vars = {
   MEMORY_NOTES_PER_DAY: "5",
   // Small, so a test reaches the daily cap on Brief writes past a typical day's (test/brief.test.ts).
   BRIEF_WRITES_PER_DAY: "40",
+  // Small, so a test reaches the daily cap on artifact publishes (test/artifacts.test.ts).
+  ARTIFACT_PUBLISHES_PER_DAY: "8",
   QUIET_CLAIM_HOURS: "4",
   // One app's callback the tests register besides the known ones (test/ask-channel.test.ts).
   MCP_EXTRA_REDIRECT_URIS: "https://inspector.test/callback",

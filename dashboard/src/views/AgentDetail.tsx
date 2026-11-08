@@ -296,7 +296,7 @@ function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
 /** An Agent's short name, in mono where it is an ID rather than a Nickname (design.md). */
 function AgentName({ agent }: { agent: Agent | AgentId }) {
   if (typeof agent === "string") return <code>{agent}</code>;
-  return agent.nickname === undefined ? <code>{shortName(agent)}</code> : <>{shortName(agent)}</>;
+  return agent.nickname === undefined ? <code>{shortName(agent)}</code> : shortName(agent);
 }
 
 /** Agents' short names, comma separated, each a link to its page when `link` says so. */
