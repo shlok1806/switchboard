@@ -209,7 +209,11 @@ describe("deleting an artifact", () => {
     const viewed = await call(artifactPagePath("plan", 2), { person: "maya" });
     const cached = viewed.headers.get("ETag") ?? "";
     expect(viewed.headers.get("Cache-Control")).not.toContain("immutable");
-    const unchanged = await call(artifactPagePath("plan", 2), { person: "maya" }, { headers: { "If-None-Match": cached } });
+    const unchanged = await call(
+      artifactPagePath("plan", 2),
+      { person: "maya" },
+      { headers: { "If-None-Match": cached } },
+    );
     expect(unchanged.status).toBe(304);
 
     const answer = await remove({ person: "shlok" }, "plan");
@@ -226,7 +230,11 @@ describe("deleting an artifact", () => {
     // Republished, the name starts again at version 1 and belongs to whoever published it.
     const again = await published({ person: "maya" }, "plan", { html: "<p>maya's</p>" });
     expect(again.artifact).toMatchObject({ version: 1, owner: "maya", publishedBy: { person: "maya" } });
-    const firstOld = await call(artifactPagePath("plan", 1), { person: "shlok" }, { headers: { "If-None-Match": cached } });
+    const firstOld = await call(
+      artifactPagePath("plan", 1),
+      { person: "shlok" },
+      { headers: { "If-None-Match": cached } },
+    );
     expect(firstOld.status).toBe(200);
     expect(await firstOld.text()).toBe("<p>maya's</p>");
   });
