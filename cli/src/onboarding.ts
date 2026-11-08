@@ -42,6 +42,8 @@ export function onboardingGuide(about: GuideFor): string {
     "  Skills         Ask your agent to share one of your skills, or to install one a Person",
     "                 shared. It shows you the skill in full first, and Claude Code or Codex asks",
     "                 you to approve each publish or install. `switchboard skills list` lists them.",
+    "  Artifacts      Ask your agent to publish an HTML page it made, such as a report or a",
+    "                 chart: it opens on the Dashboard for everyone. `switchboard artifacts list`.",
     "",
     "This guide is shown once on this machine. `switchboard help onboarding` shows it again.",
   ];

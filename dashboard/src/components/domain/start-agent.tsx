@@ -316,7 +316,7 @@ function StartAgentForm({
   const me = useMe();
   const [chosenHost, setChosenHost] = useState<string | undefined>(() => hosts.find((h) => h.id === prefill?.host)?.id);
   // Your own Hosts first, then the Live ones.
-  const host = hosts.find((h) => h.id === chosenHost) ?? hosts.find((h) => h.live && h.person === me) ?? hosts.find((h) => h.live) ?? hosts[0]!;
+  const host = hosts.find((h) => h.id === chosenHost) ?? hosts.find((h) => h.live && h.person === me) ?? hosts.find((h) => h.live) ?? hosts[0];
   const others = host.person !== me;
   const [cwd, setCwd] = useState<string | undefined>(() => (prefill?.cwd && underRoots(prefill.cwd, host.roots) ? prefill.cwd : undefined));
   const [brief, setBrief] = useState(prefill?.brief ?? "");
@@ -689,7 +689,7 @@ export function StopAgentButton({
   // Stop asks once, in place: the button becomes the question and its answer.
   if (confirming) {
     return (
-      // biome-ignore lint/a11y/noStaticElementInteractions: Escape anywhere in the question takes it back.
+      // Escape anywhere in the question takes it back.
       <span
         role="group"
         aria-label={`Stop ${name}?`}

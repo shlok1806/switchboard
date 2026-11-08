@@ -14,6 +14,7 @@ import type {
   AgentRole,
   AgentSummary,
   ApprovalDenyMessage,
+  ArtifactSummary,
   BriefPage,
   BriefPageSummary,
   Capture,
@@ -78,6 +79,7 @@ import {
   cleanHistoryPage,
   cleanTerminalText,
   cleanTranscriptPage,
+  DEFAULT_ARTIFACT_PUBLISHES_PER_DAY,
   DEFAULT_BRIEF_WRITES_PER_DAY,
   DEFAULT_GONE_AFTER_SECONDS,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
@@ -101,6 +103,7 @@ import {
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
 import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
+import { ARTIFACTS_SCHEMA, type ArtifactResult, Artifacts } from "./artifacts";
 import { askChannel, type ChannelAnswer, type ChannelQuestion, DEFAULT_QUIET_CLAIM_HOURS } from "./ask";
 import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
@@ -449,6 +452,8 @@ export class Channel extends DurableObject<Env> {
   private readonly skills: Skills;
   /** The Brief's pages (ADR 0042). */
   private readonly brief: Brief;
+  /** The HTML pages shared on the Channel (ADR 0053). */
+  private readonly artifacts: Artifacts;
   /** The read-only connector's sign-ins (ADR 0040). */
   private readonly mcpGrants: McpGrants;
   /** The repo's own Langfuse project, its secret key sealed (ADR 0044). */
@@ -504,6 +509,14 @@ export class Channel extends DurableObject<Env> {
     this.brief = new Brief(
       ctx.storage.sql,
       Number.isInteger(briefWrites) && briefWrites >= 0 ? briefWrites : DEFAULT_BRIEF_WRITES_PER_DAY,
+    );
+    ctx.storage.sql.exec(ARTIFACTS_SCHEMA);
+    const artifactPublishes = Number(env.ARTIFACT_PUBLISHES_PER_DAY);
+    this.artifacts = new Artifacts(
+      ctx.storage,
+      Number.isInteger(artifactPublishes) && artifactPublishes >= 0
+        ? artifactPublishes
+        : DEFAULT_ARTIFACT_PUBLISHES_PER_DAY,
     );
     this.mcpGrants = new McpGrants(ctx.storage.sql);
     this.langfuse = new LangfuseProject(ctx.storage.sql);
@@ -1367,6 +1380,43 @@ export class Channel extends DurableObject<Env> {
     chunks: { digest: string; index: number }[],
   ): SkillResult<{ digest: string; index: number; data: Uint8Array }[]> {
     return this.skills.readChunks(chunks);
+  }
+
+  /** Each artifact's latest version, the latest published first (ADR 0053). */
+  listArtifacts(): ArtifactSummary[] {
+    return this.artifacts.list();
+  }
+
+  /** One version of an artifact, the latest when `version` is left out, and every version kept. */
+  readArtifact(name: string, version?: number): ArtifactResult<{ artifact: ArtifactSummary; versions: number[] }> {
+    return this.artifacts.read(name, version);
+  }
+
+  /** One version of an artifact with its page. */
+  artifactPage(name: string, version?: number): ArtifactResult<{ artifact: ArtifactSummary; html: string }> {
+    return this.artifacts.page(name, version);
+  }
+
+  /** Publishes the next version of an artifact for `caller`, a Person or one of their Agents. */
+  async publishArtifact(
+    caller: Caller,
+    name: string,
+    page: { html: string; title: string },
+  ): Promise<ArtifactResult<{ artifact: ArtifactSummary; published: boolean }>> {
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    if (caller.agent === undefined) return this.artifacts.publish({ person: caller.person }, name, page);
+    const nickname = this.agents.find(caller.agent)?.nickname;
+    return this.artifacts.publish(
+      { person: caller.person, agent: caller.agent, ...(nickname === undefined ? {} : { nickname }) },
+      name,
+      page,
+    );
+  }
+
+  /** Deletes an artifact with every kept version, for its owner as a Person (ADR 0053). */
+  deleteArtifact(person: PersonName, name: string): ArtifactResult<{ deleted: string; versions: number }> {
+    return this.artifacts.delete(person, name);
   }
 
   /** Every page of the Brief, current versions, for any Person or Agent on the Channel (ADR 0042). */

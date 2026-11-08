@@ -59,8 +59,8 @@ export function groups(agents: Agent[], tasks: Task[], me: string): Group[] {
   const byKey = new Map<string, Agent[]>();
   for (const a of agents) byKey.set(groupKey(a), [...(byKey.get(groupKey(a)) ?? []), a]);
   const out = [...byKey].map(([key, members]): Group => {
-    const host = members[0]!.host;
-    return { key, person: members[0]!.person, ...(host ? { host } : {}), agents: order(members, claims) };
+    const host = members[0].host;
+    return { key, person: members[0].person, ...(host ? { host } : {}), agents: order(members, claims) };
   });
   return out.sort(
     (x, y) =>
@@ -140,12 +140,19 @@ export function place(list: Group[], saved: Record<string, Point>): Map<AgentId,
       if (p) out.set(a.id, p);
     }
   const anySaved = out.size > 0;
-  const nodesOf = (g: Group) => g.agents.flatMap((a) => (out.has(a.id) ? [out.get(a.id)!] : []));
+  const nodesOf = (g: Group) =>
+    g.agents.flatMap((a) => {
+      const p = out.get(a.id);
+      return p ? [p] : [];
+    });
   /** Every other frame as drawn so far. */
   const othersOf = (g: Group) => list.flatMap((h) => (h === g ? [] : [frameRect(nodesOf(h))].filter((r): r is Rect => r !== null)));
-  const free = (g: Group, p: Point) =>
-    !list.some((h) => nodesOf(h).some((q) => overlaps(nodeRect(q), nodeRect(p)))) &&
-    !othersOf(g).some((r) => intersects(r, frameRect([...nodesOf(g), p])!, FRAME_GAP));
+  const free = (g: Group, p: Point) => {
+    const own = frameRect([...nodesOf(g), p]);
+    return (
+      own !== null && !list.some((h) => nodesOf(h).some((q) => overlaps(nodeRect(q), nodeRect(p)))) && !othersOf(g).some((r) => intersects(r, own, FRAME_GAP))
+    );
+  };
 
   // Where each frame starts on a fresh canvas.
   const flow = { x: 0, y: 0, row: 0 };
@@ -175,10 +182,9 @@ export function place(list: Group[], saved: Record<string, Point>): Map<AgentId,
     const home = next(flow, size);
     const missing = g.agents.filter((a) => !out.has(a.id));
     if (missing.length === 0) continue;
-    const siblings = nodesOf(g);
-    if (siblings.length > 0) {
+    const box = frameRect(nodesOf(g));
+    if (box) {
       // Beside its siblings: their frame's own grid, from its top left, as far down as it takes.
-      const box = frameRect(siblings)!;
       const origin = { x: box.x, y: box.y };
       for (const a of missing) {
         let at: Point | undefined;
@@ -276,7 +282,7 @@ export const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k)
  * The camera that shows all of `box` in a `w` by `h` viewport, never past 100%. With a
  * `floor`, it never zooms out below it: what does not fit then starts at the top left.
  */
-export function fit(box: Rect | null, w: number, h: number, floor = MIN_ZOOM, margin = 40, align: "center" | "start" = "center"): Camera {
+export function fitCamera(box: Rect | null, w: number, h: number, floor = MIN_ZOOM, margin = 40, align: "center" | "start" = "center"): Camera {
   if (!box) return { x: margin, y: margin, k: 1 };
   const k = clampZoom(Math.min(1, (w - margin * 2) / box.w, (h - margin * 2) / box.h));
   if (k < floor) return { k: floor, x: Math.max(margin, (w - box.w * floor) / 2) - box.x * floor, y: margin - box.y * floor };

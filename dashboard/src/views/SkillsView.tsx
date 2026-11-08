@@ -7,21 +7,21 @@
  * installs from their terminal, or asks their own Agent, whose CLI asks them to approve it.
  */
 
-import type { Skill, SkillEntry, SkillPublisher, SkillSummary, SkillsResponse } from "@shared/index";
+import type { Skill, SkillEntry, SkillSummary, SkillsResponse } from "@shared/index";
 import { describeSize } from "@shared/index";
 import { useEffect, useState } from "react";
 import { Button, buttonVariants } from "@/components/atoms/Button";
 import { Segmented } from "@/components/atoms/Segmented";
-import { shortName } from "@/components/domain/fleet";
 import { RowFrame } from "@/components/domain/log";
+import { Publisher } from "@/components/domain/publisher";
 import { InspectorFrame, InspectorMissing, SheetClose } from "@/components/shell/inspector";
 import { PageHead } from "@/components/shell/page-head";
 import { Section } from "@/components/shell/section";
 import { CopyCommand, EmptyView, ErrorPage, ViewSkeleton } from "@/components/shell/states";
-import { useIndex, useStore } from "@/data/store";
+import { useStore } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ago, clock } from "@/lib/format";
-import { go, href } from "@/lib/router";
+import { go } from "@/lib/router";
 
 export function SkillsView({ name, version }: { name?: string; version?: number }) {
   const store = useStore();
@@ -30,7 +30,7 @@ export function SkillsView({ name, version }: { name?: string; version?: number 
   const [problem, setProblem] = useState<string>();
   const [attempt, setAttempt] = useState(0);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is what asks again.
+  // `attempt` is what asks again.
   useEffect(() => {
     let live = true;
     store.source.skills().then(
@@ -143,20 +143,6 @@ function SkillLine({ skill: s, named = true }: { skill: SkillSummary; named?: bo
       </p>
     </>
   );
-}
-
-/** Who published a version: the Agent, linked, when one did it for its Person. */
-function Publisher({ by }: { by: SkillPublisher }) {
-  const { agentById } = useIndex();
-  const agent = by.agent === undefined ? undefined : agentById.get(by.agent);
-  if (agent) {
-    return (
-      <a href={href({ view: "agent", id: agent.id })} className="text-ink hover:underline">
-        {by.person}/{shortName(agent)}
-      </a>
-    );
-  }
-  return <span>{by.agent ?? by.person}</span>;
 }
 
 /** A skill whose text files hold this much at most is shown in full as it opens; a larger one, a file at a time. */

@@ -10,6 +10,7 @@ import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentId } from "../../shared/src/index";
+import { HEADLESS_ENV } from "./artifacts";
 import { REPO_ENV } from "./channel-choice";
 import { configDir } from "./config";
 import { LIBRARIAN_ENV } from "./librarian";
@@ -89,6 +90,9 @@ export function prepareSessionTools(
         ...(options.skillWrites ? { [SKILL_WRITES_ENV]: "1" } : {}),
         // The librarian's tools only (ADR 0045).
         ...(options.librarian === true ? { [LIBRARIAN_ENV]: "1" } : {}),
+        // An Agent on a Host has no screen anyone sees, so its tools never open a browser (ADR 0053).
+        // Its CLI, and so its MCP server, never gets SWITCHBOARD_HOST itself.
+        ...(env.SWITCHBOARD_HOST ? { [HEADLESS_ENV]: "1" } : {}),
       },
     },
     dir,

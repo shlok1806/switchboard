@@ -105,10 +105,12 @@ a {
 .theme-switching *,
 .theme-switching *::before,
 .theme-switching *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: the freeze must win over every component's own transition. */
   transition: none !important;
 }
 
 /* Scroll bars stay visible, thin and quiet, so a Person can always see there is more. */
+/* biome-ignore lint/style/noDescendingSpecificity: scroll bars and the transition freeze above set different properties. */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--rule-2) transparent;
@@ -186,9 +188,13 @@ a {
   *,
   *::before,
   *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must win over every component's own motion. */
     animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: as above. */
     animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: as above. */
     transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: as above. */
     scroll-behavior: auto !important;
   }
 }

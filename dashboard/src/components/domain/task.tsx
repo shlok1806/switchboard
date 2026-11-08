@@ -46,7 +46,7 @@ export function openBlockers(t: Task, taskByNumber: Map<number, Task>): number[]
 export function holderPerson(t: Task, agentById: Map<AgentId, Agent>): string | null {
   const h = t.claim?.holder;
   if (!h) return null;
-  return h.kind === "person" ? h.person : (agentById.get(h.agentId)?.person ?? h.agentId.split("/")[0]!);
+  return h.kind === "person" ? h.person : (agentById.get(h.agentId)?.person ?? h.agentId.split("/")[0]);
 }
 
 /** `status:*` labels mirror the column the Task already sits in (ADR 0001), so views leave them out. */

@@ -222,19 +222,17 @@ export function TaskDetail({ number }: { number: number }) {
                   </p>
                 </>
               ) : (
-                <>
-                  <p className="text-small text-ink-3">
-                    {task.status === "done" ? (
-                      "Done, so nobody holds it."
-                    ) : can.claims ? (
-                      "Nobody holds it."
-                    ) : (
-                      <>
-                        Claims arrive with <IssueLink capability="claims" />.
-                      </>
-                    )}
-                  </p>
-                </>
+                <p className="text-small text-ink-3">
+                  {task.status === "done" ? (
+                    "Done, so nobody holds it."
+                  ) : can.claims ? (
+                    "Nobody holds it."
+                  ) : (
+                    <>
+                      Claims arrive with <IssueLink capability="claims" />.
+                    </>
+                  )}
+                </p>
               )}
             </Section>
 

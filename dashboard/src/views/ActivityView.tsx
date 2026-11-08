@@ -69,7 +69,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
     const out: ChannelEvent[] = [];
     let i = events.length - 1;
     for (; i >= 0 && out.length < limit; i--) {
-      const e = events[i]!;
+      const e = events[i];
       if (matches(e, verdictsByEvent.get(e.id) ?? [], filters)) out.push(e);
     }
     return { shown: out.reverse(), all: i < 0 };
@@ -107,7 +107,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
       const key = it.kind === "interrupt" ? it.verdict.agent : it.kind === "turn" ? it.agent : whoKey(it.event);
       by.set(key, [...(by.get(key) ?? []), it]);
     }
-    return [...by.entries()].sort((a, b) => a[1].at(-1)!.seq - b[1].at(-1)!.seq);
+    return [...by.entries()].sort((a, b) => a[1][a[1].length - 1].seq - b[1][b[1].length - 1].seq);
   }, [items, group]);
 
   // Read here means read: the Activity key stops counting the Interrupts shown as rows, and
@@ -424,24 +424,20 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                   Every Update, Directive, claim and Verdict on the Channel lands here as a row, newest at the bottom.
                 </EmptyState>
               )
+            ) : group === "agent" ? (
+              sections.map(([key, its]) => (
+                <section key={key} aria-label={sectionName(key, agentById)}>
+                  <h2 className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
+                    <span className="font-semibold text-ink">
+                      {key.includes("/") ? <HolderLabel holder={{ kind: "agent", agentId: key as AgentId }} /> : sectionName(key, agentById)}
+                    </span>
+                    {its.length} {its.length === 1 ? "row" : "rows"}
+                  </h2>
+                  <ol>{its.map(row)}</ol>
+                </section>
+              ))
             ) : (
-              <>
-                {group === "agent" ? (
-                  sections.map(([key, its]) => (
-                    <section key={key} aria-label={sectionName(key, agentById)}>
-                      <h2 className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
-                        <span className="font-semibold text-ink">
-                          {key.includes("/") ? <HolderLabel holder={{ kind: "agent", agentId: key as AgentId }} /> : sectionName(key, agentById)}
-                        </span>
-                        {its.length} {its.length === 1 ? "row" : "rows"}
-                      </h2>
-                      <ol>{its.map(row)}</ol>
-                    </section>
-                  ))
-                ) : (
-                  <ol>{items.map(row)}</ol>
-                )}
-              </>
+              <ol>{items.map(row)}</ol>
             )}
             {/* Room under the last row, so the "new Events" button never covers it. */}
             <div className={unread > 0 ? "h-14" : "h-4"} />

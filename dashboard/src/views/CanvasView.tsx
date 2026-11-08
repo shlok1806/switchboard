@@ -29,7 +29,7 @@ import {
   type Camera,
   claimsByAgent,
   edgePoints,
-  fit,
+  fitCamera,
   frameRect,
   type Group,
   groups as groupOrder,
@@ -92,7 +92,7 @@ export function shortTitle(title: string, max = 26): string {
   if (title.length <= max) return title;
   const words = title.split(/\s+/);
   // A first word too long for the line is cut where the line ends.
-  let out = words[0]!.slice(0, max);
+  let out = words[0].slice(0, max);
   for (const w of words.slice(1)) {
     if (out.length + 1 + w.length > max) break;
     out += ` ${w}`;
@@ -281,7 +281,7 @@ function Minimap({ frames, camera, size, onMove }: { frames: Rect[]; camera: Cam
       style={{ width: W + 2, height: H + 2 }}
     >
       {frames.map((r, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: frames keep their order
+        // frames keep their order
         <span key={i} className="absolute border border-rule-2" style={box(r)} />
       ))}
       <span className="absolute border border-ink" style={box(seen)} />
@@ -513,7 +513,7 @@ export function CanvasView({ selected }: { selected?: string }) {
   }, [empty, mobile]);
 
   // The canvas starts readable, at 100%.
-  const firstView = useCallback(() => fit(bounds(allRects), size.w, size.h, FIRST_ZOOM, 32, "start"), [allRects, size]);
+  const firstView = useCallback(() => fitCamera(bounds(allRects), size.w, size.h, FIRST_ZOOM, 32, "start"), [allRects, size]);
   // The first time there is room and nodes, frame them all. After that the camera moves only when the Person moves it.
   const saved = view.camera;
   const camera = saved ?? (size.w ? firstView() : { x: 0, y: 0, k: 1 });
@@ -529,7 +529,7 @@ export function CanvasView({ selected }: { selected?: string }) {
   useEffect(() => {
     if (!saved && size.w && allRects.length) setView((v) => (v.camera ? v : { ...v, camera: firstView() }));
   }, [saved, size, allRects, firstView]);
-  const fitAll = () => setCamera(fit(bounds(allRects), size.w, size.h));
+  const fitAll = () => setCamera(fitCamera(bounds(allRects), size.w, size.h));
   const zoomBy = (factor: number) => setCamera((c) => zoomAt(c, factor, { x: size.w / 2, y: size.h / 2 }));
   const centerOn = (p: Point) => setCamera((c) => ({ ...c, x: size.w / 2 - p.x * c.k, y: size.h / 2 - p.y * c.k }));
 
@@ -633,7 +633,7 @@ export function CanvasView({ selected }: { selected?: string }) {
       ArrowDown: { x: 0, y: -step },
     };
     if (moves[e.key]) {
-      const m = moves[e.key]!;
+      const m = moves[e.key];
       setCamera((c) => ({ ...c, x: c.x + m.x, y: c.y + m.y }));
     } else if (e.key === "+" || e.key === "=") zoomBy(1.2);
     else if (e.key === "-") zoomBy(1 / 1.2);

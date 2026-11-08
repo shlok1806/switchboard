@@ -195,7 +195,7 @@ function Entry({
 
 function lastUpdate(task: Task, events: ChannelEvent[]): string | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
+    const e = events[i];
     if (e.type === "update" && e.task === task.number) return e.payload.text;
   }
   return undefined;
@@ -204,7 +204,8 @@ function lastUpdate(task: Task, events: ChannelEvent[]): string | undefined {
 function StaleLine({ task, at, now }: { task: Task; at: string; now: number }) {
   const { events } = useChannel();
   const { agentById } = useIndex();
-  const holder = task.claim!.holder;
+  if (!task.claim) return null;
+  const holder = task.claim.holder;
   const agent = holder.kind === "agent" ? agentById.get(holder.agentId) : undefined;
   const who = agent ? `${agent.person}'s ${shortName(agent)}` : holderName(holder);
   const update = lastUpdate(task, events);
@@ -245,7 +246,7 @@ function StaleLine({ task, at, now }: { task: Task; at: string; now: number }) {
 /** The pull request's page: from its `task.review` Event, else beside the Issue. */
 function prUrl(task: Task, events: ChannelEvent[]): string | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
+    const e = events[i];
     if (e.type === "task.review" && e.task === task.number) return e.payload.url;
   }
   return task.pr !== undefined && task.url ? task.url.replace(/\/issues\/\d+$/, `/pull/${task.pr}`) : undefined;
@@ -301,7 +302,7 @@ function ReviewLine({ task, yours, at, now }: { task: Task; yours: boolean; at: 
 function Log({ events, now }: { events: ChannelEvent[]; now: number }) {
   const { agentById } = useIndex();
   const recent: ChannelEvent[] = [];
-  for (let i = events.length - 1; i >= 0 && recent.length < 7; i--) if (!QUIET.has(events[i]!.type)) recent.push(events[i]!);
+  for (let i = events.length - 1; i >= 0 && recent.length < 7; i--) if (!QUIET.has(events[i].type)) recent.push(events[i]);
   return (
     <section aria-label="Last on the Channel" className="flex min-w-0 flex-col">
       <SectionHead

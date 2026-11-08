@@ -51,6 +51,13 @@ describe("the route", () => {
     expect(parse("#/skills/release-notes/latest")).toEqual({ view: "missing", path: "/skills/release-notes/latest" });
   });
 
+  it("opens the folder of artifacts, and one artifact at its latest version or an older one", () => {
+    expect(parse(href({ view: "artifacts" }))).toEqual({ view: "artifacts" });
+    expect(parse(href({ view: "artifact", name: "bundle-size" }))).toEqual({ view: "artifact", name: "bundle-size" });
+    expect(parse(href({ view: "artifact", name: "bundle-size", version: 2 }))).toEqual({ view: "artifact", name: "bundle-size", version: 2 });
+    expect(parse("#/artifacts/bundle-size/latest")).toEqual({ view: "missing", path: "/artifacts/bundle-size/latest" });
+  });
+
   it("selects an Agent in the table, or opens its page ready for a Directive", () => {
     const id = "maya/claude/2b8d";
     expect(parse(href({ view: "agents", selected: id }))).toEqual({ view: "agents", selected: id });
@@ -108,6 +115,19 @@ describe("the phone's tab bar", () => {
       within(tabs)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["Brief", "Memory", "Skills"]);
+    ).toEqual(["Brief", "Memory", "Skills", "Artifacts"]);
+  });
+
+  it("keeps Knowledge and its Artifacts tab current inside an artifact, with its name as the trail", async () => {
+    render(<TabBar route={{ view: "artifact", name: "bundle-size" }} />, { wrapper: channel() });
+    await act(async () => {});
+    expect(screen.getByRole("link", { name: "Knowledge" }).getAttribute("aria-current")).toBe("page");
+    cleanup();
+    render(<SectionBar route={{ view: "artifact", name: "bundle-size" }} />, { wrapper: channel() });
+    const tabs = screen.getByRole("navigation", { name: "Knowledge views" });
+    const artifacts = within(tabs).getByRole("link", { name: "Artifacts" });
+    expect(artifacts.getAttribute("href")).toBe("#/artifacts");
+    expect(artifacts.getAttribute("aria-current")).toBe("location");
+    expect(within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByText("bundle-size")).toBeTruthy();
   });
 });

@@ -3,7 +3,7 @@
 
 import type { Agent, AgentId, HostId, Task } from "@shared/index";
 import { describe, expect, it } from "vitest";
-import { edgePoints, fit, frameRect, groups, nodeRect, type Point, place, type Rect, zoomAt } from "@/lib/canvas-layout";
+import { edgePoints, fitCamera, frameRect, groups, nodeRect, type Point, place, type Rect, zoomAt } from "@/lib/canvas-layout";
 import { stateOf } from "@/lib/state";
 
 let n = 0;
@@ -189,18 +189,18 @@ describe("an Agent's state", () => {
 
 describe("the camera", () => {
   it("fits a small canvas whole, and starts a large one readable at the top left", () => {
-    const small = fit({ x: 0, y: 0, w: 400, h: 200 }, 1000, 800);
+    const small = fitCamera({ x: 0, y: 0, w: 400, h: 200 }, 1000, 800);
     expect(small.k).toBe(1);
-    const large = fit({ x: 0, y: 0, w: 4000, h: 3000 }, 1000, 800, 0.85);
+    const large = fitCamera({ x: 0, y: 0, w: 4000, h: 3000 }, 1000, 800, 0.85);
     expect(large.k).toBe(0.85);
     expect(large.y).toBe(40);
     // From the top left, without a floor, as a phone first sees it: all of it, zoomed out.
-    const phone = fit({ x: 0, y: 0, w: 4000, h: 3000 }, 390, 600, undefined, 16, "start");
+    const phone = fitCamera({ x: 0, y: 0, w: 4000, h: 3000 }, 390, 600, undefined, 16, "start");
     expect(phone.k).toBeLessThan(0.85);
     expect(phone.x).toBe(16);
     expect(phone.y).toBe(16);
     // Fitting without a floor zooms out instead.
-    expect(fit({ x: 0, y: 0, w: 4000, h: 3000 }, 1000, 800).k).toBeLessThan(0.85);
+    expect(fitCamera({ x: 0, y: 0, w: 4000, h: 3000 }, 1000, 800).k).toBeLessThan(0.85);
   });
 
   it("zooms about the pointer, which stays over the same spot", () => {

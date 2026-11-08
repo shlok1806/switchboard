@@ -7,6 +7,8 @@ import type {
   AgentRole,
   AgentSummary,
   AgentsResponse,
+  ArtifactResponse,
+  ArtifactsResponse,
   BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
@@ -16,6 +18,7 @@ import type {
   ControlAgentResponse,
   CreateTaskRequest,
   CreateTaskResponse,
+  DeleteArtifactResponse,
   ErrorResponse,
   HistoryResponse,
   HostsResponse,
@@ -26,6 +29,8 @@ import type {
   Person,
   PersonAction,
   PersonsResponse,
+  PublishArtifactRequest,
+  PublishArtifactResponse,
   ReadSkillFilesResponse,
   RelayResponse,
   SetHostAllowRequest,
@@ -46,8 +51,11 @@ import type {
   Verdict,
 } from "@shared/index";
 import {
+  ARTIFACTS_PATH,
   agentPath,
   approvalDenyPath,
+  artifactPagePath,
+  artifactPath,
   BRIEF_PATH,
   claimPath,
   downloadSkillFiles,
@@ -72,6 +80,7 @@ import type {
   EventPage,
   HistoryScope,
   LangfuseResult,
+  PublishArtifactResult,
   SpawnResult,
   TerminalFrame,
   TerminalLink,
@@ -449,6 +458,43 @@ export class HttpChannelSource implements ChannelSource {
       if (status >= 400) throw new Error(reasonOf(body, status));
       return body as ReadSkillFilesResponse;
     });
+  }
+
+  async artifacts(): Promise<ArtifactsResponse | null> {
+    const { status, body } = await this.call<ArtifactsResponse>(ARTIFACTS_PATH);
+    // A Worker from before artifacts (ADR 0053): the Dashboard says so.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as ArtifactsResponse;
+  }
+
+  async artifact(name: string, version?: number): Promise<ArtifactResponse> {
+    const { status, body } = await this.call<ArtifactResponse>(artifactPath(name, version));
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as ArtifactResponse;
+  }
+
+  artifactPageUrl(name: string, version?: number, download = false): string {
+    return `${this.base}${artifactPagePath(name, version, download)}`;
+  }
+
+  async publishArtifact(name: string, request: PublishArtifactRequest): Promise<PublishArtifactResult> {
+    try {
+      const { status, body } = await this.call<PublishArtifactResponse>(artifactPath(name), { method: "PUT", body: JSON.stringify(request) });
+      if (status < 400 && body && "artifact" in body) return { ok: true, answer: body };
+      return { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
+  async deleteArtifact(name: string): Promise<ActionResult> {
+    try {
+      const { status, body } = await this.call<DeleteArtifactResponse>(artifactPath(name), { method: "DELETE" });
+      return status < 400 ? { ok: true } : { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
   }
 
   async brief(): Promise<BriefResponse | null> {

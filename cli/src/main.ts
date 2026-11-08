@@ -14,9 +14,11 @@
 //   switchboard attach allow|revoke|list|prompts   (ADR 0021)
 //   switchboard help onboarding   (ADR 0038)
 //   switchboard skills list|show|publish|install   (ADR 0039)
+//   switchboard artifacts list|show|publish|open|pull|delete   (ADR 0053)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
+import { ARTIFACTS_USAGE, artifactsCommand } from "./artifacts-command";
 import { ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig } from "./config";
@@ -57,6 +59,7 @@ ${HOST_USAGE.replace("Usage:\n", "")}
 ${ROLE_USAGE.replace("Usage:\n", "")}
 ${ATTACH_USAGE.replace("Usage:\n", "")}
 ${SKILLS_USAGE.replace("Usage:\n", "")}
+${ARTIFACTS_USAGE.replace("Usage:\n", "")}
 
 \`login\` signs you in with GitHub (a code to enter at github.com), once: the session
 works for every Channel on that host whose repo you have write access to. The
@@ -118,7 +121,16 @@ into your Agents' terminals from the Dashboard (ADR 0021): the Dashboard shows t
 fingerprint when you choose Take over. --person names whose key it is (you, by default);
 --agent limits it to one Agent. Your wrappers check every keystroke against this list,
 so the Channel cannot type for anyone. \`attach prompts off\` stops keys allowed for
-someone else from answering a permission prompt.`;
+someone else from answering a permission prompt.
+
+\`artifacts\` shares single HTML pages on the Channel (ADR 0053): a report, a chart or a
+small tool. \`publish\` sends a file as the next version of the artifact named after it
+(--name names it) and opens it on the Dashboard unless --no-open; a page that looks like it
+holds a secret is refused before it leaves this machine. \`open\` opens one on the
+Dashboard; \`pull\` saves its page to .switchboard/artifacts/<name>.html in this repo (else
+this folder, or --to), to edit and publish again. \`delete\` removes one you first published,
+every version of it, after asking (--yes skips the question). Your Agents publish and read
+them too, but only you delete one.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -221,6 +233,8 @@ async function main(argv: string[]): Promise<number> {
       return attachCommand(rest);
     case "skills":
       return skillsCommand(rest);
+    case "artifacts":
+      return artifactsCommand(rest);
     case "mcp":
       return runMcpServer();
     case "run": {

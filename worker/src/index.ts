@@ -7,6 +7,7 @@
 //   /r/<owner>/<repo>/api/hosts...  Hosts, and starting and stopping Agents (hosts-api.ts)
 //   /r/<owner>/<repo>/api/memory    the notes Agents write for each other (memory-api.ts)
 //   /r/<owner>/<repo>/api/skills    skills shared on the Channel (skills-api.ts, ADR 0039)
+//   /r/<owner>/<repo>/api/artifacts HTML pages shared on the Channel, shown sandboxed (artifacts-api.ts, ADR 0053)
 //   /r/<owner>/<repo>/api/brief     the Brief's pages, which Agents write (brief-api.ts, ADR 0042)
 //   /r/<owner>/<repo>/api/settings  the Channel's settings, its Langfuse project (settings-api.ts, ADR 0044)
 //   POST /api/github/webhook        GitHub's deliveries, routed by their repository
@@ -31,6 +32,7 @@ import type {
 } from "../../shared/src/index";
 import { MAX_ADDRESSEES, MAX_EVENT_IDS, MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
 import { type AgentRoute, handleAgentRoute, matchAgentRoute } from "./agents-api";
+import { handleArtifactRoute, matchArtifactRoute } from "./artifacts-api";
 import { channelRepo, devMode, readCredential } from "./auth";
 import { handleAuthRoute, isAuthRoute } from "./auth-api";
 import { handleBranchRoute, matchBranchRoute } from "./branches-api";
@@ -246,6 +248,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const hostRoute = matchHostRoute(request.method, path);
   const skillRoute = matchSkillRoute(request.method, path);
   const briefRoute = matchBriefRoute(request.method, path);
+  const artifactRoute = matchArtifactRoute(request.method, path);
   const librarianRoute = matchLibrarianRoute(request.method, path);
   // A Person's only, so an Agent token is refused below as for any route not on its list.
   const settingsRoute = matchSettingsRoute(request.method, path);
@@ -253,6 +256,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
     !ROUTES.has(route) &&
     skillRoute === null &&
     briefRoute === null &&
+    artifactRoute === null &&
     librarianRoute === null &&
     settingsRoute === null &&
     !taskRoute &&
@@ -288,6 +292,8 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       skillRoute !== null ||
       // An Agent reads the Brief and writes its pages (ADR 0042).
       briefRoute !== null ||
+      // An Agent reads artifacts and publishes its Person's (ADR 0053).
+      artifactRoute !== null ||
       // An Agent reads GitHub and the Librarian Feed; only the librarian moves its cursor (ADR 0045).
       librarianRoute !== null ||
       (agentRoute !== null && AGENT_ROUTE_KINDS.has(agentRoute.kind));
@@ -327,6 +333,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);
   if (skillRoute !== null) return handleSkillRoute(skillRoute, request, inner, channel, caller);
   if (briefRoute !== null) return handleBriefRoute(briefRoute, request, inner, channel, caller);
+  if (artifactRoute !== null) return handleArtifactRoute(artifactRoute, request, inner, channel, caller);
   if (librarianRoute !== null) return handleLibrarianRoute(librarianRoute, request, inner, env, repo, channel, caller);
   if (settingsRoute !== null) {
     return handleSettingsRoute(settingsRoute, request, channel, caller, { env, repo, dev: devMode(env, url) });
