@@ -67,6 +67,7 @@ import { ChannelClient, ChannelError, type ChannelMessage, targetOf } from "./ch
 import { claudeConfigDir, projectDir, withSessionId } from "./claude-session";
 import type { CliAdapter, ProxyRoute, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
+import { DatasetTrigger } from "./dataset/command";
 import { HookCapture } from "./hooks/capture";
 import { readSettings } from "./host/files";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
@@ -1020,6 +1021,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   let sawSessionStart = false;
   let endDetail: string | undefined;
+  let sawSessionEnd = false;
+  const dataset = new DatasetTrigger(env);
   if (plan.kind !== "none") {
     try {
       // Private to the Person: it holds the socket and the session's config files.
@@ -1050,6 +1053,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
           }
           // The CLI's own reason the session ended, for the session's one `session.end` (#54).
           if (input.hook_event_name === "SessionEnd") {
+            sawSessionEnd = true;
             endDetail = (typeof input.reason === "string" ? input.reason : "other").slice(0, 40);
           }
           if (!hooksRunning) {
@@ -1064,6 +1068,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             usage?.tally.follow(input.transcript_path);
             contextReader?.follow(input.transcript_path);
           }
+          // The Dataset copies this session in the background (ADR 0054); it never waits on it.
+          if (input.hook_event_name === "Stop") void dataset.kick("turn");
+          if (input.hook_event_name === "SessionEnd") void dataset.kick("end");
           if (input.hook_event_name === "Stop") {
             usage?.schedule.turnEnded();
             // The turn the Feed was typed for ended: the cursor moves past what it was told.
@@ -1276,6 +1283,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   await (link as AgentLink | null)?.end(END_TIMEOUT_MS, endDetail);
   await stopHooks();
   sessionTools?.dispose();
+  // A CLI with no SessionEnd hook (or none that ran) still has its session copied.
+  if (!sawSessionEnd) await dataset.kick("end");
   log(`exited ${exitCode}`);
   return refusedContinuation === undefined ? exitCode : 2;
 }

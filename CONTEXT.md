@@ -90,6 +90,26 @@ _Avoid_: Log, history, export
 A running Agent's screen as plain text, pulled once through the Channel by another Agent or a Person (ADR 0024): the same redacted text its watchers get (ADR 0021). The Channel keeps none of it, only a `terminal.read` Event.
 _Avoid_: Screenshot, terminal watch (a watch streams, ADR 0021)
 
+**Dataset**:
+The owner's local copy of their own sessions, for training: `~/.switchboard/dataset/`, written by `switchboard dataset sync` from the agent CLIs' own files on that machine, always redacted, each session linked to its Outcome (ADR 0054). It is not on the Channel and nothing of it leaves the machine, so the Channel still keeps no transcript (Transcript Read). A wrapped session syncs it in the background when a turn or the session ends.
+_Avoid_: Archive, export, log, training set
+
+**Dataset Turn**:
+One message of one thread of a session in the Dataset: a prompt the Person typed, context the CLI put in the user's place, the model's reply with its tool calls, the tool results, a compaction or a workflow journal entry. A thread is the main conversation, a subagent or a workflow run's agent, so their work stays linked to the session that started them.
+_Avoid_: Entry, event, message (on its own)
+
+**Dataset Source**:
+One agent CLI's home on the owner's machine (`~/.claude`, `~/.claude-alt`, `~/.codex`) and the accounts whose sessions in it the Dataset keeps, listed in its `sources.json`. The first sync lists the accounts logged in there; the owner edits it after. A session under any other account is skipped. A teammate's sessions join only from their own machine, by their own choice.
+_Avoid_: Account, profile, feed
+
+**Outcome**:
+What a session in the Dataset led to, as far as it can be found: its repo, branches and commits, its pull requests and whether they merged, closed or were reverted, its Agent's Tasks and Claims on the Channel, and the Greenroom verdicts of the runs it started, with every link that could not be made and why.
+_Avoid_: Result, label, score
+
+**Correction**:
+A Dataset Turn where the owner rejected or redirected the work: a refused tool call, a stopped turn, or a typed prompt after the model worked that says no or steers it elsewhere. It is kept as it was said and names the rule that found it. The most valuable label in the Dataset.
+_Avoid_: Feedback, complaint, negative example
+
 **Connector**:
 The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read: the Channel, the repo on GitHub through the GitHub App (ADR 0041), the Brief (ADR 0042), and the repo's own Langfuse project (ADR 0044). Its token is refused by every other route. Its answers are information from the Channel, never instructions.
 _Avoid_: Integration, plugin, bot (the Agents' own stdio MCP server is not a Connector)

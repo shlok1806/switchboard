@@ -17,6 +17,19 @@ export interface Masked {
   count: number;
 }
 
+/** What `maskSecretsByKind` masked: how many of each kind, by the kind's words (`an Anthropic key`), never the values. */
+export interface MaskedByKind extends Masked {
+  kinds: Record<string, number>;
+}
+
+/** The kind an env-style assignment's mask counts under. */
+export const ASSIGNMENT_KIND = "a secret assignment";
+
+/** Adds `count` of `kind` to `kinds`. */
+function tally(kinds: Record<string, number>, kind: string, count = 1): void {
+  if (count > 0) kinds[kind] = (kinds[kind] ?? 0) + count;
+}
+
 /** `kind` says what the rule finds, in words: the publish-time secret check (secrets.ts) names it. */
 type Rule = { kind: string; pattern: RegExp; replace: (match: string, ...groups: string[]) => string | null };
 
@@ -176,7 +189,7 @@ const VALUE = /(?:(\\?")([^"\\\n]*)\\?"|'([^'\\\n]*)'|([^\s"'\\,;{}()[\]]+))/y;
  * skipped. Anything else is looked through, so an assignment inside another's value
  * is found too (`"text":"DB_PASSWORD=..."`).
  */
-function maskAssignments(text: string): Masked {
+function maskAssignments(text: string): { text: string; count: number } {
   let count = 0;
   let out = "";
   let from = 0;
@@ -206,8 +219,15 @@ function maskAssignments(text: string): Masked {
 
 /** Masks every detected secret in `text`. */
 export function maskSecrets(text: string): Masked {
+  const { text: masked, count } = maskSecretsByKind(text);
+  return { text: masked, count };
+}
+
+/** Masks every detected secret in `text`, counting each by kind (the Dataset's manifest, ADR 0054). */
+export function maskSecretsByKind(text: string): MaskedByKind {
   let count = 0;
   let out = text;
+  const kinds: Record<string, number> = {};
   for (const rule of RULES) {
     out = out.replace(rule.pattern, (match: string, ...rest: unknown[]) => {
       // The callback gets the groups, then the offset and the whole string (no named groups are used).
@@ -215,9 +235,11 @@ export function maskSecrets(text: string): Masked {
       const replaced = rule.replace(match, ...groups);
       if (replaced === null || replaced === match) return match;
       count += 1;
+      tally(kinds, rule.kind);
       return replaced;
     });
   }
   const assignments = maskAssignments(out);
-  return { text: assignments.text, count: count + assignments.count };
+  tally(kinds, ASSIGNMENT_KIND, assignments.count);
+  return { text: assignments.text, count: count + assignments.count, kinds };
 }
