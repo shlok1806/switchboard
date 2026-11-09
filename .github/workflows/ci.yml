@@ -12,7 +12,24 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  # Three jobs that run side by side: none reads another's output, so CI takes as
+  # long as the slowest one instead of the sum of all three.
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+        working-directory: worker
+      - name: Worker
+        working-directory: worker
+        run: npm run typecheck && npm run lint && npm test
+
+  cli:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,18 +41,29 @@ jobs:
             worker/package-lock.json
             cli/package-lock.json
             dashboard/package-lock.json
+      # The e2e suite runs the Worker under `wrangler dev`, whose build step builds
+      # the Dashboard (scripts/build-site.ts), so this job installs all three.
       - run: npm ci
         working-directory: worker
       - run: npm ci
         working-directory: cli
       - run: npm ci
         working-directory: dashboard
-      - name: Worker
-        working-directory: worker
-        run: npm run typecheck && npm run lint && npm test
       - name: CLI
         working-directory: cli
         run: npm run typecheck && npm run lint && npm test
+
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+        working-directory: dashboard
       - name: Dashboard
         working-directory: dashboard
         run: npm run lint && npm run build && npm test
@@ -52,7 +80,7 @@ jobs:
           if-no-files-found: ignore
 
   deploy:
-    needs: check
+    needs: [worker, cli, dashboard]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # One deploy at a time; a newer push to main waits for the running one.
