@@ -12,11 +12,18 @@ import type { SessionUsage } from "../../../shared/src/index";
 /** US dollars per million tokens: input, output, cache read. A cache write is 1.25x input (5 min) or 2x (1 h). */
 type Price = [input: number, output: number, cacheRead: number];
 
+/** A model whose rate rises once one request's prompt (input, cache reads and writes) passes `over` tokens. */
+interface Tiered {
+  price: Price;
+  over: number;
+  long: Price;
+}
+
 /**
  * API list prices, first match wins. Subscriptions are not billed per token: the
  * cost is an estimate for comparing Agents, never a bill.
  */
-const PRICES: [RegExp, Price][] = [
+const PRICES: [RegExp, Price | Tiered][] = [
   [/(fable|mythos)-5-1/, [10, 50, 0.25]],
   [/(fable|mythos)-5/, [10, 50, 1]],
   [/opus-5-5/, [4, 20, 0.2]],
@@ -24,12 +31,15 @@ const PRICES: [RegExp, Price][] = [
   [/opus-4|opus/, [15, 75, 1.5]],
   [/sonnet-5/, [2, 10, 0.2]],
   [/sonnet/, [3, 15, 0.3]],
+  [/haiku-5/, { price: [0.1, 0.5, 0.01], over: 100_000, long: [0.5, 2.5, 0.05] }],
   [/haiku-4/, [1, 5, 0.1]],
   [/haiku/, [0.8, 4, 0.08]],
 ];
 
-function priceOf(model: string): Price | undefined {
-  return PRICES.find(([pattern]) => pattern.test(model))?.[1];
+function priceOf(r: Request): Price | undefined {
+  const found = PRICES.find(([pattern]) => pattern.test(r.model))?.[1];
+  if (found === undefined || Array.isArray(found)) return found;
+  return r.input + r.cacheRead + r.write5m + r.write1h > found.over ? found.long : found.price;
 }
 
 interface Request {
@@ -145,7 +155,7 @@ export class SessionTally {
       sum.outputTokens += r.output;
       sum.cacheReadTokens += r.cacheRead;
       sum.cacheWriteTokens += r.write5m + r.write1h;
-      const price = priceOf(r.model);
+      const price = priceOf(r);
       if (price === undefined) continue;
       priced = true;
       const [input, output, cacheRead] = price;

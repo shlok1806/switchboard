@@ -219,6 +219,23 @@ describe("what a session used, from its transcript", () => {
     expect((await tally.read()).requests).toBe(3);
   });
 
+  it("prices Haiku 5.5 at its own rate, and a prompt over 100K tokens at the long-context rate", async () => {
+    const transcript = join(dir, "h.jsonl");
+    await writeFile(
+      transcript,
+      // 100K prompt tokens exactly: $0.10/M in, $0.50/M out.
+      response("r1", "claude-haiku-5-5", {
+        input_tokens: 90_000,
+        cache_read_input_tokens: 10_000,
+        output_tokens: 1000,
+      }) +
+        // 100,001 prompt tokens, cache reads included: $0.50/M in, $2.50/M out.
+        response("r2", "claude-haiku-5-5", { input_tokens: 1, cache_read_input_tokens: 100_000, output_tokens: 1000 }),
+    );
+    // r1: 90K x 0.10 + 10K x 0.01 + 1K x 0.50 = $0.0096. r2: 1 x 0.50 + 100K x 0.05 + 1K x 2.50 = $0.0075.
+    expect((await new SessionTally(transcript).read()).costUsd).toBe(0.0171);
+  });
+
   it("counts nothing for a transcript that is not there yet, and no cost for an unknown model", async () => {
     const tally = new SessionTally(join(dir, "missing.jsonl"));
     expect(await tally.read()).toEqual({
