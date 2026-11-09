@@ -101,6 +101,9 @@ const MODEL_WORDS: Record<string, string> = {
   mini: "Mini",
   nano: "Nano",
   max: "Max",
+  sol: "Sol",
+  terra: "Terra",
+  astra: "Astra",
 };
 
 /**
@@ -124,8 +127,8 @@ export function modelLabel(id: string): string {
   if (older?.[1] && older[3]) {
     return `${CLAUDE_FAMILIES[older[3].toLowerCase()]} ${older[2] === undefined ? older[1] : `${older[1]}.${older[2]}`}`;
   }
-  // gpt-5, gpt-5-codex, gpt-5.1-codex-mini
-  const gpt = /^gpt-(\d+(?:\.\d+)?)((?:-(?:codex|mini|nano|pro|max))*)$/i.exec(model);
+  // gpt-5, gpt-5-codex, gpt-5.1-codex-mini, gpt-6.1-sol
+  const gpt = /^gpt-(\d+(?:\.\d+)?)((?:-(?:codex|mini|nano|pro|max|sol|terra|astra))*)$/i.exec(model);
   if (gpt?.[1] !== undefined) return [`GPT-${gpt[1]}`, ...words(gpt[2] ?? "")].join(" ");
   // gemini-3-pro-preview, gemini-2.5-flash-lite
   const gemini =
