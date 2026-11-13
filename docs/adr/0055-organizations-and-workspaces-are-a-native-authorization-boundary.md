@@ -1,6 +1,6 @@
 # Organizations and Workspaces are a native authorization boundary
 
-Status: proposed, 2026-11-13, M1 Gate 0. Saved outside the repository for review. Builds on ADR 0007, 0008 and 0040; changes Membership authority only for voluntarily managed Channels.
+Status: accepted design, 2026-11-13, following Gate 0 confirmation (m1/reviews/G0_CONFIRM_1.md). Implementation is incremental; P2/P3 decisions remain future work. Builds on ADR 0007, 0008 and 0040; changes Membership authority only for voluntarily managed Channels.
 
 ## Context
 

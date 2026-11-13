@@ -1,5 +1,6 @@
+import { SESSION_COOKIE } from "../../shared/src/index";
 import type { OrganizationCommand } from "../../shared/src/m1";
-import { devMode, readNativeActor, sessionSecret } from "./auth";
+import { channelRepo, devMode, readCookie, readNativeActor, sessionSecret } from "./auth";
 import { canonical } from "./organization";
 import { workspaceParent } from "./policy";
 import { signPayload, tokenHash, verifyPayload } from "./session";
@@ -12,12 +13,13 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
       status,
       headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
     });
-  const error = (status: number, reason: string, policyRevision = 0) =>
+  const error = (status: number, reason: string, policyRevision = 0, operationId?: string) =>
     reply(
       {
         error: { code: status === 404 || status === 403 ? "RESOURCE_DENIED" : "REQUEST_FAILED", reason },
         policyRevision,
         requestId,
+        ...(operationId ? { operationId } : {}),
       },
       status,
     );
@@ -110,6 +112,12 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
       }
       return error(400, "invalid_request");
     }
+    if (collection === "operations" && id && !sub && request.method === "GET") {
+      const parent = workspaceParent(id);
+      if (!parent) return error(404, "resource_denied");
+      const value = await env.ORGANIZATION.getByName(parent).bindingOperation(actor, id);
+      return value ? reply({ value, requestId }) : error(404, "resource_denied");
+    }
     let organizationId =
       collection === "organizations" && id && /^[0-9a-f-]{36}$/.test(id)
         ? id
@@ -123,6 +131,35 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
     const metadata = await org.metadata(actor);
     if (!metadata && collection !== "invitations") return error(404, "resource_denied");
     const revision = metadata?.policyRevision ?? 0;
+    if (collection === "workspaces" && sub === "channel" && !target && ["POST", "DELETE"].includes(request.method)) {
+      if (
+        typeof body.repo !== "string" ||
+        !channelRepo(env, body.repo) ||
+        Object.keys(body).some((k) => !["repo", "operationId", "acknowledgeLegacyAccess"].includes(k)) ||
+        (body.operationId !== undefined && typeof body.operationId !== "string")
+      )
+        return error(400, "invalid_binding");
+      const authorization = request.headers.get("Authorization");
+      const token = authorization ? authorization.slice(7).trim() : readCookie(request, SESSION_COOKIE);
+      const session = token ? await verifyPayload(secret, token) : null;
+      if (typeof session?.login !== "string") return error(401, "native_authentication_required");
+      const result = await org.coordinateBinding({
+        actor,
+        login: session.login,
+        workspaceId: id ?? "",
+        repo: channelRepo(env, body.repo) ?? "",
+        mode: request.method === "DELETE" ? "unbind" : "bind",
+        key,
+        requestId,
+        operationId: body.operationId as string | undefined,
+        expectedRevision,
+        acknowledgeLegacyAccess: body.acknowledgeLegacyAccess === true,
+      });
+      return result.ok
+        ? reply({ ...result, requestId })
+        : error(result.status, result.reason, result.policyRevision, result.operationId);
+    }
+
     if (request.method === "GET") {
       if (target) return error(404, "resource_denied");
       if (collection === "organizations" && !sub)

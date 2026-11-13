@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
+import type { PersonName } from "../../shared/src/index";
 import type {
   AdminAuditRecord,
+  BindingOperation,
   MembershipInvitation,
   NativeMutation,
   NativeOrganization,
@@ -12,6 +14,7 @@ import type {
   PolicyResource,
   WorkspaceMembership,
 } from "../../shared/src/m1";
+import { channelRepo } from "./auth";
 import { decide, validPerson, workspaceParent } from "./policy";
 
 const DAY = 86_400_000;
@@ -57,6 +60,8 @@ export class Organization extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS creation (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS replay (scope TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, timestamp INTEGER NOT NULL, body TEXT NOT NULL, bucket TEXT UNIQUE, count INTEGER NOT NULL DEFAULT 1, last_timestamp INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS binding_operations (id TEXT PRIMARY KEY, scope TEXT UNIQUE NOT NULL, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS binding_reservations (workspace TEXT PRIMARY KEY, repo TEXT UNIQUE NOT NULL, operation TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS directory_outbox (person TEXT PRIMARY KEY, generation TEXT NOT NULL);`);
   }
   private load(): State | undefined {
@@ -484,6 +489,259 @@ export class Organization extends DurableObject<Env> {
       return result;
     });
   }
+  private bindingAllowed(state: State, actor: PersonActor, workspaceId: string): boolean {
+    return (
+      validPerson(actor) &&
+      workspaceParent(workspaceId) === state.organization.id &&
+      !!state.workspaces[workspaceId] &&
+      decide(
+        actor,
+        "workspace.manage",
+        { kind: "workspace", organizationId: state.organization.id, id: workspaceId },
+        this.context(state, actor, workspaceId),
+      ).decision === "allow"
+    );
+  }
+  private loadBinding(id: string): BindingOperation | null {
+    const row = this.ctx.storage.sql
+      .exec<{ body: string }>("SELECT body FROM binding_operations WHERE id=?", id)
+      .toArray()[0];
+    return row ? (JSON.parse(row.body) as BindingOperation) : null;
+  }
+  private saveBinding(operation: BindingOperation) {
+    this.ctx.storage.sql.exec(
+      "UPDATE binding_operations SET body=? WHERE id=?",
+      JSON.stringify(operation),
+      operation.id,
+    );
+  }
+  /** Polling is metadata only; it never resumes a mutation without fresh dual authority. */
+  bindingOperation(actor: PersonActor, id: string): BindingOperation | null {
+    const state = this.load();
+    const operation = this.loadBinding(id);
+    if (!state || !operation || !validPerson(actor)) return null;
+    if (
+      operation.actor.personId === actor.personId ||
+      decide(
+        actor,
+        "organization.manage",
+        { kind: "organization", organizationId: state.organization.id, id: state.organization.id },
+        this.context(state, actor),
+      ).decision === "allow"
+    )
+      return operation;
+    return null;
+  }
+  /** Native HTTP adapter supplies only the authenticated signed-session login. */
+  async coordinateBinding(input: {
+    actor: PersonActor;
+    login: string;
+    workspaceId: string;
+    repo: string;
+    mode: "bind" | "unbind";
+    key: string;
+    requestId: string;
+    operationId?: string;
+    expectedRevision?: number;
+    acknowledgeLegacyAccess?: boolean;
+  }): Promise<NativeResult<BindingOperation>> {
+    const { actor, workspaceId, mode, key, requestId } = input;
+    let operationId: string | undefined;
+    const state = this.load();
+    const resource: PolicyResource = {
+      kind: "workspace",
+      organizationId: state?.organization.id ?? "",
+      id: workspaceId,
+    };
+    const refuse = (status: 400 | 403 | 409 | 503, reason: string): NativeResult<BindingOperation> => {
+      const revision = this.load()?.organization.policyRevision ?? 0;
+      this.audit(actor, `channel.${mode}`, resource, false, reason, revision, requestId);
+      return { ok: false, status, reason, policyRevision: revision, ...(operationId ? { operationId } : {}) };
+    };
+    if (!state || !this.bindingAllowed(state, actor, workspaceId)) return refuse(403, "workspace_manage_required");
+    const repo = channelRepo(this.env, input.repo);
+    if (
+      !repo ||
+      repo !== input.repo ||
+      !text(key, 128) ||
+      !text(requestId, 100) ||
+      !/^[a-zA-Z0-9-]{1,39}$/.test(input.login) ||
+      !["bind", "unbind"].includes(mode)
+    )
+      return refuse(400, "invalid_binding");
+    if (mode === "unbind" && input.acknowledgeLegacyAccess !== true)
+      return refuse(400, "legacy_access_warning_required");
+    const channel = this.env.CHANNEL.getByName(repo);
+    if (!(await channel.bindingOwner(repo, input.login as PersonName, actor.githubId)))
+      return refuse(403, "fresh_repo_admin_required");
+    // Reservation and replay are serialized with workspace authority, never with cached GitHub admission.
+    const reserved = this.ctx.storage.transactionSync((): NativeResult<BindingOperation> => {
+      const current = this.load();
+      if (!current || !this.bindingAllowed(current, actor, workspaceId))
+        return refuse(403, "workspace_manage_required");
+      const scope = canonical([actor.personId, workspaceId, key]);
+      const replay = this.ctx.storage.sql
+        .exec<{ body: string }>("SELECT body FROM binding_operations WHERE scope=?", scope)
+        .toArray()[0];
+      const old = input.operationId
+        ? this.loadBinding(input.operationId)
+        : replay
+          ? (JSON.parse(replay.body) as BindingOperation)
+          : null;
+      if (old) {
+        if (
+          old.actor.personId !== actor.personId ||
+          old.workspaceId !== workspaceId ||
+          old.repo !== repo ||
+          old.mode !== mode ||
+          (replay && (JSON.parse(replay.body) as BindingOperation).id !== old.id)
+        )
+          return refuse(409, "operation_conflict");
+        return { ok: true, value: old, policyRevision: current.organization.policyRevision };
+      }
+      if (input.operationId) return refuse(409, "operation_conflict");
+      if (input.expectedRevision !== undefined && input.expectedRevision !== current.organization.policyRevision)
+        return refuse(409, "stale_revision");
+      const linked = current.workspaces[workspaceId]?.channel;
+      if ((mode === "bind" && linked) || (mode === "unbind" && linked !== repo)) return refuse(409, "binding_conflict");
+      const held = this.ctx.storage.sql
+        .exec("SELECT workspace FROM binding_reservations WHERE workspace=? OR repo=? LIMIT 1", workspaceId, repo)
+        .toArray();
+      if (held.length) return refuse(409, "binding_conflict");
+      const operation: BindingOperation = {
+        id: `${current.organization.id}:${crypto.randomUUID()}`,
+        actor,
+        workspaceId,
+        repo,
+        mode,
+        phase: "reserved",
+        generation: null,
+        key,
+        ...(mode === "unbind" ? { warning: "Unbinding restores legacy repository access." } : {}),
+      };
+      this.ctx.storage.sql.exec("INSERT INTO binding_reservations VALUES(?,?,?)", workspaceId, repo, operation.id);
+      this.ctx.storage.sql.exec(
+        "INSERT INTO binding_operations VALUES(?,?,?)",
+        operation.id,
+        scope,
+        JSON.stringify(operation),
+      );
+      this.audit(
+        actor,
+        `channel.${mode}.reserve`,
+        resource,
+        true,
+        "reserved",
+        current.organization.policyRevision,
+        requestId,
+      );
+      return { ok: true, value: operation, policyRevision: current.organization.policyRevision };
+    });
+    if (!reserved.ok) return reserved;
+    operationId = reserved.value.id;
+    try {
+      let operation = reserved.value;
+      if (operation.phase === "done") return reserved;
+      if (operation.phase === "conflict") return refuse(409, "channel_binding_conflict");
+      if (operation.generation === null) {
+        const snapshot = await channel.bindingState();
+        operation = this.ctx.storage.transactionSync(() => {
+          const stored = this.loadBinding(operation.id);
+          if (!stored) throw new Error("Missing binding operation");
+          if (stored.generation === null) {
+            stored.generation = snapshot.generation;
+            this.saveBinding(stored);
+          }
+          return stored;
+        });
+      }
+      const expected = operation.generation;
+      if (expected === null) return refuse(503, "binding_recovery_required");
+      const advance = (from: BindingOperation["phase"], to: BindingOperation["phase"]): BindingOperation | null =>
+        this.ctx.storage.transactionSync(() => {
+          const current = this.load();
+          const stored = this.loadBinding(operation.id);
+          if (!current || !stored || !this.bindingAllowed(current, actor, workspaceId)) return null;
+          if (stored.phase !== from) return stored;
+          if (to === "committed") {
+            const workspace = current.workspaces[workspaceId];
+            if (!workspace) return null;
+            if (mode === "bind") workspace.channel = repo;
+            else delete workspace.channel;
+            current.organization.policyRevision++;
+            this.save(current);
+            this.audit(
+              actor,
+              `channel.${mode}`,
+              resource,
+              true,
+              "committed",
+              current.organization.policyRevision,
+              requestId,
+            );
+          }
+          stored.phase = to;
+          this.saveBinding(stored);
+          if (to === "done") {
+            this.audit(
+              actor,
+              `channel.${mode}.complete`,
+              resource,
+              true,
+              "both_sides_agree",
+              current.organization.policyRevision,
+              requestId,
+            );
+            this.ctx.storage.sql.exec("DELETE FROM binding_reservations WHERE operation=?", stored.id);
+          }
+          return stored;
+        });
+      if (operation.phase === "reserved") {
+        if (!(await channel.prepareBinding(workspaceId, operation.id, expected, mode === "unbind"))) {
+          // A losing CAS has made no Channel change. Release only our own reservation;
+          // keep the terminal conflict journal so changed-key retries cannot revive it.
+          this.ctx.storage.transactionSync(() => {
+            const stored = this.loadBinding(operation.id);
+            if (stored?.phase === "reserved") {
+              stored.phase = "conflict";
+              this.saveBinding(stored);
+              this.ctx.storage.sql.exec("DELETE FROM binding_reservations WHERE operation=?", stored.id);
+            }
+          });
+          return refuse(409, "channel_binding_conflict");
+        }
+        const next = advance("reserved", "prepared");
+        if (!next) return refuse(403, "workspace_manage_required");
+        operation = next;
+      }
+      if (operation.phase === "prepared") {
+        const next = advance("prepared", "committed");
+        if (!next) return refuse(403, "workspace_manage_required");
+        operation = next;
+      }
+      if (operation.phase === "committed") {
+        // Lost authority leaves the local pending fence closed for an authorized retry.
+        const current = this.load();
+        if (!current || !this.bindingAllowed(current, actor, workspaceId))
+          return refuse(403, "workspace_manage_required");
+        if (!(await channel.finishBinding(workspaceId, operation.id, expected + 1, mode === "unbind")))
+          return refuse(409, "channel_binding_conflict");
+        const next = advance("committed", "done");
+        if (!next) return refuse(403, "workspace_manage_required");
+        operation = next;
+      }
+      return { ok: true, value: operation, policyRevision: this.load()?.organization.policyRevision ?? 0 };
+    } catch {
+      return {
+        ok: false,
+        status: 503,
+        reason: "binding_recovery_required",
+        policyRevision: this.load()?.organization.policyRevision ?? 0,
+        operationId,
+      };
+    }
+  }
+
   /** Active membership is checked even for directory candidates and direct ID reads. */
   metadata(actor: PersonActor): NativeOrganization | null {
     const state = this.load();

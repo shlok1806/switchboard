@@ -110,7 +110,7 @@ import { Branches, type CodeEventResult } from "./branches";
 import { BRIEF_SCHEMA, Brief, type BriefResult, migrateBrief } from "./brief";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
 import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
-import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
+import { type CodeChange, type GitHub, gitHubFor, readerFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } from "./hosts";
 import { LangfuseProject, type StoredLangfuse } from "./langfuse";
@@ -482,8 +482,45 @@ export class Channel extends DurableObject<Env> {
   private historyIndexes: HistoryIndexes;
   private historyIndexesDay = utcDay();
 
+  private binding!: {
+    version: number;
+    generation: number;
+    workspace: string | null;
+    operation: string | null;
+    state: string;
+  };
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // Additive migration: never infer legacy access from an unknown managed version.
+    ctx.storage.transactionSync(() => {
+      let existed = true;
+      try {
+        const snapshot = ctx.storage.sql
+          .exec<typeof this.binding>("SELECT version,generation,workspace,operation,state FROM m1_binding WHERE id=1")
+          .toArray()[0];
+        if (snapshot) this.binding = snapshot;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("no such table: m1_binding")) throw error;
+        existed = false;
+      }
+      ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS m1_binding (
+        id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL,
+        generation INTEGER NOT NULL, workspace TEXT, operation TEXT, state TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS m1_binding_outbox (
+        operation TEXT PRIMARY KEY, generation INTEGER NOT NULL, body TEXT NOT NULL);`);
+      // Missing state in a previously migrated object is not proof of legacy access.
+      if (!this.binding)
+        ctx.storage.sql.exec(
+          `INSERT OR IGNORE INTO m1_binding
+        SELECT 1,1,0,NULL,NULL,CASE WHEN ? OR EXISTS(SELECT 1 FROM m1_binding_outbox)
+        THEN 'recovery_required' ELSE 'unlinked' END`,
+          existed ? 1 : 0,
+        );
+    });
+    this.binding ??= ctx.storage.sql
+      .exec<typeof this.binding>("SELECT version,generation,workspace,operation,state FROM m1_binding WHERE id=1")
+      .one();
     createEventsTable(ctx.storage.sql);
     this.historyIndexes = buildHistoryIndexes(ctx.storage.sql);
     ctx.storage.sql.exec(`
@@ -688,14 +725,191 @@ export class Channel extends DurableObject<Env> {
     return repo === null ? null : gitHubFor(this.env, repo);
   }
 
+  /** Internal binding snapshot. Unknown schemas and pending bindings deny all admission. */
+  bindingState(): {
+    version: number;
+    generation: number;
+    workspace: string | null;
+    operation: string | null;
+    state: string;
+  } {
+    return { ...this.binding };
+  }
+
+  /** Synchronous transition fence, immediately before dispatch or result release. */
+  bindingCurrent(generation: number): boolean {
+    return !this.managedClosed() && this.binding.generation === generation;
+  }
+
+  private managedClosed(): boolean {
+    const binding = this.bindingState();
+    return (
+      binding.version !== 1 ||
+      !Number.isSafeInteger(binding.generation) ||
+      binding.generation < 0 ||
+      binding.state !== "unlinked" ||
+      binding.workspace !== null ||
+      binding.operation !== null
+    );
+  }
+
+  async bindingOwner(repo: string, person: PersonName, githubId: string): Promise<boolean> {
+    this.access.setRepo(repo);
+    const result = await this.isOwner(person, false);
+    if (!result.ok || !result.owner) return false;
+    // Bind the fresh permission proof to the numeric native identity, including after login recycling.
+    const reader = readerFor(this.env, repo);
+    if (!reader) return false;
+    try {
+      const response = await reader.call(`/repos/${repo}/collaborators/${encodeURIComponent(person)}/permission`);
+      if (!response.ok) {
+        await response.body?.cancel();
+        return false;
+      }
+      const proof = (await response.json()) as { user?: { id?: number }; permission?: string; role_name?: string };
+      return (
+        Number.isSafeInteger(proof.user?.id) &&
+        String(proof.user?.id) === githubId &&
+        (proof.permission === "admin" || proof.role_name === "admin")
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** Server-only CAS; operation evidence and fence commit in the same local transaction. */
+  prepareBinding(workspace: string, operation: string, expectedGeneration: number, unlink = false): boolean {
+    if (
+      !workspace ||
+      !operation ||
+      !Number.isSafeInteger(expectedGeneration) ||
+      expectedGeneration < 0 ||
+      expectedGeneration >= Number.MAX_SAFE_INTEGER
+    )
+      return false;
+    const accepted = this.ctx.storage.transactionSync(() => {
+      const old = this.bindingState();
+      if (old.version !== 1) return false;
+      if (old.operation === operation) {
+        if (
+          old.workspace === workspace &&
+          old.generation === expectedGeneration + 1 &&
+          (old.state === (unlink ? "pending_unlink" : "pending") || (!unlink && old.state === "linked"))
+        )
+          return old;
+        return false;
+      }
+      if (
+        old.generation !== expectedGeneration ||
+        (unlink ? old.state !== "linked" || old.workspace !== workspace : this.managedClosed())
+      )
+        return false;
+      this.ctx.storage.sql.exec(
+        "UPDATE m1_binding SET generation=generation+1,workspace=?,operation=?,state=? WHERE id=1",
+        workspace,
+        operation,
+        unlink ? "pending_unlink" : "pending",
+      );
+      this.ctx.storage.sql.exec(
+        "INSERT INTO m1_binding_outbox VALUES(?,?,?)",
+        operation,
+        expectedGeneration + 1,
+        JSON.stringify({ workspace, outcome: "pending" }),
+      );
+      return {
+        ...old,
+        generation: expectedGeneration + 1,
+        workspace,
+        operation,
+        state: unlink ? "pending_unlink" : "pending",
+      };
+    });
+    if (accepted) {
+      this.binding = accepted;
+      // Resolve outstanding reads before closing their transports. Their completion
+      // checks below discard data captured before the pending transition.
+      for (const read of this.transcriptReads.values()) read.answer("");
+      for (const read of this.terminalReads.values()) read.answer("");
+      for (const read of this.historyReads.values()) read.answer(null);
+      for (const ws of this.ctx.getWebSockets()) {
+        try {
+          ws.close(1008, "Channel binding changed; managed access is closed.");
+        } catch {
+          /* Already closed. */
+        }
+      }
+    }
+    return accepted !== false;
+  }
+
+  /** Finalization follows the Organization commit; RPC is server-only. */
+  finishBinding(workspace: string, operation: string, generation: number, unlink: boolean): boolean {
+    const accepted = this.ctx.storage.transactionSync(() => {
+      const old = this.bindingState();
+      if (old.version !== 1 || old.generation !== generation) return false;
+      const evidence = this.ctx.storage.sql
+        .exec<{ body: string }>(
+          "SELECT body FROM m1_binding_outbox WHERE operation=? AND generation=?",
+          operation,
+          generation,
+        )
+        .toArray()[0];
+      if (!evidence) return false;
+      const outcome = JSON.parse(evidence.body) as { workspace: string; outcome: string };
+      if (outcome.workspace !== workspace) return false;
+      if (outcome.outcome === (unlink ? "unlinked" : "linked")) {
+        const same = unlink
+          ? old.state === "unlinked" && old.workspace === null && old.operation === null
+          : old.state === "linked" && old.operation === operation && old.workspace === workspace;
+        return same ? old : false;
+      }
+      if (
+        old.workspace !== workspace ||
+        old.operation !== operation ||
+        old.state !== (unlink ? "pending_unlink" : "pending")
+      )
+        return false;
+      this.ctx.storage.sql.exec(
+        "UPDATE m1_binding SET workspace=?,operation=?,state=? WHERE id=1",
+        unlink ? null : workspace,
+        unlink ? null : operation,
+        unlink ? "unlinked" : "linked",
+      );
+      this.ctx.storage.sql.exec(
+        "UPDATE m1_binding_outbox SET body=? WHERE operation=?",
+        JSON.stringify({ workspace, outcome: unlink ? "unlinked" : "linked" }),
+        operation,
+      );
+      return {
+        ...old,
+        workspace: unlink ? null : workspace,
+        operation: unlink ? null : operation,
+        state: unlink ? "unlinked" : "linked",
+      };
+    });
+    if (accepted) this.binding = accepted;
+    return accepted !== false;
+  }
+
   /**
    * Admits a call to the Channel of `repo` (ADR 0007): a live Agent token, and a
    * Person with write access to the repo, checked with GitHub at most every few
    * minutes. `fresh` asks GitHub now, as sign-in does.
    */
-  admit(repo: string, credential: Credential, dev: boolean, fresh = false): Promise<AdmitResult> {
+  async admit(
+    repo: string,
+    credential: Credential,
+    dev: boolean,
+    fresh = false,
+  ): Promise<AdmitResult & { generation?: number }> {
+    if (this.managedClosed()) return { ok: false, status: 403, reason: "Managed Channel access is closed until P3." };
+    const generation = this.bindingState().generation;
     this.access.setRepo(repo);
-    return this.access.admit(credential, dev, fresh);
+    const admitted = await this.access.admit(credential, dev, fresh);
+    // GitHub admission may yield while a pending binding closes this Channel.
+    if (this.managedClosed() || this.bindingState().generation !== generation)
+      return { ok: false, status: 403, reason: "Managed Channel access is closed until P3." };
+    return admitted.ok ? { ...admitted, generation } : admitted;
   }
 
   /**
@@ -1221,6 +1435,8 @@ export class Channel extends DurableObject<Env> {
    * Channel keeps none of it, and records only that it was read.
    */
   async readTranscript(caller: Caller, id: AgentId, from: number, latest = false): Promise<TranscriptResult> {
+    if (this.managedClosed()) return { ok: false, status: 403, reason: "Managed Channel access is closed until P3." };
+    const generation = this.bindingState().generation;
     const ready = this.readable(caller, id, "transcript", this.transcriptReads);
     if (!ready.ok) return ready;
     const page = await this.askWrapper(
@@ -1234,6 +1450,8 @@ export class Channel extends DurableObject<Env> {
         ...(latest ? { latest } : {}),
       }),
     );
+    if (this.managedClosed() || this.bindingState().generation !== generation)
+      return { ok: false, status: 403, reason: "Managed Channel access is closed until P3." };
     if (page === false) {
       return {
         ok: false,
@@ -1261,6 +1479,8 @@ export class Channel extends DurableObject<Env> {
    * records only that it was read.
    */
   async readTerminal(caller: Caller, id: AgentId): Promise<TerminalReadResult> {
+    if (this.managedClosed()) return { ok: false, status: 403, reason: "Managed Channel access is closed until P3." };
+    const generation = this.bindingState().generation;
     const ready = this.readable(caller, id, "terminal", this.terminalReads);
     if (!ready.ok) return ready;
     const screen = await this.askWrapper(
@@ -1268,6 +1488,8 @@ export class Channel extends DurableObject<Env> {
       id,
       (request): TerminalReadRequestMessage => ({ type: "terminal.read.request", agent: id, id: request }),
     );
+    if (this.managedClosed() || this.bindingState().generation !== generation)
+      return { ok: false, status: 403, reason: "Managed Channel access is closed until P3." };
     if (screen === false) {
       return {
         ok: false,
@@ -1497,7 +1719,8 @@ export class Channel extends DurableObject<Env> {
    * The Connector's `brief` tool (ADR 0042): one page and, for the overview or a page
    * there is none of, the list of pages. Bounded by the Brief's page cap, and no write.
    */
-  askBrief(page: string): { page: BriefPage | null; pages?: BriefPageSummary[] } {
+  askBrief(page: string, generation = this.binding.generation): { page: BriefPage | null; pages?: BriefPageSummary[] } {
+    if (!this.bindingCurrent(generation)) throw new Error("Managed Channel access is closed until P3.");
     return this.brief.ask(page);
   }
 
@@ -1511,7 +1734,8 @@ export class Channel extends DurableObject<Env> {
    * alone: the settings route shows only `connection(...)` of it, and the Connector's
    * costs tool opens the key for its calls to Langfuse (ADR 0044). One row read.
    */
-  langfuseProject(): StoredLangfuse | null {
+  langfuseProject(generation = this.binding.generation): StoredLangfuse | null {
+    if (!this.bindingCurrent(generation)) throw new Error("Managed Channel access is closed until P3.");
     return this.langfuse.get();
   }
 
@@ -1531,7 +1755,8 @@ export class Channel extends DurableObject<Env> {
    * what is stuck, what was said since `since`, narrowed by `about`. Bounded reads
    * through indexes, and no write.
    */
-  askChannel(question: ChannelQuestion): ChannelAnswer {
+  askChannel(question: ChannelQuestion, generation = this.binding.generation): ChannelAnswer {
+    if (!this.bindingCurrent(generation)) throw new Error("Managed Channel access is closed until P3.");
     const sql = this.ctx.storage.sql;
     return askChannel(
       {
@@ -1554,7 +1779,12 @@ export class Channel extends DurableObject<Env> {
    * Admits a call to the read-only connector (ADR 0040): its access token's grant must
    * still be live (one read by key), and its Person a Member, as for every Channel call.
    */
-  admitConnector(repo: string, person: PersonName, grant: string, dev: boolean): Promise<AdmitResult> {
+  admitConnector(
+    repo: string,
+    person: PersonName,
+    grant: string,
+    dev: boolean,
+  ): Promise<AdmitResult & { generation?: number }> {
     if (!this.mcpGrants.live(grant)) {
       return Promise.resolve({ ok: false, status: 401, reason: "This sign-in ended. Connect the app again." });
     }
@@ -1668,6 +1898,8 @@ export class Channel extends DurableObject<Env> {
    * at once, each waited for at most the history wait.
    */
   private async withLocalEvents(stored: ChannelEvent[], asked: HistoryAsk): Promise<HistoryPage> {
+    if (this.managedClosed()) throw new Error("Managed Channel access is closed until P3.");
+    const generation = this.bindingState().generation;
     const { holders, unavailable } = this.historyHolders(asked);
     const pages = await Promise.all(
       holders.map(async (holder) => {
@@ -1675,6 +1907,8 @@ export class Channel extends DurableObject<Env> {
         return { holder, events };
       }),
     );
+    if (this.managedClosed() || this.bindingState().generation !== generation)
+      throw new Error("Managed Channel access is closed until P3.");
     for (const { holder, events } of pages) {
       if (events !== null) continue;
       const [person, tag] = this.ctx.getTags(holder.ws);
@@ -1837,7 +2071,11 @@ export class Channel extends DurableObject<Env> {
    * is its wrapper's: only it may send that Agent's Hook and Proxy Events.
    */
   override async fetch(request: Request): Promise<Response> {
+    if (this.managedClosed()) return new Response("Managed Channel access is closed until P3.", { status: 403 });
+    const generation = this.binding.generation;
     const url = new URL(request.url);
+    if (url.searchParams.has("generation") && Number(url.searchParams.get("generation")) !== generation)
+      return new Response("Binding changed", { status: 403 });
     const name = url.searchParams.get("person");
     const agent = url.searchParams.get("agent");
     const host = url.searchParams.get("host");
@@ -1850,18 +2088,24 @@ export class Channel extends DurableObject<Env> {
         return Response.json({ error: `You have no Host named ${host} on this Channel.` }, { status: 404 });
       }
       const { 0: client, 1: server } = new WebSocketPair();
-      this.ctx.acceptWebSocket(server, [name, hostTag(hostIdFor(name, host))]);
+      this.ctx.acceptWebSocket(server, [name, hostTag(hostIdFor(name, host)), `binding:${generation}`]);
       server.serializeAttachment({
         at: Date.now(),
         ...(url.searchParams.get("history") === "1" ? { history: true } : {}),
       } satisfies HostAttachment);
       this.hosts.attach(name, host);
       await this.watchMembers();
+      if (!this.bindingCurrent(generation)) return new Response("Binding changed", { status: 403 });
       return new Response(null, { status: 101, webSocket: client });
     }
 
     const { 0: client, 1: server } = new WebSocketPair();
-    this.ctx.acceptWebSocket(server, agent === null ? [name] : [name, agentTag(agent as AgentId)]);
+    this.ctx.acceptWebSocket(
+      server,
+      agent === null
+        ? [name, "", `binding:${generation}`]
+        : [name, agentTag(agent as AgentId), `binding:${generation}`],
+    );
     // Everything below is synchronous, so no other Event can be appended
     // between the backlog and the live stream: none is missed or sent twice.
     if (after !== null) {
@@ -1872,6 +2116,7 @@ export class Channel extends DurableObject<Env> {
     for (const agent of this.agents.list()) send(server, { type: "agent", agent });
     this.join(name);
     await this.watchMembers();
+    if (!this.bindingCurrent(generation)) return new Response("Binding changed", { status: 403 });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -1882,6 +2127,11 @@ export class Channel extends DurableObject<Env> {
    * over HTTP.
    */
   override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    const bindingTag = this.ctx.getTags(ws)[2];
+    if (this.managedClosed() || (bindingTag ?? "binding:0") !== `binding:${this.binding.generation}`) {
+      ws.close(1008, "Managed Channel access is closed until P3.");
+      return;
+    }
     if (typeof message !== "string") return;
     let frame: unknown;
     try {

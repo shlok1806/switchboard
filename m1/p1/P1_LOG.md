@@ -15,3 +15,22 @@ Code changes with file:line are recorded by Codex in m1/p1/P1_IMPLEMENTATION_NOT
 - 4:21 PM CT: [P1] tests S1: == totals (S1, quick, HEAD 6d61188) == 06_worker_test:  Test Files 32 passed | 2 skipped (34) | Tests 433 passed | 2 skipped (435)  | gate: PASS  | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=0 07_cli_typecheck=0 11_dashboard_typecheck=0 
 - 4:21 PM CT: [P1] M1-P1-S2 run attempt 1 started
 - 4:41 PM CT: [P1] M1-P1-S2 done
+- 4:41 PM CT: [P1] tests S2 (quick) started at HEAD 62fe6d7
+- 4:41 PM CT: [P1] tests S2: == totals (S2, quick, HEAD 62fe6d7) == 06_worker_test:  Test Files 33 passed | 2 skipped (35) | Tests 449 passed | 2 skipped (451)  | gate: PASS  | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=0 07_cli_typecheck=0 11_dashboard_typecheck=0 
+- 4:41 PM CT: [P1] M1-P1-S3 run attempt 1 started
+- 4:42 PM CT: [P1] executor P1-#2: one chain (291723 = watchdog subshell); S1/S2 'runtime verification blocked' = Codex sandbox EPERM, resolved by manager-run gates + independent run of new tests at 62fe6d7 (45/45 passed).
+- 4:46 PM CT: [P1] M1-P1-S3 done
+- 4:46 PM CT: [P1] M1-P1-S3 done but /home/box/engineering-workspace/worktrees/switchboard-m1/m1/p1/S3_DONE.md missing — requeue (1)
+- 4:46 PM CT: [P1] M1-P1-S3 run attempt 1 started
+- 4:58 PM CT: [P1] M1-P1-S3 done
+- 4:58 PM CT: [P1] M1-P1-S3 done but /home/box/engineering-workspace/worktrees/switchboard-m1/m1/p1/S3_DONE.md missing — requeue (2)
+- 4:58 PM CT: [P1] M1-P1-S3 run attempt 1 started
+- 5:11 PM CT: [P1] M1-P1-S3 done
+- 5:11 PM CT: [P1] M1-P1-S3 done but /home/box/engineering-workspace/worktrees/switchboard-m1/m1/p1/S3_DONE.md missing — requeue (3)
+- 5:11 PM CT: [P1] CHAIN STOP: slice S3 incomplete
+- 5:16 PM CT: [P1] CHAIN STOP 5:11 PM: S3 incomplete after 3 Codex runs (binding fail-closed; MCP/async-read fence escalation). WIP gate S3-wip: worker 459p/4f/2s (3 regressions in rows-read.test.ts + 1 new binding test). Awaiting decision.
+- 5:18 PM CT: [P1] executor P1-#3 (successor): coordinator decision OPTION B — S3 must deliver working generation-fenced Channel↔Workspace linking (MCP/history/WS fence, Org link coordinator + recovery, remove 503, fix 3 rows-read regressions + 1 binding test, dual-authority tests). Dedicated prompt prompts/p1/S3_CONTINUE.txt swapped into DB task M1-P1-S3 (attempts reset 0; old prompt saved _slice_S3_full.orig.txt); chain_p1.sh NOT edited. WIP kept. Limit: if S3 still partial after 2 more Codex runs, stop and report.
+- 5:18 PM CT: [P1] M1-P1-S3 run attempt 1 started
+- 5:36 PM CT: executor P1-#3 status: S3 option-B Codex run 1 active since 5:18 PM (rollout ~/.codex/sessions/2026/11/13/rollout-2026-11-13T17-18-17-*.jsonl; now also touching mcp/server.ts, organization.ts, index.ts, shared/src/m1.ts; 756+/158- uncommitted). Chain pid 316362 (316398 = its watchdog subshell). Guard s3_limit.sh (nohup) stops the chain if this round logs 'requeue (2)' (i.e. 2 option-B runs without S3_DONE.md) — SUCCESSOR: if that SUPERVISOR STOP line appears, report the blocker from the '## S3' notes; do not relaunch without a new decision. Otherwise let chain continue (gate S3 quick → full+shots → agy review ≤3 loops → ff bulletin).
+- 5:46 PM CT: executor P1-#3 independent mid-run check (outside sandbox, WIP while Codex still editing; p1_logs/S3-midrun-1745.log): rows-read.test.ts + m1-migration.test.ts + workspace-binding.test.ts → 55 passed / 1 failed (59; rest skipped/unfinished): the 3 rows-read regressions now PASS; failing = workspace-binding 'discards HTTP history results admitted before a pending transition' (5 s timeout; RPC 'latestEvents' not implemented noise). Not a gate result — Codex run 1 still in progress.
+- 5:56 PM CT: [P1] M1-P1-S3 done

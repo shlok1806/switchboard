@@ -8,6 +8,27 @@ A shared channel for people on different machines who point their coding agents 
 The shared space of one GitHub repo, where its People and Agents coordinate. There is exactly one Channel per repo, named by `owner/repo`, and its Tasks are that repo's Issues.
 _Avoid_: Room, workspace, project
 
+**Organization**:
+A native administrative boundary owning Workspaces and explicit human memberships. It exists without a GitHub repository.
+
+**OrganizationMembership**:
+An explicit active or revoked Person membership with an owner, admin or member role. It does not grant Workspace content access.
+
+**Workspace**:
+A native private authorization boundary within one Organization. It may link a repository Channel; it does not replace or rename Channel, and has no generic Task lifecycle in Milestone 1.
+
+**WorkspaceMembership**:
+An explicit active or revoked Person membership in one Workspace, with a manager, contributor or viewer role and an audited grant reason. Content also requires active Organization membership.
+
+**Invitation**:
+An expiring offer to an exact numeric GitHub identity. Membership activates only on explicit acceptance.
+
+**Person identity**:
+An immutable native Person UUID associated with a verified numeric GitHub account ID. Displayed login changes do not change that identity; historical login-only sessions do not establish it.
+
+**Administrative AuditRecord**:
+A redacted record of an administrative actor, action, resource, decision, outcome and policy revision. It contains no credentials or private session contents and grants no content access.
+
 **Dashboard**:
 The human view of the channel, where every message, task and claim from every person and agent is visible.
 _Avoid_: Feed, UI, console

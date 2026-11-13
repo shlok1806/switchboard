@@ -30,6 +30,7 @@ export interface NativeWorkspace {
   visibility: "private";
   status: "active" | "archived";
   createdAt: number;
+  channel?: string;
 }
 export interface NativeOrganization {
   id: string;
@@ -108,4 +109,17 @@ export type OrganizationCommand =
   | { kind: "invitation.accept"; invitationId: string };
 export type NativeResult<T> =
   | { ok: true; value: T; policyRevision: number }
-  | { ok: false; status: 400 | 403 | 404 | 409 | 503; reason: string; policyRevision: number };
+  | { ok: false; status: 400 | 403 | 404 | 409 | 503; reason: string; policyRevision: number; operationId?: string };
+
+/** Durable cross-object binding journal; IDs route to their Organization. */
+export interface BindingOperation {
+  id: string;
+  actor: PersonActor;
+  workspaceId: string;
+  repo: string;
+  mode: "bind" | "unbind";
+  phase: "reserved" | "prepared" | "committed" | "done" | "conflict";
+  generation: number | null;
+  key: string;
+  warning?: string;
+}

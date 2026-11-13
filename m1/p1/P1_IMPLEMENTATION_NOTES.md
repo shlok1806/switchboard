@@ -158,3 +158,192 @@ Node commands used `export PATH=/home/box/.local/node22/bin:$PATH` in `worker/`.
 ### Final S2 whitespace check
 
 - `git diff --check`: **exit 0**, including the S2 notes and completion marker.
+
+## S3
+
+**Partial implementation; slice is NOT complete. No S3_DONE.md is written.** Binding activation remains denied under the explicit safety fallback in `m1/p1/P1_PLAN.md:81`. This is not runtime compatibility or security acceptance evidence.
+
+### Changes (file:line + symbol)
+
+- `worker/src/channel.ts:488` (`Channel.constructor`): additive idempotent singleton binding schema with version, nullable workspace/operation, monotonic generation, and a local operation-evidence outbox. No existing data is rewritten by these new statements. Existing schema initialization follows at `worker/src/channel.ts:494`.
+- `worker/src/channel.ts:699` (`bindingState`) and `worker/src/channel.ts:717` (`managedClosed`): unknown versions, pending/linked states and non-null workspace bindings deny admission. `worker/src/channel.ts:723` (`prepareBinding`) provides an internal-only pending CAS with transactionally coupled outbox evidence, same-operation replay, stale-generation/conflict refusal and old-socket closure. It is deliberately not called by any HTTP activation endpoint. This is a foundation, not a complete binding coordinator or administrative audit export.
+- `worker/src/channel.ts:761` (`admit`), `worker/src/channel.ts:1906` (`fetch`), `worker/src/channel.ts:1952` (`webSocketMessage`): deny new admission, upgrades/replay and queued incoming socket messages when the local binding is managed or unknown. Unlinked requests still delegate to the existing admission implementation at `worker/src/channel.ts:764`. These checks do NOT claim to fence every pre-admitted RPC or asynchronous completion.
+- `worker/src/workspace-api.ts:126` (`handleWorkspaceApi`): POST/DELETE workspace Channel routes return a no-store native 503 denial rather than starting an unsafe cross-object operation. Existing native authentication remains at `worker/src/workspace-api.ts:26`; no repo-admin bypass or managed data path is enabled.
+- `CONTEXT.md:11`–`:30`: glossary entries for Organization, OrganizationMembership, Workspace, WorkspaceMembership, Invitation, Person identity and administrative AuditRecord. Channel's existing definition remains at `CONTEXT.md:7`.
+- Moved the three ADR drafts to `docs/adr/0055-organizations-and-workspaces-are-a-native-authorization-boundary.md:1`, `docs/adr/0056-agent-principals-are-separate-from-executions.md:1`, and `docs/adr/0057-one-policy-function-guards-managed-workspaces.md:1`; status at line 3 distinguishes accepted Gate 0 design from incremental/future implementation. Removed obsolete outside-repository/pending-Gate-0 wording; retained Context/Decision/Consequences/Alternatives and P2/P3 design decisions.
+
+### Tests added (authored, not runtime passes)
+
+`worker/test/workspace-binding.test.ts`:
+- `:12` — it("refuses native binding activation while pre-admitted Channel work is not fenced").
+- `:42` — it("closes existing sockets at the pending transition").
+- `:57` — it("replays pending preparation and rejects stale generations and competing workspaces").
+- `:66` — it("rolls back the pending fence if its durable outbox cannot commit").
+- `:75` — it("denies pending admission and reconnects without changing legacy membership authority").
+- `:88` — it("keeps unknown schemas closed and refuses to overwrite them").
+
+`worker/test/m1-migration.test.ts`:
+- `:10` — it("preserves pre-M1 Events persons and stored Skills and Artifacts across repeated startup"). Seeds existing Event/Person SQL and actual Skill/Artifact chunk tables, removes the new schema, constructs Channel twice, compares preserved rows/chunks. This is a focused synthetic fixture, not a production dataset or complete realistic migration matrix.
+- `:39` — it("preserves unlinked session admission and does not erase unknown binding versions on startup").
+
+Existing tests/helpers were not edited (read-only `git status --short`/`git diff` inspection). The full planned dual-authority, operation polling, interruption recovery, agent/stream compatibility and migration matrix remain incomplete; these eight cases are foundation coverage only (`worker/test/workspace-binding.test.ts:11`, `worker/test/m1-migration.test.ts:9`).
+
+### Commands run / actual results
+
+Node commands used `export PATH=/home/box/.local/node22/bin:$PATH` in `worker/`; no dependency install, network, credential-file read, git write or deploy was performed.
+
+- `npm run typecheck`: initial migration/fence implementation passed (exit 0); a later HTTP test addition failed with TS2339 on the mutation result union. Added an explicit `"id" in result.value` guard (`worker/test/workspace-binding.test.ts:27`); final rerun passed (exit 0).
+- `npx biome check --write src/channel.ts src/workspace-api.ts test/workspace-binding.test.ts test/m1-migration.test.ts`, followed by focused new-test formatting after edits: exit 0. Formatting touched only these owned changed files.
+- `npm run lint`: passed, exit 0; final run checked 158 files with no fixes.
+- `npx vitest run test/workspace-binding.test.ts test/m1-migration.test.ts`: attempted twice; both exited 1 before assertions, `Error: listen EPERM: operation not permitted 127.0.0.1`, Node v22.23.5. Zero tests are claimed executed/passed. The final union-narrowing correction was statically checked afterward.
+- `git diff --check`: exit 0 before this notes append; final result recorded below.
+- Full suites and existing organizations/native-auth files: not run in S3; manager-owned broader validation. No compatibility pass is claimed.
+
+### Deviations from plan/proposal
+
+- S3 is incomplete. No Organization reservation/link coordinator, fresh dual-authority orchestration, operation polling authorization, bind/unbind recovery, completed binding audit/outbox delivery, or restore-to-legacy transition has been implemented. HTTP binding stays refused (`worker/src/workspace-api.ts:126`). No activation or unbind is claimed.
+- The internal Channel CAS is intentionally only a pending-phase primitive (`worker/src/channel.ts:723`). It must not be wired to a public transition before the escalation below is resolved; the outbox stores local pending evidence and does not imply external acknowledgment or repair.
+- Minimal admission/socket closure guards implement the plan's stated scope clarification (`m1/p1/P1_PLAN.md:43`, `:81`). They are insufficient as the complete managed enforcement inventory.
+
+### Escalations
+
+- **Trust-boundary gap; safest denial implemented.** MCP admission happens before `request.json()` (`worker/src/mcp/server.ts:81`, `:90`), and tool closures later invoke Channel reads without carrying a binding generation (`worker/src/mcp/server.ts:95`–`:108`, `:180`). A request admitted before a pending transition can therefore dispatch a later read even after all sockets close. Channel transcript reads also authorize before awaiting wrapper data and return it afterward (`worker/src/channel.ts:1289`–`:1321`). Adding only admission/upgrade guards cannot establish the promised closed-pending boundary. Solving this requires a generation-fenced dispatch/result boundary and coverage of outstanding asynchronous work; this overlaps P3's full inventory, including a file outside S3 ownership (`worker/src/mcp/server.ts`). Under `m1/p1/P1_PLAN.md:81`, activation remains denied rather than improvising permissive behavior. Independent reviewer/manager must resolve the scope and complete this before enabling the coordinator. This is a concrete inspection finding, not a claim of an executed exploit.
+- **Runtime verification blocked:** local listener EPERM prevented all new runtime assertions. Manager must run targeted and legacy suites, then adversarially review the completed binding protocol. Static checks alone do not establish migration or socket correctness.
+- S3_DONE.md intentionally absent until the entire slice is complete, as required by the task.
+
+### Final S3 whitespace check
+
+- `git diff --check`: exit 0, including the S3 notes. S3 remains partial; no completion marker was created.
+
+### S3 continuation — migration and admission hardening
+
+Still **partial**, continuing the existing working-tree implementation rather than replacing it. No completion marker is written. The existing S3 changes and limitations above remain, except for the updates below; earlier Channel line citations predate this continuation.
+
+#### Changes (file:line + symbol)
+
+- `worker/src/channel.ts:488` (`Channel.constructor`): make binding schema initialization atomic. A previously migrated table with a missing singleton, or a missing table with retained operation outbox evidence, initializes to `recovery_required`, never permissive `unlinked`. Preserve existing singleton versions and outbox evidence on repeated startup (`:498`). A genuinely pre-M1 object without either table retains the original unlinked default.
+- `worker/src/channel.ts:728` (`managedClosed`): refuse malformed/negative/noninteger generations and orphan operation IDs even if the row says unlinked. `:741` (`prepareBinding`) rejects empty identifiers, invalid generations and overflow, and refuses mismatched state before writing the pending fence/outbox.
+- `worker/src/channel.ts:786` (`admit`): recheck local closure and binding generation after asynchronous legacy admission returns, so a GitHub lookup started before pending cannot return successful admission afterward. The unlinked Access result is otherwise preserved. This does not fence work already admitted before the transition or establish complete managed enforcement.
+
+#### Tests added (authored; not runtime passes)
+
+- `worker/test/workspace-binding.test.ts:101` — it("refuses admission when binding starts during the GitHub permission lookup"): deterministic paused GitHub permission response, pending transition before release, denial on completion.
+- `worker/test/workspace-binding.test.ts:129` — it("keeps mismatched operation and invalid generation states closed").
+- `worker/test/workspace-binding.test.ts:145` — it("rejects invalid pending transition inputs without writing operation evidence").
+- `worker/test/m1-migration.test.ts:49` — it("keeps missing binding state closed when prior migration or pending outbox evidence remains"): missing singleton, missing table with outbox, repeated construction, admission refusal and retained operation evidence.
+
+#### Commands run / actual results
+
+All Node commands ran in `worker/` with `export PATH=/home/box/.local/node22/bin:$PATH`. No dependencies installed; no credential files read, network calls, git writes or deployment.
+
+- `npx biome check --write src/channel.ts test/workspace-binding.test.ts`: exit **0**; formatted both edited files.
+- First continuation `npm run typecheck`: exit **0**. First `npm run lint`: exit **0**, 158 files, no fixes.
+- First `npx vitest run test/workspace-binding.test.ts test/m1-migration.test.ts`: exit **1**, localhost listener `EPERM` before assertions.
+- After migration hardening, `npx biome check --write src/channel.ts test/workspace-binding.test.ts test/m1-migration.test.ts`: exit **0**, three files checked, two formatted.
+- Final `npm run typecheck`: exit **0**. Final `npm run lint`: exit **0**, 158 files, no fixes.
+- Final `npx vitest run test/workspace-binding.test.ts test/m1-migration.test.ts`: exit **1**, `listen EPERM: operation not permitted 127.0.0.1`, Node v22.23.5. **No runtime assertions passed or are claimed executed.**
+- `git diff --check`: exit **0** before this notes append. Full suites: **not run**, manager-owned. Existing tests/helpers remain unmodified by this continuation.
+
+#### Deviations and escalations
+
+- The plan explicitly requires keeping activation denied if an uncovered entry point needs P3 work (`m1/p1/P1_PLAN.md:81`). That restriction remains in force. Binding HTTP requests still return 503 (`worker/src/workspace-api.ts:126`); no reservation/link coordinator, fresh dual-authority operation, operation polling, activation or unbind recovery is claimed complete.
+- The outstanding MCP admission-before-body/dispatch boundary remains (`worker/src/mcp/server.ts:81`, `:90`, `:95`). Fixing the admission-in-flight race above does not fence requests that already received admission. The prior escalation therefore remains unresolved; manager/reviewer scope resolution is needed before activation. Asked whether to authorize the broader fencing work; no affirmative authorization has been received at the time of this record.
+- `recovery_required` is a conservative corruption/interruption state, not an automatic repair or unbind. It never silently restores legacy access. Runtime recovery tests remain blocked by the sandbox listener restriction.
+
+### S3 continuation — outstanding read cancellation
+
+S3 remains **partial**. Continued the existing files; no `S3_DONE.md` is written.
+
+#### Changes (file:line + symbol)
+
+- `worker/src/channel.ts:769` (`prepareBinding`): after the durable pending transaction succeeds, resolve outstanding transcript, terminal and history requests before closing sockets. The existing request answer callbacks remove their entries and clear timers (`worker/src/channel.ts:1456`, `worker/src/channel.ts:1876`). Failed pending transactions never reach cancellation.
+- `worker/src/channel.ts:1324` (`readTranscript`) and `worker/src/channel.ts:1368` (`readTerminal`): reject locally managed state before resource lookup; capture generation and check it again after the wrapper await, before recording a successful read or returning its data.
+- `worker/src/channel.ts:1779` (`withLocalEvents`): reject locally managed state and discard retained history when generation changes during the machine-history await. This internal history path throws a fixed denial rather than returning a page containing pre-transition Events. A uniform public HTTP translation is not implemented here; activation remains disabled (`worker/src/workspace-api.ts:126`).
+
+#### Tests added (authored, not executed assertions)
+
+- `worker/test/workspace-binding.test.ts:155` — it("discards history captured before a pending transition while its result is outstanding"): deterministically start a history read with a retained Event, enter pending before its promise resumes, expect rejection and verify the stored Event remains intact.
+- `worker/test/workspace-binding.test.ts:170` — it("denies transcript and screen reads before resolving managed Channel resource identities"): pending reads deny even for nonexistent Agent IDs.
+- Cancellation of live wrapper requests and the complete response/dispatch boundary remain without runtime evidence; these two cases do not establish complete fencing.
+
+#### Commands run / actual results
+
+Node commands ran in `worker/` with `export PATH=/home/box/.local/node22/bin:$PATH`.
+
+- `npx biome check --write src/channel.ts test/workspace-binding.test.ts`: exit **0**, two files checked, no fixes.
+- `npm run typecheck`: exit **0**.
+- `npm run lint`: exit **0**, 158 files checked, no fixes.
+- `npx vitest run test/workspace-binding.test.ts test/m1-migration.test.ts`: exit **1** before assertions, `listen EPERM: operation not permitted 127.0.0.1`, Node v22.23.5. No runtime test pass claimed.
+- `git diff --check`: exit **0** before and after this notes update.
+- Full suites: **not run**, manager-owned. No dependency installation, network, git write, deployment or credential-file read.
+
+#### Deviations and escalations
+
+- Read cancellation and local result checks reduce the outstanding asynchronous-read gap, but do not resolve the previously recorded MCP pre-admission/dispatch gap (`worker/src/mcp/server.ts:81`, `:90`, `:95`). No binding coordinator, operation polling or unbind implementation is claimed complete.
+- The binding safety fallback remains mandatory: `m1/p1/P1_PLAN.md:81` says “If an uncovered entry point requires P3 work, keep binding activation denied and report it rather than open access.” Requested an explicit scope extension for MCP dispatch and necessary new fencing tests through the asynchronous clarification tool. No affirmative response received when writing this note; no outside-ownership file was changed. The request is about this binding trust boundary, not permission to run static checks or write the currently owned files.
+
+### S3 option B — chunk 1: transition fences and bounded binding reads
+
+- Coordinator authorization in this task resolves the prior MCP ownership escalation. `worker/src/channel.ts:485` (`binding`) caches the singleton; constructor uses bounded `PRAGMA table_info` instead of scanning sqlite_master. `bindingState`/`bindingCurrent` (`:719`, `:730`) perform no SQL per request. Pending commits refresh memory synchronously after the transaction, never before a possible rollback (`prepareBinding`, `:753`). This addresses the reported row budgets; runtime budgets are **not measured here**.
+- `worker/src/index.ts:287` (`dispatch`) and `:369` discard HTTP responses after generation changes. `worker/src/mcp/server.ts:88` captures the admission generation before parsing the body and discards single/batch results after changes; tool Channel reads carry the same generation. Channel upgrades capture/recheck generation, socket tags retain it across hibernation, queued socket dispatch refuses old tags (`worker/src/channel.ts:2036`). No permits, stream leases, or permissive managed paths added.
+- New fixture fix: `worker/test/workspace-binding.test.ts:158` it("discards history captured before a pending transition while its result is outstanding") now stores JSON actor data, as required by Event deserialization; same correction in the new migration fixture. SQL-corruption tests reconstruct Channel to model startup and load deliberately modified durable binding state.
+- Commands in worker/ with Node 22: first combined biome/typecheck/lint shell command exited **1**, with duplicate local `tag` diagnostics (individual exits were not captured); renamed it `bindingTag`. Final `npx biome check --write src/channel.ts src/index.ts src/mcp/server.ts test/workspace-binding.test.ts test/m1-migration.test.ts`, `npm run typecheck`, and `npm run lint` each exited **0**. `git diff --check`: **0**. Vitest **not run**, per sandbox instruction. Existing tests/helpers untouched.
+
+### S3 option B — chunk 2: durable coordinator and activation
+
+- `worker/src/organization.ts:536` (`coordinateBinding`) now reserves workspace/repo, journals generation and phase, installs Channel pending CAS, atomically commits the Workspace link/revision/audit, and finalizes Channel. Retries use the durable operation ID or original scoped idempotency key. Losing CAS records terminal conflict and releases its reservation. Unbind follows the same protocol with an explicit acknowledgment that legacy access resumes. Operations poll only for original actor or active org admin (`bindingOperation`, `:519`); polling cannot mutate/recover without fresh authority.
+- `worker/src/channel.ts:756` (`bindingOwner`) uses existing fresh `isOwner` with dev bypass disabled and additionally checks GitHub's permission response user.id against the native numeric identity; missing reader/identity/lookup refuses. `prepareBinding` (`:781`) handles bind/unbind pending generations and durable local evidence; `finishBinding` (`:839`) commits/replays the final local outcome. Linked/pending managed data stays denied.
+- `worker/src/workspace-api.ts:114` exposes operation polling; `:133` replaces the 503 activation stub with native authenticated orchestration, ALLOWED_REPOS guard, field allowlist, and signed-session login. `shared/src/m1.ts:115` defines the binding journal; NativeWorkspace now optionally records its Channel.
+- Constructor refinement (`worker/src/channel.ts:495`): final normal-start path reads the binding singleton by primary key once; missing table alone enters additive migration; missing row with existing table/outbox remains recovery_required. This supersedes chunk 1's intermediate PRAGMA implementation and further reduces startup reads.
+- Commands (worker/, Node 22): biome, typecheck and lint each exit **0** after coordinator and 503 removal. Intermediate lint exit 0 reported a non-null assertion warning; removed it, final checks exit **0**, no warnings. Vitest **not run** (sandbox restriction). Tests for this chunk are being added next; no runtime correctness or rows-read pass claimed.
+- Recovery is explicitly driven by an authenticated POST/DELETE retry, not GET or a background actor with stale repo-admin proof. This preserves the fresh dual-authority requirement; unavailable/revoked actors leave pending transitions closed. No Package 3 authorization permits or UI added.
+
+### S3 option B — chunk 3: recovery, races, compatibility fixtures and final checks
+
+**S3 implementation now includes working binding/unbinding; earlier “partial/503 stub” statements are historical and superseded. Runtime verification remains manager-owned.**
+
+Changes/evidence:
+- `worker/src/channel.ts:493` (`constructor`) uses a primary-key singleton read on normal startup and additive migration only when absent; no binding SQL remains in `bindingState`/`bindingCurrent` (`:729`, `:740`). `prepareBinding` (`:781`) and `finishBinding` (`:846`) return the committed snapshot from their synchronous transactions, then assign it with no SQL or await before the next request can run. Failed evidence writes leave memory/durable state unchanged. This supersedes chunk 2's post-commit SQL refresh; row budgets require manager measurement.
+- Native repo-admin proof uses existing `Access.isOwner` (`worker/src/access.ts:156`, fresh GitHub lookup `worker/src/github/rest.ts:117`) without collaborator cache/grace or dev admission, plus numeric user.id from a fresh permission response (`worker/src/channel.ts:756`). Missing configured GitHub reader denies. No existing GitHub modules changed.
+- `worker/src/organization.ts:536` (`coordinateBinding`) returns operation ID on recoverable errors; `:519` authorizes operation polling. `:685`–`:696` adds final `channel.bind.complete`/`channel.unbind.complete` audit evidence alongside final journal acknowledgment/reservation cleanup, distinct from org-link commit audit. Terminal losing CAS cannot silently reactivate. `shared/src/m1.ts:112`, `:115` type error operation IDs/journal; `:33` records optional Workspace Channel reference.
+- `worker/src/workspace-api.ts:115`, `:134` expose operation reads and bind/unbind; `:160` propagates recovery IDs. Native auth and same-origin rules are retained through `readNativeActor`; request body cannot select actor/login. The 503 permanent activation stub is removed.
+- `worker/src/index.ts:287` (`dispatch`), `:369`–`:382` discard results or translate asynchronous transition exceptions to 403 after generation changes. `worker/src/mcp/server.ts:88`, `:99`, `:101`, `:109`, `:119`, `:123` carry generation through body parsing, Channel tool dispatch and final single/batch release. The synchronous Channel checks and last Worker RPC check are transition fences, not P3 permits or revocation leases.
+- `worker/src/channel.ts:1437`, `:1481`, `:1900`, `:2073`, `:2129` fence transcript, terminal, history, upgrades and queued WS dispatch. WS generation tags survive hibernation/attachment updates. Linked/pending data admission remains refused for all callers until P3; unbind generation remains monotonic.
+- The history fixture's JSON actor correction (`worker/test/workspace-binding.test.ts:207`, `worker/test/m1-migration.test.ts:14`) matches `rowToEvent`'s `JSON.parse(row.actor)` (`worker/src/channel.ts:393`). Existing tests/helpers remain untouched.
+
+Tests authored in `worker/test/workspace-binding.test.ts` (not executed here; earlier foundation titles remain except obsolete stub expectation):
+- `:74` — "binds with fresh repo admin and workspace manage".
+- `:230` — "refuses binding without repo admin even with cached collaborator admission".
+- `:240` — "refuses binding without workspace manage".
+- `:259` — "refuses active workspace viewers binding and unbinding despite fresh repo admin".
+- `:290` — "refuses binding when GitHub lookup fails without legacy grace".
+- `:300` — "refuses recycled login or unavailable numeric identity proof".
+- `:308` — "rejects nonhuman binding actors and legacy sessions".
+- `:331` — "rejects a channel already bound to another workspace and releases the losing reservation".
+- `:355` — "replays binding operations by key and operation ID without incrementing generation".
+- `:368` — "scopes operation reads to the original actor or an organization admin".
+- `:392` — "unbinds only with both authorities and explicit warning then restores legacy behavior".
+- `:424` — generated titles `recovers ${mode} interruption at ${interruption} without repeating its generation`: modes `bind`, `unbind`; interruptions `generation`, `pending`, `prepared`, `committed`, `activation`, `done` (12 cases). SQL triggers interrupt durable phase/evidence writes; retries assert original operation ID, no repeated generation, and managed denial while pending. Before the Channel pending CAS, reservation alone has not changed legacy Channel admission; after org unlink plus Channel unlink agree, final journal acknowledgment may be retried without re-closing legacy access.
+- `:488` — "fences MCP admitted before its request body completes including batches".
+- `:523` — "discards MCP tool results outstanding at the pending transition".
+- `:571` — "refuses stale HTTP stream upgrades after bind and unbind while fresh legacy upgrades work".
+- `:592` — "discards HTTP history results admitted before a pending transition".
+- `:617` — "rejects changed-mode idempotency replay and competing operations".
+- `:630` — "fences queued WS dispatch from old generations after legacy access resumes".
+- `:650` — "keeps linked HTTP history persons and stream data closed until Package 3".
+
+`worker/test/m1-migration.test.ts:73` adds "preserves pending linked and unbinding fences across repeated startup". The three earlier migration tests remain; seeded Events, Persons, Skills/Artifacts chunk data and repeated startup fixtures are preserved (`:10`, `:39`, `:49`). No production data was accessed.
+
+Commands/results:
+- All Node commands used Node 22 PATH in worker/. No vitest was attempted in this continuation, per the explicit sandbox instruction; all test assertions and full suites are **not run** here.
+- Intermediate test typechecks reported unused future MCP-test imports and a missing `HistoryPage.unavailable` fixture field. Those were fixed; the combined shells' final exit was 0 because lint followed typecheck, so individual failing typecheck exit codes were not captured. No pass is claimed for those intermediate typechecks.
+- Final separately captured `npm run typecheck`: **exit 0**; `npm run lint`: **exit 0**, 158 files; focused `npx biome check src/channel.ts src/index.ts src/mcp/server.ts src/organization.ts src/workspace-api.ts ../shared/src/m1.ts test/workspace-binding.test.ts test/m1-migration.test.ts`: **exit 0**, eight files. The last added restart fixture was subsequently formatted and typecheck/lint again reported no errors (combined shell exit 0). Final whitespace check recorded below.
+- New SQL cache/startup implementation addresses all three reported row-read regressions structurally, but the unchanged `worker/test/rows-read.test.ts` must establish the actual budgets at the manager gate. No regression pass claimed.
+
+Deviations / Escalations:
+- Coordinator-approved option B resolves the earlier MCP scope escalation. Full managed authorization, execution identity, projections, permits, leases and UI remain P2–P4 work; managed content stays closed.
+- Safest deny for actor substitution: operation recovery retries require the original actor, still authorized for workspace.manage and fresh numeric-bound repo-admin. Org admins may inspect operations but cannot take over another actor's pending mutation. The design explicitly authorizes admin **reads**, not actor substitution on recovery; revoked/unavailable original actors therefore leave incomplete transitions closed rather than granting implied takeover authority (`worker/src/organization.ts:591`). If administrative takeover is desired, its explicit authority/audit contract needs a later decision. Normal same-actor interruption recovery is implemented.
+- Legacy network-buffered frames already sent before the pending CAS cannot be recalled (proposal §8); new pending/linked sends/admissions are fenced. Full membership-revocation stream leases remain P3, not a claim of S3.
+- No dependencies, network requests, credential-file reads, git writes, deploys, existing test changes or remote operations performed.
+
+Final saved-state gate (after restart fixture and S3_DONE.md): individually captured `npm run typecheck` **0**, `npm run lint` **0**, focused eight-file `npx biome check` **0**, `git diff --check` **0**. Completion handoff: `m1/p1/S3_DONE.md:1`. Runtime tests remain **not run**; manager commands are in that file.

@@ -85,6 +85,10 @@ export async function handleMcp(
     });
   }
 
+  const generation = admitted.generation ?? -1;
+  const current = () => channel.bindingCurrent(generation);
+  const denied = () =>
+    reply(rpcError(null, -32002, "Channel binding changed; managed access is closed until P3."), 403);
   let body: unknown;
   try {
     body = await request.json();
@@ -92,16 +96,17 @@ export async function handleMcp(
     return reply(rpcError(null, -32700, "The body is not JSON."), 400);
   }
   // The only view of the Channel any tool gets: its reads.
+  if (!(await current())) return denied();
   const readOnly: ReadOnlyChannel = {
-    askChannel: (question) => channel.askChannel(question),
-    askBrief: (page) => channel.askBrief(page),
+    askChannel: (question) => channel.askChannel(question, generation),
+    askBrief: (page) => channel.askBrief(page, generation),
   };
   // And of GitHub: reads as the App's installation, never a write (ADR 0041).
   const rest = readerFor(env, repo);
   const github = rest === null ? null : readOnlyGitHub(rest, repo);
   // And of the repo's Langfuse project, its row read only when the costs tool asks (ADR 0044).
   const langfuse = async () => {
-    const stored = await channel.langfuseProject();
+    const stored = await channel.langfuseProject(generation);
     if (stored === null) return null;
     return { connection: connection(stored), keys: await openKeys(secret, repo, stored) };
   };
@@ -111,9 +116,11 @@ export async function handleMcp(
       return reply(rpcError(null, -32600, `A batch must hold 1 to ${MAX_BATCH} messages.`), 400);
     }
     const answers = (await Promise.all(body.map(answer))).filter((a) => a !== null);
+    if (!(await current())) return denied();
     return answers.length === 0 ? new Response(null, { status: 202, headers: CORS }) : reply(answers);
   }
   const single = await answer(body);
+  if (!(await current())) return denied();
   return single === null ? new Response(null, { status: 202, headers: CORS }) : reply(single);
 }
 

@@ -1,6 +1,6 @@
 # Agent principals are separate from executions
 
-Status: proposed, 2026-11-13, M1 Gate 0. Builds on ADR 0007 and the existing Agent/Host terminology; does not redefine an Agent ID.
+Status: accepted design, 2026-11-13, following Gate 0 confirmation (m1/reviews/G0_CONFIRM_1.md). P2/P3 implementation remains future work. Builds on ADR 0007 and the existing Agent/Host terminology; does not redefine an Agent ID.
 
 ## Context
 

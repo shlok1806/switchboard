@@ -1,6 +1,6 @@
 # One policy function guards managed Workspaces
 
-Status: proposed, 2026-11-13, M1 Gate 0. Builds on ADR 0005, 0007, 0040 and 0041. Central policy is deterministic authorization, not a central LLM orchestrator.
+Status: accepted design, 2026-11-13, following Gate 0 confirmation (m1/reviews/G0_CONFIRM_1.md). P2/P3 implementation remains future work. Builds on ADR 0005, 0007, 0040 and 0041. Central policy is deterministic authorization, not a central LLM orchestrator.
 
 ## Context
 
@@ -18,7 +18,7 @@ Status: proposed, 2026-11-13, M1 Gate 0. Builds on ADR 0005, 0007, 0040 and 0041
 
 ## Consequences
 
-[DECISION] More policy RPCs and fail-closed outages are accepted for a verifiable boundary. No positive HTTP authorization cache or legacy outage grace on managed paths. Permission grants do not constrain direct GitHub access or tools outside Switchboard. Independent Gate 0 review must resolve any trust-boundary contradiction before implementation.
+[DECISION] More policy RPCs and fail-closed outages are accepted for a verifiable boundary. No positive HTTP authorization cache or legacy outage grace on managed paths. Permission grants do not constrain direct GitHub access or tools outside Switchboard. Gate 0 confirmation accepted this design; implementation still requires independent review and runtime evidence.
 
 ## Alternatives considered
 

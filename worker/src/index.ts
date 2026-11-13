@@ -177,6 +177,7 @@ async function handleStream(request: Request, url: URL, channel: ChannelStub, ca
   // The Durable Object only ever sees the admitted Person and Agent, never a credential.
   const target = new URL("https://channel/stream");
   target.searchParams.set("person", caller.person);
+  target.searchParams.set("generation", url.searchParams.get("bindingGeneration") ?? "-1");
   if (caller.agent !== undefined) target.searchParams.set("agent", caller.agent);
   if (host !== null) target.searchParams.set("host", host);
   // A Host that answers history reads (ADR 0037).
@@ -283,84 +284,101 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
     ...(admitted.librarian === true ? { librarian: true } : {}),
   };
 
-  if (caller.agent !== undefined) {
-    if (hostRoute !== null && !agentMayCall(hostRoute)) return fail(403, HOST_AGENT_REFUSED);
-    const allowed =
-      AGENT_ROUTES.has(route) ||
-      hostRoute !== null ||
-      (taskRoute && request.method === "GET") ||
-      claimRoute !== null ||
-      branchRoute !== null ||
-      // An Agent reads skills and publishes its Person's, when its Person asks (ADR 0039).
-      skillRoute !== null ||
-      // An Agent reads the Brief and writes its pages (ADR 0042).
-      briefRoute !== null ||
-      // An Agent reads artifacts and publishes its Person's (ADR 0053).
-      artifactRoute !== null ||
-      // An Agent reads GitHub and the Librarian Feed; only the librarian moves its cursor (ADR 0045).
-      librarianRoute !== null ||
-      (agentRoute !== null && AGENT_ROUTE_KINDS.has(agentRoute.kind));
-    if (!allowed) return fail(403, AGENT_REFUSED);
-    if (
-      agentRoute !== null &&
-      "id" in agentRoute &&
-      agentRoute.kind !== "touched-files" &&
-      // Any session on the Channel may read any session's transcript (ADR 0019), summary and screen (ADR 0024).
-      agentRoute.kind !== "transcript" &&
-      agentRoute.kind !== "summary" &&
-      agentRoute.kind !== "terminal" &&
-      agentRoute.id !== caller.agent
-    ) {
-      return fail(403, `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`);
+  const dispatch = async (): Promise<Response> => {
+    if (caller.agent !== undefined) {
+      if (hostRoute !== null && !agentMayCall(hostRoute)) return fail(403, HOST_AGENT_REFUSED);
+      const allowed =
+        AGENT_ROUTES.has(route) ||
+        hostRoute !== null ||
+        (taskRoute && request.method === "GET") ||
+        claimRoute !== null ||
+        branchRoute !== null ||
+        // An Agent reads skills and publishes its Person's, when its Person asks (ADR 0039).
+        skillRoute !== null ||
+        // An Agent reads the Brief and writes its pages (ADR 0042).
+        briefRoute !== null ||
+        // An Agent reads artifacts and publishes its Person's (ADR 0053).
+        artifactRoute !== null ||
+        // An Agent reads GitHub and the Librarian Feed; only the librarian moves its cursor (ADR 0045).
+        librarianRoute !== null ||
+        (agentRoute !== null && AGENT_ROUTE_KINDS.has(agentRoute.kind));
+      if (!allowed) return fail(403, AGENT_REFUSED);
+      if (
+        agentRoute !== null &&
+        "id" in agentRoute &&
+        agentRoute.kind !== "touched-files" &&
+        // Any session on the Channel may read any session's transcript (ADR 0019), summary and screen (ADR 0024).
+        agentRoute.kind !== "transcript" &&
+        agentRoute.kind !== "summary" &&
+        agentRoute.kind !== "terminal" &&
+        agentRoute.id !== caller.agent
+      ) {
+        return fail(403, `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`);
+      }
+      // The librarian writes Brief pages and nothing else (ADR 0045); its wrapper still reports on its session.
+      if (
+        caller.librarian === true &&
+        !librarianMayCall(request.method, {
+          brief: briefRoute !== null,
+          librarian: librarianRoute !== null,
+          wrapperReport: agentRoute !== null && LIBRARIAN_WRAPPER_REPORTS.has(agentRoute.kind),
+          stream: route === "GET /api/stream",
+          toolCall: claimRoute?.kind === "tool-call",
+        })
+      ) {
+        return fail(403, LIBRARIAN_REFUSED);
+      }
     }
-    // The librarian writes Brief pages and nothing else (ADR 0045); its wrapper still reports on its session.
-    if (
-      caller.librarian === true &&
-      !librarianMayCall(request.method, {
-        brief: briefRoute !== null,
-        librarian: librarianRoute !== null,
-        wrapperReport: agentRoute !== null && LIBRARIAN_WRAPPER_REPORTS.has(agentRoute.kind),
-        stream: route === "GET /api/stream",
-        toolCall: claimRoute?.kind === "tool-call",
-      })
-    ) {
-      return fail(403, LIBRARIAN_REFUSED);
+
+    if (taskRoute) return handleTaskRoute(request, inner, channel, caller);
+    if (hostRoute !== null) return handleHostRoute(hostRoute, request, channel, caller);
+    if (agentRoute !== null) return handleAgentRoute(agentRoute, request, inner, channel, caller);
+    if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel, caller);
+    if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel, caller);
+    if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);
+    if (skillRoute !== null) return handleSkillRoute(skillRoute, request, inner, channel, caller);
+    if (briefRoute !== null) return handleBriefRoute(briefRoute, request, inner, channel, caller);
+    if (artifactRoute !== null) return handleArtifactRoute(artifactRoute, request, inner, channel, caller);
+    if (librarianRoute !== null)
+      return handleLibrarianRoute(librarianRoute, request, inner, env, repo, channel, caller);
+    if (settingsRoute !== null) {
+      return handleSettingsRoute(settingsRoute, request, channel, caller, { env, repo, dev: devMode(env, url) });
     }
-  }
 
-  if (taskRoute) return handleTaskRoute(request, inner, channel, caller);
-  if (hostRoute !== null) return handleHostRoute(hostRoute, request, channel, caller);
-  if (agentRoute !== null) return handleAgentRoute(agentRoute, request, inner, channel, caller);
-  if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel, caller);
-  if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel, caller);
-  if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);
-  if (skillRoute !== null) return handleSkillRoute(skillRoute, request, inner, channel, caller);
-  if (briefRoute !== null) return handleBriefRoute(briefRoute, request, inner, channel, caller);
-  if (artifactRoute !== null) return handleArtifactRoute(artifactRoute, request, inner, channel, caller);
-  if (librarianRoute !== null) return handleLibrarianRoute(librarianRoute, request, inner, env, repo, channel, caller);
-  if (settingsRoute !== null) {
-    return handleSettingsRoute(settingsRoute, request, channel, caller, { env, repo, dev: devMode(env, url) });
+    switch (route) {
+      case "POST /api/join":
+        return handleJoin(request, channel, caller);
+      case "GET /api/events":
+        return handleHistory(inner, channel);
+      case "GET /api/persons":
+        return json<PersonsResponse>({ persons: await channel.listPersons() });
+      case "GET /api/relay":
+        return json<RelayResponse>({ relay: relaySettings(env) });
+      case "POST /api/updates":
+        return handlePostUpdate(request, channel, caller);
+      case DIRECTIVE_ROUTE:
+        return handleDirectiveRoute(request, channel, caller);
+      case POST_MEMORY_ROUTE:
+      case GET_MEMORY_ROUTE:
+        return handleMemoryRoute(route, request, inner, channel, caller);
+      default:
+        return handleStream(request, inner, channel, caller);
+    }
+  };
+  inner.searchParams.set("bindingGeneration", String(admitted.generation));
+  let response: Response;
+  try {
+    response = await dispatch();
+  } catch (error) {
+    if (!(await channel.bindingCurrent(admitted.generation ?? -1)))
+      return fail(403, "Channel binding changed; managed access is closed until P3.");
+    throw error;
   }
-
-  switch (route) {
-    case "POST /api/join":
-      return handleJoin(request, channel, caller);
-    case "GET /api/events":
-      return handleHistory(inner, channel);
-    case "GET /api/persons":
-      return json<PersonsResponse>({ persons: await channel.listPersons() });
-    case "GET /api/relay":
-      return json<RelayResponse>({ relay: relaySettings(env) });
-    case "POST /api/updates":
-      return handlePostUpdate(request, channel, caller);
-    case DIRECTIVE_ROUTE:
-      return handleDirectiveRoute(request, channel, caller);
-    case POST_MEMORY_ROUTE:
-    case GET_MEMORY_ROUTE:
-      return handleMemoryRoute(route, request, inner, channel, caller);
-    default:
-      return handleStream(request, inner, channel, caller);
+  if (!(await channel.bindingCurrent(admitted.generation ?? -1))) {
+    void response.body?.cancel();
+    return fail(403, "Channel binding changed; managed access is closed until P3.");
   }
+  return response;
 }
 
 /** The Dashboard's page for a Channel: the static site's index.html, which reads the repo from the path. */
