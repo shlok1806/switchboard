@@ -5,7 +5,19 @@
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { type AddressInfo, connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -430,6 +442,8 @@ beforeAll(async () => {
     SWITCHBOARD_IDLE_AFTER_SECONDS: "1",
     SWITCHBOARD_HEARTBEAT_SECONDS: "0.5",
     CLAUDE_CONFIG_DIR: join(scratch, "claude"),
+    // The wrappers' background Dataset sync (ADR 0054) never reads or writes the tester's own.
+    SWITCHBOARD_DATASET_DIR: join(scratch, "dataset"),
     TMPDIR: suiteTmp,
     // A page an Agent publishes opens in its Person's browser: here, a script that notes the URL.
     BROWSER: BROWSER_SCRIPT(),
@@ -858,6 +872,45 @@ describe("the Hook Capture", () => {
 
     // The session's settings and socket are cleaned up when it ends.
     await expect(stat(settingsPath)).rejects.toThrow();
+  });
+});
+
+describe("the Dataset (ADR 0054)", () => {
+  it("copies a wrapped session in the background when it ends, without holding its hooks up", async () => {
+    const dataset = join(scratch, "dataset-hook");
+    await mkdir(dataset, { recursive: true });
+    await writeFile(
+      join(dataset, "sources.json"),
+      JSON.stringify({
+        schema: 1,
+        sources: [{ cli: "claude-code", dir: join(scratch, "claude"), accounts: [] }],
+        keepUnattributed: true,
+      }),
+    );
+    const term = new Terminal(["run", "claude"], { SWITCHBOARD_DATASET_DIR: dataset });
+    const { agentEnv: id } = await term.started();
+    await term.waitForOutput(/hook SessionStart exit=0/);
+    term.type("turn\r");
+    await term.waitForOutput(/FAKE-CLAUDE turn done/);
+    term.type("quit\r");
+    expect(await term.exited).toBe(0);
+
+    // The session's own hooks never waited on the sync: each returned in well under a second.
+    for (const run of term.output.matchAll(/FAKE-CLAUDE hook (Stop|SessionEnd) exit=(\d+) ms=(\d+)/g)) {
+      expect(run[2]).toBe("0");
+      expect(Number(run[3])).toBeLessThan(1000);
+    }
+    const short = id.split("/")[2] ?? "";
+    const session = await waitFor("the session in the Dataset", async () => {
+      const ids = await readdir(join(dataset, "sessions", "claude-code")).catch(() => [] as string[]);
+      const found = ids.find((name) => name.startsWith(short));
+      if (found === undefined) return undefined;
+      return readFile(join(dataset, "sessions", "claude-code", found, "session.json"), "utf8")
+        .then((text) => JSON.parse(text) as { id: string; account: { source: string } })
+        .catch(() => undefined);
+    });
+    expect(session.account.source).toBe(join(scratch, "claude"));
+    expect(await readFile(join(dataset, "sync.log"), "utf8")).toMatch(/Synced /);
   });
 });
 

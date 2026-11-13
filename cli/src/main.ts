@@ -15,6 +15,7 @@
 //   switchboard help onboarding   (ADR 0038)
 //   switchboard skills list|show|publish|install   (ADR 0039)
 //   switchboard artifacts list|show|publish|open|pull|delete   (ADR 0053)
+//   switchboard dataset sync|stats   (ADR 0054)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
@@ -22,6 +23,7 @@ import { ARTIFACTS_USAGE, artifactsCommand } from "./artifacts-command";
 import { ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig } from "./config";
+import { DATASET_USAGE, datasetCommand } from "./dataset/command";
 import {
   HOST_USAGE,
   hostCommand,
@@ -60,6 +62,7 @@ ${ROLE_USAGE.replace("Usage:\n", "")}
 ${ATTACH_USAGE.replace("Usage:\n", "")}
 ${SKILLS_USAGE.replace("Usage:\n", "")}
 ${ARTIFACTS_USAGE.replace("Usage:\n", "")}
+${DATASET_USAGE.replace("Usage:\n", "")}
 
 \`login\` signs you in with GitHub (a code to enter at github.com), once: the session
 works for every Channel on that host whose repo you have write access to. The
@@ -130,7 +133,15 @@ holds a secret is refused before it leaves this machine. \`open\` opens one on t
 Dashboard; \`pull\` saves its page to .switchboard/artifacts/<name>.html in this repo (else
 this folder, or --to), to edit and publish again. \`delete\` removes one you first published,
 every version of it, after asking (--yes skips the question). Your Agents publish and read
-them too, but only you delete one.`;
+them too, but only you delete one.
+
+\`dataset sync\` copies your own sessions (Claude Code's and Codex's files on this machine,
+with their subagents and workflow runs) into ~/.switchboard/dataset, redacted, with each
+linked to how it turned out: its repo, commits, pull requests and whether they merged, its
+Switchboard Tasks and its Greenroom runs (ADR 0054). Nothing is uploaded. The first sync
+writes sources.json, the accounts whose sessions are kept; after it, every wrapped session
+syncs in the background when a turn or the session ends. --relink links every session's
+outcomes again; --offline skips gh and the Channel. \`dataset stats\` counts what it holds.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -235,6 +246,8 @@ async function main(argv: string[]): Promise<number> {
       return skillsCommand(rest);
     case "artifacts":
       return artifactsCommand(rest);
+    case "dataset":
+      return datasetCommand(rest);
     case "mcp":
       return runMcpServer();
     case "run": {

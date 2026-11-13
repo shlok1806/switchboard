@@ -6,7 +6,7 @@
 import { readFile, stat } from "node:fs/promises";
 import type { Cli, TranscriptEntry, TranscriptKind, TranscriptResponse } from "../../shared/src/index";
 import { cleanTranscriptText, ESCAPE_SEQUENCE, TRANSCRIPT_PAGE_BYTES } from "../../shared/src/index";
-import { MASK, maskSecrets } from "../../shared/src/mask";
+import { MASK, maskSecretsByKind } from "../../shared/src/mask";
 
 /** The longest an entry of each kind runs, after redaction. */
 const MAX_CHARS: Record<TranscriptKind, number> = {
@@ -27,17 +27,28 @@ const HEADER =
 /** A cookie header's whole value: it holds several cookies, any of which may be a session. */
 const COOKIE = /(?<![A-Za-z0-9_-])((?:set-)?cookie)(\\?["']?[ \t]*:[ \t]*\\?["']?)()([^\r\n"'\\]+)/gi;
 
-/** Masks what `maskSecrets` finds, and the credentials in HTTP headers. */
-export function redactTranscript(text: string): { text: string; count: number } {
-  let count = 0;
-  const mask = (match: string, name: string, separator: string, scheme: string | undefined, value: string) => {
-    if (value.includes(MASK)) return match;
-    count += 1;
-    return `${name}${separator}${scheme ?? ""}${MASK}`;
-  };
-  const headers = text.replace(HEADER, mask).replace(COOKIE, mask);
-  const masked = maskSecrets(headers);
-  return { text: masked.text, count: count + masked.count };
+/** What a header credential's mask counts under. */
+export const HEADER_KIND = "an HTTP credential header";
+/** What a cookie header's mask counts under. */
+export const COOKIE_KIND = "a cookie header";
+
+/**
+ * Masks what `maskSecrets` finds, and the credentials in HTTP headers. `kinds` counts
+ * each mask by what it hid, never the value.
+ */
+export function redactTranscript(text: string): { text: string; count: number; kinds: Record<string, number> } {
+  const kinds: Record<string, number> = {};
+  const masker =
+    (kind: string) => (match: string, name: string, separator: string, scheme: string | undefined, value: string) => {
+      if (value.includes(MASK)) return match;
+      kinds[kind] = (kinds[kind] ?? 0) + 1;
+      return `${name}${separator}${scheme ?? ""}${MASK}`;
+    };
+  const headers = text.replace(HEADER, masker(HEADER_KIND)).replace(COOKIE, masker(COOKIE_KIND));
+  const masked = maskSecretsByKind(headers);
+  for (const [kind, n] of Object.entries(masked.kinds)) kinds[kind] = (kinds[kind] ?? 0) + n;
+  const count = Object.values(kinds).reduce((sum, n) => sum + n, 0);
+  return { text: masked.text, count, kinds };
 }
 
 /** One entry before it is numbered, redacted and cut. */
@@ -231,20 +242,28 @@ export function condense(cli: Cli, file: string): Raw[] {
 const SPLIT_TAIL = new RegExp(`${MASK.replace(/\*/g, "\\*")}(?:(?:${ESCAPE_SEQUENCE})+[A-Za-z0-9_-]+)+`, "g");
 
 /**
- * Redacted and cut to its kind's length; redacted first, as cutting a secret can hide it.
  * Redacted twice, around removing escape sequences: before, a colour code is the break
  * that shows where a key glued to a word starts (`OK\e[32mghp_...`); after, a key that
- * colour codes split (`sk-ant-\e[1m...`) is whole again.
+ * colour codes split (`sk-ant-\e[1m...`) is whole again. Shared by Transcript Reads
+ * and the Dataset (ADR 0054), so both redact alike.
  */
-function shown(raw: Raw): { text: string; count: number } {
-  const first = redactTranscript(raw.text);
+export function redactCleaned(raw: string): { text: string; count: number; kinds: Record<string, number> } {
+  const first = redactTranscript(raw);
   // A mask, then a colour code, then more of a token: the rest of a key both glued and
   // split (`OK\e[32mghp_abc\e[1mdef`). It goes with the mask.
   const joined = first.text.replace(SPLIT_TAIL, MASK);
-  const second = redactTranscript(cleanTranscriptText(joined).trim());
+  const second = redactTranscript(cleanTranscriptText(joined));
+  const kinds = { ...first.kinds };
+  for (const [kind, n] of Object.entries(second.kinds)) kinds[kind] = (kinds[kind] ?? 0) + n;
+  return { text: second.text, count: first.count + second.count, kinds };
+}
+
+/** Redacted and cut to its kind's length; redacted first, as cutting a secret can hide it. */
+function shown(raw: Raw): { text: string; count: number } {
+  const { text: redacted, count } = redactCleaned(raw.text);
+  const text = redacted.trim();
   const max = MAX_CHARS[raw.kind];
-  const text = second.text;
-  return { text: text.length > max ? `${text.slice(0, max - 1)}…` : text, count: first.count + second.count };
+  return { text: text.length > max ? `${text.slice(0, max - 1)}…` : text, count };
 }
 
 /**

@@ -551,6 +551,34 @@ runs. A machine that runs a `switchboard` from before this change has no store u
 you update it: run `npm ci` in `switchboard/cli`, then restart `switchboard run` and
 `switchboard host run`.
 
+### Your Dataset: your own sessions, kept for training
+
+`switchboard dataset sync` copies your own sessions on this machine into a local Dataset,
+`~/.switchboard/dataset/`, to train on later (ADR 0054). Nothing in it leaves the machine.
+
+- It reads Claude Code's session files (with their subagents and workflow runs) and Codex's
+  rollouts, and writes one record per session, its turns, and its outcome: the repo, branches
+  and commits it worked on, its pull requests and whether they merged, closed or were reverted
+  (asked of `gh`), its Switchboard Tasks and Claims, and the verdicts of the Greenroom runs it
+  started. What cannot be linked is listed with why.
+- Every string is redacted first, as a transcript is for the Channel (API keys, tokens, `.env`
+  values, `Authorization` headers). `redactions.json` counts what was masked, by kind, never the
+  values.
+- Only your own sessions: the first sync writes `sources.json` with the accounts logged in here,
+  and sessions under any other account are skipped. Edit it to add or remove one.
+- Your corrections, the prompts where you said no or steered the work elsewhere, and the tool
+  calls you refused, are marked on their turns as they were said.
+- After the first sync, every session you run through `switchboard run` syncs in the background
+  when a turn or the session ends; it never holds the session up. `SWITCHBOARD_DATASET=off` stops
+  that. A sync copies only sessions that changed, and is safe to run again or interrupt.
+
+```sh
+switchboard dataset sync [--relink] [--offline]
+switchboard dataset stats [--json]
+```
+
+`docs/dataset.md` describes every file and field.
+
 ### Leads: an Agent that runs a team
 
 You can make one of your Agents a lead (ADR 0018). It may then start Agents on your
