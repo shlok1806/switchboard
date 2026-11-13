@@ -52,6 +52,8 @@ export interface GitHubSignIn {
   pollDevice(deviceCode: string): Promise<DevicePoll>;
   /** The GitHub login a user token belongs to. */
   userLogin(userToken: string): Promise<string>;
+  /** Verified numeric identity; optional only for legacy sign-in fixtures. */
+  userIdentity?(userToken: string): Promise<{ githubId: string; login: string }>;
 }
 
 const encoder = new TextEncoder();
@@ -247,6 +249,15 @@ export class GitHubApp implements GitHubSignIn {
       headers: { ...API_HEADERS, Authorization: `Bearer ${userToken}` },
     });
     return (await read<{ login: string }>(response)).login;
+  }
+
+  async userIdentity(userToken: string): Promise<{ githubId: string; login: string }> {
+    const response = await fetch(`${this.api}/user`, {
+      headers: { ...API_HEADERS, Authorization: `Bearer ${userToken}` },
+    });
+    const user = await read<{ id: number; login: string }>(response);
+    if (!Number.isSafeInteger(user.id) || user.id <= 0) throw new Error("Invalid GitHub identity");
+    return { githubId: String(user.id), login: user.login };
   }
 
   private cacheKey(repo: string): string {

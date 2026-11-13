@@ -81,6 +81,8 @@ export interface NativeMutation {
   key: string;
   requestId: string;
   expectedRevision?: number;
+  /** Trusted HTTP adapter hashes original fields before applying PATCH defaults. */
+  requestFingerprint?: string;
   command: OrganizationCommand;
 }
 export type OrganizationCommand =

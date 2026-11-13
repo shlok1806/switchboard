@@ -91,3 +91,70 @@ All Node commands used `export PATH=/home/box/.local/node22/bin:$PATH`, working 
 - Final standalone `worker/ npm run lint` with Node 22 PATH: **exit 0**, 153 files checked, no fixes.
 - Final `worker/ npx vitest run test/organizations.test.ts`: **exit 1**, identical local-listener `EPERM` before assertions. The file contains 29 authored `it()` cases; zero are claimed executed/passed.
 - Final `git diff --check`: **exit 0**. No existing test file/helper was edited; runtime compatibility remains unverified in this sandbox.
+
+## S2
+
+### Changes (file:line + symbol)
+
+- `worker/src/github/app.ts:56` (`GitHubSignIn.userIdentity`) adds an optional numeric identity seam so legacy fixtures remain compatible; `:254` (`GitHubApp.userIdentity`) validates a positive safe-integer GitHub account id from the authenticated user response. No login-to-identity upgrade is provided.
+- `worker/src/session.ts:104` (`signNativeSession`) and `:121` (`verifyNativeSession`) use a distinct versioned native payload with issuer, Person UUID, numeric GitHub id, displayed login, issue time and bounded expiry. Existing `signSession`/`verifySession` stay at `:77`/`:83` with legacy semantics.
+- `worker/src/auth.ts:124` (`readNativeActor`) authenticates native bearer or cookie sessions, requires explicit matching Origin on cookie writes, and verifies the directory association. Authorization headers never fall back to cookies. Query tokens, legacy login-only sessions and non-Person credentials do not authenticate here.
+- `worker/src/auth-api.ts:129` (`startWebFlow`), `:164` (`finishWebFlow`), `:206` (`startDeviceFlow`), `:248` (`pollDeviceFlow`), `:318` (`nativeSession`): explicit `destination=native` authenticates destination in signed OAuth/device state; native sign-in requires numeric identity and bypasses Channel admission only on the native branch. Native device browser session issuance also requires same-origin Origin. Legacy member admission remains at `:90`, `:198`, `:288`; existing FakeSignIn/helpers were not edited.
+- `worker/src/index.ts:378` dispatches native APIs before repo routing. `worker/src/workspace-api.ts:8` (`handleWorkspaceApi`) implements org create/list/get/rename; org member list/invite/change/revoke; exact invitation acceptance; workspace create/list/get/update; workspace member list/invite/grant/change/revoke; and admin audit read. Commands use explicit fields and the authenticated actor. Unknown fields/actions deny. Native replies carry no-store, requestId/revision and uniform JSON errors (`:10`); foreign resource denials have no metadata (`:121`).
+- `worker/src/workspace-api.ts:30` signs expiring actor/path-scoped cursors, `:71` scopes idempotency keys to the resource path, `:89` validates revision headers. Original request fingerprints preserve retries across PATCH default application (`:237`); `shared/src/m1.ts:85` adds trusted `NativeMutation.requestFingerprint`, consumed by `worker/src/organization.ts:206`. No raw body is persisted in replay/audit.
+- `worker/src/organization.ts:200` (`mutate`) resolves invitation numeric targets before the local transaction, then checks current authoritative roles inside it. `:380` restricts manager invitations to already-active org members without role changes; `:408` rechecks inviter workspace administration at acceptance. Workspace invitations now use workspace.member.manage, rather than requiring org administration (`:246`).
+- `worker/src/organization.ts:521` (`auditRecords`) adds timestamp/id keyset continuation so equal-timestamp rows are not skipped. `:550` (`catalog`) adds bounded authorized workspace/member pages; every page rechecks current authority. Existing workspace metadata policy remains authoritative (`worker/src/organization.ts:502`).
+- `worker/src/identity-directory.ts:32` (`personForGithub`) is an internal identity lookup for invitation restriction. `:76` (`createOrganization`) bounds creation to ten new reservations per Person per UTC day; existing idempotent reservations bypass quota consumption. The table is lazily created at `:12`.
+- `worker/test/m1-helpers.ts:8` provides absolute production-origin native requests and `:25` an independent `NativeSignIn` fixture. Existing test/helper files are unchanged except appended S2 cases in the explicitly owned organizations test (`worker/test/organizations.test.ts:498`).
+
+### Tests added
+
+Authored assertions only; runtime execution was blocked before assertions.
+
+`worker/test/native-auth.test.ts`:
+- `:28` — it("supports native browser and device sign-in without repo permission").
+- `:47` — it("preserves legacy browser and device membership prerequisites").
+- `:55` — it("preserves Person UUID across login changes").
+- `:59` — it("rejects recycled-login legacy sessions for native access").
+- `:66` — it("denies agent legacy connector and Host tokens on api m1").
+- `:76` — it("rejects forged expired or mismatched native identity").
+- `:87` — it("rejects native cookie writes with missing or foreign Origin").
+- `:114` — it("ignores body-supplied actor identity").
+- `:126` — it("authenticates native destination in device state").
+
+`worker/test/organizations.test.ts` (only appended cases):
+- `:500` — it("requires Idempotency-Key on every native write").
+- `:509` — it("returns no-store and uniform JSON errors").
+- `:522` — it("reauthorizes every bounded cursor page").
+- `:544` — it("exercises native create update invite accept grant revoke and audit over HTTP").
+- `:588` — it("replays original PATCH fields and rejects changed bodies and stale If-Match").
+- `:610` — it("allows manager invitations only within existing org membership and rechecks inviter authority").
+- `:673` — it("bounds organization creation while retaining idempotent retries").
+
+### Commands run / actual results
+
+Node commands used `export PATH=/home/box/.local/node22/bin:$PATH` in `worker/`.
+
+- `npm run typecheck`: initial exit 1 for two possibly-undefined accesses; corrected. Subsequent runs including the final production/test revision exited **0**.
+- `npx biome check --write` on owned changed source/new tests and shared type: exit **0**; initial optional-chain/non-null warnings fixed. No existing assertions were reformatted (`git diff -- worker/test/organizations.test.ts` shows only appended lines).
+- `npm run lint`: exit **0**, final run checked 156 files, no fixes.
+- `npx vitest run test/organizations.test.ts test/native-auth.test.ts`: attempted twice, both exit **1** before assertions with `listen EPERM: operation not permitted 127.0.0.1` (Node v22.23.5). **Zero runtime tests are claimed passed.** This includes the final test revision; the last tiny production change (invalid-path/identity-body validation) was statically checked afterward.
+- `git diff --check`: exit **0** before notes; final check also recorded below. Read-only status/diff and bounded source/document reads supported inspection. No git writes, installs, network, deploy or credential-file reads.
+- Full suites: **not run**, manager-owned. Runtime legacy compatibility and new security assertions remain for manager verification.
+
+### Deviations from plan/proposal
+
+- No new dependencies. The native GitHub seam is optional at the interface level solely for backward-compatible legacy fixtures; native issuance denies if absent (`worker/src/auth-api.ts:325`). Session envelope HMAC remains v1; the native payload has a separate kind and version (`worker/src/session.ts:112`).
+- Workspace PATCH fills omitted fields from authorized metadata and commits against If-Match. Trusted requestFingerprint preserves original-body replay semantics (`worker/src/workspace-api.ts:158`, `:237`). DELETE and explicit POST workspace grants also require a revision, preserving S1's stricter membership transaction requirement (`worker/src/organization.ts:271`).
+- Scope-bound cursors expire after ten minutes and contain a last key, not a permission grant (`worker/src/workspace-api.ts:51`). Audit continuation is a timestamp/id pair (`:135`). Organization creation's concrete local rate bound is ten per UTC day (`worker/src/identity-directory.ts:76`); proposal requested a bound without specifying a number.
+- HTTP tests are appended to the explicitly S2-owned organizations file per the plan's ownership/test mapping; pre-existing cases and all legacy helpers remain unchanged (`worker/test/organizations.test.ts:498`).
+
+### Escalations
+
+- **Conservative invitation boundary:** accept numeric GitHub-id targets only; no unverified login resolution. Workspace managers may invite existing active org members at their current org role, but may not enroll/reactivate or promote org members. Org admin/owner invitations remain the route for org enrollment. This follows the separate organization.member.manage ceiling; ambiguous attempts deny (`worker/src/organization.ts:380`, `:408`).
+- S1's conflicting-active-org-role and archived-workspace restrictions remain in force (`worker/src/organization.ts:427`, `worker/src/policy.ts:64`). Unsupported owner-reserved lifecycle/ceiling changes remain denied by the HTTP allowlist (`worker/src/workspace-api.ts:164`), rather than silently implementing P2/P3 policy.
+- **Verification blocker:** sandbox listener EPERM prevents runtime evidence. Manager must run both targeted files and legacy suites before accepting the slice. Native APIs expose administrative metadata only; Channel binding/closed managed paths are S3 (`m1/p1/P1_PLAN.md:44`), and general-user enablement remains deferred (`m1/M1_ARCHITECTURE_PROPOSAL.md:219`).
+
+### Final S2 whitespace check
+
+- `git diff --check`: **exit 0**, including the S2 notes and completion marker.

@@ -494,3 +494,189 @@ describe("P1 adversarial lifecycle cases", () => {
     }
   });
 });
+
+// HTTP cases extend S1 without changing its existing assertions or fixtures.
+describe("native P1 HTTP contract", () => {
+  it("requires Idempotency-Key on every native write", async () => {
+    const { nativeFetch, nativeIdentity } = await import("./m1-helpers");
+    const { token } = await nativeIdentity();
+    for (const method of ["POST", "PATCH", "DELETE"]) {
+      const response = await nativeFetch("/api/m1/organizations", token, { method, body: "{}" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { reason: "idempotency_key_required" } });
+    }
+  });
+  it("returns no-store and uniform JSON errors", async () => {
+    const { nativeFetch, nativeIdentity } = await import("./m1-helpers");
+    const { token } = await nativeIdentity();
+    for (const path of ["/api/m1/organizations/foreign", "/api/m1/agents"]) {
+      const response = await nativeFetch(path, token);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(await response.json()).toMatchObject({
+        error: { code: "RESOURCE_DENIED", reason: "resource_denied" },
+        policyRevision: 0,
+        requestId: expect.any(String),
+      });
+    }
+  });
+  it("reauthorizes every bounded cursor page", async () => {
+    const { M1_SECRET, nativeFetch, nativeIdentity } = await import("./m1-helpers");
+    const { signPayload } = await import("../src/session");
+    const { actor, token } = await nativeIdentity();
+    for (let i = 0; i < 51; i++) await directory().indexCandidate(actor.personId, crypto.randomUUID());
+    const response = await nativeFetch("/api/m1/organizations", token);
+    const body = (await response.json()) as { items: unknown[]; cursor: string };
+    expect(body.items).toEqual([]);
+    expect(body.cursor).toBeTruthy();
+    expect((await nativeFetch(`/api/m1/organizations?cursor=${body.cursor}`, token)).status).toBe(200);
+    const other = await nativeIdentity("999", "other");
+    expect((await nativeFetch(`/api/m1/organizations?cursor=${body.cursor}`, other.token)).status).toBe(400);
+    const forgedScope = await signPayload(M1_SECRET, {
+      kind: "m1-cursor",
+      scope: `${actor.personId}:/api/m1/organizations/${org.id}/members`,
+      after: "",
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+    expect((await nativeFetch(`/api/m1/organizations/${org.id}/members?cursor=${forgedScope}`, token)).status).toBe(
+      404,
+    );
+  });
+  it("exercises native create update invite accept grant revoke and audit over HTTP", async () => {
+    const { nativeFetch, nativeIdentity } = await import("./m1-helpers");
+    const { token } = await nativeIdentity("100", "owner");
+    const bobSession = await nativeIdentity("200", "bob");
+    let seq = 0;
+    const write = (path: string, body: unknown, method = "POST", revision?: number, session = token) =>
+      nativeFetch(path, session, {
+        method,
+        headers: {
+          "Idempotency-Key": `http-${++seq}`,
+          ...(revision === undefined ? {} : { "If-Match": String(revision) }),
+        },
+        body: JSON.stringify(body),
+      });
+    const root = `/api/m1/organizations/${org.id}`;
+    expect((await write(root, { name: "Renamed" }, "PATCH", 1)).status).toBe(200);
+    const created = (await (await write(`${root}/workspaces`, { name: "Operations", acceptManager: true })).json()) as {
+      value: NativeWorkspace;
+      policyRevision: number;
+    };
+    const w = `/api/m1/workspaces/${created.value.id}`;
+    const invitation = (await (
+      await write(`${root}/members`, { githubId: "200", organizationRole: "member" })
+    ).json()) as { value: MembershipInvitation };
+    expect(
+      (await write(`/api/m1/invitations/${invitation.value.id}/accept`, {}, "POST", undefined, bobSession.token))
+        .status,
+    ).toBe(200);
+    const current = (await stub().metadata(owner))?.policyRevision ?? 0;
+    expect(
+      (await write(`${w}/members`, { personId: bob.personId, role: "viewer", reason: "explicit" }, "POST", current))
+        .status,
+    ).toBe(200);
+    expect((await nativeFetch(w, bobSession.token)).status).toBe(200);
+    expect((await nativeFetch(`${root}/audit`, bobSession.token)).status).toBe(404);
+    expect((await nativeFetch(`${root}/audit`, token)).status).toBe(200);
+    expect((await write(`${root}/members/${bob.personId}`, { role: "member" }, "DELETE", current + 1)).status).toBe(
+      200,
+    );
+    expect((await nativeFetch(w, bobSession.token)).status).toBe(404);
+  });
+});
+
+describe("S2 HTTP replay and invitation authority", () => {
+  it("replays original PATCH fields and rejects changed bodies and stale If-Match", async () => {
+    const { nativeFetch, nativeIdentity } = await import("./m1-helpers");
+    const { token } = await nativeIdentity("100", "owner");
+    const w = await workspace();
+    const path = `/api/m1/workspaces/${w.id}`;
+    const rev = await revision();
+    const patch = (name: string, key: string, expected = rev) =>
+      nativeFetch(path, token, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": key, "If-Match": String(expected) },
+        body: JSON.stringify({ name }),
+      });
+    const first = await patch("Changed", "retry");
+    expect(first.status).toBe(200);
+    expect(await (await patch("Changed", "retry")).json()).toMatchObject({ value: { name: "Changed" } });
+    expect((await patch("Different", "retry")).status).toBe(409);
+    expect((await patch("Stale", "stale")).status).toBe(409);
+    const outsiderSession = await nativeIdentity("300", "outsider");
+    const denied = await nativeFetch(path, outsiderSession.token);
+    expect(denied.status).toBe(404);
+    expect(await denied.json()).toMatchObject({ policyRevision: 0, error: { reason: "resource_denied" } });
+  });
+  it("allows manager invitations only within existing org membership and rechecks inviter authority", async () => {
+    await invite(bob);
+    await invite(outsider);
+    const w = await workspace();
+    value(
+      await mutate(
+        {
+          kind: "workspace.member",
+          workspaceId: w.id,
+          personId: bob.personId,
+          role: "manager",
+          status: "active",
+          reason: "manager",
+        },
+        owner,
+        "manager",
+        await revision(),
+      ),
+    );
+    const invitation = value(
+      await mutate(
+        {
+          kind: "invitation.create",
+          githubId: outsider.githubId,
+          organizationRole: "member",
+          workspaceId: w.id,
+          workspaceRole: "viewer",
+        },
+        bob,
+      ),
+    ) as MembershipInvitation;
+    expect(
+      await mutate(
+        {
+          kind: "invitation.create",
+          githubId: "99999",
+          organizationRole: "member",
+          workspaceId: w.id,
+          workspaceRole: "viewer",
+        },
+        bob,
+      ),
+    ).toMatchObject({ ok: false });
+    value(
+      await mutate(
+        {
+          kind: "workspace.member",
+          workspaceId: w.id,
+          personId: bob.personId,
+          role: "viewer",
+          status: "active",
+          reason: "demoted",
+        },
+        owner,
+        "demote-manager",
+        await revision(),
+      ),
+    );
+    expect(await mutate({ kind: "invitation.accept", invitationId: invitation.id }, outsider)).toMatchObject({
+      ok: false,
+      reason: "inviter_authority_lost",
+    });
+  });
+  it("bounds organization creation while retaining idempotent retries", async () => {
+    for (let i = 0; i < 9; i++)
+      expect((await directory().createOrganization(owner, `Org ${i}`, `quota-${i}`, `quota-${i}`)).ok).toBe(true);
+    expect(await directory().createOrganization(owner, "Excess", "quota-extra", "quota-extra")).toMatchObject({
+      ok: false,
+      reason: "creation_rate_limited",
+    });
+    expect((await directory().createOrganization(owner, "Org A", "create", "request-create")).ok).toBe(true);
+  });
+});

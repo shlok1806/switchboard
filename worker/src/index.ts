@@ -1,3 +1,4 @@
+import { handleWorkspaceApi } from "./workspace-api";
 // The central Switchboard Worker (ADR 0004). One Channel per GitHub repo (ADR 0007),
 // each a Durable Object named by `owner/repo`. Routes:
 //
@@ -374,6 +375,7 @@ async function handleDashboard(request: Request, url: URL, env: Env): Promise<Re
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/api/m1" || url.pathname.startsWith("/api/m1/")) return handleWorkspaceApi(request, url, env);
     if (`${request.method} ${url.pathname}` === WEBHOOK_ROUTE) {
       return handleWebhook(request, env, (repo) => channelOf(env, repo));
     }

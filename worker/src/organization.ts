@@ -197,9 +197,13 @@ export class Organization extends DurableObject<Env> {
     };
   }
   async mutate(input: NativeMutation): Promise<NativeResult<MutationValue>> {
+    const invitationTarget =
+      input.command.kind === "invitation.create" && input.command.workspaceId
+        ? await this.env.IDENTITY_DIRECTORY.getByName("directory-v1").personForGithub(input.command.githubId)
+        : null;
     const digest = await crypto.subtle.digest(
       "SHA-256",
-      new TextEncoder().encode(canonical([input.command, input.expectedRevision])),
+      new TextEncoder().encode(input.requestFingerprint ?? canonical([input.command, input.expectedRevision])),
     );
     const fingerprint = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
     return this.ctx.storage.transactionSync(() => {
@@ -209,7 +213,7 @@ export class Organization extends DurableObject<Env> {
       const { actor, command: c } = input;
       const revision = state.organization.policyRevision;
       const workspaceId = "workspaceId" in c ? c.workspaceId : undefined;
-      const workspaceResource = workspaceId && c.kind !== "invitation.create";
+      const workspaceResource = workspaceId;
       const resource: PolicyResource = {
         kind: workspaceResource ? "workspace" : "organization",
         organizationId: state.organization.id,
@@ -234,13 +238,13 @@ export class Organization extends DurableObject<Env> {
       const action =
         c.kind === "organization.rename"
           ? "organization.manage"
-          : c.kind === "organization.member" || c.kind === "invitation.create"
+          : c.kind === "organization.member" || (c.kind === "invitation.create" && !workspaceId)
             ? "organization.member.manage"
             : c.kind === "workspace.create"
               ? "workspace.create"
               : c.kind === "workspace.update"
                 ? "workspace.manage"
-                : c.kind === "workspace.member"
+                : c.kind === "workspace.member" || c.kind === "invitation.create"
                   ? "workspace.member.manage"
                   : "invitation.accept";
       const invitation = c.kind === "invitation.accept" ? state.invitations[c.invitationId] : undefined;
@@ -374,6 +378,15 @@ export class Organization extends DurableObject<Env> {
             (c.workspaceId ? !workspaceRole(c.workspaceRole) : c.workspaceRole !== undefined)
           )
             return refuse("invalid_invitation", 400);
+          // Workspace managers may invite existing org members, never enroll or promote org members.
+          if (
+            c.workspaceId &&
+            !["owner", "admin"].includes(state.members[actor.personId]?.role ?? "") &&
+            (!invitationTarget ||
+              state.members[invitationTarget]?.status !== "active" ||
+              state.members[invitationTarget]?.role !== c.organizationRole)
+          )
+            return refuse("organization_membership_required");
           value = {
             id: `${state.organization.id}:${crypto.randomUUID()}`,
             organizationId: state.organization.id,
@@ -395,7 +408,16 @@ export class Organization extends DurableObject<Env> {
           const inviter = state.members[invitation.createdBy];
           if (
             inviter?.status !== "active" ||
-            !["owner", "admin"].includes(inviter.role) ||
+            (!["owner", "admin"].includes(inviter.role) &&
+              (!invitation.workspaceId ||
+                state.members[actor.personId]?.status !== "active" ||
+                state.members[actor.personId]?.role !== invitation.organizationRole ||
+                decide(
+                  { ...actor, personId: invitation.createdBy },
+                  "workspace.member.manage",
+                  { kind: "workspace", organizationId: state.organization.id, id: invitation.workspaceId },
+                  this.context(state, { ...actor, personId: invitation.createdBy }, invitation.workspaceId),
+                ).decision !== "allow")) ||
             (invitation.organizationRole === "owner" && inviter.role !== "owner")
           )
             return refuse("inviter_authority_lost");
@@ -496,7 +518,7 @@ export class Organization extends DurableObject<Env> {
     }
     return state.workspaces[id] ?? null;
   }
-  auditRecords(actor: PersonActor, after = 0): AdminAuditRecord[] | null {
+  auditRecords(actor: PersonActor, after = 0, afterId = ""): AdminAuditRecord[] | null {
     const state = this.load();
     if (
       !state ||
@@ -511,8 +533,10 @@ export class Organization extends DurableObject<Env> {
       return null;
     return this.ctx.storage.sql
       .exec<{ body: string; count: number; last_timestamp: number }>(
-        "SELECT body,count,last_timestamp FROM audit WHERE timestamp>? AND timestamp>=? ORDER BY timestamp,id LIMIT 100",
+        "SELECT body,count,last_timestamp FROM audit WHERE (timestamp>? OR (timestamp=? AND id>?)) AND timestamp>=? ORDER BY timestamp,id LIMIT 100",
         after,
+        after,
+        afterId,
         Date.now() - 90 * DAY,
       )
       .toArray()
@@ -521,6 +545,42 @@ export class Organization extends DurableObject<Env> {
         count: row.count,
         lastTimestamp: row.last_timestamp,
       }));
+  }
+  /** Bounded metadata catalogs; authority is rechecked on every page. */
+  catalog(actor: PersonActor, kind: "workspaces" | "members" | "workspace-members", workspaceId?: string, after = "") {
+    const state = this.load();
+    if (!state || !validPerson(actor) || !this.metadata(actor)) return null;
+    if (kind !== "workspaces") {
+      const resource: PolicyResource = {
+        kind: workspaceId ? "workspace" : "organization",
+        organizationId: state.organization.id,
+        id: workspaceId ?? state.organization.id,
+      };
+      if (
+        decide(
+          actor,
+          workspaceId ? "workspace.member.manage" : "organization.member.manage",
+          resource,
+          this.context(state, actor, workspaceId),
+        ).decision !== "allow"
+      )
+        return null;
+    }
+    const entries =
+      kind === "workspaces"
+        ? Object.entries(state.workspaces).filter(([id]) => this.workspace(actor, id, true) !== null)
+        : kind === "members"
+          ? Object.entries(state.members)
+          : Object.entries(state.workspaceMembers[workspaceId ?? ""] ?? {});
+    const page = entries
+      .filter(([id]) => id > after)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(0, 51);
+    return {
+      items: page.slice(0, 50).map(([, value]) => value),
+      next: page.length > 50 ? (page[49]?.[0] ?? null) : null,
+      policyRevision: state.organization.policyRevision,
+    };
   }
   /** Derived candidates can be stale; directory always rechecks metadata(). */
   async repairDirectory(): Promise<void> {

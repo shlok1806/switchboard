@@ -9,6 +9,7 @@ export class IdentityDirectory extends DurableObject<Env> {
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS identities (github TEXT PRIMARY KEY, person TEXT NOT NULL UNIQUE, login TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS candidates (person TEXT NOT NULL, organization TEXT NOT NULL, PRIMARY KEY(person,organization));
       CREATE TABLE IF NOT EXISTS creations (scope TEXT PRIMARY KEY, name TEXT NOT NULL, organization TEXT NOT NULL, expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS creation_limits (person TEXT PRIMARY KEY, day INTEGER NOT NULL, count INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, github TEXT NOT NULL, organization TEXT NOT NULL);`);
   }
   resolve(githubId: string, login: string): PersonActor | null {
@@ -27,6 +28,13 @@ export class IdentityDirectory extends DurableObject<Env> {
       );
       return { kind: "person", personId, githubId };
     });
+  }
+  personForGithub(githubId: string): string | null {
+    return (
+      this.ctx.storage.sql
+        .exec<{ person: string }>("SELECT person FROM identities WHERE github=?", githubId)
+        .toArray()[0]?.person ?? null
+    );
   }
   associated(actor: PersonActor): boolean {
     return (
@@ -65,10 +73,23 @@ export class IdentityDirectory extends DurableObject<Env> {
         .exec<{ name: string; organization: string }>("SELECT name,organization FROM creations WHERE scope=?", scope)
         .toArray()[0];
       if (old) return old.name === name ? old.organization : null;
+      const day = Math.floor(Date.now() / 86_400_000);
+      const limit = this.ctx.storage.sql
+        .exec<{ day: number; count: number }>("SELECT day,count FROM creation_limits WHERE person=?", actor.personId)
+        .toArray()[0];
+      if (limit?.day === day && limit.count >= 10) return "rate_limited";
+      this.ctx.storage.sql.exec(
+        "INSERT OR REPLACE INTO creation_limits VALUES(?,?,?)",
+        actor.personId,
+        day,
+        limit?.day === day ? limit.count + 1 : 1,
+      );
       const id = crypto.randomUUID();
       this.ctx.storage.sql.exec("INSERT INTO creations VALUES(?,?,?,?)", scope, name, id, Date.now() + 86_400_000);
       return id;
     });
+    if (reserved === "rate_limited")
+      return { ok: false, status: 403, reason: "creation_rate_limited", policyRevision: 0 };
     if (!reserved) return { ok: false, status: 409, reason: "idempotency_conflict", policyRevision: 0 };
     const org = this.env.ORGANIZATION.getByName(reserved);
     const result = await org.initialize(reserved, name, actor, requestId);

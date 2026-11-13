@@ -9,6 +9,7 @@
 
 import type { PersonName } from "../../shared/src/index";
 import { AGENT_TOKEN_PREFIX, personFromLogin } from "../../shared/src/index";
+import { validPerson } from "./policy";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -97,4 +98,49 @@ export function newAgentToken(): string {
 export async function tokenHash(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(token));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Native sessions deliberately use a separate payload kind from legacy sessions. */
+export function signNativeSession(
+  secret: string,
+  issuer: string,
+  actor: import("../../shared/src/m1").PersonActor,
+  login: string,
+  now = Date.now(),
+) {
+  return signPayload(secret, {
+    version: 1,
+    issuer,
+    ...actor,
+    kind: "native-session",
+    login,
+    iat: Math.floor(now / 1000),
+    exp: Math.floor(now / 1000) + SESSION_TTL_SECONDS,
+  });
+}
+export async function verifyNativeSession(
+  secret: string,
+  issuer: string,
+  token: string,
+  now = Date.now(),
+): Promise<import("../../shared/src/m1").PersonActor | null> {
+  const p = await verifyPayload(secret, token);
+  if (
+    p?.kind !== "native-session" ||
+    p.version !== 1 ||
+    p.issuer !== issuer ||
+    typeof p.login !== "string" ||
+    !/^[a-zA-Z0-9-]{1,39}$/.test(p.login) ||
+    typeof p.iat !== "number" ||
+    !Number.isInteger(p.iat) ||
+    p.iat * 1000 > now ||
+    typeof p.exp !== "number" ||
+    !Number.isInteger(p.exp) ||
+    p.exp <= p.iat ||
+    p.exp * 1000 <= now ||
+    p.exp - p.iat > SESSION_TTL_SECONDS
+  )
+    return null;
+  const actor = { kind: "person", personId: p.personId, githubId: p.githubId };
+  return validPerson(actor) ? actor : null;
 }

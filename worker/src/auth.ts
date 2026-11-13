@@ -6,7 +6,13 @@
 
 import type { PersonName } from "../../shared/src/index";
 import { AGENT_TOKEN_PREFIX, channelKey, SESSION_COOKIE } from "../../shared/src/index";
-import { DEV_SESSION_SECRET, MIN_SESSION_SECRET_LENGTH, tokenHash, verifySession } from "./session";
+import {
+  DEV_SESSION_SECRET,
+  MIN_SESSION_SECRET_LENGTH,
+  tokenHash,
+  verifyNativeSession,
+  verifySession,
+} from "./session";
 
 declare global {
   interface Env {
@@ -112,4 +118,25 @@ export async function readCredential(request: Request, url: URL, env: Env): Prom
     }
   }
   return { ok: true, credential: { kind: "session", person }, viaCookie: fromCookie !== null };
+}
+
+/** Native cookie writes require an explicit same-origin Origin; bearer is independent. */
+export async function readNativeActor(
+  request: Request,
+  url: URL,
+  env: Env,
+): Promise<import("../../shared/src/m1").PersonActor | null> {
+  const authorization = request.headers.get("Authorization");
+  const token =
+    authorization === null
+      ? readCookie(request, SESSION_COOKIE)
+      : authorization.startsWith("Bearer ")
+        ? authorization.slice(7).trim()
+        : null;
+  if (!token || (authorization === null && request.method !== "GET" && request.headers.get("Origin") !== url.origin))
+    return null;
+  const secret = sessionSecret(env, devMode(env, url));
+  if (!secret) return null;
+  const actor = await verifyNativeSession(secret, url.origin, token);
+  return actor && (await env.IDENTITY_DIRECTORY.getByName("directory-v1").associated(actor)) ? actor : null;
 }
