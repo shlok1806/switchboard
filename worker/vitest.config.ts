@@ -59,8 +59,18 @@ const vars = {
 export default defineConfig({
   plugins: [
     cloudflareTest({
-      wrangler: { configPath: "./wrangler.jsonc" },
-      miniflare: { bindings: { ...vars, ...secrets } },
+      // Explicit local configuration prevents Wrangler from reading credential files.
+      main: "./src/index.ts",
+      miniflare: {
+        compatibilityDate: "2026-08-15",
+        bindings: { ...vars, ...secrets },
+        durableObjects: {
+          CHANNEL: { className: "Channel", useSQLite: true },
+          ORGANIZATION: { className: "Organization", useSQLite: true },
+          IDENTITY_DIRECTORY: { className: "IdentityDirectory", useSQLite: true },
+        },
+        assets: { directory: "./site", binding: "ASSETS" },
+      },
     }),
   ],
   test: { setupFiles: ["./test/setup.ts"] },

@@ -20,12 +20,14 @@ interface __BaseEnv_Env {
 	MCP_EXTRA_REDIRECT_URIS: "";
 	JEV_API_KEY: string;
 	GITHUB_WEBHOOK_SECRET: string;
+	ORGANIZATION: DurableObjectNamespace<import("./src/index").Organization>;
+	IDENTITY_DIRECTORY: DurableObjectNamespace<import("./src/index").IdentityDirectory>;
 	CHANNEL: DurableObjectNamespace<import("./src/index").Channel>;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/index");
-		durableNamespaces: "Channel";
+		durableNamespaces: "Channel" | "Organization" | "IdentityDirectory";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

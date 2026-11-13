@@ -54,6 +54,8 @@ import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
 
 export { Channel } from "./channel";
+export { IdentityDirectory } from "./identity-directory";
+export { Organization } from "./organization";
 
 /** `/r/<owner>/<repo>/<rest>`: a Channel API call. */
 const CHANNEL_PATH = /^\/r\/([^/]+\/[^/]+)(\/api\/.*)$/;

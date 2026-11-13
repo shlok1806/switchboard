@@ -1,0 +1,11 @@
+# S1 implementation complete; runtime verification blocked
+- Added native P1 domain/command types (`shared/src/m1.ts:2`).
+- Added SQLite Organization aggregate with transactional membership/revision/audit/replay (`worker/src/organization.ts:53`).
+- Added numeric identity directory, idempotent creation, derived listings and invitation routing (`worker/src/identity-directory.ts:6`).
+- Added deterministic default-deny P1 policy (`worker/src/policy.ts:31`).
+- Added DO bindings/migration/exports and local test configuration (`worker/wrangler.jsonc:20`, `worker/vitest.config.ts:62`).
+- Added 29 storage/policy tests (`worker/test/organizations.test.ts:59`); existing tests/helpers untouched.
+- Observed final worker typecheck and lint exit 0; whitespace check exit 0.
+- Targeted Vitest attempted twice: exit 1, sandbox listener EPERM; no assertions ran.
+- Native HTTP/auth (S2), Channel binding/migration (S3), and P2–P4 are not implemented here.
+- Review conservative invitation-role conflicts and archived-workspace denial; details and evidence in `m1/p1/P1_IMPLEMENTATION_NOTES.md:17`.

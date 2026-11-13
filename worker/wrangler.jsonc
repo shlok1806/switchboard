@@ -18,9 +18,16 @@
   },
   "assets": { "directory": "./site", "binding": "ASSETS" },
   "durable_objects": {
-    "bindings": [{ "name": "CHANNEL", "class_name": "Channel" }]
+    "bindings": [
+      { "name": "CHANNEL", "class_name": "Channel" },
+      { "name": "ORGANIZATION", "class_name": "Organization" },
+      { "name": "IDENTITY_DIRECTORY", "class_name": "IdentityDirectory" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Channel"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Channel"] },
+    { "tag": "v2-m1-authorization", "new_sqlite_classes": ["Organization", "IdentityDirectory"] }
+  ],
   "vars": {
     // One Channel per GitHub repo (ADR 0007). While testing, only these repos
     // (comma-separated `owner/repo`) may have a Channel; empty allows any repo the
