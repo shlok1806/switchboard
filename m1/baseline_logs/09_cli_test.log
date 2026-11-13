@@ -1,0 +1,54 @@
+
+> @switchboard/cli@0.0.0 test
+> npm run build && vitest run
+
+
+> @switchboard/cli@0.0.0 build
+> esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/switchboard.js && esbuild src/hooks/hook-command.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/switchboard-hook.js
+
+
+  dist/switchboard.js  565.6kb
+
+⚡ Done in 19ms
+
+  dist/switchboard-hook.js  1.1kb
+
+⚡ Done in 2ms
+
+ RUN  v4.1.11 /home/box/engineering-workspace/worktrees/switchboard-m1/cli
+
+ ❯ test/terminal.test.ts (60 tests | 1 failed) 239ms
+     × reads the list again only once it changed, so a revoke is seen at the next frame 15ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/terminal.test.ts > switchboard attach > reads the list again only once it changed, so a revoke is seen at the next frame
+AssertionError: expected [ { …(3) } ] to match object [ { person: 'bub' } ]
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  [
+    {
+-     "person": "bub",
++     "person": "bob",
+    },
+  ]
+
+ ❯ test/terminal.test.ts:320:33
+    318|     const path = join(dir, "attach.json");
+    319|     await writeFile(path, (await readFile(path, "utf8")).replace('"bob…
+    320|     expect((await list()).keys).toMatchObject([{ person: "bub" }]);
+       |                                 ^
+    321|     await attachCommand(["revoke", FP], env);
+    322|     expect((await list()).keys).toEqual([]);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 34 passed (35)
+      Tests  1 failed | 699 passed (700)
+   Start at  14:02:54
+   Duration  412.12s (transform 3.34s, setup 0ms, import 6.79s, tests 434.47s, environment 3ms)
+

@@ -1,0 +1,18 @@
+# cmd: cd cli && npx vitest run test/terminal.test.ts -t 'reads the list again only once it changed' (x15 total; fs ext2/ext3)
+      Tests  1 passed | 59 skipped (60)
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  1 failed | 59 skipped (60)
+      Tests  1 passed | 59 skipped (60)
+      Tests  1 passed | 59 skipped (60)
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  1 failed | 59 skipped (60)
+      Tests  1 passed | 59 skipped (60)
+      Tests  1 passed | 59 skipped (60)
+      Tests  1 failed | 59 skipped (60)
+      Tests  1 failed | 59 skipped (60)
+      Tests  1 passed | 59 skipped (60)
+      Tests  1 failed | 59 skipped (60)
+      Tests  1 failed | 59 skipped (60)
+      Tests  1 failed | 59 skipped (60)
+      Tests  1 passed | 59 skipped (60)
+      Tests  1 passed | 59 skipped (60)
