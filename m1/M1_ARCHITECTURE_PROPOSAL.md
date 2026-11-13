@@ -1,0 +1,267 @@
+# Switchboard M1 Gate 0 architecture proposal
+
+Status: proposal for independent review, 2026-11-13. Binding contract: `SPEC.md` in this output directory, read in full. No implementation, tests, builds, installs, network requests or repository mutations were performed. Repository references are relative to `/home/box/engineering-workspace/worktrees/switchboard-m1` at `66abafbb15d68a40970b51eeac25928a9f7b80ad`. Proposed paths and tests do not exist yet unless identified as current evidence. [FACT-CODE] means inspected source; [FACT-TEST] means inspected assertions or supplied execution logs; [DOC-ONLY] means documentary evidence; [INFERENCE] identifies conclusions; [DECISION] identifies proposed design; [OPEN] identifies a decision still required. Each table inherits its stated tag.
+
+## 1. Current-state anchors
+
+| Current behavior [FACT-CODE] | Source and symbol |
+|---|---|
+| Browser GitHub code exchange learns a login, checks repo membership, issues a Switchboard cookie; device flow also checks membership before issuing a session. | `worker/src/auth-api.ts:170-192`, `:227-249`, `handleAuthRoute` and flow helpers |
+| Session is signed HMAC payload with login subject and 30-day expiry; agent credentials are random tokens hashed with SHA-256. | `worker/src/session.ts:17`, `:45-98`, `signSession`, `verifySession`, `newAgentToken`, `tokenHash` |
+| Session admission resolves login; agent admission resolves hash to AgentId/person, then checks collaborator write permission. Five-minute membership cache and one-hour outage grace apply. | `worker/src/access.ts:92-148`, `Access.admit/checkMember` |
+| Channel is one DO named by repo. SQL stores Events, People, agents, deliveries, memory and Brief; Skills/Artifacts also use storage API. | `worker/src/index.ts:63-65`, `channelOf`; `worker/src/channel.ts:485-522`, constructor |
+| Repo allowlist gates routing. Channel Owner means fresh GitHub admin permission. | `worker/src/auth.ts:54-66`, `channelRepo`; `worker/src/access.ts:156-166`, `isOwner` |
+| HTTP history supports IDs, tail, task/agent filters, replay and wakes. Tail can merge machine-local Events. | `worker/src/index.ts:97-142`, `handleHistory`; `worker/src/channel.ts:1590-1690`, history helpers |
+| WebSocket upgrade passes admitted person/agent/Host; connect replays history and sends agent roster snapshot. Broad broadcast reaches all non-Host sockets. | `worker/src/index.ts:165-182`, `handleStream`; `worker/src/channel.ts:1839-1875`, `fetch`; `:2360-2363`, `broadcast` |
+| Read-only MCP has separate credential admission and closures over Channel, GitHub and Langfuse reads. Tools are channel/github/brief/costs. | `worker/src/mcp/server.ts:74-108`, `handleMcp`; `worker/src/mcp/tools.ts:117`, `TOOLS` |
+| Transcript/screen requests go to running wrappers; readable checks existence, Gone state, caller resolution and concurrency, without owner consent. | `worker/src/channel.ts:1223-1319`, `readTranscript/readTerminal/readable` |
+| Persons send Directives; agent leads are restricted to their subtree. Continuation registration checks predecessor existence/self, then records lineage. | `worker/src/channel.ts:993-1007`, `sendDirective`; `:815-868`, `registerAgent/handOff` |
+
+[DOC-ONLY] `CONTEXT.md:7-11` reserves Channel for one repo; ADR 0007 describes GitHub identity, app writes and tokens; ADR 0008 preserves one login across Channels (`docs/adr/0007-github-identity-one-channel-per-repo.md:1-15`; `docs/adr/0008-one-login-serves-every-channel.md:1-25`). Connector architecture and live GitHub read intent remain ADR 0040/0041 (`docs/adr/0040-ask-the-channel-a-read-only-mcp-connector.md:1-35`; `docs/adr/0041-the-connectors-github-tool-reads-github-live.md:1-25`). M1 adds native Workspace terminology alongside Channel, explicitly superseding only repo Membership as authority on voluntarily linked Channels.
+
+[INFERENCE] Native M1 records are additions: `rg -n 'Organization|WorkspaceMembership|AgentPrincipal|AgentExecution|AgentGrant|policyRevision' worker/src worker/test shared/src cli/src cli/test dashboard/src dashboard/test -g '*.ts' -g '*.tsx'` returned no matches. This bounded search does not assert absence of unrelated strings in dependencies. Baseline reconciliation separately records source identity, totals and stale audit-review status.
+
+## 2. Storage placement and consistency
+
+[DECISION] Add SQLite-backed `Organization` DO per organization and `IdentityDirectory` DO named `directory-v1`. Keep Channel storage and algorithms intact. Organization owns OrganizationMembership, Workspace, WorkspaceMembership, AgentPrincipal, AgentExecution, AgentGrant, consent grants, policy revisions and authoritative administrative AuditRecords. Directory owns verified GitHub numeric-id ↔ Person UUID associations, invitation routing and a derived Person→organization index. Workspace IDs encode their parent organization UUID plus a random UUID, allowing direct routing without global scans. IDs are immutable, server-generated, uniqueness-constrained; names/logins are display data. Agent/execution IDs likewise carry organization routing information. Never accept a client-supplied parent inconsistent with the ID.
+
+| Option [DECISION] | Benefit | Cost / disposition |
+|---|---|---|
+| Organization DO + directory | Single serialized policy aggregate; atomic membership/grant/revision/audit changes; same SQLite/test model as Channel | Cross-object authorization needs explicit fencing; directory index is eventually consistent; selected |
+| D1 | Cross-org SQL listings and relational indexes convenient | Adds a second database/test/migration model; transaction and replica consistency would still not make Channel mutation atomic with policy; unnecessary for M1 |
+| Existing Channel DO | Few binding changes | Cannot own native repo-free Workspaces or consistent cross-Channel org policy; replicating grants into each Channel makes revoke correctness harder; rejected as authority |
+
+[FACT-CODE] Current configuration has `CHANNEL` and migration `v1` only (`worker/wrangler.jsonc:19-23`); tests already run `cloudflareTest` with Wrangler/Miniflare (`worker/vitest.config.ts:59-66`). [DECISION] Preserve both and add exactly bindings `{ "name":"ORGANIZATION", "class_name":"Organization" }`, `{ "name":"IDENTITY_DIRECTORY", "class_name":"IdentityDirectory" }`; append migration `{ "tag":"v2-m1-authorization", "new_sqlite_classes":["Organization","IdentityDirectory"] }`. Export both classes from `worker/src/index.ts`; update the existing Env declaration and regenerate types in implementation. No D1/KV binding or new secret. Add managed policy constants in code, rather than deployment-dependent security defaults.
+
+[DECISION] Organization mutations use one local SQL transaction for condition checks, state changes, revision increment, idempotency record and AuditRecord. Directory index maintenance uses durable outbox retries, not cross-DO transactions. Person listings read only index candidates then ask each Organization for current explicit memberships; stale entries never authorize. Pending accepted memberships missing from the index are retried/repaired and may temporarily be absent from lists, while direct access still checks authority. Do not expose an org name until its authoritative membership check succeeds. Global organization creation is directory-idempotent and creates an explicit owner membership; no implicit membership of other Workspaces.
+
+[DECISION] For Channel actions, obtain a fresh Organization decision immediately before sensitive work. No positive authorization cache for HTTP, mutation or private reads. Policy RPC failure denies with bounded 503; managed paths never inherit GitHub outage grace. Avoid claiming distributed atomicity: Channel state and org policy cannot share a SQL transaction. Use short, server-only authorization permits bound to actor, exact action/resource, Channel binding generation, request ID and policy revision. Permits expire in **2 seconds**, are consumed once by the Channel, and cannot cross Channels. Org records active permits transactionally with the decision. Channel consumes and commits its local sensitive mutation synchronously, without an intervening await; otherwise it must reacquire. Existing asynchronous GitHub work is a separately recorded external side effect with explicit retry semantics.
+
+[DECISION] Revocation immediately blocks new permits, marks outstanding ones cancelled and pushes fencing updates. Revocation returns completed only after affected Channels acknowledge fencing or all pre-revocation permits expire. Its response includes effectiveAt and revision. An operation already committed before that point may finish its recorded external side effect; it is not a new authorization. A delayed permit delivered after its deadline or binding change is refused. This defines the linearization boundary and avoids an unsupported claim that a remote revoke transaction instantly rolls back another DO. Tests must delay policy replies, reorder invalidate messages, and restart objects. Implementation must validate the permit expiry at the actual synchronous commit, not merely at route entry.
+
+[DECISION] Audit records for Channel mutations reside locally in the same transaction as that mutation, with an outbox to Organization; administrative changes are directly atomic in Organization. Queries merge pending local outcomes if necessary and indicate incomplete export. Do not call an Org decision audit a successful Channel mutation. Native foundation stays unavailable to general users until PR3 closes the complete enforcement boundary.
+
+## 3. Human authentication and explicit memberships
+
+[DECISION] Extend the existing GitHub browser/device flows with a repo-independent native sign-in destination. GitHub proves identity only. Retrieve verified numeric GitHub `id` as well as login; map to durable Person UUID. Numeric id survives login changes; login remains the displayed Person name and existing AgentId prefix. Current `SignIn.userLogin` returns just a string (`worker/src/github/app.ts:54`, `:245-249`); expand this seam and issue versioned signed sessions containing `personId`, `githubId`, login, issuer and expiry. Never trust an arbitrary login supplied in a mutation body as an actor.
+
+[DECISION] Legacy login-only sessions continue on unlinked Channels. Require fresh GitHub sign-in before their first native/managed use; do not silently map a potentially recycled login to numeric identity. Existing session IDs and historical Agent IDs remain immutable. Store a verified association to Person UUID instead of rewriting historical records. Both browser and CLI native entry must bypass the old repo-membership prerequisite at `worker/src/auth-api.ts:187-189`, `:242-244`; legacy login entry preserves it. GitHub OAuth scopes need identity only for native membership; no repo write access prerequisite.
+
+[DECISION] Each request resolves a typed concrete Person, Execution or Connector actor before policy. Connector acts as its verified Person with an additional read-only restriction; a Host transport acts as its authenticated owner with a host constraint. No anonymous native reads and no body-supplied `person` override. Browser writes validate Origin/CSRF in addition to cookie authentication. Keep dev fake identities isolated to existing localhost test mode; no deployment bypass.
+
+[DECISION] Authorized admins create visible pending invitations naming a verified Person or a login resolved to numeric GitHub identity by the server. Invitee explicitly accepts while authenticated as that numeric identity; acceptance activates the exact offered org/workspace roles. Add-to-existing-member flow requires an audited explicit workspace grant, visible to the recipient; no hidden/default membership inferred from collaborator or org status. Invitations expire after seven days and do not authorize before acceptance. Last active org owner cannot be removed/demoted. Org admins may list/manage workspace metadata for administration, but do not acquire shared data or private-session access without explicit membership/consent. Creating a Workspace explicitly offers its creator manager membership and records acceptance in the create transaction.
+
+## 4. Principals, executions and existing sessions
+
+[DECISION] AgentPrincipal is stable within one Organization: `{id, organizationId, sponsor:{kind:organization|person,id}, displayName, capabilities[], status, createdBy, createdAt}`. Capabilities are searchable descriptions only. Organization sponsorship has an explicit delegable action ceiling controlled by owners/admins, not an imaginary Person. Person sponsorship is tied to active membership and the sponsor's current delegable scope. Disable sponsor/principal → deny all executions. Principals never carry a usable bearer credential.
+
+[DECISION] AgentExecution is `{id, principalId, workspaceId, ownerPersonId, legacyAgentId, cli, sessionReference, startedAt,lastSeen,endedAt,status,credentialGeneration}`. Each execution belongs to exactly one Workspace in M1; another Workspace requires another execution/token, even for the same principal. Two simultaneous executions retain one principal ID and distinct execution IDs/hashes. Session ID, AgentId construction, Host ownership, Lead subtree, terminal signatures and all four adapters remain unchanged. Linkage is an extra server-owned association created by a Person authorized for `agent.execution.start` and the principal's sponsor. An agent cannot nominate a principal or owner in its own token request.
+
+[FACT-CODE] Existing registration issues per-session tokens and permits continuation (`worker/src/channel.ts:815-848`, `registerAgent`); the API dispatches registration and heartbeat at `worker/src/agents-api.ts:267-280`, `handleAgentRoute`. [DECISION] Extend registration request optionally with principal/workspace intent and return additive execution metadata. CLI configuration selects an approved principal before registration; wrapper and stdio MCP use the resulting scoped credential. No adapter rewrite. Existing Host spawns need a human-approved execution intent, not a Host-wide Org grant. Legacy tokens never exchange themselves into managed credentials; linking requires fresh human authorization. A pre-existing session may be attached to a principal without changing its user-visible ID, then its wrapper reconnects with a new scoped credential. Until that occurs it has no managed access.
+
+## 5. Scoped credential lifecycle
+
+[DECISION] Credential format is versioned opaque `m1.<org-id>.<credential-id>.<32 random bytes>`; routing fields are untrusted until lookup. Store SHA-256 of the random secret with execution/principal/workspace/generation/expiry binding; no pepper, because uniformly random 256-bit secrets resist offline guessing and pepper rotation would add dependency without meaningful password-hardening benefit. Compare fixed 32-byte digests with a timing-safe implementation (WebCrypto verification primitive or fixed-length audited byte comparison), never early-return string comparison. Public credential IDs select rows; they are not authority.
+
+[DECISION] Default lifetime one hour, absolute maximum 24 hours, capped by grant expiry. Server time controls expiry; tokens cannot refresh themselves. Sponsor or authorized admin issues/rotates within `agent.execution.start` ceiling and existing grant. Rotation atomically invalidates prior generation, with no overlap; official client reconnects. Execution revoke, principal disable, sponsor loss and grant revoke deny even otherwise unexpired credentials. Gone ends a managed execution; resume creates a fresh attributable execution association to the same principal/session.
+
+[DECISION] Return secret once in a `Cache-Control: no-store` response to the initiating authenticated CLI; never place in query strings, Events, audit, telemetry, DOM, URLs or Dashboard token lists. Dashboard initiates a short-lived, one-use CLI redemption code bound to the authenticated Person; code hash expires in 60 seconds. Duplicate issuance requests return metadata only; if the display-once response was lost, rotate with a new idempotency key. Redact Authorization and request bodies at logging boundaries. Admin UI shows credential ID, expiry, status and effective scope. No credentials embedded in Relay context.
+
+## 6. One server policy function
+
+[DECISION] Define `decide(actor, action, resource, context) -> {decision:allow|deny, reason, policyRevision}` in `worker/src/policy.ts`, used inside Organization authority and every managed boundary. Context contains server-derived time, verified transport, binding generation, target owner, request ID and optional narrow consent ID. Unknown actor/action/resource, parent mismatch, inactive memberships, expiry or unavailable authority deny. No central LLM orchestrator: deterministic policy controls authority; Relay continues deciding relevance only.
+
+[DECISION] Effective agent actions = organization ceiling ∩ Workspace policy ∩ explicit principal grant ∩ current sponsor delegable authority, further intersected with execution constraints and existing Lead/Host/librarian restrictions. Evaluate sponsor authority when creating/updating a grant AND on every decision; demotion cannot leave a durable escalation. No action is inferred from capabilities. Humans receive action sets from org and Workspace roles with resource constraints; org administration is separate from shared Workspace content.
+
+| Role [DECISION] | Explicit default action set |
+|---|---|
+| Org owner | `organization.manage`, `organization.member.manage`, `workspace.create`; workspace administrative `workspace.manage`, `workspace.member.manage`, `agent.register`, `agent.grant.manage`, `agent.execution.revoke` within org; explicit organizational sponsor controls |
+| Org admin | Same administration except owner transfer/deleting org/changing owner-reserved ceiling; no automatic data membership |
+| Org member | Can accept invites and list own memberships; no org administration, no default Workspace access |
+| Workspace manager | `workspace.read/manage/member.manage`, `agent.register/view/grant.manage/execution.start/execution.revoke`, and contributor actions, within org ceiling and explicit delegated administrative scope |
+| Contributor | `workspace.read`, `agent.view`, `task.read/claim/update`, `channel.update.read/write`, `channel.history.read`, `channel.subscribe`; execution start only if explicitly authorized sponsor |
+| Viewer | `workspace.read`, `agent.view`, `task.read`, `channel.update.read`, `channel.history.read`, `channel.subscribe` |
+| Newly registered principal | Empty; only explicit grant intersection gives actions |
+
+[DECISION] Admin/manager roles never imply `agent.private_transcript.read`, `agent.private_screen.read`, acting as another Person, or `agent.handoff.cross_owner`. Private access requires owner identity or explicit owner-issued, target/action/expiry-limited auditable consent, plus applicable Workspace scope. Agents need explicit action grants even for their own execution; a Person's ownership does not authorize their entire fleet. `agent.directive.send` requires owner consent and true caller attribution; a lead additionally stays in its existing subtree. No credential can forge Person-origin Directive semantics. Cross-owner handoff requires predecessor-owner consent; does not transfer Claims. Admin cannot mint consent on the owner's behalf.
+
+| Every contract action [DECISION] | Immediate enforcement point |
+|---|---|
+| organization.manage / organization.member.manage | Organization transaction before policy/name/lifecycle or membership mutation |
+| workspace.create / workspace.read / workspace.manage / workspace.member.manage | Organization transaction before create, metadata read, bind/policy change or membership grant |
+| agent.register / agent.view / agent.grant.manage | Organization principal transaction; Channel roster/summary projection; grant transaction with delegation check |
+| agent.execution.start / agent.execution.revoke | Organization issuance/start or revoke transaction; Channel registration/Host spawn must consume execution intent |
+| task.read / task.claim / task.update | Channel before task list/detail and before claim/release versus step/branch/finish/takeover/update commit; preserve existing ownership checks |
+| channel.update.read / channel.update.write | Each shared Event projection/recipient and before Update/Memory/Brief/Skill/Artifact writes; deny unsupported suboperations |
+| channel.history.read / channel.subscribe | History query and result release; socket connect/replay/snapshot and each outgoing delivery |
+| agent.private_transcript.read / agent.private_screen.read | Before wrapper request and again before returned page/screen release; terminal watch attach and every screen frame |
+| agent.directive.send / agent.handoff.cross_owner | Before enqueue/delivery of Directive; before continuation lineage/brief read and before Host spawn using from |
+
+[DECISION] Shared-write action groups do not silently grant owner-only operations: existing skill/artifact ownership and approval constraints remain additional predicates. Managed agent Task creation is denied; human existing GitHub Task creation requires contributor `task.update` and existing constraints. Administrative settings require `workspace.manage`, not shared write. A golden action-map test enumerates every route and rejects any unmapped operation; implementation adding a route must classify it.
+
+## 7. Enforcement inventory and alternate paths
+
+[FACT-CODE] Routing inventory comes from `worker/src/index.ts:185-223`, `:239-359`, `:372-411` (ROUTES, matchers, handleChannel, fetch), the named matchers below, and `worker/src/channel.ts:1894-1915` (accepted WS frame types). [DECISION] All rows below are **A** when a Channel has an active/pending managed binding, **B** unchanged when never linked; native APIs in §12 are **C**. Pending/failed binding is fail-closed, never an unlinked fallback. Checks belong inside Channel RPC methods as well as public route entry; Worker admission alone is insufficient. Trusted service calls carry a typed internal actor, never user-controlled query parameters masquerading as one.
+
+| Current route / handler evidence [FACT-CODE] | Managed enforcement [DECISION] immediately before sensitive action |
+|---|---|
+| join, persons, relay, events, updates, stream: `worker/src/index.ts:342-359`, `handleChannel`; history `:97-142` | workspace.read for presence/join/relay config; channel.history.read + resource-specific Event projection for every history variant; update.write before append; subscribe before upgrade |
+| Task list/detail/create: `worker/src/tasks-api.ts:30-47`, `isTaskRoute/handleTaskRoute` | task.read before query/result; task.update for human create; agent create denied |
+| claim/release/step/tool-calls: `worker/src/claims-api.ts:23-41`, `:57-80`, matcher/handler | task.claim for claim/release; task.update for step; agent tool-call telemetry constrained to own execution and update.write; no actor supplied by telemetry |
+| branch/finish: `worker/src/branches-api.ts:15-42`; takeover: `worker/src/takeover-api.ts:16-43` | task.update, plus existing holder/Person/stale conditions; external side-effect request IDs |
+| agents list/accounts/register/heartbeat/end/touched-files/transcript/summary/terminal/proxy-mode/nickname/model/approval/deny/role: `worker/src/agents-api.ts:60-93`, `:254-349` | agent.view for scoped roster, accounts and safe summary; private action for raw reads; execution.start before register; own execution for heartbeat/end/model/approval report; owner-only management plus workspace scope for proxy/approval deny/role, never an admin takeover |
+| hosts list/register/remove/allow/spawn/stop/pause/resume: `worker/src/hosts-api.ts:44-79`, `:165-263` | scope Host roster to eligible owner/allowed machine; workspace.read for metadata; execution.start/revoke plus original Host and Lead rules for control; owner-only signed allow mutation; handoff.cross_owner additionally for foreign from |
+| Directives: `worker/src/directives-api.ts:15-30`; `worker/src/channel.ts:993-1007`, sendDirective | directive.send plus ownership/consent before enqueue and before delayed delivery; preserve true Person/Lead provenance |
+| memory read/search/recent/write: `worker/src/memory-api.ts:14-15`, `:25-75`, memoryQuery/handler | history.read for queries, update.write before note insertion; scope tags/task/agent filters and counts |
+| skills list/read/publish/upload/read-files: `worker/src/skills-api.ts:35-65`, matchSkillRoute | update.read for content/manifest/blob reads, update.write plus publisher ownership for writes; check blob IDs' Channel ownership before bytes returned |
+| artifacts list/read/page/publish/delete: `worker/src/artifacts-api.ts:30-57`, matchArtifactRoute | update.read for JSON and HTML page; update.write + existing ownership for publish; human owner-only delete; do not let sandbox page URLs bypass admission |
+| Brief list/read/write: `worker/src/brief-api.ts:16-36`, matchBriefRoute | update.read / update.write; librarian-specific ceiling remains an intersection |
+| librarian feed/cursor/GitHub read: `worker/src/librarian-api.ts:23-51`, matchLibrarianRoute | history.read / own librarian update.write / task.read before App-backed GitHub query; no repo-free GitHub proxy |
+| Langfuse GET/PUT/DELETE: `worker/src/settings-api.ts:20-39`, matchSettingsRoute | workspace.manage plus existing fresh repo-admin predicate for configuration; no secret fields returned; connector costs requires explicit shared-read entitlement |
+| MCP channel/github/brief/costs: `worker/src/mcp/tools.ts:117`, TOOLS; `worker/src/mcp/server.ts:79-108`, `:172-180` | reauthorize each tool call, including every batch entry and result release; channel decomposes into task.read, update.read, history.read and agent.view, omitting unauthorized fields; costs update.read; no private data in summary/search |
+| OAuth register/authorize/token/metadata: `worker/src/mcp/oauth.ts:163-193`, handleOAuthRoute | public protocol metadata/client registration contain no workspace content; authorization/refresh require active concrete Person and Workspace membership; connector token only attenuates rights, never freezes them |
+| GitHub webhook: `worker/src/index.ts:375-376`; `worker/src/tasks-api.ts:84-110`, handleWebhook | preserve signature and repo routing; typed integration actor may synchronize mirror only; output fans out through current recipient policy; not a membership bypass |
+| Dashboard static page: `worker/src/index.ts:363-369`, handleDashboard | public shell carries no Workspace data; every JSON call uses policy; native selector lists authorized metadata only |
+
+[DECISION] WS frames `hook`, `proxy` need own execution and update.write before append; `delivery.ack`, `directive.ack`, `wake`, `wake.capped` need matching execution and current delivery authorization. `interrupt.attach/result`, `directive.result` only answer requests belonging to that execution. `transcript.page`, `terminal.text`, `history.page` must match outstanding owner-bound read IDs and recheck requester before release. `host.spawn.failed`, `host.control.failed`, `host.paused`, `host.allow.result` retain Host signature/identity constraints and must match pending authorized request. `terminal.watch/input` require authenticated Person ownership or explicit narrow control consent; private_screen.read alone does not allow keystrokes. `terminal.screen/refused/attached` must originate from target wrapper and are delivered only to currently authorized watchers. Evidence for existing dispatch/response matching: `worker/src/channel.ts:1919-2061`, `webSocketMessage`; terminal forwarding `:2129-2173`, `terminalWatch/terminalInput`.
+
+[DECISION] Deny default on managed RPCs without actor context, including methods previously invoked through readOnly closures. Introduce a managed facade rather than exposing bare `channel.askChannel` to MCP. The current connector closure omits actor (`worker/src/mcp/server.ts:94-108`); `ChannelAnswer.said` includes Directives (`worker/src/ask.ts:49-73`). Managed summaries exclude Directive bodies and private raw context unless individually permitted. Direct-ID unknown vs forbidden responses use uniform 404 for nonmembers; authorized denials show reason codes without leaking foreign names.
+
+[DECISION] Close alternate reads explicitly: connect backlog and roster snapshot (`worker/src/channel.ts:1867-1873`) use the same projection as HTTP; Events-by-ID, tail, wake filters and machine-local history require fresh requester scope; search results/counts/cursors and Agent summaries apply field filtering before formatting. Existing `broadcast` (`:2360-2363`) becomes recipient-aware for managed sockets. Do not persist/broadcast raw hook/proxy bodies into managed shared Events: preserve only bounded safe metadata and deliberately shared Updates, keeping private content owner-only. Existing raw history cannot simply be grandfathered into new shared snapshots.
+
+[DECISION] Notification paths include heartbeat's queued deliveries/Directives (`worker/src/channel.ts:976-981`), Relay take/queue/interrupt (`worker/src/relay/relay.ts:269-277`, `:358-402`, `:451-472`) and wake acknowledgement (`worker/src/wakes.ts:33-37`). Filter before enqueue, again at take/send and at delayed interrupt completion; revoke purges or permanently suppresses stale payloads. Jev inputs are assembled only from authorized shared context before `jev.verdict` (`worker/src/relay/relay.ts:309-316`), and rechecked after its asynchronous response. Relay relevance is never authorization. Hosts answering Local Events cannot enlarge a request's authorized scope (`worker/src/channel.ts:1670-1690`, withLocalEvents); private reads are cancelled on requester revoke. No managed payload crosses org/Workspace just because the same Person or Host participates in both.
+
+## 8. Open-stream revalidation
+
+[DECISION] Managed socket attachment persists actor IDs, execution credential generation/expiry, workspaceId, binding generation and last policy revision; never a plaintext token. Org revocation pushes invalidation via a durable outbox to linked Channels. Channel immediately clears authorization leases, stops watchers, cancels pending reads/Directives/interrupts and closes affected sockets with 4403. Serialize recipient checks with send; asynchronous checks must recheck generation immediately before sending. Each inbound frame needs its action check; each outgoing Event/queue/screen needs eligibility. Do not let subscription permission imply task/private-read permissions.
+
+[DECISION] Stream eligibility leases have a maximum **5-second lifetime**; per-message checks reject expired leases and policy revisions known stale. Recheck on a Channel alarm at least every 5 seconds while connected, including hibernation; expiry gates every send even if an alarm or invalidate is delayed. No data after lease expiry until fresh authority replies. Thus target application-level delivery cessation is ≤5 seconds after authoritative revoke commit, with push normally faster. Network-buffered frames already sent cannot be recalled; wall-clock transport close is best effort. HTTP after completed revoke denies, with no positive cache. Org/Channel failures fail closed at expiry.
+
+[DECISION] `worker/test/managed-streams.test.ts` records revoke commit time from authority, continuous uniquely sequenced Events, server-send timestamps and client receipt/close timestamps for Dashboard, agent, Host history and terminal watcher sockets. Assert last authorized server send ≤commit+5,000 ms, no new payload at expired lease, and closure on resumed execution. Test delayed/lost push, hibernation, expiry, sponsor demotion and delayed private response. Fake-time unit tests validate boundaries; a real-time local Miniflare integration measures elapsed behavior and records scheduling/transport overhead separately. Do not describe this unexecuted target as measured evidence.
+
+## 9. Channel ↔ Workspace binding
+
+[DECISION] Human POST binding request must pass fresh `Access.isOwner` GitHub permission===admin AND `workspace.manage` in the destination org; failed GitHub lookup refuses. Existing implementation seam is `worker/src/access.ts:156-166`, backed by `worker/src/github/rest.ts:117-127` permission API. Membership/collaborator write is insufficient. No agent, connector, webhook or Host may bind. Keep ALLOWED_REPOS as deployment scope guard.
+
+[DECISION] Two-phase idempotent binding: reserve repo in Workspace, install pending Channel binding with incremented generation using Channel compare-and-set, commit org link, then activate Channel. At most one Workspace per Channel; competing requests return 409. Recovery retries by operation ID; any pending disagreement denies data. Binding activation invalidates all old sockets/tokens for that Channel; original sessions reconnect only after explicit managed identity/grant enrollment. Do not auto-enroll collaborators. Existing Events remain in Channel storage but use managed safe projections.
+
+[DECISION] Unbind requires both fresh repo-admin and Workspace management, same fencing protocol, explicit warning that legacy access resumes, and audit. Clear links only when both sides agree; partial operations stay closed. Detach closes managed sockets and refuses managed tokens on the resulting legacy Channel. Repository admission is replaced by explicit Workspace membership/grants for linked human/agent data access, allowing Bob without repo write; GitHub mirror/App operations and repo-admin checks retain their existing mechanics. Channel names, GitHub Tasks, Claims, Relay, worktree/PR flows and local Host enforcement do not change.
+
+## 10. Migration and compatibility
+
+[DECISION] No migration of existing Channel content or automatic memberships. Add nullable binding/generation and local audit/outbox tables lazily with idempotent schema versioning; absence preserves original behavior. Test realistic isolated pre-M1 SQLite/storage records, repeated startup and interrupted binding. Rollback leaves managed Channels closed if policy classes unavailable; never turn a managed record into an unlinked permissive record by ignoring an unknown schema. No production migration in Gate 0.
+
+| Legacy trust assumption [FACT-CODE] | Managed-only change [DECISION] |
+|---|---|
+| Admitted agent tokens may read others' transcripts/screens (`worker/src/index.ts:301-311`; `worker/src/channel.ts:1295-1319`, readable). | Owner/narrow consent and explicit actions, including response-time recheck |
+| Person may direct another Person's agent (`worker/src/channel.ts:993-1007`, sendDirective). | Explicit target-owner consent; no impersonation |
+| Continuation checks existence/self without owner consent (`worker/src/channel.ts:819-826`, registerAgent). | Predecessor-owner consent plus handoff action |
+| Issued timestamp has no maximum-age admission check (`worker/src/access.ts:92-114`, `:178-194`, admit/issueAgentToken). | Absolute managed execution expiry and rotation |
+| Update checks content/addressees, without intake rate admission (`worker/src/index.ts:145-162`; `worker/src/channel.ts:1148-1181`, postUpdate). | Managed per-execution bucket 30 Updates/minute, burst 10; per-Channel 300/minute, burst 50; 429 + Retry-After before append/Relay |
+| Repo write membership, cached grace, broad snapshot/broadcast (`worker/src/access.ts:117-148`; `worker/src/channel.ts:1867-1873`, `:2360-2363`). | Explicit membership, scoped projection, bounded leases; no outage grace |
+
+[INFERENCE] Absence findings are bounded by searches of code AND tests: `rg -n 'rate.limit|rateLimit|token.bucket|UPDATES_PER|UPDATE.*BUDGET|expires_at|issued_at' worker/src worker/test -g '*.ts'` found existing external-service/Interrupt limits and connector expiry, but no Update intake bucket or legacy Agent-token max-age check in the cited handlers. `rg -n 'continues|sendDirective|transcript|terminal' worker/src/channel.ts worker/src/index.ts worker/test/handoff.test.ts worker/test/directives.test.ts worker/test/identity.test.ts` plus handler inspection confirms the described legacy paths, not a claim that all authorization is absent. [FACT-TEST] Existing cross-owner screen and continuation assertions are `worker/test/handoff.test.ts:213-248`, `:271-293`; Person Directive cross-owner assertion `worker/test/directives.test.ts:175-195`. These remain legacy compatibility fixtures, with managed denial counterparts.
+
+## 11. Audit records
+
+[DECISION] Record `{id,organizationId,workspaceId?,at,requestId,actor:{kind,personId?,principalId?,executionId?,connectorId?},action,resource:{kind,id},decision,outcome,reason,policyRevision,bindingGeneration?,previousRevision?,mutationId?}`. Append-only application API; audit owner/member/grant changes, credential lifecycle, binds, private-consent grants/use, protected denials and material mutations. Do not store plaintext credentials, redemption codes, transcript/screen bodies, Directive text, raw prompts, arbitrary request bodies or unbounded errors. Audit has bounded fields and denial aggregation against flooding, preserving first/last/count/reason.
+
+[DECISION] Organization administrative state + audit are one SQL transaction. Channel state + outcome audit/outbox are another local transaction, correlated to Org decision ID (§2); external GitHub success/failure is a later outcome record, never invented transactional exactly-once behavior. Denial transaction stores a decision before returning. Private read logs identify target/action, not contents. Default retention 90 days with batched deletion; policy records and deletion checkpoints remain documented. Audit retrieval is human-only `organization.manage`, scoped to that org, with redacted actor metadata where necessary; private access consent use is also visible to its owner. Retrieval never grants private content.
+
+## 12. API contract
+
+[DECISION] All new paths are under `/api/m1`; H=authenticated Person, E=scoped execution, C=read-only connector as Person. JSON errors `{error:{code,reason},policyRevision,requestId}`; no resource metadata on foreign-ID denial. All responses no-store. POST/PATCH/DELETE require `Idempotency-Key` scoped to actor/resource/body hash for 24 hours; same key/different body →409. PATCH also requires expected policy revision (If-Match); stale →409. GET uses bounded cursor pagination reauthorized per page. Credential secret replay exception is §5. Operations crossing objects return `{operationId,status:pending|complete}` and are polled/retried with the same key. These are replay strategies, not exactly-once external execution claims.
+
+| Method and new path [C] | Request → response sketch | Action / actors |
+|---|---|---|
+| POST /organizations | name → org + explicit owner membership | authenticated creation, H; rate bounded |
+| GET /organizations | cursor → own orgs | active org membership, H |
+| GET,PATCH /organizations/:o | metadata / name,ceiling,status → org,revision | org membership for metadata; organization.manage for patch, H |
+| GET,POST,PATCH,DELETE /organizations/:o/members[/:p] | invite/role/reason → explicit membership/status | organization.member.manage, H; last-owner guard |
+| POST /invitations/:i/accept | acceptance → membership | exact verified invitee, H; one-use, seven-day expiry |
+| POST /organizations/:o/workspaces | name,description → workspace,membership | workspace.create, H |
+| GET /organizations/:o/workspaces | cursor → accessible workspace metadata | explicit Workspace membership or admin metadata, H |
+| GET,PATCH /workspaces/:w | metadata / policy,status → workspace,revision | workspace.read / workspace.manage, H; E read only if granted |
+| GET,POST,PATCH,DELETE /workspaces/:w/members[/:p] | role,reason → membership | workspace.member.manage, H |
+| GET,POST /organizations/:o/agents | filters / sponsor,name,capabilities → principals | agent.view / agent.register, H; E scoped view only |
+| PATCH /organizations/:o/agents/:a | name,status → principal | agent.register for owner-managed edit/disable, H; current sponsor/admin check |
+| GET,PUT,DELETE /workspaces/:w/grants/:a | actions,constraints,expiry → grant,revision | agent.grant.manage, H; current delegation ceiling |
+| POST /workspaces/:w/executions | principal,legacySessionReference → execution,credential once | agent.execution.start, H |
+| POST /executions/:e/rotate | expectedGeneration → metadata,secret once | agent.execution.start, H |
+| DELETE /executions/:e | reason → effectiveAt,revision | agent.execution.revoke, H |
+| POST,DELETE /workspaces/:w/channel | repo,expectedGeneration → binding operation | workspace.manage + fresh repo admin, H |
+| GET /operations/:id | none → operation status | original actor or authorized org admin, H |
+| POST,DELETE /workspaces/:w/consents[/:id] | target,action,recipient,expiry → consent | target owner only, H, plus applicable workspace scope |
+| GET /workspaces/:w/permissions | target actor → effective actions/reasons | self or agent.view for scoped roster, H/E; no foreign grants exposed |
+| GET /organizations/:o/audit | cursor,filters → redacted records | organization.manage, H |
+
+[DECISION] Changed existing endpoints retain paths/bodies, with additive principal/execution IDs, policyRevision and requestId metadata on managed responses. All `/r/:owner/:repo/api/*` routes, MCP POST/tools and OAuth refresh get §7 checks. Browser/device native sign-in adds a native destination to existing `/auth` flow and versioned session response, preserving legacy repo entry. Managed registration accepts optional principal/workspace intent; it never infers one from token or AgentId. Existing WS message names remain; add `policy.invalidated {workspaceId,revision}` and close 4403, plus additive identity metadata. Clients must not rely on receiving invalidation before close. No public policy-evaluation RPC or raw permit endpoint; permits are internal DO calls only.
+
+## 13. Ranked high-risk routes
+
+| Rank [DECISION] | Threat and covering proposed test |
+|---|---|
+| 1 | Stream snapshot/history/search/MCP leak after membership revoke → managed-streams and managed-read-paths tests, lost invalidation and batch race |
+| 2 | Transcript, terminal watch, delayed wrapper response or raw proxy broadcast leaks private data → managed-private tests, planted unique private marker absent from all alternate outputs |
+| 3 | Grant escalation / sponsor demotion / foreign-org credential → policy and scoped-executions tests, grant-time and use-time checks |
+| 4 | Directive/Host spawn/from impersonation → managed-private tests, actual owner attribution and narrow consent |
+| 5 | Concurrent bind/unbind falling into legacy admission → workspace-binding tests, crash at every protocol stage |
+| 6 | Permit response delayed past revoke / claim race → managed-claims tests, expiry fences and exactly one local holder |
+| 7 | Update amplification → managed-budgets tests, 429 before append/Relay and bounded denial audit |
+
+## 14. Packages and four-PR sequence
+
+[DECISION] Keep four PRs; P5 develops evidence throughout and closes in PR4. No concurrent editing of shared files. P1 supplies a deny-by-default policy skeleton; P2 extends it; P3 completes enforcement before enabling managed use; P4 adds UI. Each PR is reviewed independently in isolated branches, never merged/pushed by this task.
+
+| PR / package [DECISION] | File ownership and dependency | Tests and exit criteria |
+|---|---|---|
+| PR1 / P1 | New worker/src/organization.ts, identity-directory.ts, workspace-api.ts, policy.ts skeleton; shared/src/m1.ts. Existing index.ts, auth-api.ts, github/app.ts, session.ts, auth.ts, channel.ts (binding schema only), wrangler.jsonc, worker/worker-configuration.d.ts, vitest.config.ts, shared export barrel. Sole owner until reviewed. | worker/test/organizations.test.ts, workspace-binding.test.ts, m1-migration.test.ts, native-auth.test.ts: native creation, explicit membership, multi-org isolation, numeric identity, dual binding and pre-M1 fixtures; managed reads stay closed |
+| PR2 / P2 | Depends PR1. New worker/src/principals.ts, executions.ts, execution-api.ts; cli/src/principal-config.ts. Sequential ownership of organization.ts, policy.ts, shared m1 types, index.ts, channel.ts, agents-api.ts, auth.ts, cli/src/channel-client.ts, cli/src/run.ts and cli/src/index.ts. No adapter changes. | worker/test/scoped-executions.test.ts; cli/test/managed-executions.test.ts: two executions, spoofed sponsor, expiry, rotation, revoke, legacy registration compatibility |
+| PR3 / P3 + P5 security | Depends PR2. New worker/src/managed-channel.ts, policy-permits.ts, managed-projection.ts. Sequential ownership of policy.ts, organization.ts, channel.ts, index.ts and every handler in §7 plus mcp/server.ts, oauth.ts, tools.ts, ask.ts, relay/relay.ts, directives.ts, terminal.ts; shared stream types and Env typing only as needed. Existing claims/tasks algorithms unchanged, hooks around local commit only. | worker/test/policy.test.ts, managed-read-paths.test.ts, managed-streams.test.ts, managed-private.test.ts, managed-claims.test.ts, managed-budgets.test.ts; route inventory exhaustiveness, adversarial default deny, measured stream bound, local claim atomicity |
+| PR4 / P4 + P5 closure | Depends PR3. New dashboard/src/m1/ components/client; existing dashboard/src/App.tsx, lib/router.ts, data/http.ts, data/store.tsx and views/AgentDetail.tsx. Sequential ownership of shared types; worker organization/workspace API only for reviewed UI contract corrections, never parallel with PR3. New worker audit retrieval tests and dashboard tests. | dashboard/test/m1-management.test.tsx, m1-permissions.test.tsx; worker/test/m1-acceptance.test.ts; full existing regression, screenshots, lint/typecheck/build, independent review and scripted demo evidence |
+
+[DECISION] Before coding each PR, assign the listed files to one owner in its source-linked implementation plan; handler families are exactly those inventoried in §7. Generated worker/worker-configuration.d.ts is owned by the active PR and never edited concurrently. No two packages edit those families concurrently. No changes to adapter semantics, GitHub synchronization, Relay decision algorithm, worktree/PR flows, or claim ownership model. Gate 0 independent review is required before implementation; unresolved trust-boundary contradictions stop implementation.
+
+## 15. Acceptance and adversarial test plan
+
+[DECISION] Worker tests use existing `cloudflareTest`/Miniflare configuration (`worker/vitest.config.ts:59-66`), actual DO boundaries and fake GitHub; CLI tests retain existing fixture patterns and Dashboard tests use its existing runner. All cases below are planned, not executed.
+
+| SPEC scenario step [DECISION] | Concrete proposed case/file |
+|---|---|
+| 1 | organizations.test.ts + m1-acceptance.test.ts: create A/B, Operations/Finance with GitHub permission stub refusing all repo writes; native operations still succeed |
+| 2 | organizations.test.ts: Alice explicit admin, Bob Operations contributor, Carol Finance member, Dave B; assert list/direct-ID/search metadata isolation and no automatic membership |
+| 3 | scoped-executions.test.ts + cli/test/managed-executions.test.ts: ops-helper two executions, distinct secret/hash/attribution, same principal; exact sample action grant |
+| 4 | workspace-binding.test.ts + managed-claims.test.ts: both admin proofs, existing Task list/claim/Update; two concurrent eligible claims have one winner and holder retry no-op |
+| 5 | policy.test.ts + managed-private.test.ts: Finance/B/private screen/transcript/Directive/admin denials; Bob cannot grant more than delegable authority; sponsor demotion removes previously delegated rights |
+| 6 | managed-streams.test.ts + scoped-executions.test.ts: revoke open socket and measure §8 bound; every subsequent HTTP denies; expired/rotated/revoked secret fails, delayed responses cannot release private marker |
+| 7 | cli/test/managed-executions.test.ts plus existing cli/test/clis.test.ts, worker/test/identity.test.ts and handoff.test.ts: all four legacy adapters/unbound semantics; native creation does not invoke Issue provider |
+| 8 | m1-acceptance.test.ts + dashboard/test/m1-permissions.test.tsx: same actors against API, JSON, MCP, subscription and UI; audit carries actor/target/revision/outcome without secrets |
+
+[DECISION] P5 coverage beyond the eight steps: access matrix via policy.test.ts table-driven role/action/owner cases; direct HTTP and foreign-org tokens via managed-read-paths/scoped-executions; impersonation via native-auth and managed-private; permission escalation via policy; WS event leaks and revoke via managed-streams; read-only MCP scope, GitHub proxy/costs/Brief, batch revocation and OAuth refresh via managed-read-paths; cross-owner Directives/screens/handoffs via managed-private; same-principal sessions via scoped-executions; concurrent and stale claims via managed-claims plus existing claims/stale-claims tests. Migration test seeds realistic pre-M1 SQL rows and Skill/Artifact storage, verifies untouched contents and absent binding, retries migration and exercises partial binds. Fault injection covers directory outage, org outage, outbox replay, grant expiry at commit, duplicate keys, generation mismatch, consent expiry and policy downgrade.
+
+[FACT-TEST] Existing atomic-claim assertions: `worker/test/claims.test.ts:84-103`; legacy token/Gone assertions `worker/test/identity.test.ts:339-418`. Supplied baseline logs show 1,346 passed/1 failed/2 skipped and 203 generated screenshots (`baseline_logs/totals.txt:2-5`, output directory). [DECISION] Compare P5 against this reconciled baseline, recording the attach-cache test as known-flaky: 8 passed/7 failed across 15 targeted manager runs (`baseline_logs/09b_cli_flaky_rerun.log:2-18`). Keep test unchanged and unskipped without separate decision; recommend separate fix. No other regression is waived. Run clean install, package lint/typecheck/tests, Dashboard build and visual checks only in implementation authorization; record exact commands/exits, screenshots inspected, skipped live-service tests and real-agent limitations. Gate 0 executes none of these. Independent reviewer must rereview fixes and issue final verdict; historical S8 GO approves audit corrections, not M1.
+
+## 16. Product limitation, scope and blocking questions
+
+[DECISION] Switchboard permissions govern only operations through Switchboard or integrated enforcement points. They cannot remove a person's direct GitHub repository access, constrain unrelated external tools, recall data already received, or guarantee an agent obeys prompts. No vendor-trust or enterprise-readiness claim before live-agent and security testing.
+
+[DECISION] Out of scope: native generic/noncoding Tasks, non-PR completion, generalized reviews/ranking/proposals, external arbitrary agents or HTTP adapters, remote write MCP, A2A/SDK publishing, SSO/SAML/SCIM, billing, SOC2, enterprise SLA, emergency private-data override, central LLM orchestrator, replacement Relay/GitHub/claims/worktree flows, external API enforcement, deployment/production migration/merge. Repo-free Workspaces hold identity, membership and permission/participant state only.
+
+[OPEN] No founder product choice currently blocks this proposed design: lifetimes, budgets, retention and role ceilings above are explicit reviewable defaults. The blocking gate is independent architecture/security review of permit fencing, managed projection completeness and the 5-second stream contract. If it finds a trust-boundary contradiction, implementation must wait for resolution; no presumed approval. Pranay may revise defaults during that review without changing invariants. In particular, the sample three-action ops-helper grant authorizes Tasks/claims/Updates but no subscription/history/private APIs; the demo must not accidentally broaden it to make a UI convenient.
+
+## 17. Invariant compliance
+
+| SPEC invariant [DECISION] | Design satisfaction |
+|---|---|
+| 1 | Optional binding; legacy branch unchanged; no Channel rename or adapter/Relay/claim rewrite; §10 compatibility tests |
+| 2 | Native creation private, no inherited membership; empty agent grants; explicit checks §§3/6 |
+| 3 | Numeric GitHub identity + concrete typed actor; multi-org index; native login does not require repo permission |
+| 4 | Principal separate from execution; stable session display IDs; per-execution tokens §§4/5 |
+| 5 | Explicit sponsor and revocation; capabilities descriptive only |
+| 6 | Four-way intersection, grant-time and decision-time sponsor ceiling; deterministic server policy |
+| 7 | Administrative roles exclude private data and Person impersonation; narrow owner consent |
+| 8 | Shared projection across every output; private raw content excluded; connector/queues/history included §7 |
+| 9 | Typed actor from verified credential, explicit continuation consent and org routing; no agent self-grant |
+| 10 | Immediate server checks; local atomic audit/outboxes; idempotency and external retry limitations §§2/11/12 |
+| 11 | Explicit enforcement boundary and direct GitHub limitation §16 |
+| 12 | No enterprise/vendor claim; live-agent/security/reviewer gates remain §15 |
