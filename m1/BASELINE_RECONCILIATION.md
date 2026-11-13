@@ -70,3 +70,9 @@ git -C <repo> diff --stat fe392689db002edb058eca9b6047be577c5bb656 HEAD -- cli
 ## Audit-status correction
 
 [DOC-ONLY] Binding `SPEC.md:7` says the reviewer verdict “remained `REQUEST_CHANGES` after the report revisions, with no re-review”. Actual reviewer files say **`VERDICT: REQUEST_CHANGES`** (`audit/reviews/S6_REVIEW.md:1`) and subsequently **`VERDICT: GO`** (`audit/reviews/S8_CONFIRMATION.md:1`). These exact verdicts also appear at line 1 of the supplied prior-audit directory's `reviews/S6_REVIEW.md` and `reviews/S8_CONFIRMATION.md`. S8 confirms no remaining disagreements (`audit/reviews/S8_CONFIRMATION.md:32-35`). The deliverables' review-status lines and `REVIEW_RESOLUTION.md` were left stale; e.g. `audit/SWITCHBOARD_CURRENT_STATE_AUDIT.md:3`, `:304-308`, `audit/REVIEW_RESOLUTION.md:41`. S8 is the independent reviewer's GO after S7 report revisions, not production-security approval and not approval of this new M1 design.
+
+## Round 1 revision inspection
+
+[FACT-CODE] Read-only `git log --oneline 66abafbb15d68a40970b51eeac25928a9f7b80ad..HEAD` now shows `b3a5e24` (design documents) and `4157ed8` (independent review); inspection HEAD is `4157ed8328f3d430fc17a458edc653970c6e075f`. `git diff --stat 66abafbb15d68a40970b51eeac25928a9f7b80ad HEAD` lists only eleven `m1/` deliverable/log/script files; the same diff restricted to `worker shared cli dashboard` is empty. Earlier baseline observations above remain historical, not current-HEAD claims. Application citations remain valid; no baseline rerun was performed.
+
+[DOC-ONLY] Latest Gate 0 reviewer verdict is REQUEST_CHANGES (`reviews/G0_REVIEW.md:1`). Round 1 source rechecks and decisions are in `G0_RESOLUTION.md`; this is separate from historical audit S8 GO. [DECISION] No baseline test correction is needed for the seven design findings. All added security cases remain planned, not passed.
