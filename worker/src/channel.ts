@@ -493,34 +493,37 @@ export class Channel extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Additive migration: never infer legacy access from an unknown managed version.
-    ctx.storage.transactionSync(() => {
-      let existed = true;
-      try {
-        const snapshot = ctx.storage.sql
-          .exec<typeof this.binding>("SELECT version,generation,workspace,operation,state FROM m1_binding WHERE id=1")
-          .toArray()[0];
-        if (snapshot) this.binding = snapshot;
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes("no such table: m1_binding")) throw error;
-        existed = false;
-      }
-      ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS m1_binding (
-        id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL,
-        generation INTEGER NOT NULL, workspace TEXT, operation TEXT, state TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS m1_binding_outbox (
-        operation TEXT PRIMARY KEY, generation INTEGER NOT NULL, body TEXT NOT NULL);`);
-      // Missing state in a previously migrated object is not proof of legacy access.
-      if (!this.binding)
+    let existed = true;
+    try {
+      const snapshot = ctx.storage.sql
+        .exec<typeof this.binding>("SELECT version,generation,workspace,operation,state FROM m1_binding WHERE id=1")
+        .toArray()[0];
+      if (snapshot) this.binding = snapshot;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("no such table: m1_binding")) throw error;
+      existed = false;
+    }
+    // Hibernation reconstructs the object. A durable snapshot needs no migration
+    // writes or transaction on every wake (including terminal/Interrupt frames).
+    if (!this.binding) {
+      ctx.storage.transactionSync(() => {
+        ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS m1_binding (
+          id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL,
+          generation INTEGER NOT NULL, workspace TEXT, operation TEXT, state TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS m1_binding_outbox (
+          operation TEXT PRIMARY KEY, generation INTEGER NOT NULL, body TEXT NOT NULL);`);
+        // Missing state in a previously migrated object is not proof of legacy access.
         ctx.storage.sql.exec(
           `INSERT OR IGNORE INTO m1_binding
         SELECT 1,1,0,NULL,NULL,CASE WHEN ? OR EXISTS(SELECT 1 FROM m1_binding_outbox)
         THEN 'recovery_required' ELSE 'unlinked' END`,
           existed ? 1 : 0,
         );
-    });
-    this.binding ??= ctx.storage.sql
-      .exec<typeof this.binding>("SELECT version,generation,workspace,operation,state FROM m1_binding WHERE id=1")
-      .one();
+      });
+      this.binding = ctx.storage.sql
+        .exec<typeof this.binding>("SELECT version,generation,workspace,operation,state FROM m1_binding WHERE id=1")
+        .one();
+    }
     createEventsTable(ctx.storage.sql);
     this.historyIndexes = buildHistoryIndexes(ctx.storage.sql);
     ctx.storage.sql.exec(`
@@ -742,7 +745,7 @@ export class Channel extends DurableObject<Env> {
   }
 
   private managedClosed(): boolean {
-    const binding = this.bindingState();
+    const binding = this.binding;
     return (
       binding.version !== 1 ||
       !Number.isSafeInteger(binding.generation) ||
@@ -2108,7 +2111,7 @@ export class Channel extends DurableObject<Env> {
         return Response.json({ error: `You have no Host named ${host} on this Channel.` }, { status: 404 });
       }
       const { 0: client, 1: server } = new WebSocketPair();
-      this.ctx.acceptWebSocket(server, [name, hostTag(hostIdFor(name, host)), `binding:${generation}`]);
+      this.ctx.acceptWebSocket(server, this.socketTags([name, hostTag(hostIdFor(name, host))], generation));
       server.serializeAttachment({
         at: Date.now(),
         ...(url.searchParams.get("history") === "1" ? { history: true } : {}),
@@ -2122,7 +2125,7 @@ export class Channel extends DurableObject<Env> {
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(
       server,
-      agent === null ? [name, `binding:${generation}`] : [name, agentTag(agent as AgentId), `binding:${generation}`],
+      this.socketTags(agent === null ? [name] : [name, agentTag(agent as AgentId)], generation),
     );
     // Everything below is synchronous, so no other Event can be appended
     // between the backlog and the live stream: none is missed or sent twice.
@@ -2138,9 +2141,19 @@ export class Channel extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** Generation zero is implicit for legacy and never-linked sockets. */
+  private socketTags(identity: string[], generation: number): string[] {
+    return generation === 0 ? identity : [...identity, `binding:${generation}`];
+  }
+
   /** Binding metadata must not occupy the legacy Person/Agent/Host identity slots. */
   private socketIdentityTags(ws: WebSocket): string[] {
-    return this.ctx.getTags(ws).filter((tag) => !tag.startsWith("binding:"));
+    const tags = this.ctx.getTags(ws);
+    // Generation zero sockets use precisely the legacy identity tags. Once a
+    // transition has occurred, also handle old sockets still completing close.
+    return this.binding.generation === 0 && !tags.includes("binding:0")
+      ? tags
+      : tags.filter((tag) => !tag.startsWith("binding:"));
   }
 
   /**
@@ -2150,8 +2163,14 @@ export class Channel extends DurableObject<Env> {
    * over HTTP.
    */
   override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    const bindingTag = this.ctx.getTags(ws).find((tag) => tag.startsWith("binding:"));
-    if (this.managedClosed() || (bindingTag ?? "binding:0") !== `binding:${this.binding.generation}`) {
+    // No transition has ever occurred at generation zero. Missing tags remain
+    // generation zero after a restart; a later transition checks them as stale.
+    if (
+      this.managedClosed() ||
+      (this.binding.generation !== 0 &&
+        (this.ctx.getTags(ws).find((tag) => tag.startsWith("binding:")) ?? "binding:0") !==
+          `binding:${this.binding.generation}`)
+    ) {
       ws.close(1008, "Managed Channel access is closed until P3.");
       return;
     }
