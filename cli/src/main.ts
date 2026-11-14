@@ -5,6 +5,7 @@
 //   switchboard run claude [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Claude Code]
 //   switchboard run codex|cursor|gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...args for Codex, Cursor or Gemini CLI]
 //   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
+//   switchboard execution redeem --url <origin> --principal <id> --workspace <id> --execution <id>
 //   switchboard whoami
 //   switchboard host install|uninstall|run|status|list   (ADR 0015, ADR 0028)
 //   switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--from <agent>] [...] [brief]
@@ -38,6 +39,13 @@ import {
 import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
 import { dashboardUrl, onboardingGuide } from "./onboarding";
+import {
+  authenticateNative,
+  principalSelection,
+  readFreshExecutionId,
+  readRedemptionCode,
+  redeemExecution,
+} from "./principal-config";
 import { renameAgent } from "./rename";
 import { runCli } from "./run";
 import { SKILLS_USAGE, skillsCommand } from "./skills-command";
@@ -50,6 +58,7 @@ const USAGE = `Usage:
   switchboard run cursor [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--no-mask] [...arguments for Cursor CLI]
   switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
+  switchboard execution redeem --url <origin> --principal <id> --workspace <id> --execution <id>
   switchboard whoami
   switchboard help onboarding
   switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--from <agent>] [--repo <owner>/<repo>] [brief...]
@@ -220,6 +229,45 @@ async function rename(args: string[]): Promise<number> {
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
+    case "execution": {
+      const [action, ...args] = rest;
+      let values: { url?: string; principal?: string; workspace?: string; execution?: string };
+      try {
+        ({ values } = parseArgs({
+          args,
+          options: {
+            url: { type: "string" },
+            principal: { type: "string" },
+            workspace: { type: "string" },
+            execution: { type: "string" },
+          },
+          strict: true,
+        }));
+      } catch {
+        console.error("Invalid execution options. Enter redemption codes only at the hidden prompt.");
+        return 2;
+      }
+      if (action !== "redeem" || !values.url || !values.principal || !values.workspace || !values.execution) {
+        console.error(
+          "Usage: switchboard execution redeem --url <origin> --principal <id> --workspace <id> --execution <id>",
+        );
+        return 2;
+      }
+      const selection = principalSelection(values.principal, values.workspace);
+      const origin = values.url;
+      await redeemExecution({
+        origin,
+        selection,
+        executionId: values.execution,
+        authenticate: () => authenticateNative(origin, (line) => console.error(line)),
+        readCode: readRedemptionCode,
+        refreshExecution: readFreshExecutionId,
+      });
+      console.error(
+        "Execution redeemed. Managed Channel runs remain closed until P3; this command retains no credential.",
+      );
+      return 0;
+    }
     case "login":
       return login(rest);
     case "whoami":

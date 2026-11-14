@@ -193,6 +193,8 @@ export type ReportedPresence = "live" | "idle";
  * session of the same Person already holds that Agent ID.
  */
 export interface RegisterAgentRequest {
+  /** Explicit native Person intent; never inferred from a legacy token. */
+  managed?: { principalId: string; workspaceId: string };
   cli: Cli;
   sessionId: string;
   /** True when the session was resumed rather than started fresh. */
@@ -258,6 +260,8 @@ export interface RegisterAgentRequest {
 
 /** `POST /api/agents` and `POST /api/agents/:id/heartbeat` answer with the Agent. */
 export interface AgentResponse {
+  /** Server-verified association; credentials are returned only in token. */
+  execution?: import("./m1").AgentExecution;
   ok: true;
   agent: Agent;
   /**

@@ -418,6 +418,17 @@ export class Organization extends DurableObject<Env> {
           status: "active",
           credentialGeneration: 0,
         };
+        if (c.kind === "execution.start" && c.registration) {
+          if (
+            state.workspaces[workspaceId]?.channel !== c.registration.channel ||
+            !c.registration.agentId ||
+            !c.registration.sessionId
+          )
+            return refuse("registration_denied");
+          e.legacyAgentId = c.registration.agentId;
+          e.sessionReference = c.registration.sessionId;
+          e.legacyChannel = c.registration.channel;
+        }
         e.credentialGeneration++;
         const credential: StoredCredential = {
           id: prepared.id,
@@ -560,10 +571,79 @@ export class Organization extends DurableObject<Env> {
     if (!actor?.actions.includes("agent.view")) return null;
     return this.identityRow<AgentPrincipal>("principals", actor.principalId) ?? null;
   }
+  touchRegisteredExecution(executionId: string, agentId: string): void {
+    this.ctx.storage.transactionSync(() => {
+      const execution = this.identityRow<AgentExecution>("executions", executionId);
+      if (!execution || execution.legacyAgentId !== agentId || execution.status !== "active") return;
+      execution.lastSeen = Date.now();
+      this.ctx.storage.sql.exec("UPDATE executions SET body=? WHERE id=?", JSON.stringify(execution), executionId);
+    });
+  }
+
+  registeredExecutionOwnedBy(executionId: string, personId: string): boolean {
+    return this.identityRow<AgentExecution>("executions", executionId)?.ownerPersonId === personId;
+  }
+
+  /** Internal Channel lifecycle notification, never exposed as a credential endpoint. */
+  endRegisteredExecution(executionId: string, agentId: string): boolean {
+    try {
+      this.ctx.storage.transactionSync(() => {
+        const state = this.load();
+        const execution = this.identityRow<AgentExecution>("executions", executionId);
+        if (
+          !state ||
+          !execution ||
+          execution.legacyAgentId !== agentId ||
+          !execution.legacyChannel ||
+          execution.status !== "active"
+        )
+          return;
+        execution.status = "ended";
+        execution.endedAt = Date.now();
+        execution.credentialGeneration++;
+        this.ctx.storage.sql.exec("UPDATE executions SET body=? WHERE id=?", JSON.stringify(execution), executionId);
+        state.organization.policyRevision++;
+        this.save(state);
+        this.audit(
+          { kind: "execution", principalId: execution.principalId, executionId, workspaceId: execution.workspaceId },
+          "execution.end",
+          { kind: "workspace", organizationId: state.organization.id, id: execution.workspaceId },
+          true,
+          "session_gone",
+          state.organization.policyRevision,
+          crypto.randomUUID(),
+          undefined,
+          { kind: "execution", id: executionId },
+        );
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async verifyExecution(token: string): Promise<VerifiedExecution | null> {
     const parsed = parseCredential(token);
     if (!parsed) return null;
     const digest = await secretDigest(parsed.secret);
+    // Linked legacy executions also require a live matching Channel association.
+    // Perform that await before re-reading every mutable authorization row below.
+    const hint = this.identityRow<StoredCredential>("execution_credentials", parsed.credentialId);
+    if (!hint || !equalDigest(digest, new Uint8Array(hint.digest)) || hint.expiresAt <= Date.now()) return null;
+    const linked = this.identityRow<AgentExecution>("executions", hint.executionId);
+    if (linked?.legacyChannel && linked.legacyAgentId) {
+      try {
+        if (
+          !(await this.env.CHANNEL.getByName(linked.legacyChannel).registeredExecutionActive(
+            linked.legacyAgentId as import("../../shared/src/index").AgentId,
+            linked.id,
+          ))
+        )
+          return null;
+      } catch {
+        return null;
+      }
+    }
     const state = this.load();
     if (!state || state.organization.id !== parsed.organizationId) return null;
     const credential = this.identityRow<StoredCredential>("execution_credentials", parsed.credentialId);

@@ -265,7 +265,14 @@ export async function handleAgentRoute(
     case "accounts":
       return json<AccountsResponse>({ accounts: await channel.listAccounts() });
     case "register": {
-      const parsed = parseRegister(await readJson(request));
+      const body = await readJson(request);
+      // Do not silently drop managed intent into the legacy registration branch.
+      if (body.managed !== undefined) {
+        const parsed = parseRegister(body);
+        if (!parsed.ok) return fail(400, parsed.reason);
+        return channel.registerManagedAgent(request, parsed.value, body.managed);
+      }
+      const parsed = parseRegister(body);
       if (!parsed.ok) return fail(400, parsed.reason);
       return answer(await channel.registerAgent(person, parsed.value));
     }

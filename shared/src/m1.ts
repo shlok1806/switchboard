@@ -147,6 +147,7 @@ export interface AgentExecution {
   workspaceId: string;
   ownerPersonId: string;
   legacyAgentId?: string;
+  legacyChannel?: string;
   sessionReference?: string;
   cli: string;
   startedAt: number;
@@ -204,6 +205,8 @@ export type IdentityCommand =
       workspaceId: string;
       cli: string;
       mode?: "direct" | "redemption";
+      /** Trusted registration adapter only; public lifecycle APIs do not accept this. */
+      registration?: { agentId: string; sessionId: string; channel: string };
       lifetimeMs?: number;
       constraints?: AgentConstraints;
     }

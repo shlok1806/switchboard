@@ -107,6 +107,7 @@ export class ChannelClient {
   private readonly session: string;
   /** The Agent's token once registered; every other call then carries it. */
   private agentToken: string | null = null;
+  private managed = false;
   private readonly tokenListeners = new Set<() => void>();
   /** Requests in flight now, and those waiting for one of them to finish. */
   private inFlight = 0;
@@ -118,10 +119,13 @@ export class ChannelClient {
   constructor(target: ChannelTarget) {
     this.base = `${target.url.replace(/\/+$/, "")}${channelApiBase(target.repo)}`;
     this.session = target.credential;
+    this.managed = target.credential.startsWith("m1.");
   }
 
   /** Makes every later call, and the WebSocket, act as the Agent the token was issued to. */
   useAgentToken(token: string): void {
+    if (this.managed && !token.startsWith("m1.")) throw new ChannelError(403, "Managed credential required.");
+    if (token.startsWith("m1.")) this.managed = true;
     if (this.agentToken === token) return;
     this.agentToken = token;
     for (const listener of this.tokenListeners) listener();
@@ -133,11 +137,15 @@ export class ChannelClient {
   }
 
   async request<T>(path: string, init: RequestInit = {}, timeoutMs = 10_000): Promise<T> {
+    if (this.managed && !this.credential().startsWith("m1."))
+      throw new ChannelError(403, "Managed credential required.");
     return this.requestAs<T>(this.credential(), path, init, timeoutMs);
   }
 
   /** A GET whose answer is text, such as an artifact's page; a refusal is still the Channel's JSON. */
   requestText(path: string, timeoutMs = 10_000): Promise<string> {
+    if (this.managed && !this.credential().startsWith("m1."))
+      throw new ChannelError(403, "Managed credential required.");
     return this.requestAs<string>(this.credential(), path, {}, timeoutMs, true);
   }
 
@@ -158,9 +166,15 @@ export class ChannelClient {
       this.refuseWhileExhausted();
       let response: Response;
       try {
-        response = await fetch(`${this.base}${path}`, { ...init, headers, signal });
+        response = await fetch(`${this.base}${path}`, {
+          ...init,
+          headers,
+          signal,
+          ...(this.managed ? { redirect: "error" } : {}),
+        });
       } catch (error) {
         this.throwIfExhausted(error);
+        if (this.managed) throw new ChannelError(0, "Managed request failed.");
         throw new ChannelError(0, `Could not reach ${this.base}: ${(error as Error).message}`);
       }
       // The body is always read, so the connection goes back to the pool for the next call.
@@ -169,7 +183,10 @@ export class ChannelClient {
       const body = (await response.json().catch(() => ({ ok: false, reason: response.statusText }))) as
         | T
         | ErrorResponse;
-      if (!response.ok) throw new ChannelError(response.status, (body as ErrorResponse).reason, body);
+      if (!response.ok) {
+        if (this.managed) throw new ChannelError(response.status, "Managed request denied.");
+        throw new ChannelError(response.status, (body as ErrorResponse).reason, body);
+      }
       return body as T;
     } finally {
       this.inFlight -= 1;
@@ -222,6 +239,7 @@ export class ChannelClient {
   }
 
   join(): Promise<JoinResponse> {
+    if (this.managed) return Promise.reject(new ChannelError(403, "Managed Channel access is closed until P3."));
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const body = JSON.stringify({ timeZone });
     return this.requestAs<JoinResponse>(this.session, "/api/join", { method: "POST", body }, 10_000);
@@ -229,8 +247,23 @@ export class ChannelClient {
 
   /** Registers the Agent with the Person's session, and from then on acts with the Agent token it answers with. */
   async register(request: RegisterAgentRequest): Promise<AgentResponse> {
+    if (this.session.startsWith("m1.") || (this.managed && !request.managed)) {
+      throw new ChannelError(403, "Native Person registration required.");
+    }
+    if (request.managed && !this.managed) {
+      this.managed = true;
+      for (const listener of this.tokenListeners) listener();
+    }
     const body = JSON.stringify(request);
     const answer = await this.requestAs<AgentResponse>(this.session, "/api/agents", { method: "POST", body }, 10_000);
+    if (
+      request.managed &&
+      (!answer.token?.startsWith("m1.") ||
+        answer.execution?.principalId !== request.managed.principalId ||
+        answer.execution?.workspaceId !== request.managed.workspaceId)
+    ) {
+      throw new ChannelError(403, "Managed registration denied.");
+    }
     if (answer.token !== undefined) this.useAgentToken(answer.token);
     return answer;
   }
@@ -270,6 +303,7 @@ export class ChannelClient {
     onStatus: (connected: boolean) => void,
     options: { pingMs?: number; log?: (line: string) => void } = {},
   ): ChannelStream {
+    if (this.managed) throw new ChannelError(403, "Managed streaming is closed until P3.");
     const pingMs = options.pingMs ?? STREAM_PING_MS;
     let closed = false;
     let socket: WebSocket | null = null;
@@ -289,6 +323,11 @@ export class ChannelClient {
       pending = undefined;
       if (this.exhaustedFor() > 0) {
         retry(true);
+        return;
+      }
+      if (this.managed) {
+        closed = true;
+        onStatus(false);
         return;
       }
       const query = new URLSearchParams({ token: this.agentToken ?? this.session });

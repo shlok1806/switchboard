@@ -94,6 +94,7 @@ import {
   MAX_SPAWN_FAILURE_LENGTH,
   mergePages,
   offlineReason,
+  SESSION_COOKIE,
   SUMMARY_MAX_ACTIVITY,
   SUMMARY_MAX_FILES,
   SUMMARY_MAX_NOTES,
@@ -106,6 +107,7 @@ import { Alarms } from "./alarms";
 import { ARTIFACTS_SCHEMA, type ArtifactResult, Artifacts } from "./artifacts";
 import { askChannel, type ChannelAnswer, type ChannelQuestion, DEFAULT_QUIET_CLAIM_HOURS } from "./ask";
 import type { Credential } from "./auth";
+import { devMode, readCookie, readNativeActor, sessionSecret } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
 import { BRIEF_SCHEMA, Brief, type BriefResult, migrateBrief } from "./brief";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
@@ -117,9 +119,11 @@ import { LangfuseProject, type StoredLangfuse } from "./langfuse";
 import { LIBRARIAN_SCHEMA, librarianFeed, moveLibrarianCursor } from "./librarian";
 import { type GrantResult, McpGrants } from "./mcp/grants";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
+import { workspaceParent } from "./policy";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
+import { verifyPayload } from "./session";
 import { migrateSkills, SKILLS_SCHEMA, type SkillResult, Skills, type UploadedChunk } from "./skills";
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
@@ -482,6 +486,8 @@ export class Channel extends DurableObject<Env> {
   private historyIndexes: HistoryIndexes;
   private historyIndexesDay = utcDay();
 
+  private managedRegistration: Promise<void> = Promise.resolve();
+
   private binding!: {
     version: number;
     generation: number;
@@ -593,6 +599,13 @@ export class Channel extends DurableObject<Env> {
       broadcast: (message) => this.broadcast(message),
       presenceChanged: (id, presence) => {
         this.staleClaims.presenceChanged(id, presence);
+        if (presence === "gone" && this.binding.workspace !== null) {
+          const association = this.managedAssociation(id);
+          if (association) {
+            this.queueManagedEnd(id, association);
+            this.ctx.waitUntil(this.deliverManagedEnd(id, association));
+          }
+        }
         // An Agent's token stops working when it goes Gone; resuming issues a new one.
         if (presence === "gone" && this.access.revokeAgent(id)) {
           this.closeSockets(agentTag(id), 4001, "Agent token revoked: the Agent is Gone.");
@@ -714,6 +727,7 @@ export class Channel extends DurableObject<Env> {
     try {
       if (due.has("tasks")) await this.tasks.alarm();
       if (due.has("presence")) await this.agents.expireSilent();
+      if (due.has("executions")) await this.retryManagedEnds();
       if (due.has("members")) await this.recheckMembers();
       if (due.has("hosts")) await this.hosts.alarm();
       if (due.has("directives")) await this.directives.alarm();
@@ -1044,6 +1058,228 @@ export class Channel extends DurableObject<Env> {
     return this.agents.list(includeGone);
   }
 
+  /** Only association IDs enter Channel storage. Managed content stays closed until P3. */
+  async registerManagedAgent(request: Request, registration: RegisterAgentRequest, intent: unknown): Promise<Response> {
+    const deny = (status: number) =>
+      Response.json(
+        { ok: false, reason: "Managed registration denied." },
+        { status, headers: { "Cache-Control": "no-store" } },
+      );
+    const previous = this.managedRegistration;
+    let release!: () => void;
+    this.managedRegistration = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      if (!intent || typeof intent !== "object" || Array.isArray(intent)) return deny(400);
+      const fields = intent as Record<string, unknown>;
+      if (
+        Object.keys(fields).some((k) => k !== "principalId" && k !== "workspaceId") ||
+        typeof fields.principalId !== "string" ||
+        typeof fields.workspaceId !== "string"
+      )
+        return deny(400);
+      const actor = await readNativeActor(request, new URL(request.url), this.env);
+      if (!actor) return deny(401);
+      const organizationId = workspaceParent(fields.workspaceId);
+      const channel = this.access.repo();
+      const generation = this.binding.generation;
+      if (
+        !organizationId ||
+        !channel ||
+        this.binding.version !== 1 ||
+        this.binding.state !== "linked" ||
+        this.binding.operation !== null ||
+        this.binding.workspace !== fields.workspaceId
+      )
+        return deny(403);
+      const org = this.env.ORGANIZATION.getByName(organizationId);
+      const workspace = await org.workspace(actor, fields.workspaceId);
+      if (!workspace || workspace.channel !== channel) return deny(403);
+      // Login is read only from the same signed native session just authenticated above.
+      const person = await this.nativeLogin(request);
+      if (!person) return deny(401);
+      const id = agentIdFor(person, registration.cli, registration.sessionId);
+      if (registration.continues) return deny(403);
+      const prior = this.managedAssociation(id);
+      if (
+        prior &&
+        !(await this.env.ORGANIZATION.getByName(prior.organizationId).registeredExecutionOwnedBy(
+          prior.executionId,
+          actor.personId,
+        ))
+      )
+        return deny(403);
+      const key = request.headers.get("Idempotency-Key");
+      if (!key || key.length > 128) return deny(400);
+      const issued = await org.mutateIdentity({
+        actor,
+        key,
+        requestId: crypto.randomUUID(),
+        command: {
+          kind: "execution.start",
+          principalId: fields.principalId,
+          workspaceId: fields.workspaceId,
+          cli: registration.cli,
+          registration: { agentId: id, sessionId: registration.sessionId, channel },
+        },
+      });
+      if (!issued.ok) return deny(issued.status);
+      const execution = issued.value.execution;
+      // An idempotent retry cannot recover the secret or re-register the session.
+      if (!execution || !issued.value.secret) return deny(409);
+      this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS m1_agent_executions (
+        agent TEXT PRIMARY KEY, organizationId TEXT NOT NULL, executionId TEXT NOT NULL, active INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS m1_agent_execution_ends (
+          executionId TEXT PRIMARY KEY, organizationId TEXT NOT NULL, agent TEXT NOT NULL)`);
+      const cancel = () => {
+        const association = { organizationId, executionId: execution.id };
+        this.queueManagedEnd(id, association);
+        return this.deliverManagedEnd(id, association);
+      };
+      if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
+        await cancel();
+        return deny(403);
+      }
+      try {
+        const result = await this.registerAgent(person, registration);
+        if (!result.ok) {
+          await cancel();
+          return deny(result.status);
+        }
+        if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
+          await cancel();
+          return deny(403);
+        }
+        await this.endManagedAssociation(id);
+        if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
+          await cancel();
+          return deny(403);
+        }
+        this.ctx.storage.sql.exec(
+          "INSERT OR REPLACE INTO m1_agent_executions VALUES(?,?,?,1)",
+          id,
+          organizationId,
+          execution.id,
+        );
+        return Response.json(
+          { ok: true, agent: result.agent, execution, token: issued.value.secret },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      } catch {
+        await cancel();
+        return deny(503);
+      }
+    } catch {
+      return deny(503);
+    } finally {
+      release();
+    }
+  }
+
+  private async nativeLogin(request: Request): Promise<string | null> {
+    const secret = sessionSecret(this.env, devMode(this.env, new URL(request.url)));
+    const token = request.headers.get("Authorization")?.slice(7).trim() ?? readCookie(request, SESSION_COOKIE);
+    const payload = secret && token ? await verifyPayload(secret, token) : null;
+    return payload?.kind === "native-session" && typeof payload.login === "string" ? payload.login.toLowerCase() : null;
+  }
+
+  private managedAssociation(id: AgentId): { organizationId: string; executionId: string; active: number } | undefined {
+    try {
+      return this.ctx.storage.sql
+        .exec<{ organizationId: string; executionId: string; active: number }>(
+          "SELECT organizationId,executionId,active FROM m1_agent_executions WHERE agent=?",
+          id,
+        )
+        .toArray()[0];
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("no such table: m1_agent_executions")) return undefined;
+      throw error;
+    }
+  }
+
+  /** Managed-only verification; no legacy request performs this RPC or SQL read. */
+  registeredExecutionActive(id: AgentId, executionId: string): boolean {
+    const association = this.managedAssociation(id);
+    const agent = this.agents.find(id);
+    return (
+      association?.executionId === executionId &&
+      association.active === 1 &&
+      agent !== null &&
+      agent !== undefined &&
+      agent.presence !== "gone" &&
+      this.binding.state === "linked" &&
+      this.binding.operation === null
+    );
+  }
+
+  private queueManagedEnd(id: AgentId, association: { organizationId: string; executionId: string }): void {
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        "UPDATE m1_agent_executions SET active=0 WHERE agent=? AND executionId=?",
+        id,
+        association.executionId,
+      );
+      this.ctx.storage.sql.exec(
+        "INSERT OR IGNORE INTO m1_agent_execution_ends VALUES(?,?,?)",
+        association.executionId,
+        association.organizationId,
+        id,
+      );
+    });
+    const next = Date.now() + 1000;
+    if ((this.alarms.deadline("executions") ?? Infinity) > next)
+      this.ctx.waitUntil(this.alarms.set("executions", next));
+  }
+
+  private async deliverManagedEnd(
+    id: AgentId,
+    association: { organizationId: string; executionId: string },
+  ): Promise<void> {
+    try {
+      if (
+        !(await this.env.ORGANIZATION.getByName(association.organizationId).endRegisteredExecution(
+          association.executionId,
+          id,
+        ))
+      )
+        throw new Error("Execution end unavailable.");
+      this.ctx.storage.sql.exec("DELETE FROM m1_agent_execution_ends WHERE executionId=?", association.executionId);
+    } catch {
+      // The inactive association already denies use. Retry only metadata, never credentials.
+      const next = Date.now() + 1000;
+      if ((this.alarms.deadline("executions") ?? Infinity) > next) await this.alarms.set("executions", next);
+    }
+  }
+
+  private async retryManagedEnds(): Promise<void> {
+    let rows: { organizationId: string; executionId: string; agent: string }[];
+    try {
+      rows = this.ctx.storage.sql
+        .exec<{ organizationId: string; executionId: string; agent: string }>(
+          "SELECT * FROM m1_agent_execution_ends LIMIT 20",
+        )
+        .toArray();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("no such table: m1_agent_execution_ends")) return;
+      throw error;
+    }
+    for (const row of rows) await this.deliverManagedEnd(row.agent as AgentId, row);
+    if (rows.length === 20) {
+      const next = Date.now() + 1000;
+      if ((this.alarms.deadline("executions") ?? Infinity) > next) await this.alarms.set("executions", next);
+    }
+  }
+
+  private async endManagedAssociation(id: AgentId): Promise<void> {
+    const association = this.managedAssociation(id);
+    if (association) {
+      this.queueManagedEnd(id, association);
+      await this.deliverManagedEnd(id, association);
+    }
+  }
+
   /**
    * Registers the Agent for a CLI session, or brings it back on resume, and joins
    * its Person. This is where `switchboard run` trades the Person's session for a
@@ -1073,6 +1309,8 @@ export class Channel extends DurableObject<Env> {
         };
       }
     }
+    if (this.binding.workspace !== null)
+      await this.endManagedAssociation(agentIdFor(person, request.cli, request.sessionId));
     this.join(person);
     // A machine's Host the Channel does not know answers for nothing (ADR 0037).
     if (request.historyHost !== undefined && this.hosts.find(person, request.historyHost) === null) {
@@ -1184,6 +1422,14 @@ export class Channel extends DurableObject<Env> {
   ): Promise<RosterResult> {
     const result = this.withNextTurn(await this.agents.heartbeat(person, id, presence, usage, context));
     if (result.ok && usage !== undefined) this.recordUsage(usage);
+    if (result.ok && this.binding.workspace !== null) {
+      const association = this.managedAssociation(id);
+      if (association?.active === 1)
+        await this.env.ORGANIZATION.getByName(association.organizationId).touchRegisteredExecution(
+          association.executionId,
+          id,
+        );
+    }
     return result;
   }
 

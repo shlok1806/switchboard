@@ -209,6 +209,11 @@ export function hostFor(repo: string, env: NodeJS.ProcessEnv = process.env): str
 }
 
 export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<number> {
+  const ownArgs = rawArgs.slice(0, rawArgs.indexOf("--") < 0 ? rawArgs.length : rawArgs.indexOf("--"));
+  if (ownArgs.some((arg) => /^(--principal|--workspace|--execution)(=|$)/.test(arg))) {
+    console.error("switchboard: managed Channel runs are closed until P3. Use execution redeem for enrollment.");
+    return 2;
+  }
   const env = process.env;
   const config = await readConfig();
   if (!config) {

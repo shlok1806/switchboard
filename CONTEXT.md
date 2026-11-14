@@ -26,6 +26,18 @@ An expiring offer to an exact numeric GitHub identity. Membership activates only
 **Person identity**:
 An immutable native Person UUID associated with a verified numeric GitHub account ID. Displayed login changes do not change that identity; historical login-only sessions do not establish it.
 
+**AgentPrincipal**:
+A stable identity within one Organization, explicitly sponsored by an Organization or Person. Declared capabilities describe it and grant no authority.
+
+**AgentExecution**:
+One principal's run in exactly one Workspace, owned by an authenticated Person. It has a distinct ID and credential generation; an optional legacy AgentId/session reference does not change that session's identity.
+
+**AgentGrant**:
+An explicit expiring Workspace action grant, bounded by current Organization policy, Workspace policy and the sponsor's current delegable authority.
+
+**Execution credential**:
+A short-lived opaque bearer for one AgentExecution. Stored only as a digest in Organization; rotation invalidates its previous generation immediately. It never belongs in Channel storage or stream URLs.
+
 **Administrative AuditRecord**:
 A redacted record of an administrative actor, action, resource, decision, outcome and policy revision. It contains no credentials or private session contents and grants no content access.
 
