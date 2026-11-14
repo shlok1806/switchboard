@@ -52,3 +52,10 @@ Code changes with file:line are recorded by Codex in m1/p1/P1_IMPLEMENTATION_NOT
 - 6:13 PM CT: [P1] tests S3-fix3: == totals (S3-fix3, quick, HEAD 90b6fda) == 06_worker_test:  Test Files 34 passed | 2 skipped (37) | Tests 491 passed | 2 skipped (495)  | gate: FAIL  06_worker_test=1;
 - 6:20 PM CT: [P1] M1-P1-S3-FIX4 run attempt 1 started (supervisor driver)
 - 6:24 PM CT: [P1] M1-P1-S3-FIX4 done
+- 6:24 PM CT: [P1] tests S3-fix4 (quick) started at HEAD e914346
+- 6:25 PM CT: [P1] tests S3-fix4: == totals (S3-fix4, quick, HEAD e914346) == 06_worker_test:  Test Files 35 passed | 2 skipped (37) | Tests 493 passed | 2 skipped (495)  | gate: PASS 
+- 6:25 PM CT: [P1] quick gate S3-fix4 PASS — relaunching chain_p1.sh (skips done; S3 gate satisfied by p1_logs/S3-fix4)
+- 6:25 PM CT: [P1] tests full0 (full+shots) started at HEAD e914346
+- 6:40 PM CT: [P1] tests full0: == totals (full0, full+shots, HEAD e914346) == 06_worker_test:  Test Files 35 passed | 2 skipped (37) | Tests 493 passed | 2 skipped (495) 09_cli_test:  Test Files 2 failed | 33 passed (35) | Tests 3 failed | 697 passed (700) 13_dashboard_test:  Test Files 29 passed (29) | Tests 243 passed (243) shots: 203 screenshots in /home/box/engineering-workspace/worktrees/switchboard-m1/dashboard/screenshots  | gate: FAIL  09_cli_test=1; 14_dashboard_shots=1; | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=0 07_cli_typecheck=0 11_dashboard_typecheck=0 08_cli_lint=0 09_cli_test=1 10_dashboard_lint=0 12_dashboard_build=0 13_dashboard_test=0 14_dashboard_shots=1 
+- 6:40 PM CT: [P1] M1-P1-FULL-FIX1 run attempt 1 started
+- 6:42 PM CT: [P1] M1-P1-FULL-FIX1 done
