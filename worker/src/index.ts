@@ -374,6 +374,11 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       return fail(403, "Channel binding changed; managed access is closed until P3.");
     throw error;
   }
+  // Channel.fetch fences the upgrade after its last await, in the same DO turn
+  // that releases the socket. Binding transitions also close accepted sockets.
+  // Return that upgrade directly: another RPC here delays handing the live
+  // socket to its wrapper after backlog/roster delivery has already started.
+  if (route === "GET /api/stream" && response.status === 101) return response;
   if (!(await channel.bindingCurrent(admitted.generation ?? -1))) {
     void response.body?.cancel();
     return fail(403, "Channel binding changed; managed access is closed until P3.");
