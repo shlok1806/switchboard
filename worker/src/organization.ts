@@ -644,7 +644,7 @@ export class Organization extends DurableObject<Env> {
       if (operation.phase === "done") return reserved;
       if (operation.phase === "conflict") return refuse(409, "channel_binding_conflict");
       if (operation.generation === null) {
-        const snapshot = await channel.bindingState();
+        using snapshot = await channel.bindingState();
         operation = this.ctx.storage.transactionSync(() => {
           const stored = this.loadBinding(operation.id);
           if (!stored) throw new Error("Missing binding operation");
@@ -697,7 +697,7 @@ export class Organization extends DurableObject<Env> {
           return stored;
         });
       if (operation.phase === "reserved") {
-        const prepared = await channel.transitionBinding(
+        using prepared = await channel.transitionBinding(
           "prepare",
           workspaceId,
           operation.id,
@@ -732,7 +732,7 @@ export class Organization extends DurableObject<Env> {
         const current = this.load();
         if (!current || !this.bindingAllowed(current, actor, workspaceId))
           return refuse(403, "workspace_manage_required");
-        const finished = await channel.transitionBinding(
+        using finished = await channel.transitionBinding(
           "finish",
           workspaceId,
           operation.id,

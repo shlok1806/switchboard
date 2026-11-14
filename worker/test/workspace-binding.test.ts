@@ -426,7 +426,7 @@ describe("binding operation recovery", () => {
       it(`recovers ${mode} interruption at ${interruption} without repeating its generation`, async () => {
         const f = await bindingFixture();
         if (mode === "unbind") expect((await f.change("bind", "initial")).status).toBe(200);
-        const before = await f.channel.bindingState();
+        using before = await f.channel.bindingState();
         const local = interruption === "pending" || interruption === "activation";
         if (local) {
           await runInDurableObject(f.channel, (_object, state) => {
@@ -459,7 +459,7 @@ describe("binding operation recovery", () => {
         });
         expect(failure.operationId).toBe(journal.id);
         expect((await nativeFetch(`/api/m1/operations/${journal.id}`, f.token)).status).toBe(200);
-        const snapshot = await f.channel.bindingState();
+        using snapshot = await f.channel.bindingState();
         if (interruption === "pending") {
           // A failed prepare must retain both the durable fence and its cached value.
           expect(snapshot).toEqual(before);
@@ -615,30 +615,37 @@ describe("binding transition result boundaries", () => {
 
 it("discards HTTP history results admitted before a pending transition", async () => {
   const f = await bindingFixture();
-  let started!: () => void;
-  const reading = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  let release!: () => void;
-  const waiting = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  type HistoryGate = { started: boolean; release: () => void };
+  type GatedChannel = Channel & { historyGate: HistoryGate };
   await runInDurableObject(f.channel, (object) => {
+    // Both the promise and its resolver belong to this Channel's I/O context.
+    const gate: HistoryGate = { started: false, release: () => {} };
+    const waiting = new Promise<void>((resolve) => {
+      gate.release = resolve;
+    });
+    (object as GatedChannel).historyGate = gate;
     // Keep the prototype RPC method intact; pause its internal history merge.
     vi.spyOn(
       object as unknown as { withLocalEvents(): Promise<{ events: []; unavailable: [] }> },
       "withLocalEvents",
     ).mockImplementation(async () => {
-      started();
+      gate.started = true;
       await waiting;
       return { events: [], unavailable: [] };
     });
   });
   const token = await signSession("test-session-secret-at-least-32-characters-long", "native-human" as PersonName);
   const history = nativeFetch(`/r/${f.repo}/api/events?tail=10`, token);
-  await reading;
-  expect(await f.channel.prepareBinding(f.workspaceId, "outstanding-http-history", 0)).toBe(true);
-  release();
+  try {
+    await vi.waitFor(async () => {
+      expect(await runInDurableObject(f.channel, (object) => (object as GatedChannel).historyGate.started)).toBe(true);
+    });
+    expect(await f.channel.prepareBinding(f.workspaceId, "outstanding-http-history", 0)).toBe(true);
+  } finally {
+    await runInDurableObject(f.channel, (object) => {
+      (object as GatedChannel).historyGate.release();
+    });
+  }
   expect((await history).status).toBe(403);
 });
 

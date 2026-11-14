@@ -43,3 +43,8 @@ Code changes with file:line are recorded by Codex in m1/p1/P1_IMPLEMENTATION_NOT
 - 6:01 PM CT: [P1] M1-P1-S3-FIX2 run attempt 1 started
 - 6:01 PM CT: executor P1-#3 status: S3 option-B DONE in 1 Codex run (5:18–5:56 PM) → commit 8a6c2d2 (pushed to origin feature). Gate S3 quick FAIL: worker 474p/17f/2s (495) — 17 failures incl. EXISTING suites (~40 s timeouts: wrapper page reads, stale claims, concurrent claims, interrupts, screen-watch). FIX1 (Codex) → 7f88e32; gate S3-fix1 FAIL only on rc: 489p/0f/2s of 495 (4 tests not executed) + 1 unhandled error 'Worker exited unexpectedly' / 'Expected global Vitest state' — must be resolved (a crashed file is not a pass). FIX2 running since 6:01 PM; if its gate fails the chain stops ('gates still failing after S3 fixes'). guard s3_limit.sh exited (S3_DONE present). bulletin still 5a4ecba; main untouched.
 - 6:03 PM CT: [P1] M1-P1-S3-FIX2 done
+- 6:03 PM CT: [P1] tests S3-fix2 (quick) started at HEAD 0093e3a
+- 6:04 PM CT: [P1] tests S3-fix2: == totals (S3-fix2, quick, HEAD 0093e3a) == 06_worker_test:  Test Files 34 passed | 2 skipped (37) | Tests 489 passed | 2 skipped (495)  | gate: FAIL  06_worker_test=1; | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=1 07_cli_typecheck=0 11_dashboard_typecheck=0 
+- 6:04 PM CT: [P1] CHAIN STOP: gates still failing after S3 fixes — see p1_logs/
+- 6:10 PM CT: [P1] M1-P1-S3-FIX3 run attempt 1 started (supervisor driver)
+- 6:12 PM CT: [P1] M1-P1-S3-FIX3 done
