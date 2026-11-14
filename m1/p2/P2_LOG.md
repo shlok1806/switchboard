@@ -10,3 +10,5 @@ Deferred P1 findings P1R-1..4 stay deferred unless P2 naturally touches them.
 - 11:58 AM CT: [P2] M1-P2-PLANCHECK run attempt 1 started
 - 12:04 PM CT: [P2] M1-P2-PLANCHECK done
 - 12:04 PM CT: [P2] agy P2 plan-check verdict: GO
+- 12:04 PM CT: [P2] M1-P2-S1 run attempt 1 started
+- 12:17 PM CT: [P2] M1-P2-S1 done

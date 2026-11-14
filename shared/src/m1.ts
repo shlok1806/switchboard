@@ -66,14 +66,14 @@ export interface AdminAuditRecord {
   id: string;
   timestamp: number;
   requestId: string;
-  actor: { kind: "person"; personId: string } | { kind: "unknown" };
+  actor: { kind: "person"; personId: string } | ExecutionActor | { kind: "unknown" };
   action: string;
   resource: PolicyResource;
   decision: "allow" | "deny";
   outcome: "committed" | "denied";
   reason: string;
   policyRevision: number;
-  target?: { kind: "person" | "invitation"; id: string };
+  target?: { kind: "person" | "invitation" | "principal" | "execution"; id: string };
   count?: number;
   lastTimestamp?: number;
 }
@@ -122,4 +122,98 @@ export interface BindingOperation {
   generation: number | null;
   key: string;
   warning?: string;
+}
+
+/** Capabilities describe an agent; only grants convey authority. */
+export interface AgentPrincipal {
+  id: string;
+  organizationId: string;
+  sponsor: { kind: "organization" | "person"; id: string };
+  displayName: string;
+  capabilities: string[];
+  status: "active" | "disabled" | "revoked";
+  createdBy: string;
+  createdAt: number;
+}
+export interface AgentExecution {
+  id: string;
+  principalId: string;
+  workspaceId: string;
+  ownerPersonId: string;
+  legacyAgentId?: string;
+  sessionReference?: string;
+  cli: string;
+  startedAt: number;
+  lastSeen: number;
+  endedAt?: number;
+  status: "active" | "revoked" | "ended";
+  credentialGeneration: number;
+}
+export interface ExecutionActor {
+  kind: "execution";
+  principalId: string;
+  executionId: string;
+  workspaceId: string;
+}
+export interface VerifiedExecution extends ExecutionActor {
+  actions: string[];
+}
+export interface AgentConstraints {
+  /** Only action narrowing is supported in P2; unknown constraints deny. */
+  actions?: string[];
+}
+export interface AgentGrant {
+  principalId: string;
+  workspaceId: string;
+  actions: string[];
+  constraints: AgentConstraints;
+  grantedBy: string;
+  expiresAt: number;
+  policyRevision: number;
+}
+export interface ExecutionCredentialMetadata {
+  id: string;
+  executionId: string;
+  principalId: string;
+  workspaceId: string;
+  generation: number;
+  expiresAt: number;
+}
+export type IdentityCommand =
+  | { kind: "principal.create"; sponsor: AgentPrincipal["sponsor"]; displayName: string; capabilities: string[] }
+  | { kind: "principal.update"; principalId: string; displayName: string; status: AgentPrincipal["status"] }
+  | {
+      kind: "grant.put";
+      principalId: string;
+      workspaceId: string;
+      actions: string[];
+      constraints: AgentConstraints;
+      expiresAt: number;
+    }
+  | { kind: "grant.revoke"; principalId: string; workspaceId: string }
+  | { kind: "identity.policy"; workspaceId?: string; actions: string[] }
+  | {
+      kind: "execution.start";
+      principalId: string;
+      workspaceId: string;
+      cli: string;
+      lifetimeMs?: number;
+      constraints?: AgentConstraints;
+    }
+  | { kind: "execution.rotate"; executionId: string; expectedGeneration: number; lifetimeMs?: number }
+  | { kind: "execution.revoke"; executionId: string };
+export interface IdentityMutation {
+  actor: PersonActor;
+  key: string;
+  requestId: string;
+  expectedRevision?: number;
+  command: IdentityCommand;
+}
+export interface IdentityValue {
+  principal?: AgentPrincipal;
+  grant?: AgentGrant;
+  execution?: AgentExecution;
+  credential?: ExecutionCredentialMetadata;
+  /** Ephemeral only: never persisted in replay, audit or Channel storage. */
+  secret?: string;
 }

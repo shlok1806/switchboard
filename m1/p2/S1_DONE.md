@@ -1,0 +1,12 @@
+# S1 complete — implementation; runtime verification pending
+- Added stable principals, scoped grants, separate executions and verified execution actors (`shared/src/m1.ts:128`).
+- Added digest-only credential preparation/parsing, lifetime limits and fixed-length comparison (`worker/src/executions.ts:12`).
+- Added current sponsor/delegation intersections and deny-first action sets (`worker/src/principals.ts:38`).
+- Added transactional Organization mutations, generation rotation, verification and redacted audit/replay (`worker/src/organization.ts:156`).
+- Added P2 policy opt-in while retaining existing P1 action defaults (`worker/src/policy.ts:15`).
+- Added 13 new domain/security tests (`worker/test/scoped-executions.test.ts:102`).
+- Worker typecheck and lint passed; git diff --check passed.
+- Focused Vitest startup failed with EROFS in shared node_modules/.vite-temp; zero tests executed.
+- Contributor start without explicit manager authority denies; design escalation recorded in P2_IMPLEMENTATION_NOTES.md.
+- HTTP/redemption lifecycle, bearer dispatch, CLI/registration linkage remain S2/S3; managed route enforcement remains P3.
+- No existing tests or Channel/CLI/config files changed; no git write command or deployment was run.

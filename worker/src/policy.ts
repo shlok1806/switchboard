@@ -1,6 +1,18 @@
-import type { OrganizationMembership, PersonActor, PolicyResource, WorkspaceMembership } from "../../shared/src/m1";
+import type {
+  OrganizationMembership,
+  PersonActor,
+  PolicyResource,
+  VerifiedExecution,
+  WorkspaceMembership,
+} from "../../shared/src/m1";
+
+import { DELEGABLE_ACTIONS } from "./principals";
 
 export interface PolicyContext {
+  /** Fresh authoritative verification, never taken from a request body. */
+  verifiedExecution?: VerifiedExecution;
+  /** P2 authority opts in; P1 contexts retain their original closed action set. */
+  identityPolicy?: boolean;
   organizationId: string;
   policyRevision: number;
   available: boolean;
@@ -27,14 +39,14 @@ export function validPerson(actor: unknown): actor is PersonActor {
 export function workspaceParent(id: string): string | null {
   return WORKSPACE_ID.exec(id)?.[1] ?? null;
 }
-/** Only P1 human actions can be allowed. Callers supply authoritative current rows. */
+/** Human metadata/lifecycle decisions use authoritative current rows. */
 export function decide(actor: unknown, action: string, resource: PolicyResource, context: PolicyContext) {
   const result = (decision: "allow" | "deny", reason: string) => ({
     decision,
     reason,
     policyRevision: context.policyRevision,
   });
-  if (!context.available || !validPerson(actor)) return result("deny", "authority_unavailable_or_actor_invalid");
+  if (!context.available) return result("deny", "authority_unavailable_or_actor_invalid");
   if (
     !resource ||
     resource.organizationId !== context.organizationId ||
@@ -47,6 +59,21 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
       : workspaceParent(resource.id) !== context.organizationId
   )
     return result("deny", "resource_mismatch");
+  const verified = context.verifiedExecution;
+  if (verified && actor && typeof actor === "object" && "kind" in actor && actor.kind === "execution") {
+    const a = actor as VerifiedExecution;
+    return a.executionId === verified.executionId &&
+      a.principalId === verified.principalId &&
+      a.workspaceId === verified.workspaceId &&
+      resource.kind === "workspace" &&
+      resource.id === verified.workspaceId &&
+      context.workspaceActive &&
+      DELEGABLE_ACTIONS.includes(action) &&
+      verified.actions.includes(action)
+      ? result("allow", "scoped_execution")
+      : result("deny", "execution_scope_denied");
+  }
+  if (!validPerson(actor)) return result("deny", "authority_unavailable_or_actor_invalid");
   const org = context.organizationMembership;
   if (
     !org ||
@@ -57,7 +84,9 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
     return result("deny", "membership_required");
   const admin = org.role === "owner" || org.role === "admin";
   if (resource.kind === "organization") {
-    return admin && ["organization.manage", "organization.member.manage", "workspace.create"].includes(action)
+    return admin &&
+      (["organization.manage", "organization.member.manage", "workspace.create"].includes(action) ||
+        (context.identityPolicy && ["agent.register", "agent.view"].includes(action)))
       ? result("allow", "organization_administrator")
       : result("deny", "action_denied");
   }
@@ -65,15 +94,22 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
   if (
     admin &&
     (["workspace.manage", "workspace.member.manage"].includes(action) ||
+      (context.identityPolicy && ["agent.register", "agent.grant.manage", "agent.execution.revoke"].includes(action)) ||
       (action === "workspace.read" && context.metadataOnly))
   )
     return result("allow", "workspace_administration");
   const member = context.workspaceMembership;
   if (!member || member.personId !== actor.personId || member.workspaceId !== resource.id || member.status !== "active")
     return result("deny", "workspace_membership_required");
-  if (action === "workspace.read" && ["manager", "contributor", "viewer"].includes(member.role))
+  if (
+    (action === "workspace.read" || (context.identityPolicy && action === "agent.view")) &&
+    ["manager", "contributor", "viewer"].includes(member.role)
+  )
     return result("allow", "explicit_membership");
-  return member.role === "manager" && ["workspace.manage", "workspace.member.manage"].includes(action)
+  return member.role === "manager" &&
+    (["workspace.manage", "workspace.member.manage"].includes(action) ||
+      (context.identityPolicy &&
+        ["agent.register", "agent.grant.manage", "agent.execution.start", "agent.execution.revoke"].includes(action)))
     ? result("allow", "workspace_manager")
     : result("deny", "action_denied");
 }

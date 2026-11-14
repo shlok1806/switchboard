@@ -2,7 +2,13 @@ import { DurableObject } from "cloudflare:workers";
 import type { PersonName } from "../../shared/src/index";
 import type {
   AdminAuditRecord,
+  AgentConstraints,
+  AgentExecution,
+  AgentGrant,
+  AgentPrincipal,
   BindingOperation,
+  IdentityMutation,
+  IdentityValue,
   MembershipInvitation,
   NativeMutation,
   NativeOrganization,
@@ -12,10 +18,21 @@ import type {
   OrganizationMembership,
   PersonActor,
   PolicyResource,
+  VerifiedExecution,
   WorkspaceMembership,
 } from "../../shared/src/m1";
 import { channelRepo } from "./auth";
+import {
+  credentialExpiry,
+  equalDigest,
+  parseCredential,
+  prepareCredential,
+  type StoredCredential,
+  secretDigest,
+  validConstraints,
+} from "./executions";
 import { decide, validPerson, workspaceParent } from "./policy";
+import { administrator, DELEGABLE_ACTIONS, effectiveActions, humanActions, managesPrincipal } from "./principals";
 
 const DAY = 86_400_000;
 interface State {
@@ -62,6 +79,12 @@ export class Organization extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, timestamp INTEGER NOT NULL, body TEXT NOT NULL, bucket TEXT UNIQUE, count INTEGER NOT NULL DEFAULT 1, last_timestamp INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS binding_operations (id TEXT PRIMARY KEY, scope TEXT UNIQUE NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS binding_reservations (workspace TEXT PRIMARY KEY, repo TEXT UNIQUE NOT NULL, operation TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS principals (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS executions (id TEXT PRIMARY KEY, body TEXT NOT NULL, constraints_body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS identity_policy (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS execution_credentials (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS redemption_codes (digest TEXT PRIMARY KEY, body TEXT NOT NULL, retain_until INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS directory_outbox (person TEXT PRIMARY KEY, generation TEXT NOT NULL);`);
   }
   private load(): State | undefined {
@@ -117,6 +140,354 @@ export class Organization extends DurableObject<Env> {
       return { ok: true, value: organization, policyRevision: 1 };
     });
   }
+  private identityRow<T>(table: string, id: string): T | undefined {
+    const row = this.ctx.storage.sql.exec<{ body: string }>(`SELECT body FROM ${table} WHERE id=?`, id).toArray()[0];
+    return row ? (JSON.parse(row.body) as T) : undefined;
+  }
+  private identityWrite(table: string, id: string, value: unknown) {
+    this.ctx.storage.sql.exec(`INSERT OR REPLACE INTO ${table} VALUES(?,?)`, id, JSON.stringify(value));
+  }
+  private identityCeiling(id: string): string[] {
+    return this.identityRow<string[]>("identity_policy", id) ?? [];
+  }
+  private grantFor(principal: string, workspace: string) {
+    return this.identityRow<AgentGrant>("grants", canonical([principal, workspace]));
+  }
+  async mutateIdentity(input: IdentityMutation): Promise<NativeResult<IdentityValue>> {
+    const initial = this.load();
+    if (!initial) return { ok: false, status: 404, reason: "not_found", policyRevision: 0 };
+    const c = input.command;
+    const prepared =
+      c.kind === "execution.start" || c.kind === "execution.rotate"
+        ? await prepareCredential(initial.organization.id)
+        : undefined;
+    const fingerprint = Array.from(await secretDigest(canonical([c, input.expectedRevision])), (b) =>
+      b.toString(16).padStart(2, "0"),
+    ).join("");
+    return this.ctx.storage.transactionSync(() => {
+      this.cleanup();
+      const state = this.load();
+      if (!state) return { ok: false, status: 404, reason: "not_found", policyRevision: 0 };
+      const now = Date.now(),
+        revision = state.organization.policyRevision;
+      const actor = input.actor;
+      const execution = "executionId" in c ? this.identityRow<AgentExecution>("executions", c.executionId) : undefined;
+      const principalId = "principalId" in c ? c.principalId : execution?.principalId;
+      const principal = principalId ? this.identityRow<AgentPrincipal>("principals", principalId) : undefined;
+      const workspaceId = "workspaceId" in c ? c.workspaceId : execution?.workspaceId;
+      const resource: PolicyResource = {
+        kind: workspaceId ? "workspace" : "organization",
+        organizationId: state.organization.id,
+        id: workspaceId ?? state.organization.id,
+      };
+      const refuse = (reason: string, status: 400 | 403 | 409 = 403): NativeResult<IdentityValue> => {
+        this.audit(
+          actor,
+          c.kind,
+          resource,
+          false,
+          reason,
+          revision,
+          text(input.requestId, 100) ? input.requestId : "invalid",
+        );
+        return { ok: false, status, reason, policyRevision: revision };
+      };
+      if (!validPerson(actor) || !text(input.key, 128) || !text(input.requestId, 100))
+        return refuse("invalid_request", 400);
+      if (state.members[actor.personId]?.status !== "active") return refuse("action_denied");
+      if (
+        workspaceId &&
+        (workspaceParent(workspaceId) !== state.organization.id || state.workspaces[workspaceId]?.status !== "active")
+      )
+        return refuse("resource_denied");
+      if (
+        ("principalId" in c || "executionId" in c) &&
+        (!principal || principal.organizationId !== state.organization.id)
+      )
+        return refuse("resource_denied");
+      if ("executionId" in c && !execution) return refuse("resource_denied");
+      const admin = administrator(state, actor.personId);
+      const actions = workspaceId ? humanActions(state, actor.personId, workspaceId) : [];
+      const permits = (action: string) =>
+        decide(actor, action, resource, this.context(state, actor, workspaceId, false, true)).decision === "allow";
+      if (principal && !managesPrincipal(state, actor.personId, principal)) return refuse("sponsor_authority_required");
+      if (c.kind === "principal.create") {
+        if (
+          !text(c.displayName) ||
+          !Array.isArray(c.capabilities) ||
+          c.capabilities.length > 32 ||
+          !c.capabilities.every((v) => text(v, 100))
+        )
+          return refuse("invalid_principal", 400);
+        if (
+          !c.sponsor ||
+          (c.sponsor.kind === "organization"
+            ? !admin || c.sponsor.id !== state.organization.id
+            : c.sponsor.kind !== "person" || c.sponsor.id !== actor.personId)
+        )
+          return refuse("sponsor_denied");
+        if (
+          !admin &&
+          !Object.keys(state.workspaces).some((w) => humanActions(state, actor.personId, w).includes("agent.register"))
+        )
+          return refuse("action_denied");
+      } else if (c.kind === "identity.policy") {
+        if (!admin || !Array.isArray(c.actions) || !c.actions.every((a) => DELEGABLE_ACTIONS.includes(a)))
+          return refuse("policy_denied");
+      } else if (c.kind === "grant.put" || c.kind === "grant.revoke") {
+        if (!permits("agent.grant.manage")) return refuse("action_denied");
+      } else if (c.kind === "execution.start" || c.kind === "execution.rotate") {
+        if (!permits("agent.execution.start") || principal?.status !== "active") return refuse("start_denied");
+      } else if (c.kind === "execution.revoke") {
+        if (!permits("agent.execution.revoke")) return refuse("action_denied");
+      } else if (c.kind !== "principal.update") return refuse("unknown_command", 400);
+      const scope = canonical(["identity", actor.personId, input.key]);
+      const replay = this.ctx.storage.sql
+        .exec<{ fingerprint: string; result: string }>(
+          "SELECT fingerprint,result FROM replay WHERE scope=? AND expires>?",
+          scope,
+          now,
+        )
+        .toArray()[0];
+      if (replay)
+        return replay.fingerprint === fingerprint
+          ? (JSON.parse(replay.result) as NativeResult<IdentityValue>)
+          : refuse("idempotency_conflict", 409);
+      if (c.kind !== "principal.create" && c.kind !== "execution.start" && input.expectedRevision === undefined)
+        return refuse("revision_required", 409);
+      if (input.expectedRevision !== undefined && input.expectedRevision !== revision)
+        return refuse("stale_revision", 409);
+      const value: IdentityValue = {};
+      if (c.kind === "principal.create") {
+        const p: AgentPrincipal = {
+          id: `${state.organization.id}:${crypto.randomUUID()}`,
+          organizationId: state.organization.id,
+          sponsor: c.sponsor,
+          displayName: c.displayName,
+          capabilities: c.capabilities,
+          status: "active",
+          createdBy: actor.personId,
+          createdAt: now,
+        };
+        this.identityWrite("principals", p.id, p);
+        value.principal = p;
+      } else if (c.kind === "principal.update" && principal) {
+        if (
+          !text(c.displayName) ||
+          !["active", "disabled", "revoked"].includes(c.status) ||
+          principal.status === "revoked"
+        )
+          return refuse("invalid_principal", 400);
+        principal.displayName = c.displayName;
+        principal.status = c.status;
+        this.identityWrite("principals", principal.id, principal);
+        value.principal = principal;
+      } else if (c.kind === "identity.policy") {
+        this.identityWrite("identity_policy", workspaceId ?? state.organization.id, [...new Set(c.actions)]);
+      } else if (c.kind === "grant.revoke" && principal && workspaceId) {
+        this.ctx.storage.sql.exec("DELETE FROM grants WHERE id=?", canonical([principal.id, workspaceId]));
+      } else if (c.kind === "grant.put" && principal && workspaceId) {
+        if (
+          !Array.isArray(c.actions) ||
+          c.actions.length > 32 ||
+          !validConstraints(c.constraints) ||
+          !Number.isSafeInteger(c.expiresAt) ||
+          c.expiresAt <= now
+        )
+          return refuse("invalid_grant", 400);
+        const grant: AgentGrant = {
+          principalId: principal.id,
+          workspaceId,
+          actions: [...new Set(c.actions)],
+          constraints: c.constraints,
+          grantedBy: actor.personId,
+          expiresAt: c.expiresAt,
+          policyRevision: revision + 1,
+        };
+        const allowed = effectiveActions(
+          state,
+          principal,
+          { ...grant, constraints: {} },
+          this.identityCeiling(state.organization.id),
+          this.identityCeiling(workspaceId),
+          now,
+        );
+        if (
+          grant.actions.some((a) => !allowed.includes(a) || !actions.includes(a)) ||
+          c.constraints.actions?.some((a) => !grant.actions.includes(a))
+        )
+          return refuse("delegation_denied");
+        this.identityWrite("grants", canonical([principal.id, workspaceId]), grant);
+        value.grant = grant;
+      } else if (
+        (c.kind === "execution.start" || c.kind === "execution.rotate") &&
+        principal &&
+        workspaceId &&
+        prepared
+      ) {
+        const grant = this.grantFor(principal.id, workspaceId);
+        const constraints =
+          c.kind === "execution.start"
+            ? (c.constraints ?? {})
+            : (JSON.parse(
+                this.ctx.storage.sql
+                  .exec<{ constraints_body: string }>(
+                    "SELECT constraints_body FROM executions WHERE id=?",
+                    execution?.id ?? "",
+                  )
+                  .one().constraints_body,
+              ) as AgentConstraints);
+        const expiresAt = grant ? credentialExpiry(now, c.lifetimeMs, grant.expiresAt) : null;
+        if (
+          !grant ||
+          !expiresAt ||
+          !validConstraints(constraints) ||
+          !effectiveActions(
+            state,
+            principal,
+            grant,
+            this.identityCeiling(state.organization.id),
+            this.identityCeiling(workspaceId),
+            now,
+            undefined,
+            constraints,
+          ).length
+        )
+          return refuse("grant_or_lifetime_denied", 400);
+        if (c.kind === "execution.start" && !text(c.cli, 80)) return refuse("invalid_cli", 400);
+        if (
+          execution &&
+          (execution.status !== "active" ||
+            c.kind !== "execution.rotate" ||
+            c.expectedGeneration !== execution.credentialGeneration)
+        )
+          return refuse("stale_generation", 409);
+        const e: AgentExecution = execution ?? {
+          id: `${state.organization.id}:${crypto.randomUUID()}`,
+          principalId: principal.id,
+          workspaceId,
+          ownerPersonId: actor.personId,
+          cli: c.kind === "execution.start" ? c.cli : "",
+          startedAt: now,
+          lastSeen: now,
+          status: "active",
+          credentialGeneration: 0,
+        };
+        e.credentialGeneration++;
+        const credential: StoredCredential = {
+          id: prepared.id,
+          executionId: e.id,
+          principalId: principal.id,
+          workspaceId,
+          generation: e.credentialGeneration,
+          expiresAt,
+          digest: prepared.digest,
+        };
+        this.ctx.storage.sql.exec(
+          "INSERT OR REPLACE INTO executions VALUES(?,?,?)",
+          e.id,
+          JSON.stringify(e),
+          JSON.stringify(constraints),
+        );
+        this.identityWrite("execution_credentials", credential.id, credential);
+        const { digest: _digest, ...metadata } = credential;
+        value.execution = e;
+        value.credential = metadata;
+        value.secret = prepared.token;
+      } else if (c.kind === "execution.revoke" && execution) {
+        execution.status = "revoked";
+        execution.endedAt = now;
+        this.ctx.storage.sql.exec("UPDATE executions SET body=? WHERE id=?", JSON.stringify(execution), execution.id);
+        value.execution = execution;
+      } else return refuse("invalid_command", 400);
+      state.organization.policyRevision++;
+      this.save(state);
+      this.audit(
+        actor,
+        c.kind,
+        resource,
+        true,
+        "identity_committed",
+        state.organization.policyRevision,
+        input.requestId,
+        undefined,
+        value.execution
+          ? { kind: "execution", id: value.execution.id }
+          : value.principal
+            ? { kind: "principal", id: value.principal.id }
+            : principal
+              ? { kind: "principal", id: principal.id }
+              : undefined,
+      );
+      const { secret: _secret, ...metadata } = value;
+      const result: NativeResult<IdentityValue> = {
+        ok: true,
+        value: metadata,
+        policyRevision: state.organization.policyRevision,
+      };
+      this.ctx.storage.sql.exec(
+        "INSERT INTO replay VALUES(?,?,?,?)",
+        scope,
+        fingerprint,
+        JSON.stringify(result),
+        now + DAY,
+      );
+      return { ...result, value };
+    });
+  }
+  async verifyExecution(token: string): Promise<VerifiedExecution | null> {
+    const parsed = parseCredential(token);
+    if (!parsed) return null;
+    const digest = await secretDigest(parsed.secret);
+    const state = this.load();
+    if (!state || state.organization.id !== parsed.organizationId) return null;
+    const credential = this.identityRow<StoredCredential>("execution_credentials", parsed.credentialId);
+    if (
+      !credential ||
+      credential.id !== parsed.credentialId ||
+      !equalDigest(digest, new Uint8Array(credential.digest)) ||
+      credential.expiresAt <= Date.now()
+    )
+      return null;
+    const execution = this.identityRow<AgentExecution>("executions", credential.executionId);
+    const principal = this.identityRow<AgentPrincipal>("principals", credential.principalId);
+    const grant = this.grantFor(credential.principalId, credential.workspaceId);
+    if (
+      !execution ||
+      !principal ||
+      !grant ||
+      execution.id !== credential.executionId ||
+      workspaceParent(execution.id) !== state.organization.id ||
+      workspaceParent(principal.id) !== state.organization.id ||
+      execution.credentialGeneration !== credential.generation ||
+      execution.workspaceId !== credential.workspaceId ||
+      execution.principalId !== credential.principalId
+    )
+      return null;
+    const constraints = JSON.parse(
+      this.ctx.storage.sql
+        .exec<{ constraints_body: string }>("SELECT constraints_body FROM executions WHERE id=?", execution.id)
+        .one().constraints_body,
+    ) as AgentConstraints;
+    const actions = effectiveActions(
+      state,
+      principal,
+      grant,
+      this.identityCeiling(state.organization.id),
+      this.identityCeiling(execution.workspaceId),
+      Date.now(),
+      execution,
+      constraints,
+    );
+    if (!actions.length) return null;
+    return {
+      kind: "execution",
+      actions,
+      executionId: execution.id,
+      principalId: principal.id,
+      workspaceId: execution.workspaceId,
+    };
+  }
   private enqueue(person: string) {
     this.ctx.storage.sql.exec(
       "INSERT INTO directory_outbox VALUES(?,?) ON CONFLICT(person) DO UPDATE SET generation=excluded.generation",
@@ -143,12 +514,33 @@ export class Organization extends DurableObject<Env> {
     revision: number,
     requestId: string,
     command?: OrganizationCommand,
+    identityTarget?: AdminAuditRecord["target"],
   ) {
     const now = Date.now();
     // One redacted denial per actor/action/resource/reason/minute bounds amplification.
+    // Execution actors reach this seam only from internal authenticated adapters.
+    // Retain attribution only when the referenced authoritative association matches.
+    const candidate =
+      actor && typeof actor === "object" && "kind" in actor && actor.kind === "execution"
+        ? (actor as Partial<VerifiedExecution>)
+        : undefined;
+    const execution =
+      candidate && typeof candidate.executionId === "string"
+        ? this.identityRow<AgentExecution>("executions", candidate.executionId)
+        : undefined;
     const safeActor: AdminAuditRecord["actor"] = validPerson(actor)
       ? { kind: "person", personId: actor.personId }
-      : { kind: "unknown" };
+      : execution &&
+          execution.id === candidate?.executionId &&
+          execution.principalId === candidate.principalId &&
+          execution.workspaceId === candidate.workspaceId
+        ? {
+            kind: "execution",
+            executionId: execution.id,
+            principalId: execution.principalId,
+            workspaceId: execution.workspaceId,
+          }
+        : { kind: "unknown" };
     const bucket = allowed
       ? null
       : canonical([safeActor, action.slice(0, 80), resource.id.slice(0, 100), reason, Math.floor(now / 60_000)]);
@@ -164,11 +556,12 @@ export class Organization extends DurableObject<Env> {
       reason,
       policyRevision: revision,
       target:
-        command && "personId" in command
+        identityTarget ??
+        (command && "personId" in command
           ? { kind: "person", id: command.personId }
           : command?.kind === "invitation.accept"
             ? { kind: "invitation", id: command.invitationId }
-            : undefined,
+            : undefined),
     };
     this.ctx.storage.sql.exec(
       "INSERT INTO audit VALUES(?,?,?,?,1,?) ON CONFLICT(bucket) DO UPDATE SET count=count+1,last_timestamp=excluded.last_timestamp",
@@ -182,6 +575,10 @@ export class Organization extends DurableObject<Env> {
   private cleanup() {
     const now = Date.now();
     this.ctx.storage.sql.exec(
+      "DELETE FROM redemption_codes WHERE digest IN (SELECT digest FROM redemption_codes WHERE retain_until<=? LIMIT 100)",
+      now,
+    );
+    this.ctx.storage.sql.exec(
       "DELETE FROM replay WHERE scope IN (SELECT scope FROM replay WHERE expires<=? LIMIT 100)",
       now,
     );
@@ -190,7 +587,13 @@ export class Organization extends DurableObject<Env> {
       now - 90 * DAY,
     );
   }
-  private context(state: State, actor: PersonActor, workspaceId?: string, metadataOnly = false) {
+  private context(
+    state: State,
+    actor: PersonActor,
+    workspaceId?: string,
+    metadataOnly = false,
+    identityPolicy = false,
+  ) {
     return {
       available: true,
       organizationId: state.organization.id,
@@ -199,6 +602,7 @@ export class Organization extends DurableObject<Env> {
       workspaceMembership: workspaceId ? state.workspaceMembers[workspaceId]?.[actor.personId] : undefined,
       workspaceActive: workspaceId ? state.workspaces[workspaceId]?.status === "active" : undefined,
       metadataOnly,
+      identityPolicy,
     };
   }
   async mutate(input: NativeMutation): Promise<NativeResult<MutationValue>> {
