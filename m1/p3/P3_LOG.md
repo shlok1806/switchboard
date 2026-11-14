@@ -6,3 +6,6 @@
 - 2:50 PM CT: [P3-#1] PLAN done → 8f9fd71 (M1-P3-1, attribution OK, feature pushed; m1/p3/P3_PLAN.md 2,593 words, 4 slices: S1 P1R-3 broadcast gen check at channel.ts:~2904 (untagged=gen0) + decide()/permits/SafeAgent/503; S2 HTTP/RPC admission; S3 streams; S4 MCP/compat/docs. P2R-1 will be fixed (identityCatalog touched → SQL keyset/limit); P2R-2 kept manager-only). agy PLANCHECK running since 2:50 PM. chain_p3.sh pid 1146064.
 - 2:58 PM CT: [P3] M1-P3-PLANCHECK done
 - 2:58 PM CT: [P3] agy P3 plan-check verdict: GO
+- 2:58 PM CT: [P3] M1-P3-S1 run attempt 1 started
+- 2:59 PM CT: [P3-#1] agy PLANCHECK GO (9bf1def; advisories only: P3P-1 S2 density, P3P-2 narrow agent self-termination representation → appended to prompts/p3/SLICE.txt for S2+, backup SLICE.txt.bak-p3-1). No plan revision. M1-P3-S1 (Codex) running since 2:58 PM.
+- 3:09 PM CT: [P3] M1-P3-S1 done

@@ -2397,8 +2397,7 @@ export class Channel extends DurableObject<Env> {
   }
 
   /** Binding metadata must not occupy the legacy Person/Agent/Host identity slots. */
-  private socketIdentityTags(ws: WebSocket): string[] {
-    const tags = this.ctx.getTags(ws);
+  private socketIdentityTags(ws: WebSocket, tags = this.ctx.getTags(ws)): string[] {
     // Generation zero sockets use precisely the legacy identity tags. Once a
     // transition has occurred, also handle old sockets still completing close.
     return this.binding.generation === 0 && !tags.includes("binding:0")
@@ -2903,7 +2902,10 @@ export class Channel extends DurableObject<Env> {
 
   private broadcast(message: StreamMessage): void {
     for (const ws of this.ctx.getWebSockets()) {
-      if (!this.socketIdentityTags(ws)[1]?.startsWith(HOST_TAG)) send(ws, message);
+      const tags = this.ctx.getTags(ws);
+      if ((tags.find((tag) => tag.startsWith("binding:")) ?? "binding:0") !== `binding:${this.binding.generation}`)
+        continue;
+      if (!this.socketIdentityTags(ws, tags)[1]?.startsWith(HOST_TAG)) send(ws, message);
     }
   }
 }

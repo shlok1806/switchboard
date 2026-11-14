@@ -32,7 +32,8 @@ import {
   secretDigest,
   validConstraints,
 } from "./executions";
-import { decide, validPerson, workspaceParent } from "./policy";
+import { decide, type PolicyContext, validPerson, workspaceParent } from "./policy";
+import { type MutationPermit, resourceKey } from "./policy-permits";
 import { administrator, DELEGABLE_ACTIONS, effectiveActions, humanActions, managesPrincipal } from "./principals";
 
 const DAY = 86_400_000;
@@ -86,6 +87,7 @@ export class Organization extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS identity_policy (id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS execution_credentials (id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS redemption_codes (digest TEXT PRIMARY KEY, body TEXT NOT NULL, retain_until INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mutation_permits (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, expires INTEGER NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS directory_outbox (person TEXT PRIMARY KEY, generation TEXT NOT NULL);`);
   }
   private load(): State | undefined {
@@ -93,6 +95,8 @@ export class Organization extends DurableObject<Env> {
     return row ? (JSON.parse(row.body) as State) : undefined;
   }
   private save(state: State) {
+    // Any authority change cancels every outstanding authorization from older revisions.
+    this.ctx.storage.sql.exec("DELETE FROM mutation_permits WHERE revision<>?", state.organization.policyRevision);
     this.ctx.storage.sql.exec("INSERT OR REPLACE INTO aggregate VALUES(1, ?)", JSON.stringify(state));
   }
   /** Directory reserves a random org id before calling; repeat initialization never mutates it. */
@@ -693,6 +697,141 @@ export class Organization extends DurableObject<Env> {
       workspaceId: execution.workspaceId,
     };
   }
+  /** Internal authority RPC; HTTP adapters must resolve the Person, never accept body actors. */
+  async issueMutationPermit(input: {
+    actor: PersonActor | { token: string };
+    action: string;
+    resource: PolicyResource;
+    generation: number;
+    requestId: string;
+  }): Promise<NativeResult<MutationPermit>> {
+    const verified = "token" in input.actor ? await this.verifyExecution(input.actor.token) : undefined;
+    // All mutable facts are read AFTER credential/Channel verification awaits.
+    return this.ctx.storage.transactionSync(() => {
+      const state = this.load();
+      const revision = state?.organization.policyRevision ?? 0;
+      const deny = (reason: string): NativeResult<MutationPermit> => ({
+        ok: false,
+        status: 403,
+        reason,
+        policyRevision: revision,
+      });
+      if (
+        !state ||
+        !input.resource ||
+        input.resource.kind !== "workspace" ||
+        !text(input.requestId, 200) ||
+        !text(input.resource.channel, 500) ||
+        !text(input.resource.targetId, 500) ||
+        !text(input.resource.operation, 500)
+      )
+        return deny("invalid_permit");
+      const workspace = state.workspaces[input.resource.id];
+      const pending =
+        this.ctx.storage.sql
+          .exec(
+            "SELECT id FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.phase') NOT IN ('done','conflict') LIMIT 1",
+            input.resource.id,
+          )
+          .toArray().length > 0;
+      const completed = this.ctx.storage.sql
+        .exec<{ body: string }>(
+          "SELECT body FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.repo')=? AND json_extract(body, '$.phase')='done' ORDER BY json_extract(body, '$.generation') DESC LIMIT 1",
+          input.resource.id,
+          input.resource.channel,
+        )
+        .toArray()[0];
+      const operation = completed ? (JSON.parse(completed.body) as BindingOperation) : undefined;
+      const linked =
+        !pending &&
+        operation?.mode === "bind" &&
+        operation.generation !== null &&
+        operation.generation + 1 === input.generation &&
+        workspace?.channel === input.resource.channel;
+
+      if (!linked || !Number.isSafeInteger(input.generation) || input.generation <= 0) return deny("binding_mismatch");
+      const actor = verified ?? ("token" in input.actor ? undefined : input.actor);
+      if (!actor) return deny("invalid_actor");
+      const now = Date.now();
+      let context: PolicyContext;
+      let deadline = now + 2000;
+      if (actor.kind === "execution") {
+        const execution = this.identityRow<AgentExecution>("executions", actor.executionId);
+        const principal = this.identityRow<AgentPrincipal>("principals", actor.principalId);
+        const grant = this.grantFor(actor.principalId, actor.workspaceId);
+        const parsed = "token" in input.actor ? parseCredential(input.actor.token) : null;
+        const credential = parsed
+          ? this.identityRow<StoredCredential>("execution_credentials", parsed.credentialId)
+          : null;
+        if (
+          !execution ||
+          !principal ||
+          !grant ||
+          !credential ||
+          credential.generation !== execution.credentialGeneration
+        )
+          return deny("execution_scope_denied");
+        const row = this.ctx.storage.sql
+          .exec<{ constraints_body: string }>("SELECT constraints_body FROM executions WHERE id=?", execution.id)
+          .one();
+        deadline = Math.min(deadline, credential.expiresAt, grant.expiresAt);
+        context = {
+          available: true,
+          organizationId: state.organization.id,
+          policyRevision: revision,
+          workspaceActive: workspace?.status === "active",
+          managedPolicy: true,
+          now,
+          verifiedExecution: actor,
+          executionAuthority: {
+            state,
+            execution,
+            principal,
+            grant,
+            credentialExpiresAt: credential.expiresAt,
+            organizationCeiling: this.identityCeiling(state.organization.id),
+            workspacePolicy: this.identityCeiling(actor.workspaceId),
+            constraints: JSON.parse(row.constraints_body) as AgentConstraints,
+          },
+        };
+      } else context = { ...this.context(state, actor, input.resource.id, false, true), managedPolicy: true, now };
+      const decision = decide(actor, input.action, input.resource, context);
+      // These foundations cover Channel local commits; lifecycle/admin writes stay in their existing Org transactions.
+      if (
+        ![
+          "task.claim",
+          "task.update",
+          "channel.update.write",
+          "agent.directive.send",
+          "agent.handoff.cross_owner",
+        ].includes(input.action)
+      )
+        return deny("unsupported_permit_action");
+      if (decision.decision !== "allow" || deadline <= now) return deny(decision.reason);
+      const permit: MutationPermit = {
+        id: crypto.randomUUID(),
+        actor,
+        action: input.action,
+        resource: input.resource,
+        requestId: input.requestId,
+        generation: input.generation,
+        policyRevision: revision,
+        issuedAt: now,
+        expiresAt: deadline,
+      };
+      // Resource serialization is deliberately bounded to known identifiers, not arbitrary request content.
+      if (resourceKey(input.resource).length > 2000) return deny("invalid_resource");
+      this.ctx.storage.sql.exec(
+        "INSERT INTO mutation_permits VALUES(?,?,?,?)",
+        permit.id,
+        revision,
+        deadline,
+        JSON.stringify(permit),
+      );
+      this.audit(actor, input.action, input.resource, true, "permit_issued", revision, input.requestId);
+      return { ok: true, value: permit, policyRevision: revision };
+    });
+  }
   private enqueue(person: string) {
     this.ctx.storage.sql.exec(
       "INSERT INTO directory_outbox VALUES(?,?) ON CONFLICT(person) DO UPDATE SET generation=excluded.generation",
@@ -779,6 +918,10 @@ export class Organization extends DurableObject<Env> {
   }
   private cleanup() {
     const now = Date.now();
+    this.ctx.storage.sql.exec(
+      "DELETE FROM mutation_permits WHERE id IN (SELECT id FROM mutation_permits WHERE expires<=? LIMIT 100)",
+      now,
+    );
     this.ctx.storage.sql.exec(
       "DELETE FROM redemption_codes WHERE digest IN (SELECT digest FROM redemption_codes WHERE retain_until<=? LIMIT 100)",
       now,

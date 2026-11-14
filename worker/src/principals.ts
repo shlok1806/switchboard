@@ -82,6 +82,8 @@ export function effectiveActions(
     principal.organizationId !== state.organization.id ||
     principal.status !== "active" ||
     grant.principalId !== principal.id ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(grant.expiresAt) ||
     grant.expiresAt <= now ||
     !validConstraints(grant.constraints) ||
     !validConstraints(constraints) ||
@@ -93,7 +95,8 @@ export function effectiveActions(
     execution &&
     (execution.status !== "active" ||
       execution.principalId !== principal.id ||
-      execution.workspaceId !== grant.workspaceId)
+      execution.workspaceId !== grant.workspaceId ||
+      humanActions(state, execution.ownerPersonId, grant.workspaceId).length === 0)
   )
     return [];
   const sponsor =
@@ -101,7 +104,9 @@ export function effectiveActions(
       ? principal.sponsor.id === state.organization.id
         ? organizationCeiling
         : []
-      : humanActions(state, principal.sponsor.id, grant.workspaceId);
+      : principal.sponsor.kind === "person"
+        ? humanActions(state, principal.sponsor.id, grant.workspaceId)
+        : [];
   const executionActions = (constraints as { actions?: string[] }).actions;
   return grant.actions.filter(
     (a) =>

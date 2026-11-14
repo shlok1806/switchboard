@@ -1,3 +1,5 @@
+import type { Agent } from "./domain";
+
 /** Native foundation; unrelated legacy Channel identities are deliberately unchanged. */
 export interface PersonActor {
   kind: "person";
@@ -61,6 +63,21 @@ export interface PolicyResource {
   kind: "organization" | "workspace";
   organizationId: string;
   id: string;
+  /** Exact managed subresource; all fields participate in permit binding. */
+  channel?: string;
+  targetId?: string;
+  ownerPersonId?: string;
+  operation?: string;
+}
+export interface SafeAgent {
+  id: Agent["id"];
+  principalId: string;
+  executionId: string;
+  ownerPersonId: string;
+  cli: Agent["cli"];
+  presence: Agent["presence"];
+  startedAt: Agent["startedAt"];
+  lastSeenAt: Agent["lastSeenAt"];
 }
 export interface AdminAuditRecord {
   id: string;

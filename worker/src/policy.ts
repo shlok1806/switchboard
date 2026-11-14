@@ -1,16 +1,65 @@
 import type {
+  AgentConstraints,
+  AgentExecution,
+  AgentGrant,
+  AgentPrincipal,
   OrganizationMembership,
   PersonActor,
   PolicyResource,
   VerifiedExecution,
   WorkspaceMembership,
 } from "../../shared/src/m1";
+import {
+  CONTRIBUTOR_ACTIONS,
+  DELEGABLE_ACTIONS,
+  effectiveActions,
+  type IdentityAuthority,
+  MANAGER_ACTIONS,
+  VIEW_ACTIONS,
+} from "./principals";
 
-import { DELEGABLE_ACTIONS } from "./principals";
+export const PRIVATE_ACTIONS = [
+  "agent.private_transcript.read",
+  "agent.private_screen.read",
+  "agent.directive.send",
+  "agent.handoff.cross_owner",
+];
+export const POLICY_ACTIONS = [
+  "organization.manage",
+  "organization.member.manage",
+  "workspace.create",
+  ...MANAGER_ACTIONS,
+  ...PRIVATE_ACTIONS,
+];
+export interface OwnerConsent {
+  ownerPersonId: string;
+  personId: string;
+  workspaceId: string;
+  targetId: string;
+  action: string;
+  expiresAt: number;
+}
 
 export interface PolicyContext {
   /** Fresh authoritative verification, never taken from a request body. */
   verifiedExecution?: VerifiedExecution;
+  /** Fresh facts from the authority. Required for managed execution decisions. */
+  executionAuthority?: {
+    state: IdentityAuthority;
+    principal: AgentPrincipal;
+    grant: AgentGrant;
+    execution: AgentExecution;
+    organizationCeiling: string[];
+    workspacePolicy: string[];
+    constraints: AgentConstraints;
+    credentialExpiresAt: number;
+  };
+  managedPolicy?: boolean;
+  now?: number;
+  /** Current owner-issued consent row, resolved by the authority; never supplied by a request body. */
+  consent?: OwnerConsent;
+  /** Existing Lead/Host/librarian/holder predicates may only narrow authority. */
+  restrictionsSatisfied?: boolean;
   /** P2 authority opts in; P1 contexts retain their original closed action set. */
   identityPolicy?: boolean;
   organizationId: string;
@@ -46,9 +95,18 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
     reason,
     policyRevision: context.policyRevision,
   });
+  if (!POLICY_ACTIONS.includes(action)) return result("deny", "unknown_action");
+  if (context.restrictionsSatisfied === false) return result("deny", "execution_restriction");
   if (!context.available) return result("deny", "authority_unavailable_or_actor_invalid");
   if (
     !resource ||
+    typeof resource.id !== "string" ||
+    Object.keys(resource).some(
+      (key) => !["kind", "id", "organizationId", "channel", "targetId", "ownerPersonId", "operation"].includes(key),
+    ) ||
+    [resource.channel, resource.targetId, resource.ownerPersonId, resource.operation].some(
+      (value) => value !== undefined && (typeof value !== "string" || value.length === 0 || value.length > 500),
+    ) ||
     resource.organizationId !== context.organizationId ||
     !["organization", "workspace"].includes(resource.kind)
   )
@@ -62,6 +120,29 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
   const verified = context.verifiedExecution;
   if (verified && actor && typeof actor === "object" && "kind" in actor && actor.kind === "execution") {
     const a = actor as VerifiedExecution;
+    const facts = context.executionAuthority;
+    const now = context.now ?? Date.now();
+    const actions =
+      facts &&
+      Number.isFinite(now) &&
+      Number.isFinite(facts.credentialExpiresAt) &&
+      facts.credentialExpiresAt > now &&
+      facts.state.organization.id === context.organizationId &&
+      facts.state.organization.policyRevision === context.policyRevision &&
+      facts.execution.id === verified.executionId &&
+      facts.principal.id === verified.principalId &&
+      facts.execution.workspaceId === verified.workspaceId
+        ? effectiveActions(
+            facts.state,
+            facts.principal,
+            facts.grant,
+            facts.organizationCeiling,
+            facts.workspacePolicy,
+            now,
+            facts.execution,
+            facts.constraints,
+          )
+        : [];
     return a.executionId === verified.executionId &&
       a.principalId === verified.principalId &&
       a.workspaceId === verified.workspaceId &&
@@ -69,7 +150,11 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
       resource.id === verified.workspaceId &&
       context.workspaceActive &&
       DELEGABLE_ACTIONS.includes(action) &&
-      verified.actions.includes(action)
+      verified.actions.includes(action) &&
+      (!context.managedPolicy ||
+        (workspaceParent(verified.executionId) === context.organizationId &&
+          workspaceParent(verified.principalId) === context.organizationId &&
+          actions.includes(action)))
       ? result("allow", "scoped_execution")
       : result("deny", "execution_scope_denied");
   }
@@ -99,8 +184,42 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
   )
     return result("allow", "workspace_administration");
   const member = context.workspaceMembership;
-  if (!member || member.personId !== actor.personId || member.workspaceId !== resource.id || member.status !== "active")
+  if (
+    !member ||
+    member.personId !== actor.personId ||
+    member.workspaceId !== resource.id ||
+    member.status !== "active" ||
+    !["manager", "contributor", "viewer"].includes(member.role)
+  )
     return result("deny", "workspace_membership_required");
+  if (context.managedPolicy) {
+    if (PRIVATE_ACTIONS.includes(action)) {
+      if (member.role === "viewer" && ["agent.directive.send", "agent.handoff.cross_owner"].includes(action))
+        return result("deny", "viewer_read_only");
+      const owner = resource.ownerPersonId;
+      const consent = context.consent;
+      const authorized =
+        owner &&
+        resource.targetId &&
+        (owner === actor.personId ||
+          (consent?.ownerPersonId === owner &&
+            consent.personId === actor.personId &&
+            consent.workspaceId === resource.id &&
+            consent.targetId === resource.targetId &&
+            consent.action === action &&
+            consent.expiresAt > (context.now ?? Date.now())));
+      return authorized ? result("allow", "owner_or_consent") : result("deny", "owner_consent_required");
+    }
+    const actions =
+      member.role === "manager"
+        ? MANAGER_ACTIONS
+        : member.role === "contributor"
+          ? CONTRIBUTOR_ACTIONS
+          : member.role === "viewer"
+            ? VIEW_ACTIONS
+            : [];
+    return actions.includes(action) ? result("allow", "explicit_membership") : result("deny", "action_denied");
+  }
   if (
     (action === "workspace.read" || (context.identityPolicy && action === "agent.view")) &&
     ["manager", "contributor", "viewer"].includes(member.role)
