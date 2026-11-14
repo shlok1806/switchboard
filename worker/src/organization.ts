@@ -7,6 +7,7 @@ import type {
   AgentGrant,
   AgentPrincipal,
   BindingOperation,
+  IdentityCommand,
   IdentityMutation,
   IdentityValue,
   MembershipInvitation,
@@ -158,12 +159,22 @@ export class Organization extends DurableObject<Env> {
     if (!initial) return { ok: false, status: 404, reason: "not_found", policyRevision: 0 };
     const c = input.command;
     const prepared =
-      c.kind === "execution.start" || c.kind === "execution.rotate"
+      c.kind === "execution.start" || c.kind === "execution.rotate" || c.kind === "execution.redeem"
         ? await prepareCredential(initial.organization.id)
         : undefined;
-    const fingerprint = Array.from(await secretDigest(canonical([c, input.expectedRevision])), (b) =>
-      b.toString(16).padStart(2, "0"),
-    ).join("");
+    const code =
+      c.kind === "execution.start" && c.mode === "redemption" ? crypto.randomUUID() + crypto.randomUUID() : undefined;
+    const codeDigest =
+      code || c.kind === "execution.redeem"
+        ? Array.from(await secretDigest(code ?? (c.kind === "execution.redeem" ? c.code : "")), (b) =>
+            b.toString(16).padStart(2, "0"),
+          ).join("")
+        : undefined;
+    const fingerprint =
+      input.requestFingerprint ??
+      Array.from(await secretDigest(canonical([c, input.expectedRevision])), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
     return this.ctx.storage.transactionSync(() => {
       this.cleanup();
       const state = this.load();
@@ -180,7 +191,7 @@ export class Organization extends DurableObject<Env> {
         organizationId: state.organization.id,
         id: workspaceId ?? state.organization.id,
       };
-      const refuse = (reason: string, status: 400 | 403 | 409 = 403): NativeResult<IdentityValue> => {
+      const refuse = (reason: string, status: 400 | 403 | 409 | 410 = 403): NativeResult<IdentityValue> => {
         this.audit(
           actor,
           c.kind,
@@ -194,6 +205,27 @@ export class Organization extends DurableObject<Env> {
       };
       if (!validPerson(actor) || !text(input.key, 128) || !text(input.requestId, 100))
         return refuse("invalid_request", 400);
+      let redemption:
+        | {
+            personId: string;
+            executionId: string;
+            expiresAt: number;
+            used: boolean;
+            generation: number;
+            lifetimeMs?: number;
+          }
+        | undefined;
+      if (c.kind === "execution.redeem") {
+        const row = this.ctx.storage.sql
+          .exec<{ body: string }>("SELECT body FROM redemption_codes WHERE digest=?", codeDigest ?? "")
+          .toArray()[0];
+        redemption = row ? JSON.parse(row.body) : undefined;
+        if (!redemption || redemption.personId !== actor.personId || redemption.executionId !== c.executionId)
+          return refuse("CODE_INVALID", 400);
+        if (redemption.used) return refuse("CODE_USED", 409);
+        if (redemption.expiresAt <= now) return refuse("CODE_EXPIRED", 410);
+        if (execution?.credentialGeneration !== redemption.generation) return refuse("CODE_INVALID", 400);
+      }
       if (state.members[actor.personId]?.status !== "active") return refuse("action_denied");
       if (
         workspaceId &&
@@ -236,7 +268,7 @@ export class Organization extends DurableObject<Env> {
           return refuse("policy_denied");
       } else if (c.kind === "grant.put" || c.kind === "grant.revoke") {
         if (!permits("agent.grant.manage")) return refuse("action_denied");
-      } else if (c.kind === "execution.start" || c.kind === "execution.rotate") {
+      } else if (c.kind === "execution.start" || c.kind === "execution.rotate" || c.kind === "execution.redeem") {
         if (!permits("agent.execution.start") || principal?.status !== "active") return refuse("start_denied");
       } else if (c.kind === "execution.revoke") {
         if (!permits("agent.execution.revoke")) return refuse("action_denied");
@@ -253,7 +285,12 @@ export class Organization extends DurableObject<Env> {
         return replay.fingerprint === fingerprint
           ? (JSON.parse(replay.result) as NativeResult<IdentityValue>)
           : refuse("idempotency_conflict", 409);
-      if (c.kind !== "principal.create" && c.kind !== "execution.start" && input.expectedRevision === undefined)
+      if (
+        c.kind !== "principal.create" &&
+        c.kind !== "execution.start" &&
+        c.kind !== "execution.redeem" &&
+        input.expectedRevision === undefined
+      )
         return refuse("revision_required", 409);
       if (input.expectedRevision !== undefined && input.expectedRevision !== revision)
         return refuse("stale_revision", 409);
@@ -272,6 +309,8 @@ export class Organization extends DurableObject<Env> {
         this.identityWrite("principals", p.id, p);
         value.principal = p;
       } else if (c.kind === "principal.update" && principal) {
+        c.displayName ??= principal.displayName;
+        c.status ??= principal.status;
         if (
           !text(c.displayName) ||
           !["active", "disabled", "revoked"].includes(c.status) ||
@@ -320,7 +359,7 @@ export class Organization extends DurableObject<Env> {
         this.identityWrite("grants", canonical([principal.id, workspaceId]), grant);
         value.grant = grant;
       } else if (
-        (c.kind === "execution.start" || c.kind === "execution.rotate") &&
+        (c.kind === "execution.start" || c.kind === "execution.rotate" || c.kind === "execution.redeem") &&
         principal &&
         workspaceId &&
         prepared
@@ -337,7 +376,13 @@ export class Organization extends DurableObject<Env> {
                   )
                   .one().constraints_body,
               ) as AgentConstraints);
-        const expiresAt = grant ? credentialExpiry(now, c.lifetimeMs, grant.expiresAt) : null;
+        const expiresAt = grant
+          ? credentialExpiry(
+              now,
+              c.kind === "execution.redeem" ? redemption?.lifetimeMs : c.lifetimeMs,
+              grant.expiresAt,
+            )
+          : null;
         if (
           !grant ||
           !expiresAt ||
@@ -358,8 +403,8 @@ export class Organization extends DurableObject<Env> {
         if (
           execution &&
           (execution.status !== "active" ||
-            c.kind !== "execution.rotate" ||
-            c.expectedGeneration !== execution.credentialGeneration)
+            (c.kind !== "execution.rotate" && c.kind !== "execution.redeem") ||
+            (c.kind === "execution.rotate" && c.expectedGeneration !== execution.credentialGeneration))
         )
           return refuse("stale_generation", 409);
         const e: AgentExecution = execution ?? {
@@ -389,11 +434,35 @@ export class Organization extends DurableObject<Env> {
           JSON.stringify(e),
           JSON.stringify(constraints),
         );
-        this.identityWrite("execution_credentials", credential.id, credential);
+        if (code && codeDigest) {
+          this.ctx.storage.sql.exec(
+            "INSERT INTO redemption_codes VALUES(?,?,?)",
+            codeDigest,
+            JSON.stringify({
+              personId: actor.personId,
+              executionId: e.id,
+              expiresAt: now + 60_000,
+              used: false,
+              generation: e.credentialGeneration,
+              lifetimeMs: c.kind === "execution.start" ? c.lifetimeMs : undefined,
+            }),
+            now + 60_000 + DAY,
+          );
+          value.code = code;
+        } else {
+          this.identityWrite("execution_credentials", credential.id, credential);
+          if (redemption && codeDigest)
+            this.ctx.storage.sql.exec(
+              "UPDATE redemption_codes SET body=?,retain_until=? WHERE digest=?",
+              JSON.stringify({ ...redemption, used: true }),
+              now + DAY,
+              codeDigest,
+            );
+        }
         const { digest: _digest, ...metadata } = credential;
         value.execution = e;
-        value.credential = metadata;
-        value.secret = prepared.token;
+        if (!code) value.credential = metadata;
+        if (!code) value.secret = prepared.token;
       } else if (c.kind === "execution.revoke" && execution) {
         execution.status = "revoked";
         execution.endedAt = now;
@@ -419,7 +488,7 @@ export class Organization extends DurableObject<Env> {
               ? { kind: "principal", id: principal.id }
               : undefined,
       );
-      const { secret: _secret, ...metadata } = value;
+      const { secret: _secret, code: _code, ...metadata } = value;
       const result: NativeResult<IdentityValue> = {
         ok: true,
         value: metadata,
@@ -434,6 +503,62 @@ export class Organization extends DurableObject<Env> {
       );
       return { ...result, value };
     });
+  }
+  identityCatalog(actor: PersonActor, after = "") {
+    const state = this.load();
+    if (!state || !validPerson(actor) || state.members[actor.personId]?.status !== "active") return null;
+    const items = this.ctx.storage.sql
+      .exec<{ body: string }>("SELECT body FROM principals WHERE id>? ORDER BY id", after)
+      .toArray()
+      .map((row) => JSON.parse(row.body) as AgentPrincipal)
+      .filter(
+        (p) =>
+          managesPrincipal(state, actor.personId, p) ||
+          Object.keys(state.workspaces).some(
+            (w) => humanActions(state, actor.personId, w).includes("agent.view") && !!this.grantFor(p.id, w),
+          ),
+      )
+      .slice(0, 101);
+    return {
+      items: items.slice(0, 100),
+      next: items.length > 100 ? items[99]?.id : null,
+      policyRevision: state.organization.policyRevision,
+    };
+  }
+  identityGrant(actor: PersonActor, workspaceId: string, principalId: string) {
+    const state = this.load();
+    const p = this.identityRow<AgentPrincipal>("principals", principalId);
+    if (
+      !state ||
+      !validPerson(actor) ||
+      !p ||
+      !managesPrincipal(state, actor.personId, p) ||
+      !humanActions(state, actor.personId, workspaceId).includes("agent.grant.manage")
+    )
+      return null;
+    return this.grantFor(principalId, workspaceId) ?? null;
+  }
+  async auditExecutionDenial(token: string, requestId: string, action: IdentityCommand["kind"]) {
+    const actor = await this.verifyExecution(token);
+    if (!actor || !text(requestId, 100)) return;
+    this.ctx.storage.transactionSync(() => {
+      const state = this.load();
+      if (state)
+        this.audit(
+          actor,
+          action,
+          { kind: "workspace", organizationId: state.organization.id, id: actor.workspaceId },
+          false,
+          "human_required",
+          state.organization.policyRevision,
+          requestId,
+        );
+    });
+  }
+  async executionPrincipal(token: string) {
+    const actor = await this.verifyExecution(token);
+    if (!actor?.actions.includes("agent.view")) return null;
+    return this.identityRow<AgentPrincipal>("principals", actor.principalId) ?? null;
   }
   async verifyExecution(token: string): Promise<VerifiedExecution | null> {
     const parsed = parseCredential(token);

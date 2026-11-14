@@ -1,12 +1,14 @@
 import { SESSION_COOKIE } from "../../shared/src/index";
 import type { OrganizationCommand } from "../../shared/src/m1";
 import { channelRepo, devMode, readCookie, readNativeActor, sessionSecret } from "./auth";
+import { handleExecutionApi, isExecutionPath } from "./execution-api";
 import { canonical } from "./organization";
 import { workspaceParent } from "./policy";
 import { signPayload, tokenHash, verifyPayload } from "./session";
 
 /** Native administration only. No Channel content or P2/P3 action is exposed here. */
 export async function handleWorkspaceApi(request: Request, url: URL, env: Env): Promise<Response> {
+  if (isExecutionPath(url.pathname)) return handleExecutionApi(request, url, env);
   const requestId = crypto.randomUUID();
   const reply = (value: unknown, status = 200) =>
     new Response(JSON.stringify(value), {
@@ -189,6 +191,28 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
         return result ? page(result.items, result.next, result.policyRevision) : error(404, "resource_denied");
       }
       return error(404, "resource_denied");
+    }
+    if (request.method === "PATCH" && !sub && body.ceiling !== undefined) {
+      if (Object.keys(body).some((k) => k !== "ceiling")) return error(400, "invalid_body");
+      const result = await org.mutateIdentity({
+        actor,
+        key,
+        requestId,
+        expectedRevision,
+        command: {
+          kind: "identity.policy",
+          ...(collection === "workspaces" ? { workspaceId: id } : {}),
+          actions: body.ceiling as string[],
+        },
+        requestFingerprint: await tokenHash(canonical([request.method, url.pathname, body, expectedRevision])),
+      });
+      return result.ok
+        ? reply({ ...result, requestId })
+        : error(
+            result.status,
+            result.status === 403 || result.status === 404 ? "resource_denied" : result.reason,
+            result.status === 403 || result.status === 404 ? 0 : result.policyRevision,
+          );
     }
     // Construct commands from an explicit field allowlist; never accept actor/command from the body.
     let command: unknown;

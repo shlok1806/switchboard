@@ -65,3 +65,58 @@ All Node commands used `export PATH=/home/box/.local/node22/bin:$PATH`, from `wo
 
 - **Deny pending explicit contributor-start design:** proposal §6 permits contributor start only when explicitly authorized as sponsor (`m1/M1_ARCHITECTURE_PROPOSAL.md:82`), but P2's command/API plan does not specify a separate human start-authority grant representation. S1 permits start/rotate only with current explicit Workspace manager membership plus current sponsor/admin control and an effective agent grant (`worker/src/organization.ts:240`, `worker/src/policy.ts:109`). Organization admin status alone does not confer start; Person sponsorship alone does not upgrade contributor authority. A separate mechanism must be approved before enabling contributor starts. No implicit administrative bypass was introduced; tested denial is authored at `worker/test/scoped-executions.test.ts:452`, not executed.
 - Runtime evidence is blocked by the shared dependency directory's read-only Vite cache location; the manager must execute the 13 new tests and unchanged suites. S1 code completion is not a claim of runtime or full milestone acceptance.
+
+## S2
+
+### Changes
+
+- `worker/src/execution-api.ts:7` (`isExecutionPath`) and `:14` (`handleExecutionApi`) implement the P2 principal, grant, execution, redemption, rotation and revocation route rows. `worker/src/workspace-api.ts:11` dispatches only matching P2 paths through the existing Worker `/api/m1` dispatch (`worker/src/index.ts:396`). No index edit is necessary. Diff inspection shows no Channel, legacy route, CLI, config, dependency or existing test edits; runtime compatibility has not been established here.
+- `worker/src/execution-api.ts:16` (`reply`) applies no-store; `:21` (`error`) returns requestId/revision and redemption error codes; `:38` rejects malformed paths. `:75` reuses native Person authentication and its explicit cookie-write Origin check (`worker/src/auth.ts:125`, `readNativeActor`). `:79` handles scoped principal/grant reads, signed Person/path-bound ten-minute cursors and reauthorization per page. `:119` validates Idempotency-Key, bounded JSON and revision headers (PUT/rotate included); `:137` constructs allowlisted commands. Actor/owner/command injection and unknown sponsor fields deny; rotate requires expectedGeneration. Original method/path/body/revision fingerprints are supplied at `:208`. Foreign errors and CODE_INVALID redact revisions (`:210`); authority exceptions return static 503 (`:220`).
+- `worker/src/auth.ts:146` (`readExecutionActor`) verifies header-only managed bearers through their authoritative Organization. Legacy `readCredential` remains unchanged (`worker/src/auth.ts:102`). The managed branch at `worker/src/execution-api.ts:48` allows only the execution's own principal view with agent.view; lifecycle/grant calls deny with redacted action audit through `worker/src/organization.ts:541` (`auditExecutionDenial`). Managed credentials are not enabled on Channel content or streams.
+- `worker/src/organization.ts:157` (`mutateIdentity`) prepares crypto before transactionSync, validates code hash/Person/execution/generation (`:208`), and rechecks current authority (`:229`). Redemption-mode start returns an execution plus code, with no stored usable credential. Codes expire after 60 seconds, retaining unused/expired hashes until expiry plus 24 hours (`:449`); consumption and credential creation commit atomically, retaining consumed hashes for 24 hours (`:454`). Wrong Person/unknown/mismatch returns 400 CODE_INVALID, matching expired 410 CODE_EXPIRED, consumed 409 CODE_USED even on same-key retries (`:220`). Rotation invalidates pending codes by generation. Redemption recalculates grant/lifetime caps (`:377`) and advances generation. Replay strips both secret and code (`:491`). No plaintext code/secret enters SQL or replay in these changes.
+- `worker/src/organization.ts:311` (`principal.update`) resolves omitted PATCH fields inside the transaction after original-body fingerprinting. `:507` (`identityCatalog`) returns at most 100 visible principals; `:528` (`identityGrant`) requires current sponsor/admin management plus Workspace grant authority; `:558` (`executionPrincipal`) re-verifies bearer before scoped metadata retrieval.
+- `worker/src/workspace-api.ts:195` adds audited revision-checked ceiling-only organization/Workspace PATCH bodies using S1's `identity.policy`. Mixed name/ceiling bodies deny, avoiding non-atomic combined mutations. Current administrator authority remains enforced (`worker/src/organization.ts:266`).
+- `shared/src/m1.ts:110` (`NativeResult`) adds 410; `:188` (`IdentityCommand`) adds explicit redemption start mode and redemption command; `:213` (`IdentityMutation`) adds trusted-adapter fingerprints; `:221` (`IdentityValue`) adds an ephemeral code. Durable replay excludes both one-time values (`worker/src/organization.ts:491`).
+
+### Tests added
+
+New file `worker/test/execution-api.test.ts`, using actual Organization RPCs and public Worker APIs. Exact `it()` titles (authored, not executed):
+
+- `worker/test/execution-api.test.ts:86` — `rejects unauthorized sponsor and body owner impersonation`
+- `worker/test/execution-api.test.ts:106` — `denies execution actors every lifecycle and grant mutation including self grant`
+- `worker/test/execution-api.test.ts:127` — `denies foreign organization credentials without resource metadata`
+- `worker/test/execution-api.test.ts:140` — `rejects tampered org and credential routing fields`
+- `worker/test/execution-api.test.ts:150` — `returns invalid for wrong Person or unknown code expired 410 and used 409`
+- `worker/test/execution-api.test.ts:189` — `serializes concurrent redemption and retains hashed tombstones for 24 hours`
+- `worker/test/execution-api.test.ts:213` — `never replays secrets or codes on idempotent retry and rejects changed bodies`
+- `worker/test/execution-api.test.ts:236` — `excludes planted secret markers from audit events logs replay and Channel storage`
+- `worker/test/execution-api.test.ts:285` — `denies legacy session agent Host and connector tokens on m1 lifecycle routes`
+- `worker/test/execution-api.test.ts:292` — `enforces no store origin revision generation pagination and foreign ID denial`
+- `worker/test/execution-api.test.ts:330` — `paginates principal views with actor and resource bound cursors`
+- `worker/test/execution-api.test.ts:364` — `rechecks principal and grant revocation on every managed bearer use`
+- `worker/test/execution-api.test.ts:375` — `invalidates pending codes on rotation and rolls back consumption with issuance`
+
+The confidentiality case inspects Organization SQL/audit/replay/digests, console spies and a fresh Channel SQL/KV sentinel (`worker/test/execution-api.test.ts:236`). No event producer or Channel call is present in `worker/src/execution-api.ts:14` (`handleExecutionApi`); source inspection is not runtime event delivery evidence. Legacy token-shaped strings supplement a signed historical Person session; they are rejection cases, not full Host/connector integration fixtures (`worker/test/execution-api.test.ts:285`). Injected SQL exceptions are caught inside the DO boundary to avoid the known uncaught-RPC failure pattern (`worker/test/execution-api.test.ts:377`).
+
+### Commands and actual results
+
+All Node commands used `export PATH=/home/box/.local/node22/bin:$PATH`, from worker/.
+
+- `npm run typecheck`: initial development runs failed on an accidentally duplicated preparation block and an unused helper; corrected. Subsequent runs, including the final source/test version, exited **0**, both TypeScript projects.
+- Targeted `npx biome check --write` on the changed source files, shared/src/m1.ts and new test file: applied formatting/import fixes. Final targeted run exited **0**, no diagnostics.
+- `npm run lint`: final run exited **0**, 163 files checked, no diagnostics.
+- `npx vitest run test/execution-api.test.ts`: exited **1 during config startup**, EROFS writing `worker/node_modules/.vite-temp/vitest.config.ts.timestamp-…mjs`. **Zero tests executed.** Shared dependency cache resolves outside the writable worktree. No test/config/dependency workaround used; no runtime pass is claimed. Later test additions were typechecked/linted but did not receive runtime verification through this blocked command.
+- `git diff --check`: exited **0**. Read-only git status/diff and source reads/searches used for inspection.
+- Existing S1 tests and full worker suites: **not run**; the manager owns full-suite execution, and focused S2 startup is blocked. CLI checks/tests: **not run**, no CLI changes. No network, dependency install, credential-file read, git mutation or deploy performed.
+
+### Deviations
+
+- Dispatch lives in workspace-api rather than adding another index branch (`worker/src/workspace-api.ts:11`, `worker/src/index.ts:396`). S1 crypto/lifetime helpers suffice without an executions.ts edit (`worker/src/executions.ts:12`, `:36`).
+- Ceiling-only PATCH uses approved organization/Workspace rows; mixed name/policy updates safely deny (`worker/src/workspace-api.ts:195`). No unapproved policy endpoint was added.
+- Rotation requires If-Match plus expectedGeneration, preserving S1's revision boundary (`worker/src/execution-api.ts:131`, `worker/src/organization.ts:288`). Lost issuance responses require fresh-key rotation; code/credential retries never replay secrets (`worker/src/organization.ts:491`). Same-code redemption retry returns CODE_USED (`worker/src/organization.ts:225`).
+- Hash retention is 24 hours after expiry/consumption, preserving errors for the whole tombstone period (`worker/src/organization.ts:449`, `:458`).
+
+### Escalations
+
+- No new trust-boundary exception enabled. S1's unresolved contributor-start design remains safely denied: current Workspace manager/start authority and sponsor/admin control are required (`worker/src/organization.ts:271`). Registration/CLI linkage remains S3; content enforcement, linked Channel opening and stream revalidation remain P3. This slice does not establish live managed Channel operation.
+- Runtime verification is blocked by read-only Vite cache storage. Manager must execute the 13 new cases, S1 tests and unchanged full suites before acceptance. Typecheck/lint do not establish runtime correctness.

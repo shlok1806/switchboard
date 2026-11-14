@@ -1,0 +1,11 @@
+# S2 complete
+- Implemented principal/grant/execution HTTP APIs and isolated managed bearer authentication (`worker/src/execution-api.ts:14`, `worker/src/auth.ts:146`).
+- Added Person-bound, one-use redemption with atomic consumption/issuance and hashed tombstones (`worker/src/organization.ts:157`).
+- Added ceiling-only revision-checked policy PATCH (`worker/src/workspace-api.ts:195`).
+- Added 13 API/security tests (`worker/test/execution-api.test.ts:86`).
+- Worker typecheck and lint passed; git diff --check passed.
+- Vitest startup blocked by EROFS in shared node_modules/.vite-temp; zero tests executed.
+- Runtime verification and full suites remain manager-owned; no runtime pass claimed.
+- S1 contributor-start ambiguity remains denied; no new authority exception enabled (`worker/src/organization.ts:271`).
+- S3 registration/CLI and P3 content/stream enforcement remain unimplemented in this slice.
+- Detailed evidence and deviations: m1/p2/P2_IMPLEMENTATION_NOTES.md, section S2.

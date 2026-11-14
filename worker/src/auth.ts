@@ -6,6 +6,7 @@
 
 import type { PersonName } from "../../shared/src/index";
 import { AGENT_TOKEN_PREFIX, channelKey, SESSION_COOKIE } from "../../shared/src/index";
+import { parseCredential } from "./executions";
 import {
   DEV_SESSION_SECRET,
   MIN_SESSION_SECRET_LENGTH,
@@ -139,4 +140,14 @@ export async function readNativeActor(
   if (!secret) return null;
   const actor = await verifyNativeSession(secret, url.origin, token);
   return actor && (await env.IDENTITY_DIRECTORY.getByName("directory-v1").associated(actor)) ? actor : null;
+}
+
+/** Managed bearer authentication is isolated from all legacy Channel paths. */
+export async function readExecutionActor(request: Request, env: Env) {
+  const header = request.headers.get("Authorization");
+  if (!header?.startsWith("Bearer m1.")) return null;
+  const token = header.slice(7).trim();
+  const parsed = parseCredential(token);
+  if (!parsed) return null;
+  return env.ORGANIZATION.getByName(parsed.organizationId).verifyExecution(token);
 }

@@ -109,7 +109,13 @@ export type OrganizationCommand =
   | { kind: "invitation.accept"; invitationId: string };
 export type NativeResult<T> =
   | { ok: true; value: T; policyRevision: number }
-  | { ok: false; status: 400 | 403 | 404 | 409 | 503; reason: string; policyRevision: number; operationId?: string };
+  | {
+      ok: false;
+      status: 400 | 403 | 404 | 409 | 410 | 503;
+      reason: string;
+      policyRevision: number;
+      operationId?: string;
+    };
 
 /** Durable cross-object binding journal; IDs route to their Organization. */
 export interface BindingOperation {
@@ -197,12 +203,15 @@ export type IdentityCommand =
       principalId: string;
       workspaceId: string;
       cli: string;
+      mode?: "direct" | "redemption";
       lifetimeMs?: number;
       constraints?: AgentConstraints;
     }
   | { kind: "execution.rotate"; executionId: string; expectedGeneration: number; lifetimeMs?: number }
+  | { kind: "execution.redeem"; executionId: string; code: string }
   | { kind: "execution.revoke"; executionId: string };
 export interface IdentityMutation {
+  requestFingerprint?: string;
   actor: PersonActor;
   key: string;
   requestId: string;
@@ -216,4 +225,5 @@ export interface IdentityValue {
   credential?: ExecutionCredentialMetadata;
   /** Ephemeral only: never persisted in replay, audit or Channel storage. */
   secret?: string;
+  code?: string;
 }
