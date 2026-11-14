@@ -2593,7 +2593,7 @@ export class Channel extends DurableObject<Env> {
    * the Local Events every reachable machine keeps (ADR 0037), with the Hosts it could not reach.
    */
   async latestEvents(count: number, before = Number.MAX_SAFE_INTEGER): Promise<HistoryPage> {
-    this.requireLegacyAccess();
+    if (this.managedClosed()) throw new Error("Managed Channel access is closed until P3.");
     const stored = this.ctx.storage.sql
       .exec<EventRow>("SELECT * FROM events WHERE seq < ? ORDER BY seq DESC LIMIT ?", before, count)
       .toArray()

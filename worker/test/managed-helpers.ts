@@ -1,4 +1,5 @@
 import { Channel } from "../src/channel";
+import { OTHER_REPO } from "./client";
 
 export const legacyBinding = {
   version: 1,
@@ -38,7 +39,8 @@ export async function managedAuthorityFixture() {
   const organizationId = crypto.randomUUID();
   const { nativeIdentity } = await import("./m1-helpers");
   const { actor, token } = await nativeIdentity(String(Math.floor(Math.random() * 1e12) + 1000), "alice");
-  const repo = `test/managed-${organizationId}`;
+  // Exercise HTTP admission through the existing deployment allowlist too.
+  const repo = OTHER_REPO;
   const org = env.ORGANIZATION.getByName(organizationId);
   await org.initialize(organizationId, "Managed", actor, "init");
   const result = await org.mutate({
