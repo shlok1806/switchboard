@@ -777,6 +777,26 @@ export class Channel extends DurableObject<Env> {
     }
   }
 
+  /** Keep recoverable storage failures inside the owning DO, rather than throwing over RPC. */
+  transitionBinding(
+    phase: "prepare" | "finish",
+    workspace: string,
+    operation: string,
+    generation: number,
+    unlink: boolean,
+  ): { ok: true; accepted: boolean } | { ok: false } {
+    try {
+      if (phase !== "prepare" && phase !== "finish") return { ok: false };
+      const accepted =
+        phase === "prepare"
+          ? this.prepareBinding(workspace, operation, generation, unlink)
+          : this.finishBinding(workspace, operation, generation, unlink);
+      return { ok: true, accepted };
+    } catch {
+      return { ok: false };
+    }
+  }
+
   /** Server-only CAS; operation evidence and fence commit in the same local transaction. */
   prepareBinding(workspace: string, operation: string, expectedGeneration: number, unlink = false): boolean {
     if (

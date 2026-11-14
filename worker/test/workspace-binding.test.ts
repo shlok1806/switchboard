@@ -426,6 +426,7 @@ describe("binding operation recovery", () => {
       it(`recovers ${mode} interruption at ${interruption} without repeating its generation`, async () => {
         const f = await bindingFixture();
         if (mode === "unbind") expect((await f.change("bind", "initial")).status).toBe(200);
+        const before = await f.channel.bindingState();
         const local = interruption === "pending" || interruption === "activation";
         if (local) {
           await runInDurableObject(f.channel, (_object, state) => {
@@ -459,6 +460,27 @@ describe("binding operation recovery", () => {
         expect(failure.operationId).toBe(journal.id);
         expect((await nativeFetch(`/api/m1/operations/${journal.id}`, f.token)).status).toBe(200);
         const snapshot = await f.channel.bindingState();
+        if (interruption === "pending") {
+          // A failed prepare must retain both the durable fence and its cached value.
+          expect(snapshot).toEqual(before);
+        } else if (interruption === "activation") {
+          expect(snapshot).toMatchObject({
+            generation: before.generation + 1,
+            state: mode === "bind" ? "pending" : "pending_unlink",
+          });
+        }
+        if (local) {
+          await runInDurableObject(f.channel, (_object, state) => {
+            const durable = state.storage.sql.exec("SELECT * FROM m1_binding WHERE id=1").one();
+            expect(durable).toMatchObject(snapshot);
+            const evidence = state.storage.sql
+              .exec<{ body: string }>("SELECT body FROM m1_binding_outbox WHERE operation=?", journal.id)
+              .toArray();
+            expect(evidence.map((row) => JSON.parse(row.body).outcome)).toEqual(
+              interruption === "pending" ? [] : ["pending"],
+            );
+          });
+        }
         if (snapshot.state !== "unlinked") {
           expect(
             await f.channel.admit(f.repo, { kind: "session", person: "native-human" as PersonName }, true),

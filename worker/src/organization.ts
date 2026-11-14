@@ -697,7 +697,15 @@ export class Organization extends DurableObject<Env> {
           return stored;
         });
       if (operation.phase === "reserved") {
-        if (!(await channel.prepareBinding(workspaceId, operation.id, expected, mode === "unbind"))) {
+        const prepared = await channel.transitionBinding(
+          "prepare",
+          workspaceId,
+          operation.id,
+          expected,
+          mode === "unbind",
+        );
+        if (!prepared.ok) return refuse(503, "binding_recovery_required");
+        if (!prepared.accepted) {
           // A losing CAS has made no Channel change. Release only our own reservation;
           // keep the terminal conflict journal so changed-key retries cannot revive it.
           this.ctx.storage.transactionSync(() => {
@@ -724,8 +732,15 @@ export class Organization extends DurableObject<Env> {
         const current = this.load();
         if (!current || !this.bindingAllowed(current, actor, workspaceId))
           return refuse(403, "workspace_manage_required");
-        if (!(await channel.finishBinding(workspaceId, operation.id, expected + 1, mode === "unbind")))
-          return refuse(409, "channel_binding_conflict");
+        const finished = await channel.transitionBinding(
+          "finish",
+          workspaceId,
+          operation.id,
+          expected + 1,
+          mode === "unbind",
+        );
+        if (!finished.ok) return refuse(503, "binding_recovery_required");
+        if (!finished.accepted) return refuse(409, "channel_binding_conflict");
         const next = advance("committed", "done");
         if (!next) return refuse(403, "workspace_manage_required");
         operation = next;

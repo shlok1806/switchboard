@@ -372,3 +372,24 @@ Checks actually executed locally with Node 22 PATH, in `worker/`:
 Escalations: local listener restrictions prevent verifying the fixes and distinguishing the five legacy timeouts from runtime-wide disruption. Manager must rerun the failing gate; this revision does not claim the full gate is green. No architectural/trust-boundary change, dependency, network call, baseline-test edit, git write, credential read or deployment.
 
 Final `git diff --check` after notes append: exit 0.
+
+### S3 fix 2
+
+Read the complete external read-only `S3-fix1/06_worker_test.log` and `summary.tsv` under `/home/box/engineering-workspace/engineering-ops/projects/switchboard-m1/p1_logs/`. Only Worker tests exited nonzero. The manager log reports 489 passed, two skipped, one unhandled pool error, and a runtime crash; it does not establish completion of all 495 collected tests. Worker typecheck/lint and CLI/Dashboard typechecks exited zero in that manager run. These are manager observations, not local test results.
+
+Failures → root cause → fix:
+
+- **Four uncaught `interrupted: SQLITE_CONSTRAINT_TRIGGER` exceptions**: the new bind/unbind recovery cases deliberately abort Channel outbox INSERT/UPDATE (`worker/test/workspace-binding.test.ts:430`). The coordinator previously invoked the synchronous throwing `prepareBinding`/`finishBinding` directly over RPC; the manager stacks point to those outbox writes (now `worker/src/channel.ts:833`, `:898`). Although the coordinator catches RPC rejection, the test runtime also reports the exceptions as uncaught. Added `transitionBinding` to catch transaction failures inside the owning Channel and return a plain discriminated result (`worker/src/channel.ts:780`). Coordinator uses that result for prepare and finish (`worker/src/organization.ts:700`, `:735`), returning recoverable 503 with operation ID while preserving the reservation and journal. A negative CAS remains a distinct 409, with the prior conflict cleanup. Local transactional implementations and synchronous cache assignment remain intact (`worker/src/channel.ts:801`, `:866`).
+- **Fatal “Promise callback destroyed itself”, unexpected pool exit, RPC disposal warning, subsequent “Expected global Vitest state”, reset/WebSocket teardown errors and shutdown timeout**: the complete log shows runtime teardown/crash alongside the uncaught injected RPC errors, then failed Vitest state after restart. The concrete source defect addressed is the escaping Channel transaction exception above. The runtime's exact fatal mechanism and resolution of every teardown diagnostic remain **unverified** without a manager rerun; no independent legacy assertion failure is reported in this round. No runtime configuration, timeout, baseline assertion or dependency was changed.
+- Strengthened all four local-failure recovery cases: failed preparation retains the original cache; failed activation retains the pending generation; both compare cached state with the durable singleton and check absent/pending operation evidence (`worker/test/workspace-binding.test.ts:429`, `:462`). Existing 503, original operation ID, denial, retry and idempotent replay assertions remain (`:448`, `:460`, `:484`, `:496`). These tests exercise the real HTTP coordinator and Channel RPC wrapper. No pre-existing tests edited.
+
+Checks actually executed locally in `worker/`, using Node 22 PATH:
+
+- `npx biome check --write src/channel.ts src/organization.ts`: exit 0 (formatted Organization).
+- `npx biome check --write test/workspace-binding.test.ts`: exit 0, no fixes.
+- `npm run typecheck`: exit 0.
+- `npm run lint`: exit 0, 158 files, no fixes.
+- `npx vitest run test/workspace-binding.test.ts test/organizations.test.ts test/m1-migration.test.ts`: exit 1 **before assertions**, listener `EPERM` on `127.0.0.1`; no runtime tests passed locally.
+- `git diff --check`: exit 0 before notes append; final check follows. Full suites not run; manager must rerun the Worker gate.
+
+Escalations: sandbox listener restriction prevents runtime confirmation. No trust-boundary design change; storage failures retain retryable state and never become successful transitions. No network, dependencies, credential reads, git writes, deployment or files outside the worktree changed.
