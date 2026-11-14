@@ -344,6 +344,7 @@ describe("managed policy", () => {
       actor: person,
       key: "revoke",
       requestId: "revoke",
+      expectedRevision: permit.value.policyRevision,
       command: {
         kind: "workspace.member",
         workspaceId: ws,
@@ -353,7 +354,7 @@ describe("managed policy", () => {
         reason: "demotion",
       },
     });
-    expect(revoked.ok).toBe(true);
+    expect(revoked).toMatchObject({ ok: true, value: { role: "viewer", status: "active" } });
     expect(await authority.issueMutationPermit(request)).toMatchObject({ ok: false });
     expect(
       await runInDurableObject(authority, (_object, state) =>
