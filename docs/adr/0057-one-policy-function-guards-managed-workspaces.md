@@ -23,3 +23,7 @@ Status: accepted design, 2026-11-13, following Gate 0 confirmation (m1/reviews/G
 ## Alternatives considered
 
 [DECISION] UI-only checks, prompt-based rules and route-entry checks alone leave bypasses. Long-lived cached permissions leave stale streams. Replacing Relay with authorization-driven orchestration confuses relevance with permission and violates scope. Instant cross-DO atomic revocation is an unsupported promise; explicit permits/fences define completion instead.
+
+## Package 3 internal lifecycle exception (coordinator D1)
+
+The Channel DO's `heartbeat` and `endSession` RPCs are trusted internal Worker paths, not externally addressable endpoints. On linked Channels they may operate without a policy actor only on the already recorded active execution and matching Agent owner in the linked Organization. They confer no content rights: managed heartbeat must not drain Relay/Directive queues, report context or usage. External HTTP/WS/MCP routes must authenticate execution credentials before reaching these lifecycle methods. Unknown, inactive or mismatched executions deny. This exception does not authorize arbitrary execution revocation or Person impersonation.

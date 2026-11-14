@@ -1,4 +1,5 @@
 import type { PersonActor, PolicyResource, VerifiedExecution } from "../../shared/src/m1";
+import { MANAGED_RECORD_CAP } from "./managed-retention";
 
 export interface MutationPermit {
   id: string;
@@ -41,6 +42,12 @@ export class LocalMutationPermits {
     sql.exec("CREATE TABLE IF NOT EXISTS managed_permits (id TEXT PRIMARY KEY, body TEXT NOT NULL)");
   }
   install(permit: MutationPermit) {
+    const existing = this.sql.exec("SELECT id FROM managed_permits WHERE id=?", permit.id).toArray();
+    if (existing.length) return;
+    const now = Date.now();
+    this.sql.exec("DELETE FROM managed_permits WHERE COALESCE(json_extract(body, '$.permit.expiresAt'), 0) <= ?", now);
+    const count = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM managed_permits").one().n;
+    if (count >= MANAGED_RECORD_CAP) throw new AuthorityUnavailable();
     // Never replace a consumed permit on delayed/replayed receipt.
     this.sql.exec(
       "INSERT OR IGNORE INTO managed_permits VALUES(?,?)",

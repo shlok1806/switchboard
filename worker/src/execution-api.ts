@@ -2,6 +2,7 @@ import type { IdentityCommand } from "../../shared/src/m1";
 import { devMode, readExecutionActor, readNativeActor, sessionSecret } from "./auth";
 import { canonical } from "./organization";
 import { workspaceParent } from "./policy";
+import { authorityRequest } from "./policy-permits";
 import { signPayload, tokenHash, verifyPayload } from "./session";
 
 export function isExecutionPath(path: string) {
@@ -46,7 +47,7 @@ export async function handleExecutionApi(request: Request, url: URL, env: Env): 
     if (!organizationId) return error(404, "resource_denied");
     const org = env.ORGANIZATION.getByName(organizationId);
     if (request.headers.get("Authorization")?.startsWith("Bearer m1.")) {
-      const actor = await readExecutionActor(request, env);
+      const actor = await authorityRequest(() => readExecutionActor(request, env));
       if (!actor) return error(401, "invalid_credential");
       if (workspaceParent(actor.principalId) !== organizationId) return error(404, "resource_denied");
       if (request.method !== "GET" || collection !== "organizations" || sub !== "agents" || target) {
@@ -69,12 +70,14 @@ export async function handleExecutionApi(request: Request, url: URL, env: Env): 
         await org.auditExecutionDenial(request.headers.get("Authorization")?.slice(7).trim() ?? "", requestId, action);
         return error(403, "resource_denied");
       }
-      const principal = await org.executionPrincipal(request.headers.get("Authorization")?.slice(7).trim() ?? "");
+      const principal = await authorityRequest(
+        async () => await org.executionPrincipal(request.headers.get("Authorization")?.slice(7).trim() ?? ""),
+      );
       return principal ? reply({ items: [principal], cursor: null, requestId }) : error(403, "resource_denied");
     }
-    const actor = await readNativeActor(request, url, env);
+    const actor = await authorityRequest(() => readNativeActor(request, url, env));
     if (!actor) return error(401, "native_authentication_required");
-    using metadata = await org.metadata(actor);
+    using metadata = await authorityRequest(async () => await org.metadata(actor));
     if (!metadata && !(collection === "executions" && sub === "redemption")) return error(404, "resource_denied");
     if (request.method === "GET") {
       if (collection === "organizations" && sub === "agents" && !target) {
@@ -92,9 +95,11 @@ export async function handleExecutionApi(request: Request, url: URL, env: Env): 
             cursor.exp * 1000 <= Date.now())
         )
           return error(400, "invalid_cursor");
-        const result = await org.identityCatalog(actor, typeof cursor?.after === "string" ? cursor.after : "");
+        const result = await authorityRequest(
+          async () => await org.identityCatalog(actor, typeof cursor?.after === "string" ? cursor.after : ""),
+        );
         if (!result) return error(404, "resource_denied");
-        return reply({
+        const response = reply({
           ...result,
           next: undefined,
           cursor: result.next
@@ -107,9 +112,17 @@ export async function handleExecutionApi(request: Request, url: URL, env: Env): 
             : null,
           requestId,
         });
+        const freshActor = await authorityRequest(() => readNativeActor(request, url, env));
+        const released = freshActor
+          ? await authorityRequest(
+              async () => await org.identityCatalog(freshActor, typeof cursor?.after === "string" ? cursor.after : ""),
+            )
+          : null;
+        if (!released || canonical(released) !== canonical(result)) return error(404, "resource_denied");
+        return response;
       }
       if (collection === "workspaces" && sub === "grants" && target) {
-        const value = await org.identityGrant(actor, id, target);
+        const value = await authorityRequest(async () => await org.identityGrant(actor, id, target));
         return value
           ? reply({ value, policyRevision: metadata?.policyRevision ?? 0, requestId })
           : error(404, "resource_denied");

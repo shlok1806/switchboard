@@ -13,7 +13,7 @@
 import type { ChannelEvent, EventType, Holder, PushCommit, TaskNumber } from "../../shared/src/index";
 import { CLAIMED_LABEL, REVIEW_LABEL, taskOfBranch } from "../../shared/src/index";
 import type { NewEvent } from "./channel";
-import type { Caller, ClaimResult, Claims } from "./claims";
+import type { Caller, ClaimMutation, ClaimResult, Claims } from "./claims";
 import { APP_NOT_CONFIGURED, type CodeChange, capFileChanges, type GitHub } from "./github/index";
 import type { Tasks } from "./tasks";
 
@@ -49,13 +49,19 @@ export function pullRequestBody(number: TaskNumber, holder: string, summary: str
   return lines.join("\n");
 }
 
+export interface BranchMutation extends ClaimMutation {
+  prepareIntent(): ReturnType<ClaimMutation["prepare"]>;
+  externalOutcome(pr: { number: number; url: string } | null): void;
+}
+
 export class Branches {
   constructor(private readonly host: BranchHost) {}
 
   /** The holder's wrapper reports the Task branch it created and pushed. */
-  async record(caller: Caller, number: TaskNumber, branch: string): Promise<ClaimResult> {
+  async record(caller: Caller, number: TaskNumber, branch: string, mutation?: ClaimMutation): Promise<ClaimResult> {
     const synced = await this.host.tasks.ensureSynced();
     if (!synced.ok) return synced;
+    const prepared = mutation ? await mutation.prepare() : undefined;
     const { claims, tasks } = this.host;
 
     const who = claims.resolve(caller);
@@ -71,14 +77,18 @@ export class Branches {
     if (task.branch !== undefined) {
       return { ok: false, status: 409, reason: `Task #${number} already has branch ${task.branch}.` };
     }
-    tasks.write({ ...task, branch, updatedAt: new Date().toISOString() });
-    this.host.append({
-      type: "task.branch",
-      actor: acting.actor,
-      capture: acting.capture,
-      task: number,
-      payload: { branch },
-    });
+    const write = () => {
+      tasks.write({ ...task, branch, updatedAt: new Date().toISOString() });
+      this.host.append({
+        type: "task.branch",
+        actor: acting.actor,
+        capture: acting.capture,
+        task: number,
+        payload: { branch },
+      });
+    };
+    if (prepared) prepared.commit(write);
+    else write();
     return claims.current(number);
   }
 
@@ -86,7 +96,7 @@ export class Branches {
    * The holder finishes the Task: a pull request from its branch that closes the
    * Issue, and the Task goes to review. Finishing a Task in review changes nothing.
    */
-  async finish(caller: Caller, number: TaskNumber, summary?: string): Promise<ClaimResult> {
+  async finish(caller: Caller, number: TaskNumber, summary?: string, mutation?: BranchMutation): Promise<ClaimResult> {
     const synced = await this.host.tasks.ensureSynced();
     if (!synced.ok) return synced;
     const { claims, tasks } = this.host;
@@ -109,6 +119,14 @@ export class Branches {
     const gitHub = this.host.gitHub();
     if (gitHub === null) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
 
+    if (mutation) {
+      const intent = await mutation.prepareIntent();
+      // Reread after authorization; no PR may be opened from a stale holder snapshot.
+      const current = claims.held(acting, number, "finish");
+      if (!current.ok || current.task.branch !== branch)
+        return { ok: false, status: 409, reason: "Task changed during authorization." };
+      intent.commit(() => {});
+    }
     let pr: { number: number; url: string };
     try {
       pr = await tasks.exclusive(async () =>
@@ -120,21 +138,33 @@ export class Branches {
         }),
       );
     } catch (error) {
+      mutation?.externalOutcome(null);
       return { ok: false, status: 502, reason: `GitHub refused the pull request: ${errorText(error)}` };
+    }
+    mutation?.externalOutcome(pr);
+    const prepared = mutation ? await mutation.prepare() : undefined;
+    if (mutation) {
+      const current = claims.held(acting, number, "finish");
+      if (!current.ok || current.task.branch !== branch || JSON.stringify(current.holder) !== JSON.stringify(holder))
+        return { ok: false, status: 409, reason: "Task changed while opening the pull request." };
     }
 
     // The Task may have moved while GitHub answered: only a Task still held the same way goes to review.
     const now = tasks.read(number);
     if (now === null || now.status === "done" || now.claim === undefined) return claims.current(number);
-    tasks.write({ ...now, status: "review", pr: pr.number, updatedAt: new Date().toISOString() });
-    this.host.append({
-      type: "task.review",
-      actor: acting.actor,
-      capture: acting.capture,
-      task: number,
-      payload: { pr: pr.number, url: pr.url, branch },
-    });
-    claims.status.note(number, `Pull request #${pr.number} opened by ${claims.describe(holder)}.`);
+    const write = () => {
+      tasks.write({ ...now, status: "review", pr: pr.number, updatedAt: new Date().toISOString() });
+      this.host.append({
+        type: "task.review",
+        actor: acting.actor,
+        capture: acting.capture,
+        task: number,
+        payload: { pr: pr.number, url: pr.url, branch },
+      });
+      claims.status.note(number, `Pull request #${pr.number} opened by ${claims.describe(holder)}.`);
+    };
+    if (prepared) prepared.commit(write);
+    else write();
 
     await claims.mirror(acting, "finish", number, async (gh) => [
       [

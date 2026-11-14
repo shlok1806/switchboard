@@ -1,3 +1,5 @@
+import { ARTIFACT_CSP } from "../../shared/src/index";
+import { appendManagedOutcome } from "./managed-retention";
 // One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
 // named by `owner/repo` (ADR 0007). It owns the Channel's Persons, who may join
 // (write access to the repo, and the Agent tokens), its append-only Event stream
@@ -91,7 +93,11 @@ import {
   isLocalEvent,
   LIVE_PING,
   LIVE_PONG,
+  MAX_ADDRESSEES,
+  MAX_DIRECTIVE_LENGTH,
+  MAX_FINISH_SUMMARY_LENGTH,
   MAX_SPAWN_FAILURE_LENGTH,
+  MAX_UPDATE_LENGTH,
   mergePages,
   offlineReason,
   SESSION_COOKIE,
@@ -101,6 +107,7 @@ import {
   SUMMARY_MAX_UPDATES,
   TRANSCRIPT_WAIT_MS,
 } from "../../shared/src/index";
+import type { SafeAgent } from "../../shared/src/m1";
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
 import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
@@ -111,18 +118,25 @@ import { devMode, readCookie, readNativeActor, sessionSecret } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
 import { BRIEF_SCHEMA, Brief, type BriefResult, migrateBrief } from "./brief";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
+import { isAgentId } from "./claims-api";
 import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
 import { type CodeChange, type GitHub, gitHubFor, readerFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } from "./hosts";
+import { readJson } from "./http";
 import { LangfuseProject, type StoredLangfuse } from "./langfuse";
 import { LIBRARIAN_SCHEMA, librarianFeed, moveLibrarianCursor } from "./librarian";
+import { ManagedUpdateBudgets } from "./managed-budgets";
+import { ManagedReadFailure, managedError, managedRead, managedReadRoute, managedWriteRoute } from "./managed-channel";
+import { safeAgent } from "./managed-projection";
 import { type GrantResult, McpGrants } from "./mcp/grants";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
+import type { ChannelAuthorization } from "./organization";
 import { workspaceParent } from "./policy";
+import { authorityRequest, LocalMutationPermits, type MutationPermit } from "./policy-permits";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
-import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
+import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay, relaySettings } from "./relay/relay";
 import { verifyPayload } from "./session";
 import { migrateSkills, SKILLS_SCHEMA, type SkillResult, Skills, type UploadedChunk } from "./skills";
 import { StaleClaims } from "./stale-claims";
@@ -754,7 +768,15 @@ export class Channel extends DurableObject<Env> {
   }
 
   /** Synchronous transition fence, immediately before dispatch or result release. */
-  bindingCurrent(generation: number): boolean {
+  bindingCurrent(generation: number, managed = false): boolean {
+    if (managed)
+      return (
+        this.binding.version === 1 &&
+        this.binding.state === "linked" &&
+        this.binding.workspace !== null &&
+        this.binding.operation !== null &&
+        this.binding.generation === generation
+      );
     return !this.managedClosed() && this.binding.generation === generation;
   }
 
@@ -768,6 +790,395 @@ export class Channel extends DurableObject<Env> {
       binding.workspace !== null ||
       binding.operation !== null
     );
+  }
+
+  /** Native credentials are resolved here, never from caller-supplied Person/Agent query fields. */
+  async managedRequest(request: Request, repo: string): Promise<Response> {
+    const binding = this.bindingState();
+    if (binding.version !== 1 || binding.state !== "linked" || !binding.workspace || !binding.operation)
+      return managedError(404, "resource_denied");
+    const url = new URL(request.url);
+    // Bind the HTTP route to the actual named DO, even for direct internal invocations.
+    if (!this.env.CHANNEL.idFromName(repo).equals(this.ctx.id) || !url.pathname.startsWith(`/r/${repo}/api/`))
+      return managedError(404, "resource_denied");
+    const path = url.pathname.slice(`/r/${repo}`.length);
+    const writeRoute = managedWriteRoute(request.method, path);
+    const route = writeRoute ?? managedReadRoute(request.method, path);
+    if (!route) return managedError(404, "resource_denied");
+    const organizationId = workspaceParent(binding.workspace);
+    if (!organizationId) return managedError(404, "resource_denied");
+    try {
+      const token = request.headers.get("Authorization")?.startsWith("Bearer m1.")
+        ? request.headers.get("Authorization")?.slice(7).trim()
+        : undefined;
+      const actor = token ? { token } : await authorityRequest(() => readNativeActor(request, url, this.env));
+      if (!actor) return managedError(404, "resource_denied");
+      const org = this.env.ORGANIZATION.getByName(organizationId);
+      const input: ChannelAuthorization = {
+        actor,
+        action: route.action,
+        generation: binding.generation,
+        requestId: crypto.randomUUID(),
+        ...(route.action.startsWith("agent.private_") || (route.action === "agent.view" && route.targetId !== "agents")
+          ? { targetExecutionId: this.managedAssociation(route.targetId as AgentId)?.executionId }
+          : {}),
+        resource: {
+          kind: "workspace",
+          organizationId,
+          id: binding.workspace,
+          channel: repo,
+          targetId: route.targetId,
+          operation: route.operation,
+        },
+      };
+      const current = () =>
+        this.binding.version === 1 &&
+        this.binding.state === "linked" &&
+        this.binding.generation === binding.generation &&
+        this.binding.workspace === binding.workspace;
+      if (writeRoute) return await this.#managedWrite(request, path, input, current);
+      const rosterChecks: ChannelAuthorization[] = [];
+      return managedRead({
+        input,
+        current,
+        authorize: async (input) => {
+          for (const check of rosterChecks) {
+            const result = await org.authorizeChannelRead(check);
+            if (!result.ok) return result;
+          }
+          if (!token) {
+            const currentActor = await readNativeActor(request, url, this.env);
+            if (!currentActor)
+              return { ok: false, status: 403, reason: "native_authentication_required", policyRevision: 0 };
+            return org.authorizeChannelRead({ ...input, actor: currentActor });
+          }
+          return org.authorizeChannelRead(input);
+        },
+        read: async () => {
+          if (path === "/api/relay") return { relay: relaySettings(this.env) };
+          if (route.action === "channel.update.read") {
+            const versionText = url.searchParams.get("version");
+            if (versionText !== null && !/^[1-9]\d{0,8}$/.test(versionText)) throw new ManagedReadFailure(404);
+            const version = versionText === null ? undefined : Number(versionText);
+            if (path === "/api/skills") return { skills: this.skills.list() };
+            if (path === "/api/artifacts") return { artifacts: this.artifacts.list() };
+            if (path === "/api/brief") return { pages: this.brief.pages() };
+            const separator = route.targetId.indexOf("/");
+            const family = route.targetId.slice(0, separator);
+            const name = route.targetId.slice(separator + 1);
+            const result =
+              family === "skills"
+                ? this.skills.read(name, version)
+                : family === "brief"
+                  ? this.brief.read(name, version)
+                  : route.operation === "content.page"
+                    ? this.artifacts.page(name, version)
+                    : this.artifacts.read(name, version);
+            if (!result.ok) throw new ManagedReadFailure(404);
+            if (route.operation === "content.page" && "html" in result.value) {
+              return new Response(result.value.html, {
+                headers: {
+                  "Content-Type": "text/html; charset=utf-8",
+                  "Content-Security-Policy": ARTIFACT_CSP,
+                  "X-Content-Type-Options": "nosniff",
+                  "Referrer-Policy": "no-referrer",
+                  "Cache-Control": "no-store",
+                  ...(url.searchParams.get("download") === "1" ? { "Content-Disposition": "attachment" } : {}),
+                },
+              });
+            }
+            return result.value;
+          }
+
+          if (route.action === "agent.view") {
+            const candidates =
+              route.targetId === "agents"
+                ? this.agents.list(false)
+                : [this.agents.find(route.targetId as AgentId)].filter((a): a is Agent => a !== null);
+            const agents: SafeAgent[] = [];
+            for (const candidate of candidates) {
+              const association = this.managedAssociation(candidate.id);
+              if (association?.active !== 1) continue;
+              const check: ChannelAuthorization = {
+                ...input,
+                targetExecutionId: association.executionId,
+                resource: { ...input.resource, targetId: candidate.id },
+              };
+              const result = await authorityRequest(async () => await org.authorizeChannelRead(check));
+              if (!current()) throw new ManagedReadFailure(404);
+              if (!result.ok || !result.value.target) continue;
+              const agent = this.agents.find(candidate.id);
+              if (!agent || agent.presence === "gone") continue;
+              rosterChecks.push(check);
+              agents.push(safeAgent(agent, result.value.target));
+            }
+            if (route.targetId !== "agents" && !agents[0]) throw new ManagedReadFailure(404);
+            return route.targetId === "agents" ? { agents } : { agent: agents[0] };
+          }
+
+          if (route.action.startsWith("agent.private_")) {
+            const id = route.targetId as AgentId;
+            const agent = this.agents.find(id);
+            if (!agent || agent.presence === "gone") throw new ManagedReadFailure(404);
+            if (route.operation === "touched-files") return { agent: id, files: this.hooks.touchedFiles(id) };
+            if (route.operation === "terminal") {
+              const screen = await this.askWrapper(
+                this.terminalReads,
+                id,
+                (request): TerminalReadRequestMessage => ({ type: "terminal.read.request", agent: id, id: request }),
+              );
+              if (!screen || typeof screen === "string") throw new ManagedReadFailure(503);
+              return { screen: { agent: id, ...screen } };
+            }
+            const from = Number(url.searchParams.get("from") ?? 0);
+            if (!Number.isSafeInteger(from) || from < 0) throw new ManagedReadFailure(404);
+            const page = await this.askWrapper(
+              this.transcriptReads,
+              id,
+              (request): TranscriptRequestMessage => ({
+                type: "transcript.request",
+                agent: id,
+                id: request,
+                from,
+                ...(url.searchParams.get("latest") === "true" ? { latest: true } : {}),
+              }),
+            );
+            if (!page || typeof page === "string") throw new ManagedReadFailure(503);
+            return { page: { agent: id, ...page } };
+          }
+
+          const result = path === "/api/tasks" ? await this.tasks.list() : await this.tasks.get(Number(route.targetId));
+          if (!result.ok) throw new ManagedReadFailure(result.status);
+          return path === "/api/tasks" ? { tasks: result.value } : { task: result.value };
+        },
+      });
+    } catch (error) {
+      if (error instanceof ManagedReadFailure) return managedError(error.status, "resource_denied");
+      return managedError(503, "authority_unavailable");
+    }
+  }
+
+  /** Exact, request-local permits; never an ambient authorization flag. */
+  async #managedWrite(
+    request: Request,
+    path: string,
+    input: ChannelAuthorization,
+    current: () => boolean,
+  ): Promise<Response> {
+    const body = await readJson(request);
+    if (!current()) throw new ManagedReadFailure(404);
+    if (path === "/api/directives") {
+      if (!isAgentId(body.to)) return managedError(400, "invalid_target");
+      input = {
+        ...input,
+        targetExecutionId: this.managedAssociation(body.to)?.executionId,
+        resource: { ...input.resource, targetId: body.to },
+      };
+    }
+    const org = this.env.ORGANIZATION.getByName(input.resource.organizationId);
+    const login = "token" in input.actor ? null : await authorityRequest(() => this.nativeLogin(request));
+    const verified =
+      "token" in input.actor
+        ? await authorityRequest(
+            async () => await org.verifyExecution(input.actor && "token" in input.actor ? input.actor.token : ""),
+          )
+        : input.actor;
+    const caller = verified ? this.#managedCaller(verified, login) : undefined;
+    if (!caller || !current()) throw new ManagedReadFailure(404);
+    let outcome = "committed";
+    const prepare = async (intent = false) => {
+      if (!("token" in input.actor)) {
+        const actor = await authorityRequest(() => readNativeActor(request, new URL(request.url), this.env));
+        if (!actor || actor.personId !== input.actor.personId || actor.githubId !== input.actor.githubId || !current())
+          throw new ManagedReadFailure(404);
+        // The same immutable credential was just verified; parsing only narrows its permit deadline.
+        const credential = request.headers.get("Authorization")?.slice(7).trim() ?? readCookie(request, SESSION_COOKIE);
+        const encoded = credential?.split(".")[1];
+        if (!encoded) throw new ManagedReadFailure(404);
+        const expiry = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/"))).exp;
+        if (typeof expiry !== "number" || !Number.isFinite(expiry)) throw new ManagedReadFailure(404);
+        input = { ...input, credentialExpiresAt: expiry * 1000 };
+      }
+      const result = await authorityRequest(async () => await org.issueMutationPermit(input));
+      if (!result.ok || !current()) throw new ManagedReadFailure(404);
+      const permit = result.value;
+
+      const permits = new LocalMutationPermits(this.ctx.storage.sql);
+      permits.install(permit);
+      return {
+        commit: (write: () => void) =>
+          this.ctx.storage.transactionSync(() => {
+            if (
+              !current() ||
+              !this.#managedCaller(permit.actor, login) ||
+              !permits.consume(permit.id, { ...permit, generation: this.binding.generation })
+            )
+              throw new ManagedReadFailure(404);
+            if (intent)
+              appendManagedOutcome(this.ctx.storage.sql, "managed_external_outcomes", input.requestId, {
+                actor: permit.actor,
+                action: permit.action,
+                resource: permit.resource,
+                outcome: "external_pending",
+              });
+            // Reserve evidence capacity before append/broadcast/Relay side effects.
+            appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
+              actor: permit.actor,
+              action: permit.action,
+              resource: permit.resource,
+              policyRevision: permit.policyRevision,
+              outcome: "pending_commit",
+            });
+            write();
+            appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
+              actor: permit.actor,
+              action: permit.action,
+              resource: permit.resource,
+              policyRevision: permit.policyRevision,
+              outcome: intent ? "external_intent" : outcome,
+              at: Date.now(),
+            });
+          }),
+      };
+    };
+    if (input.resource.operation === "artifact.delete") {
+      if (caller.agent) return managedError(403, "artifact_delete_requires_person");
+      const prepared = await prepare();
+      let result: ReturnType<Artifacts["delete"]> | undefined;
+      prepared.commit(() => {
+        result = this.artifacts.delete(caller.person, input.resource.targetId?.slice("artifacts/".length) ?? "");
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result) return managedError(404, "resource_denied");
+      return result.ok
+        ? Response.json({ ok: true, ...result.value }, { headers: { "Cache-Control": "no-store" } })
+        : managedError(result.status, "resource_denied");
+    }
+    if (path === "/api/directives") {
+      if (caller.agent || !isAgentId(body.to)) return managedError(403, "directive_denied");
+      const to = body.to;
+      const text = typeof body.text === "string" ? body.text.trim() : "";
+      if (!text || text.length > MAX_DIRECTIVE_LENGTH) return managedError(400, "invalid_directive");
+      const prepared = await prepare();
+      let result: DirectiveResult | undefined;
+      prepared.commit(() => {
+        result = this.directives.send({ person: caller.person }, to, text);
+      });
+      if (!result) return managedError(404, "resource_denied");
+      return Response.json(result, {
+        status: result.ok ? 201 : result.status,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+    if (path === "/api/updates") {
+      const text = typeof body.text === "string" ? body.text.trim() : "";
+      if (!text || text.length > MAX_UPDATE_LENGTH) return managedError(400, "invalid_update");
+      const task = body.task;
+      if (task !== undefined && !(typeof task === "number" && Number.isSafeInteger(task) && task > 0))
+        return managedError(400, "invalid_task");
+      const to = Array.isArray(body.to) && body.to.every(isAgentId) ? [...new Set(body.to)] : undefined;
+      if (body.to !== undefined && (!to || to.length < 1 || to.length > MAX_ADDRESSEES))
+        return managedError(400, "invalid_addressees");
+      const prepared = await prepare();
+      let answer: ReturnType<Channel["postUpdate"]> | undefined;
+      let retry = 0;
+      prepared.commit(() => {
+        const executionId = caller?.agent ? this.managedAssociation(caller.agent)?.executionId : undefined;
+        retry = new ManagedUpdateBudgets(this.ctx.storage.sql).consume(executionId);
+        if (!retry && caller) answer = this.#postUpdate(caller, text, task as number | undefined, to);
+        if (retry || !answer?.ok) outcome = retry ? "update_budget_exhausted" : "local_restriction_denied";
+      });
+      if (retry)
+        return Response.json(
+          { ok: false, reason: "update_budget_exhausted" },
+          {
+            status: 429,
+            headers: { "Retry-After": String(retry), "Cache-Control": "no-store" },
+          },
+        );
+      if (!answer) return managedError(404, "resource_denied");
+      return Response.json(answer, {
+        status: answer.ok ? 201 : answer.status,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+    const admitted = await authorityRequest(
+      async () => await org.authorizeChannelRead({ ...input, action: "task.read" }),
+    );
+    if (!admitted.ok || !current()) return managedError(404, "resource_denied");
+
+    const number = Number(input.resource.targetId);
+    const mutation = {
+      prepare,
+      prepareIntent: () => prepare(true),
+      externalOutcome: (pr: { number: number; url: string } | null) => {
+        this.ctx.storage.transactionSync(() => {
+          appendManagedOutcome(this.ctx.storage.sql, "managed_external_outcomes", input.requestId, {
+            actor: verified,
+            requestId: input.requestId,
+            action: input.action,
+            resource: input.resource,
+            outcome: pr ? "pr_created" : "pr_failed",
+            pr: pr?.number,
+            at: Date.now(),
+          });
+        });
+      },
+    };
+    let result: ClaimResult;
+    if (input.resource.operation === "task.claim") {
+      if (body.for !== undefined && !isAgentId(body.for)) return managedError(400, "invalid_agent");
+      result = await this.claims.claim(caller, number, body.for as AgentId | undefined, mutation);
+    } else if (input.resource.operation === "task.release")
+      result = await this.claims.release(caller, number, mutation);
+    else if (input.resource.operation === "task.branch") {
+      if (typeof body.branch !== "string" || body.branch.length > 255) return managedError(400, "invalid_branch");
+      result = await this.branches.record(caller, number, body.branch, mutation);
+    } else if (input.resource.operation === "task.finish") {
+      if (
+        body.summary !== undefined &&
+        (typeof body.summary !== "string" || body.summary.length > MAX_FINISH_SUMMARY_LENGTH)
+      )
+        return managedError(400, "invalid_summary");
+      result = await this.branches.finish(caller, number, body.summary as string | undefined, mutation);
+    } else if (input.resource.operation === "task.takeover") {
+      const to = body.to;
+      if (caller.agent || !to || typeof to !== "object") return managedError(403, "takeover_denied");
+      const holder = to as Partial<Holder>;
+      if (holder.kind === "person" && "person" in holder && holder.person === caller.person)
+        result = await this.staleClaims.takeover(caller, number, { kind: "person", person: caller.person }, mutation);
+      else if (holder.kind === "agent" && "agentId" in holder && isAgentId(holder.agentId))
+        result = await this.staleClaims.takeover(caller, number, { kind: "agent", agentId: holder.agentId }, mutation);
+      else return managedError(400, "invalid_holder");
+    } else
+      result = await this.claims.completeStep(
+        caller,
+        number,
+        Number(input.resource.operation?.split("/")[1]),
+        mutation,
+      );
+    const released = await authorityRequest(
+      async () => await org.authorizeChannelRead({ ...input, action: "task.read" }),
+    );
+    if (!released.ok || !current()) return managedError(404, "resource_denied");
+    return Response.json(result, { status: result.ok ? 200 : result.status, headers: { "Cache-Control": "no-store" } });
+  }
+
+  #managedCaller(actor: MutationPermit["actor"], login: string | null): Caller | undefined {
+    if (actor.kind === "person") return login ? { person: login } : undefined;
+    const row = this.ctx.storage.sql
+      .exec<{ agent: AgentId }>(
+        "SELECT agent FROM m1_agent_executions WHERE executionId=? AND active=1",
+        actor.executionId,
+      )
+      .toArray()[0];
+    const agent = row ? this.agents.find(row.agent) : null;
+    return agent ? { person: agent.person, agent: agent.id } : undefined;
+  }
+
+  /** Bare legacy RPCs carry no managed actor and must never authorize linked content. */
+  private requireLegacyAccess(): void {
+    if (this.managedClosed()) throw new Error("managed_actor_required");
   }
 
   async bindingOwner(repo: string, person: PersonName, githubId: string): Promise<boolean> {
@@ -977,40 +1388,48 @@ export class Channel extends DurableObject<Env> {
   }
 
   listTasks(): Promise<TaskResult<Task[]>> {
+    this.requireLegacyAccess();
     return this.tasks.list();
   }
 
   getTask(number: TaskNumber): Promise<TaskResult<Task>> {
+    this.requireLegacyAccess();
     return this.tasks.get(number);
   }
 
   /** A Person creating a Task, which creates its GitHub Issue first. */
   createTask(name: PersonName, task: NewTask): Promise<TaskResult<Task>> {
-    this.join(name);
+    this.requireLegacyAccess();
+    this.#joinPerson(name);
     return this.tasks.create(name, task);
   }
 
   /** Claims a Task for the caller, or, for a Person, for one of their own Agents. */
   claimTask(caller: Caller, number: TaskNumber, forAgent?: AgentId): Promise<ClaimResult> {
-    this.join(caller.person);
+    this.requireLegacyAccess();
+    this.#joinPerson(caller.person);
     return this.claims.claim(caller, number, forAgent);
   }
 
   releaseTask(caller: Caller, number: TaskNumber): Promise<ClaimResult> {
+    this.requireLegacyAccess();
     return this.claims.release(caller, number);
   }
 
   completeStep(caller: Caller, number: TaskNumber, index: number): Promise<ClaimResult> {
+    this.requireLegacyAccess();
     return this.claims.completeStep(caller, number, index);
   }
 
   /** The holder's wrapper reporting the Task branch it created (ADR 0006). */
   recordBranch(caller: Caller, number: TaskNumber, branch: string): Promise<ClaimResult> {
+    this.requireLegacyAccess();
     return this.branches.record(caller, number, branch);
   }
 
   /** The holder finishing a Task: a pull request that closes the Issue, and the Task goes to review. */
   finishTask(caller: Caller, number: TaskNumber, summary?: string): Promise<ClaimResult> {
+    this.requireLegacyAccess();
     return this.branches.finish(caller, number, summary);
   }
 
@@ -1022,7 +1441,8 @@ export class Channel extends DurableObject<Env> {
 
   /** A Person moving a Stale Claim to themselves or one of their own Agents (ADR 0002). */
   takeoverTask(caller: Caller, number: TaskNumber, to: Holder): Promise<ClaimResult> {
-    this.join(caller.person);
+    this.requireLegacyAccess();
+    this.#joinPerson(caller.person);
     return this.staleClaims.takeover(caller, number, to);
   }
 
@@ -1032,6 +1452,7 @@ export class Channel extends DurableObject<Env> {
     call: EventPayloads["tool.call"],
     task?: TaskNumber,
   ): { ok: true; event: ChannelEvent } | ClaimRefusal {
+    this.requireLegacyAccess();
     const who = this.claims.resolve(caller);
     if (!who.ok) return who;
     if (who.acting.actor.kind !== "agent") {
@@ -1055,6 +1476,7 @@ export class Channel extends DurableObject<Env> {
 
   /** Every Agent the Channel has seen, most recently seen first. */
   listAgents(includeGone = false): Agent[] {
+    this.requireLegacyAccess();
     return this.agents.list(includeGone);
   }
 
@@ -1145,7 +1567,7 @@ export class Channel extends DurableObject<Env> {
         return deny(403);
       }
       try {
-        const result = await this.registerAgent(person, registration);
+        const result = await this.#registerAgentInternal(person, registration);
         if (!result.ok) {
           await cancel();
           return deny(result.status);
@@ -1289,7 +1711,12 @@ export class Channel extends DurableObject<Env> {
    * its Person. This is where `switchboard run` trades the Person's session for a
    * new Agent token, bound to this one Agent (ADR 0007).
    */
-  async registerAgent(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
+  registerAgent(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
+    this.requireLegacyAccess();
+    return this.#registerAgentInternal(person, request);
+  }
+
+  async #registerAgentInternal(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
     if (request.host !== undefined && this.hosts.find(person, request.host) === null) {
       return { ok: false, status: 409, reason: `You have no Host named ${request.host} on this Channel.` };
     }
@@ -1315,7 +1742,7 @@ export class Channel extends DurableObject<Env> {
     }
     if (this.binding.workspace !== null)
       await this.endManagedAssociation(agentIdFor(person, request.cli, request.sessionId));
-    this.join(person);
+    this.#joinPerson(person);
     // A machine's Host the Channel does not know answers for nothing (ADR 0037).
     if (request.historyHost !== undefined && this.hosts.find(person, request.historyHost) === null) {
       const { historyHost: _, ...rest } = request;
@@ -1359,6 +1786,7 @@ export class Channel extends DurableObject<Env> {
    * reading records nothing. Null when there is no such Agent.
    */
   async agentSummary(id: AgentId): Promise<AgentSummary | null> {
+    this.requireLegacyAccess();
     const agent = this.agents.find(id);
     if (agent === null) return null;
     // Its latest activity and the files it edited last, from the machine that keeps them (ADR 0037).
@@ -1424,6 +1852,18 @@ export class Channel extends DurableObject<Env> {
     usage?: ReportedUsage,
     context?: AgentContext,
   ): Promise<RosterResult> {
+    if (this.managedClosed()) {
+      this.requireManagedLifecycle(person, id);
+      // Trusted Worker-only lifecycle RPC: never drain content queues or report usage.
+      const result = await this.agents.heartbeat(person, id, presence);
+      const association = this.managedAssociation(id);
+      if (result.ok && association?.active === 1)
+        await this.env.ORGANIZATION.getByName(association.organizationId).touchRegisteredExecution(
+          association.executionId,
+          id,
+        );
+      return result;
+    }
     const result = this.withNextTurn(await this.agents.heartbeat(person, id, presence, usage, context));
     if (result.ok && usage !== undefined) this.recordUsage(usage);
     if (result.ok && this.binding.workspace !== null) {
@@ -1437,8 +1877,25 @@ export class Channel extends DurableObject<Env> {
     return result;
   }
 
+  /** D1: internal lifecycle only, scoped to a recorded active execution and its owner. */
+  private requireManagedLifecycle(person: PersonName, id: AgentId): void {
+    const binding = this.binding;
+    if (binding.version !== 1 || binding.state !== "linked" || !binding.workspace || !binding.operation)
+      throw new Error("managed_actor_required");
+    const association = this.managedAssociation(id);
+    const agent = this.agents.find(id);
+    if (
+      association?.active !== 1 ||
+      !agent ||
+      agent.person !== person ||
+      association.organizationId !== workspaceParent(binding.workspace)
+    )
+      throw new Error("managed_actor_required");
+  }
+
   /** Every account the Channel has usage readings for (ADR 0011). */
   listAccounts(): AccountUsage[] {
+    this.requireLegacyAccess();
     return this.usage.list();
   }
 
@@ -1470,6 +1927,7 @@ export class Channel extends DurableObject<Env> {
   }
 
   endSession(person: PersonName, id: AgentId, detail?: string): Promise<RosterResult> {
+    if (this.managedClosed()) this.requireManagedLifecycle(person, id);
     return this.agents.endSession(person, id, detail);
   }
 
@@ -1478,8 +1936,9 @@ export class Channel extends DurableObject<Env> {
    * subtree (ADR 0018). Refused through any other Agent's credentials.
    */
   sendDirective(caller: Caller, to: AgentId, text: string): DirectiveResult {
+    this.requireLegacyAccess();
     if (caller.agent === undefined) {
-      this.join(caller.person);
+      this.#joinPerson(caller.person);
       return this.directives.send({ person: caller.person }, to, text);
     }
     const lead = this.lead(caller.agent, "send Directives");
@@ -1511,6 +1970,7 @@ export class Channel extends DurableObject<Env> {
 
   /** The Agent's own Person grants it a role, or takes it back with null (ADR 0018). Never an Agent. */
   setAgentRole(caller: Caller, id: AgentId, role: AgentRole | null): RosterResult {
+    this.requireLegacyAccess();
     if (caller.agent !== undefined) {
       return {
         ok: false,
@@ -1518,7 +1978,7 @@ export class Channel extends DurableObject<Env> {
         reason: "Only the Agent's own Person grants or revokes a role, never an Agent.",
       };
     }
-    this.join(caller.person);
+    this.#joinPerson(caller.person);
     return this.agents.setRole(caller.person, id, role);
   }
 
@@ -1527,6 +1987,7 @@ export class Channel extends DurableObject<Env> {
    * Capture), or any Person on the Channel. Everyone hears on the stream.
    */
   renameAgent(caller: Caller, id: AgentId, nickname: string | null): RosterResult {
+    this.requireLegacyAccess();
     if (caller.agent !== undefined && caller.agent !== id) {
       return {
         ok: false,
@@ -1534,7 +1995,7 @@ export class Channel extends DurableObject<Env> {
         reason: `This token belongs to Agent ${caller.agent}. An Agent renames itself only.`,
       };
     }
-    if (caller.agent === undefined) this.join(caller.person);
+    if (caller.agent === undefined) this.#joinPerson(caller.person);
     return this.agents.rename(
       id,
       nickname,
@@ -1552,6 +2013,7 @@ export class Channel extends DurableObject<Env> {
     effort: string | null,
     via: "proxy" | "config",
   ): RosterResult {
+    this.requireLegacyAccess();
     if (caller.agent !== undefined && caller.agent !== id) {
       return {
         ok: false,
@@ -1564,6 +2026,7 @@ export class Channel extends DurableObject<Env> {
 
   /** The permission prompt an Agent's CLI shows, from its wrapper (ADR 0013): the Agent's own token or its own Person. */
   setAgentApproval(caller: Caller, id: AgentId, approval: PendingApproval | null): RosterResult {
+    this.requireLegacyAccess();
     if (caller.agent !== undefined && caller.agent !== id) {
       return {
         ok: false,
@@ -1576,6 +2039,7 @@ export class Channel extends DurableObject<Env> {
 
   /** The Agent's own Person denies its open prompt from the Channel; its wrapper answers the hook (ADR 0014). */
   denyAgentApproval(caller: Caller, id: AgentId, deny: DenyApprovalRequest): RosterResult {
+    this.requireLegacyAccess();
     if (caller.agent !== undefined) {
       return { ok: false, status: 403, reason: "Only the Agent's own Person can deny its prompt, never an Agent." };
     }
@@ -1592,6 +2056,7 @@ export class Channel extends DurableObject<Env> {
 
   /** Sets an Agent's Proxy mode; only its own Person may. Its wrapper hears on the stream. */
   setProxyMode(person: PersonName, id: AgentId, mode: ProxyMode): RosterResult {
+    this.requireLegacyAccess();
     return this.agents.setProxyMode(person, id, mode);
   }
 
@@ -1601,6 +2066,11 @@ export class Channel extends DurableObject<Env> {
    * time zone when a valid one is given.
    */
   join(name: PersonName, timeZone?: string): Person {
+    this.requireLegacyAccess();
+    return this.#joinPerson(name, timeZone);
+  }
+
+  #joinPerson(name: PersonName, timeZone?: string): Person {
     const zone = timeZone !== undefined && isTimeZone(timeZone) ? timeZone : undefined;
     const existing = this.ctx.storage.sql.exec<PersonRow>("SELECT * FROM persons WHERE name = ?", name).toArray()[0];
     if (existing) {
@@ -1638,7 +2108,17 @@ export class Channel extends DurableObject<Env> {
     task?: TaskNumber,
     to?: readonly AgentId[],
   ): { ok: true; event: ChannelEvent } | ClaimRefusal {
-    this.join(caller.person);
+    this.requireLegacyAccess();
+    return this.#postUpdate(caller, text, task, to);
+  }
+
+  #postUpdate(
+    caller: Caller,
+    text: string,
+    task?: TaskNumber,
+    to?: readonly AgentId[],
+  ): { ok: true; event: ChannelEvent } | ClaimRefusal {
+    this.#joinPerson(caller.person);
     const who = this.claims.resolve(caller);
     if (!who.ok) return who;
     if (to !== undefined) {
@@ -1674,6 +2154,7 @@ export class Channel extends DurableObject<Env> {
    * about the Task the Agent works on now.
    */
   writeNote(caller: Caller, note: PostNoteRequest): NoteResult | ClaimRefusal {
+    this.requireLegacyAccess();
     if (caller.agent === undefined) {
       return {
         ok: false,
@@ -1848,11 +2329,13 @@ export class Channel extends DurableObject<Env> {
 
   /** Each shared skill's latest version (ADR 0039). */
   listSkills(): SkillSummary[] {
+    this.requireLegacyAccess();
     return this.skills.list();
   }
 
   /** One version of a shared skill with its manifest, the latest when `version` is left out. */
   readSkill(name: string, version?: number): SkillResult<{ skill: Skill; versions: number[] }> {
+    this.requireLegacyAccess();
     return this.skills.read(name, version);
   }
 
@@ -1862,11 +2345,13 @@ export class Channel extends DurableObject<Env> {
     name: string,
     files: SkillEntry[],
   ): Promise<SkillResult<{ skill: SkillSummary; published: boolean }>> {
+    this.requireLegacyAccess();
     return this.skills.publish(caller, name, files);
   }
 
   /** Stores chunks of skill files, keeping each file once its bytes match its digest (ADR 0050). */
   uploadSkillFiles(chunks: UploadedChunk[]): Promise<SkillResult<{ complete: string[] }>> {
+    this.requireLegacyAccess();
     return this.skills.upload(chunks);
   }
 
@@ -1874,21 +2359,25 @@ export class Channel extends DurableObject<Env> {
   readSkillFiles(
     chunks: { digest: string; index: number }[],
   ): SkillResult<{ digest: string; index: number; data: Uint8Array }[]> {
+    this.requireLegacyAccess();
     return this.skills.readChunks(chunks);
   }
 
   /** Each artifact's latest version, the latest published first (ADR 0053). */
   listArtifacts(): ArtifactSummary[] {
+    this.requireLegacyAccess();
     return this.artifacts.list();
   }
 
   /** One version of an artifact, the latest when `version` is left out, and every version kept. */
   readArtifact(name: string, version?: number): ArtifactResult<{ artifact: ArtifactSummary; versions: number[] }> {
+    this.requireLegacyAccess();
     return this.artifacts.read(name, version);
   }
 
   /** One version of an artifact with its page. */
   artifactPage(name: string, version?: number): ArtifactResult<{ artifact: ArtifactSummary; html: string }> {
+    this.requireLegacyAccess();
     return this.artifacts.page(name, version);
   }
 
@@ -1898,6 +2387,7 @@ export class Channel extends DurableObject<Env> {
     name: string,
     page: { html: string; title: string },
   ): Promise<ArtifactResult<{ artifact: ArtifactSummary; published: boolean }>> {
+    this.requireLegacyAccess();
     const who = this.claims.resolve(caller);
     if (!who.ok) return who;
     if (caller.agent === undefined) return this.artifacts.publish({ person: caller.person }, name, page);
@@ -1911,16 +2401,19 @@ export class Channel extends DurableObject<Env> {
 
   /** Deletes an artifact with every kept version, for its owner as a Person (ADR 0053). */
   deleteArtifact(person: PersonName, name: string): ArtifactResult<{ deleted: string; versions: number }> {
+    this.requireLegacyAccess();
     return this.artifacts.delete(person, name);
   }
 
   /** Every page of the Brief, current versions, for any Person or Agent on the Channel (ADR 0042). */
   briefPages(): BriefPage[] {
+    this.requireLegacyAccess();
     return this.brief.pages();
   }
 
   /** One page of the Brief, current or one of its kept earlier versions. */
   readBriefPage(page: string, version?: number): BriefResult<{ page: BriefPage; versions: number[] }> {
+    this.requireLegacyAccess();
     return this.brief.read(page, version);
   }
 
@@ -1930,6 +2423,7 @@ export class Channel extends DurableObject<Env> {
     page: string,
     write: WriteBriefRequest,
   ): BriefResult<{ page: BriefPage; written: boolean }> | ClaimRefusal {
+    this.requireLegacyAccess();
     if (caller.agent === undefined) {
       return {
         ok: false,
@@ -1953,6 +2447,7 @@ export class Channel extends DurableObject<Env> {
    * change a Brief page, the Quiet Claims now, and the Brief's budget today. Only reads.
    */
   librarianFeed(): LibrarianFeedResponse {
+    this.requireLegacyAccess();
     return librarianFeed({
       sql: this.ctx.storage.sql,
       toEvent: rowToEvent,
@@ -1982,6 +2477,7 @@ export class Channel extends DurableObject<Env> {
     caller: Caller,
     request: MoveLibrarianCursorRequest,
   ): { ok: true; cursor: number } | { ok: false; status: number; reason: string } {
+    this.requireLegacyAccess();
     if (caller.agent === undefined || caller.librarian !== true) {
       return { ok: false, status: 403, reason: "Only the Channel's librarian moves its cursor." };
     }
@@ -2014,11 +2510,13 @@ export class Channel extends DurableObject<Env> {
 
   /** Connects the Channel's Langfuse project, or replaces it. The Worker checked the owner and the keys. */
   setLangfuseProject(stored: StoredLangfuse): void {
+    this.requireLegacyAccess();
     this.langfuse.set(stored);
   }
 
   /** Removes the Channel's Langfuse project. True when there was one. */
   removeLangfuseProject(): boolean {
+    this.requireLegacyAccess();
     return this.langfuse.remove();
   }
 
@@ -2066,20 +2564,24 @@ export class Channel extends DurableObject<Env> {
 
   /** Starts the grant of a connector sign-in whose code was redeemed (ADR 0040). */
   startMcpGrant(id: string, person: PersonName, client: string, expiresAt: number): GrantResult {
+    this.requireLegacyAccess();
     return this.mcpGrants.start(id, person, client, expiresAt);
   }
 
   /** Rotates a connector sign-in's grant for a refresh (ADR 0040). */
   rotateMcpGrant(id: string, generation: number, client: string, expiresAt: number): GrantResult {
+    this.requireLegacyAccess();
     return this.mcpGrants.rotate(id, generation, client, expiresAt);
   }
 
   readMemory(query: MemoryQuery): MemoryReadResult {
+    this.requireLegacyAccess();
     return this.memory.read(query);
   }
 
   /** Events with `seq` greater than `after`, oldest first. */
   history(after: number, limit: number): ChannelEvent[] {
+    this.requireLegacyAccess();
     return this.ctx.storage.sql
       .exec<EventRow>("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?", after, limit)
       .toArray()
@@ -2091,6 +2593,7 @@ export class Channel extends DurableObject<Env> {
    * the Local Events every reachable machine keeps (ADR 0037), with the Hosts it could not reach.
    */
   async latestEvents(count: number, before = Number.MAX_SAFE_INTEGER): Promise<HistoryPage> {
+    this.requireLegacyAccess();
     const stored = this.ctx.storage.sql
       .exec<EventRow>("SELECT * FROM events WHERE seq < ? ORDER BY seq DESC LIMIT ?", before, count)
       .toArray()
@@ -2107,6 +2610,7 @@ export class Channel extends DurableObject<Env> {
     count: number,
     before = Number.MAX_SAFE_INTEGER,
   ): Promise<HistoryPage | IndexPending | IndexTooLarge> {
+    this.requireLegacyAccess();
     const pending = this.pendingIndex("events_by_agent", "events_directives_to", "events_about_agent");
     if (pending) return pending;
     const sql = this.ctx.storage.sql;
@@ -2148,6 +2652,7 @@ export class Channel extends DurableObject<Env> {
     count: number,
     before = Number.MAX_SAFE_INTEGER,
   ): Promise<HistoryPage | IndexPending | IndexTooLarge> {
+    this.requireLegacyAccess();
     const pending = this.pendingIndex("events_by_task");
     if (pending) return pending;
     const stored = this.ctx.storage.sql
@@ -2308,6 +2813,7 @@ export class Channel extends DurableObject<Env> {
 
   /** The Events with these IDs, oldest first; IDs the Channel does not know are left out. */
   eventsById(ids: readonly string[]): ChannelEvent[] {
+    this.requireLegacyAccess();
     if (ids.length === 0) return [];
     const stored = this.ctx.storage.sql
       .exec<EventRow>(`SELECT * FROM events WHERE id IN (${ids.map(() => "?").join(", ")}) ORDER BY seq`, ...ids)
@@ -2320,6 +2826,7 @@ export class Channel extends DurableObject<Env> {
 
   /** The first `count` Wakes with `seq` above `after`, oldest first. */
   wakesAfter(after: number, count: number): ChannelEvent[] | IndexPending | IndexTooLarge {
+    this.requireLegacyAccess();
     const pending = this.pendingIndex("events_wakes");
     if (pending) return pending;
     return this.ctx.storage.sql
@@ -2334,6 +2841,7 @@ export class Channel extends DurableObject<Env> {
 
   /** Every Person who has joined the Channel. */
   listPersons(): Person[] {
+    this.requireLegacyAccess();
     return this.ctx.storage.sql.exec<PersonRow>("SELECT * FROM persons ORDER BY name").toArray().map(rowToPerson);
   }
 
@@ -2385,7 +2893,7 @@ export class Channel extends DurableObject<Env> {
       }
     }
     for (const agent of this.agents.list()) send(server, { type: "agent", agent });
-    this.join(name);
+    this.#joinPerson(name);
     await this.watchMembers();
     if (!this.bindingCurrent(generation)) return new Response("Binding changed", { status: 403 });
     return new Response(null, { status: 101, webSocket: client });
@@ -2645,6 +3153,7 @@ export class Channel extends DurableObject<Env> {
 
   /** The files Agent `id` has edited, most recently first, or null when the Channel has no such Agent. */
   touchedFiles(id: AgentId): TouchedFile[] | null {
+    this.requireLegacyAccess();
     return this.agents.has(id) ? this.hooks.touchedFiles(id) : null;
   }
 
@@ -2718,6 +3227,7 @@ export class Channel extends DurableObject<Env> {
 
   /** Every Host on the Channel, with whether it is Live. */
   listHosts(): { hosts: Host[]; cap: number; running: number } {
+    this.requireLegacyAccess();
     return { hosts: this.hosts.list(), cap: this.hostCap(), running: this.hosts.running() };
   }
 
@@ -2733,28 +3243,32 @@ export class Channel extends DurableObject<Env> {
 
   /** Registers one of `person`'s Hosts, or updates its folders and mode, and joins them. */
   registerHost(person: PersonName, request: RegisterHostRequest): Host {
-    this.join(person);
+    this.requireLegacyAccess();
+    this.#joinPerson(person);
     return this.hosts.register(person, request);
   }
 
   /** A signed allow-list change for one of `person`'s Hosts, passed on to the Host to judge (ADR 0028). */
   setHostAllow(person: PersonName, name: string, request: SetHostAllowRequest) {
-    this.join(person);
+    this.requireLegacyAccess();
+    this.#joinPerson(person);
     return this.hosts.setAllow(person, name, request);
   }
 
   removeHost(person: PersonName, name: string): boolean {
+    this.requireLegacyAccess();
     return this.hosts.remove(person, name);
   }
 
   /** Starts an Agent on one of the caller's Person's Hosts (ADR 0015), for the Person or their lead (ADR 0018). */
   async spawnAgent(caller: Caller, request: SpawnAgentRequest): Promise<SpawnResult> {
+    this.requireLegacyAccess();
     // A hand-off names an Agent the Channel knows (ADR 0024); the new session reads its summary.
     if (request.from !== undefined && !this.agents.has(request.from)) {
       return { ok: false, status: 404, reason: `No Agent ${request.from} on this Channel to continue.` };
     }
     if (caller.agent === undefined) {
-      this.join(caller.person);
+      this.#joinPerson(caller.person);
       return this.hosts.spawn({ person: caller.person }, request);
     }
     const lead = this.lead(caller.agent, "start Agents");
@@ -2767,8 +3281,9 @@ export class Channel extends DurableObject<Env> {
    * ADR 0028), or their lead over it.
    */
   stopAgent(caller: Caller, id: AgentId): ControlResult {
+    this.requireLegacyAccess();
     if (caller.agent === undefined) {
-      this.join(caller.person);
+      this.#joinPerson(caller.person);
       return this.hosts.control({ person: caller.person }, id, "stop");
     }
     const lead = this.lead(caller.agent, "stop Agents");
@@ -2778,7 +3293,8 @@ export class Channel extends DurableObject<Env> {
 
   /** Pauses (ends the process of, keeping the session of) or resumes an Agent a Host runs: for a Person only (ADR 0028). */
   controlAgent(person: PersonName, id: AgentId, action: "pause" | "resume"): ControlResult {
-    this.join(person);
+    this.requireLegacyAccess();
+    this.#joinPerson(person);
     return this.hosts.control({ person }, id, action);
   }
 

@@ -32,11 +32,28 @@ import {
   secretDigest,
   validConstraints,
 } from "./executions";
-import { decide, type PolicyContext, validPerson, workspaceParent } from "./policy";
+import {
+  decide,
+  type OwnerConsent,
+  POLICY_ACTIONS,
+  type PolicyContext,
+  PRIVATE_ACTIONS,
+  validPerson,
+  workspaceParent,
+} from "./policy";
 import { type MutationPermit, resourceKey } from "./policy-permits";
 import { administrator, DELEGABLE_ACTIONS, effectiveActions, humanActions, managesPrincipal } from "./principals";
 
 const DAY = 86_400_000;
+export interface ChannelAuthorization {
+  actor: PersonActor | { token: string };
+  action: string;
+  resource: PolicyResource;
+  generation: number;
+  requestId: string;
+  targetExecutionId?: string;
+  credentialExpiresAt?: number;
+}
 interface State {
   organization: NativeOrganization;
   members: Record<string, OrganizationMembership>;
@@ -87,6 +104,7 @@ export class Organization extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS identity_policy (id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS execution_credentials (id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS redemption_codes (digest TEXT PRIMARY KEY, body TEXT NOT NULL, retain_until INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS owner_consents (id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS mutation_permits (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, expires INTEGER NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS directory_outbox (person TEXT PRIMARY KEY, generation TEXT NOT NULL);`);
   }
@@ -522,18 +540,40 @@ export class Organization extends DurableObject<Env> {
   identityCatalog(actor: PersonActor, after = "") {
     const state = this.load();
     if (!state || !validPerson(actor) || state.members[actor.personId]?.status !== "active") return null;
+    const resource: PolicyResource = {
+      kind: "organization",
+      organizationId: state.organization.id,
+      id: state.organization.id,
+    };
+    const context = this.context(state, actor, undefined, true, true);
+    const admin = decide(actor, "agent.view", resource, context).decision === "allow";
+    const own =
+      decide(actor, "agent.view", { ...resource, ownerPersonId: actor.personId }, context).decision === "allow";
+    const visibleWorkspaces = Object.keys(state.workspaces).filter(
+      (workspaceId) =>
+        decide(
+          actor,
+          "agent.view",
+          { kind: "workspace", organizationId: state.organization.id, id: workspaceId },
+          { ...this.context(state, actor, workspaceId, false, true), managedPolicy: true },
+        ).decision === "allow",
+    );
+    // Filter and keyset LIMIT in SQL: never load the entire principal catalog before pagination.
     const items = this.ctx.storage.sql
-      .exec<{ body: string }>("SELECT body FROM principals WHERE id>? ORDER BY id", after)
-      .toArray()
-      .map((row) => JSON.parse(row.body) as AgentPrincipal)
-      .filter(
-        (p) =>
-          managesPrincipal(state, actor.personId, p) ||
-          Object.keys(state.workspaces).some(
-            (w) => humanActions(state, actor.personId, w).includes("agent.view") && !!this.grantFor(p.id, w),
-          ),
+      .exec<{ body: string }>(
+        `SELECT body FROM principals WHERE id>? AND (
+        ?=1 OR (?=1 AND json_extract(body, '$.sponsor.kind')='person' AND json_extract(body, '$.sponsor.id')=?) OR
+        EXISTS(SELECT 1 FROM grants WHERE json_extract(grants.body, '$.principalId')=principals.id AND
+          json_extract(grants.body, '$.workspaceId') IN (SELECT value FROM json_each(?)))
+      ) ORDER BY id LIMIT 101`,
+        after,
+        admin ? 1 : 0,
+        own ? 1 : 0,
+        actor.personId,
+        JSON.stringify(visibleWorkspaces),
       )
-      .slice(0, 101);
+      .toArray()
+      .map((row) => JSON.parse(row.body) as AgentPrincipal);
     return {
       items: items.slice(0, 100),
       next: items.length > 100 ? items[99]?.id : null,
@@ -548,7 +588,13 @@ export class Organization extends DurableObject<Env> {
       !validPerson(actor) ||
       !p ||
       !managesPrincipal(state, actor.personId, p) ||
-      !humanActions(state, actor.personId, workspaceId).includes("agent.grant.manage")
+      !humanActions(state, actor.personId, workspaceId).includes("agent.grant.manage") ||
+      decide(
+        actor,
+        "agent.grant.manage",
+        { kind: "workspace", organizationId: state.organization.id, id: workspaceId },
+        this.context(state, actor, workspaceId, false, true),
+      ).decision !== "allow"
     )
       return null;
     return this.grantFor(principalId, workspaceId) ?? null;
@@ -572,8 +618,43 @@ export class Organization extends DurableObject<Env> {
   }
   async executionPrincipal(token: string) {
     const actor = await this.verifyExecution(token);
-    if (!actor?.actions.includes("agent.view")) return null;
-    return this.identityRow<AgentPrincipal>("principals", actor.principalId) ?? null;
+    if (!actor) return null;
+    const state = this.load();
+    const execution = this.identityRow<AgentExecution>("executions", actor.executionId);
+    const principal = this.identityRow<AgentPrincipal>("principals", actor.principalId);
+    const grant = this.grantFor(actor.principalId, actor.workspaceId);
+    const parsed = parseCredential(token);
+    const credential = parsed ? this.identityRow<StoredCredential>("execution_credentials", parsed.credentialId) : null;
+    const row = this.ctx.storage.sql
+      .exec<{ constraints_body: string }>("SELECT constraints_body FROM executions WHERE id=?", actor.executionId)
+      .toArray()[0];
+    if (!state || !execution || !principal || !grant || !credential || !row) return null;
+    const context: PolicyContext = {
+      available: true,
+      organizationId: state.organization.id,
+      policyRevision: state.organization.policyRevision,
+      workspaceActive: state.workspaces[actor.workspaceId]?.status === "active",
+      managedPolicy: true,
+      verifiedExecution: actor,
+      executionAuthority: {
+        state,
+        execution,
+        principal,
+        grant,
+        credentialExpiresAt: credential.expiresAt,
+        organizationCeiling: this.identityCeiling(state.organization.id),
+        workspacePolicy: this.identityCeiling(actor.workspaceId),
+        constraints: JSON.parse(row.constraints_body) as AgentConstraints,
+      },
+    };
+    return decide(
+      actor,
+      "agent.view",
+      { kind: "workspace", organizationId: state.organization.id, id: actor.workspaceId },
+      context,
+    ).decision === "allow"
+      ? principal
+      : null;
   }
   touchRegisteredExecution(executionId: string, agentId: string): void {
     this.ctx.storage.transactionSync(() => {
@@ -697,105 +778,364 @@ export class Organization extends DurableObject<Env> {
       workspaceId: execution.workspaceId,
     };
   }
-  /** Internal authority RPC; HTTP adapters must resolve the Person, never accept body actors. */
-  async issueMutationPermit(input: {
-    actor: PersonActor | { token: string };
-    action: string;
-    resource: PolicyResource;
-    generation: number;
+  /** Self-only permission explanation; no foreign grant or private-target metadata. */
+  permissions(
+    actor: PersonActor,
+    workspaceId: string,
+  ): NativeResult<Record<string, { decision: string; reason: string }>> {
+    const state = this.load();
+    const revision = state?.organization.policyRevision ?? 0;
+    if (!state || !validPerson(actor))
+      return { ok: false, status: 403, reason: "resource_denied", policyRevision: revision };
+    const resource: PolicyResource = { kind: "workspace", organizationId: state.organization.id, id: workspaceId };
+    const context = { ...this.context(state, actor, workspaceId), managedPolicy: true };
+    if (decide(actor, "workspace.read", resource, context).decision !== "allow")
+      return { ok: false, status: 403, reason: "resource_denied", policyRevision: revision };
+    return {
+      ok: true,
+      value: Object.fromEntries(
+        POLICY_ACTIONS.map((action) => {
+          const { decision, reason } = decide(actor, action, resource, context);
+          return [action, { decision, reason }];
+        }),
+      ),
+      policyRevision: revision,
+    };
+  }
+
+  /** Resolve target ownership from enrolled executions, never from resource/body owner claims. */
+  private consentTarget(workspaceId: string, targetId: string, channel?: string): AgentExecution | undefined {
+    const rows = this.ctx.storage.sql
+      .exec<{ body: string }>(
+        "SELECT body FROM executions WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.legacyAgentId')=? AND json_extract(body, '$.status')='active' ORDER BY json_extract(body, '$.startedAt') DESC LIMIT 1",
+        workspaceId,
+        targetId,
+      )
+      .toArray();
+    const execution = rows[0] ? (JSON.parse(rows[0].body) as AgentExecution) : undefined;
+    return execution && (!channel || execution.legacyChannel === channel) ? execution : undefined;
+  }
+
+  /** Owner-only, action/recipient/target-bound consent; replay cannot renew expired consent. */
+  async mutateConsent(input: {
+    actor: PersonActor;
+    workspaceId: string;
+    id?: string;
+    body: Record<string, unknown>;
+    key: string;
     requestId: string;
-  }): Promise<NativeResult<MutationPermit>> {
-    const verified = "token" in input.actor ? await this.verifyExecution(input.actor.token) : undefined;
-    // All mutable facts are read AFTER credential/Channel verification awaits.
+    remove: boolean;
+    expectedRevision?: number;
+  }): Promise<NativeResult<{ id: string }>> {
+    const fingerprint = Array.from(
+      await secretDigest(canonical([input.body, input.remove, input.expectedRevision])),
+      (b) => b.toString(16).padStart(2, "0"),
+    ).join("");
     return this.ctx.storage.transactionSync(() => {
       const state = this.load();
       const revision = state?.organization.policyRevision ?? 0;
+      const deny = (reason: string, status: 400 | 403 | 409 = 403): NativeResult<{ id: string }> => ({
+        ok: false,
+        status,
+        reason,
+        policyRevision: revision,
+      });
+      if (!state || !validPerson(input.actor) || !text(input.key, 128) || !text(input.requestId, 100))
+        return deny("invalid_request", 400);
+      const prior = input.id
+        ? this.ctx.storage.sql
+            .exec<{ body: string }>("SELECT body FROM owner_consents WHERE id=?", input.id)
+            .toArray()[0]
+        : undefined;
+      const body = input.remove && prior ? (JSON.parse(prior.body) as OwnerConsent) : input.body;
+      const targetId = "targetId" in body ? body.targetId : undefined;
+      const action = body.action;
+      if (typeof targetId !== "string" || typeof action !== "string" || !PRIVATE_ACTIONS.includes(action))
+        return deny("invalid_consent", 400);
+      const target = this.consentTarget(input.workspaceId, targetId);
+      const resource: PolicyResource = {
+        kind: "workspace",
+        organizationId: state.organization.id,
+        id: input.workspaceId,
+        targetId,
+        ownerPersonId: target?.ownerPersonId,
+      };
+      const context = { ...this.context(state, input.actor, input.workspaceId), managedPolicy: true };
+      if (
+        !target ||
+        target.ownerPersonId !== input.actor.personId ||
+        decide(input.actor, action, resource, context).decision !== "allow"
+      )
+        return deny("owner_required");
+      const scope = canonical([input.actor.personId, input.workspaceId, input.id ?? "create", "consent", input.key]);
+      const replay = this.ctx.storage.sql
+        .exec<{ fingerprint: string; result: string; expires: number }>(
+          "SELECT fingerprint,result,expires FROM replay WHERE scope=?",
+          scope,
+        )
+        .toArray()[0];
+      if (replay && replay.expires > Date.now())
+        return replay.fingerprint === fingerprint
+          ? (JSON.parse(replay.result) as NativeResult<{ id: string }>)
+          : deny("idempotency_conflict", 409);
+      if (input.remove && input.expectedRevision !== revision) return deny("revision_conflict", 409);
+      const id = input.id ?? crypto.randomUUID();
+      if (input.remove) this.ctx.storage.sql.exec("DELETE FROM owner_consents WHERE id=?", id);
+      else {
+        const { recipient, expiresAt } = input.body;
+        if (
+          Object.keys(input.body).some((k) => !["targetId", "action", "recipient", "expiresAt"].includes(k)) ||
+          typeof recipient !== "string" ||
+          state.members[recipient]?.status !== "active" ||
+          state.workspaceMembers[input.workspaceId]?.[recipient]?.status !== "active" ||
+          typeof expiresAt !== "number" ||
+          !Number.isSafeInteger(expiresAt) ||
+          expiresAt <= Date.now() ||
+          expiresAt > Date.now() + DAY
+        )
+          return deny("invalid_consent", 400);
+        const consent: OwnerConsent = {
+          ownerPersonId: input.actor.personId,
+          personId: recipient,
+          workspaceId: input.workspaceId,
+          targetId,
+          action,
+          expiresAt,
+        };
+        this.ctx.storage.sql.exec("INSERT INTO owner_consents VALUES(?,?)", id, JSON.stringify(consent));
+      }
+      state.organization.policyRevision++;
+      this.save(state);
+      this.audit(
+        input.actor,
+        action,
+        resource,
+        true,
+        input.remove ? "consent_removed" : "consent_granted",
+        state.organization.policyRevision,
+        input.requestId,
+      );
+      const result: NativeResult<{ id: string }> = {
+        ok: true,
+        value: { id },
+        policyRevision: state.organization.policyRevision,
+      };
+      this.ctx.storage.sql.exec(
+        "INSERT OR REPLACE INTO replay VALUES(?,?,?,?)",
+        scope,
+        fingerprint,
+        JSON.stringify(result),
+        Date.now() + DAY,
+      );
+      return result;
+    });
+  }
+
+  /** Current facts and exact finalized binding, shared by read decisions and permit issuance. */
+  private channelDecision(
+    input: ChannelAuthorization,
+    verified?: VerifiedExecution | null,
+  ): NativeResult<{
+    actor: PersonActor | VerifiedExecution;
+    deadline: number;
+    target?: { principalId: string; executionId: string; ownerPersonId: string };
+  }> {
+    const state = this.load();
+    const revision = state?.organization.policyRevision ?? 0;
+    const deny = (
+      reason: string,
+    ): NativeResult<{
+      actor: PersonActor | VerifiedExecution;
+      deadline: number;
+      target?: { principalId: string; executionId: string; ownerPersonId: string };
+    }> => ({
+      ok: false,
+      status: 403,
+      reason,
+      policyRevision: revision,
+    });
+    if (
+      !state ||
+      !input.resource ||
+      input.resource.kind !== "workspace" ||
+      !text(input.requestId, 200) ||
+      !text(input.resource.channel, 500) ||
+      !text(input.resource.targetId, 500) ||
+      !text(input.resource.operation, 500)
+    )
+      return deny("invalid_permit");
+    const workspace = state.workspaces[input.resource.id];
+    const pending =
+      this.ctx.storage.sql
+        .exec(
+          "SELECT id FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.phase') NOT IN ('done','conflict') LIMIT 1",
+          input.resource.id,
+        )
+        .toArray().length > 0;
+    const completed = this.ctx.storage.sql
+      .exec<{ body: string }>(
+        "SELECT body FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.repo')=? AND json_extract(body, '$.phase')='done' ORDER BY json_extract(body, '$.generation') DESC LIMIT 1",
+        input.resource.id,
+        input.resource.channel,
+      )
+      .toArray()[0];
+    const operation = completed ? (JSON.parse(completed.body) as BindingOperation) : undefined;
+    const linked =
+      !pending &&
+      operation?.mode === "bind" &&
+      operation.generation !== null &&
+      operation.generation + 1 === input.generation &&
+      workspace?.channel === input.resource.channel;
+
+    if (!linked || !Number.isSafeInteger(input.generation) || input.generation <= 0) return deny("binding_mismatch");
+    const actor = verified ?? ("token" in input.actor ? undefined : input.actor);
+    if (!actor) return deny("invalid_actor");
+    const now = Date.now();
+    let context: PolicyContext;
+    let deadline = now + 2000;
+    if (actor.kind === "person" && input.credentialExpiresAt !== undefined) {
+      if (!Number.isFinite(input.credentialExpiresAt)) return deny("credential_expired");
+      deadline = Math.min(deadline, input.credentialExpiresAt);
+    }
+    if (actor.kind === "execution") {
+      const execution = this.identityRow<AgentExecution>("executions", actor.executionId);
+      const principal = this.identityRow<AgentPrincipal>("principals", actor.principalId);
+      const grant = this.grantFor(actor.principalId, actor.workspaceId);
+      const parsed = "token" in input.actor ? parseCredential(input.actor.token) : null;
+      const credential = parsed
+        ? this.identityRow<StoredCredential>("execution_credentials", parsed.credentialId)
+        : null;
+      if (!execution || !principal || !grant || !credential || credential.generation !== execution.credentialGeneration)
+        return deny("execution_scope_denied");
+      const row = this.ctx.storage.sql
+        .exec<{ constraints_body: string }>("SELECT constraints_body FROM executions WHERE id=?", execution.id)
+        .one();
+      deadline = Math.min(deadline, credential.expiresAt, grant.expiresAt);
+      context = {
+        available: true,
+        organizationId: state.organization.id,
+        policyRevision: revision,
+        workspaceActive: workspace?.status === "active",
+        managedPolicy: true,
+        now,
+        verifiedExecution: actor,
+        executionAuthority: {
+          state,
+          execution,
+          principal,
+          grant,
+          credentialExpiresAt: credential.expiresAt,
+          organizationCeiling: this.identityCeiling(state.organization.id),
+          workspacePolicy: this.identityCeiling(actor.workspaceId),
+          constraints: JSON.parse(row.constraints_body) as AgentConstraints,
+        },
+      };
+    } else context = { ...this.context(state, actor, input.resource.id, false, true), managedPolicy: true, now };
+    let targetIdentity: { principalId: string; executionId: string; ownerPersonId: string } | undefined;
+    if (input.action === "agent.view" && input.resource.targetId !== "agents") {
+      const target = this.consentTarget(input.resource.id, input.resource.targetId ?? "", input.resource.channel);
+      if (
+        !target ||
+        target.id !== input.targetExecutionId ||
+        state.members[target.ownerPersonId]?.status !== "active" ||
+        state.workspaceMembers[input.resource.id]?.[target.ownerPersonId]?.status !== "active"
+      )
+        return deny("target_enrollment_required");
+      const principal = this.identityRow<AgentPrincipal>("principals", target.principalId);
+      const grant = this.grantFor(target.principalId, input.resource.id);
+      if (
+        !principal ||
+        !grant ||
+        effectiveActions(
+          state,
+          principal,
+          grant,
+          this.identityCeiling(state.organization.id),
+          this.identityCeiling(input.resource.id),
+          now,
+          target,
+        ).length === 0
+      )
+        return deny("target_enrollment_required");
+      targetIdentity = { principalId: target.principalId, executionId: target.id, ownerPersonId: target.ownerPersonId };
+    }
+    if (PRIVATE_ACTIONS.includes(input.action)) {
+      const target = this.consentTarget(input.resource.id, input.resource.targetId ?? "", input.resource.channel);
+      if (!target || actor.kind !== "person" || input.targetExecutionId !== target.id)
+        return deny("owner_consent_required");
+      if (input.resource.ownerPersonId && input.resource.ownerPersonId !== target.ownerPersonId)
+        return deny("owner_mismatch");
+      input = { ...input, resource: { ...input.resource, ownerPersonId: target.ownerPersonId } };
+      const consent = this.ctx.storage.sql
+        .exec<{ body: string }>(
+          "SELECT body FROM owner_consents WHERE json_extract(body, '$.ownerPersonId')=? AND json_extract(body, '$.personId')=? AND json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.targetId')=? AND json_extract(body, '$.action')=? AND json_extract(body, '$.expiresAt')>? ORDER BY json_extract(body, '$.expiresAt') DESC LIMIT 1",
+          target.ownerPersonId,
+          actor.personId,
+          input.resource.id,
+          input.resource.targetId,
+          input.action,
+          now,
+        )
+        .toArray()[0];
+      if (consent) {
+        context.consent = JSON.parse(consent.body) as OwnerConsent;
+        deadline = Math.min(deadline, context.consent.expiresAt);
+      }
+    }
+    const decision = decide(actor, input.action, input.resource, context);
+    if (decision.decision !== "allow" || deadline <= now) return deny(decision.reason);
+    return {
+      ok: true,
+      value: { actor, deadline, ...(targetIdentity ? { target: targetIdentity } : {}) },
+      policyRevision: revision,
+    };
+  }
+
+  /** Internal RPC: callers resolve native Persons or pass execution credentials for fresh verification. */
+  async authorizeChannelRead(input: ChannelAuthorization) {
+    const verified = "token" in input.actor ? await this.verifyExecution(input.actor.token) : undefined;
+    // Read-only attenuation: this RPC never issues permission for mutation/control.
+    if (
+      ![
+        "workspace.read",
+        "task.read",
+        "agent.view",
+        "channel.update.read",
+        "channel.history.read",
+        "agent.private_transcript.read",
+        "agent.private_screen.read",
+      ].includes(input.action)
+    )
+      return { ok: false as const, status: 403 as const, reason: "read_action_required", policyRevision: 0 };
+    const result = this.channelDecision(input, verified);
+    if (!result.ok || PRIVATE_ACTIONS.includes(input.action))
+      this.audit(
+        verified ?? ("token" in input.actor ? undefined : input.actor),
+        input.action,
+        input.resource,
+        result.ok,
+        result.ok ? "private_read_authorized" : result.reason,
+        result.policyRevision,
+        input.requestId,
+      );
+    return result;
+  }
+
+  /** Internal authority RPC; HTTP adapters must resolve the Person, never accept body actors. */
+  async issueMutationPermit(input: ChannelAuthorization): Promise<NativeResult<MutationPermit>> {
+    const verified = "token" in input.actor ? await this.verifyExecution(input.actor.token) : undefined;
+    return this.ctx.storage.transactionSync(() => {
+      const result = this.channelDecision(input, verified);
+      if (!result.ok) return result;
+      const { actor, deadline } = result.value;
+      const revision = result.policyRevision;
+      const now = Date.now();
       const deny = (reason: string): NativeResult<MutationPermit> => ({
         ok: false,
         status: 403,
         reason,
         policyRevision: revision,
       });
-      if (
-        !state ||
-        !input.resource ||
-        input.resource.kind !== "workspace" ||
-        !text(input.requestId, 200) ||
-        !text(input.resource.channel, 500) ||
-        !text(input.resource.targetId, 500) ||
-        !text(input.resource.operation, 500)
-      )
-        return deny("invalid_permit");
-      const workspace = state.workspaces[input.resource.id];
-      const pending =
-        this.ctx.storage.sql
-          .exec(
-            "SELECT id FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.phase') NOT IN ('done','conflict') LIMIT 1",
-            input.resource.id,
-          )
-          .toArray().length > 0;
-      const completed = this.ctx.storage.sql
-        .exec<{ body: string }>(
-          "SELECT body FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.repo')=? AND json_extract(body, '$.phase')='done' ORDER BY json_extract(body, '$.generation') DESC LIMIT 1",
-          input.resource.id,
-          input.resource.channel,
-        )
-        .toArray()[0];
-      const operation = completed ? (JSON.parse(completed.body) as BindingOperation) : undefined;
-      const linked =
-        !pending &&
-        operation?.mode === "bind" &&
-        operation.generation !== null &&
-        operation.generation + 1 === input.generation &&
-        workspace?.channel === input.resource.channel;
-
-      if (!linked || !Number.isSafeInteger(input.generation) || input.generation <= 0) return deny("binding_mismatch");
-      const actor = verified ?? ("token" in input.actor ? undefined : input.actor);
-      if (!actor) return deny("invalid_actor");
-      const now = Date.now();
-      let context: PolicyContext;
-      let deadline = now + 2000;
-      if (actor.kind === "execution") {
-        const execution = this.identityRow<AgentExecution>("executions", actor.executionId);
-        const principal = this.identityRow<AgentPrincipal>("principals", actor.principalId);
-        const grant = this.grantFor(actor.principalId, actor.workspaceId);
-        const parsed = "token" in input.actor ? parseCredential(input.actor.token) : null;
-        const credential = parsed
-          ? this.identityRow<StoredCredential>("execution_credentials", parsed.credentialId)
-          : null;
-        if (
-          !execution ||
-          !principal ||
-          !grant ||
-          !credential ||
-          credential.generation !== execution.credentialGeneration
-        )
-          return deny("execution_scope_denied");
-        const row = this.ctx.storage.sql
-          .exec<{ constraints_body: string }>("SELECT constraints_body FROM executions WHERE id=?", execution.id)
-          .one();
-        deadline = Math.min(deadline, credential.expiresAt, grant.expiresAt);
-        context = {
-          available: true,
-          organizationId: state.organization.id,
-          policyRevision: revision,
-          workspaceActive: workspace?.status === "active",
-          managedPolicy: true,
-          now,
-          verifiedExecution: actor,
-          executionAuthority: {
-            state,
-            execution,
-            principal,
-            grant,
-            credentialExpiresAt: credential.expiresAt,
-            organizationCeiling: this.identityCeiling(state.organization.id),
-            workspacePolicy: this.identityCeiling(actor.workspaceId),
-            constraints: JSON.parse(row.constraints_body) as AgentConstraints,
-          },
-        };
-      } else context = { ...this.context(state, actor, input.resource.id, false, true), managedPolicy: true, now };
-      const decision = decide(actor, input.action, input.resource, context);
       // These foundations cover Channel local commits; lifecycle/admin writes stay in their existing Org transactions.
       if (
         ![
@@ -807,7 +1147,7 @@ export class Organization extends DurableObject<Env> {
         ].includes(input.action)
       )
         return deny("unsupported_permit_action");
-      if (decision.decision !== "allow" || deadline <= now) return deny(decision.reason);
+      if (deadline <= now) return deny("permit_expired");
       const permit: MutationPermit = {
         id: crypto.randomUUID(),
         actor,

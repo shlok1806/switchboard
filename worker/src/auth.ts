@@ -31,6 +31,7 @@ declare global {
 export type Credential = { kind: "session"; person: PersonName } | { kind: "agent"; tokenHash: string };
 
 export type CredentialResult =
+  | { ok: true; managed: true }
   | { ok: true; credential: Credential; viaCookie: boolean }
   | { ok: false; status: 401 | 403 | 503; reason: string };
 
@@ -104,14 +105,20 @@ export async function readCredential(request: Request, url: URL, env: Env): Prom
   const token = bearer || fromCookie;
   if (!token) return { ok: false, status: 401, reason: "Sign in with GitHub first." };
 
+  if (token.startsWith("m1.")) return { ok: true, managed: true };
+
   if (token.startsWith(AGENT_TOKEN_PREFIX)) {
     return { ok: true, credential: { kind: "agent", tokenHash: await tokenHash(token) }, viaCookie: false };
   }
   const secret = sessionSecret(env, devMode(env, url));
   if (secret === null) return { ok: false, status: 503, reason: "Sign-in is not set up: GitHub App not configured." };
   const person = await verifySession(secret, token);
-  if (person === null)
+  if (person === null) {
+    // Routing hint only; the Channel verifies signature, issuer, expiry and identity.
+    // Legacy failures must not incur another asynchronous signature verification.
+    if (recognizableNativeSession(token)) return { ok: true, managed: true };
     return { ok: false, status: 401, reason: "Your session expired or is not valid. Sign in again." };
+  }
   if (fromCookie !== null && (upgrade || request.method !== "GET")) {
     const origin = request.headers.get("Origin");
     if (origin !== null && origin !== url.origin) {
@@ -150,4 +157,16 @@ export async function readExecutionActor(request: Request, env: Env) {
   const parsed = parseCredential(token);
   if (!parsed) return null;
   return env.ORGANIZATION.getByName(parsed.organizationId).verifyExecution(token);
+}
+
+/** Synchronous routing recognition, never authentication. Native sessions retain P1's wire format. */
+export function recognizableNativeSession(token: string): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") return false;
+  try {
+    const body = parts[1]?.replace(/-/g, "+").replace(/_/g, "/");
+    return body !== undefined && JSON.parse(atob(body)).kind === "native-session";
+  } catch {
+    return false;
+  }
 }

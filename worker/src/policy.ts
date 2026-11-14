@@ -169,6 +169,13 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
     return result("deny", "membership_required");
   const admin = org.role === "owner" || org.role === "admin";
   if (resource.kind === "organization") {
+    if (
+      context.identityPolicy &&
+      context.metadataOnly &&
+      action === "agent.view" &&
+      resource.ownerPersonId === actor.personId
+    )
+      return result("allow", "owned_principal_metadata");
     return admin &&
       (["organization.manage", "organization.member.manage", "workspace.create"].includes(action) ||
         (context.identityPolicy && ["agent.register", "agent.view"].includes(action)))

@@ -1,3 +1,4 @@
+import { authorityRequest } from "./policy-permits";
 import { handleWorkspaceApi } from "./workspace-api";
 // The central Switchboard Worker (ADR 0004). One Channel per GitHub repo (ADR 0007),
 // each a Durable Object named by `owner/repo`. Routes:
@@ -186,7 +187,7 @@ async function handleStream(request: Request, url: URL, channel: ChannelStub, ca
   return channel.fetch(target, { headers: { Upgrade: "websocket" } });
 }
 
-const ROUTES = new Set([
+export const ROUTES = new Set([
   "POST /api/join",
   "GET /api/events",
   "GET /api/persons",
@@ -240,22 +241,37 @@ const AGENT_REFUSED =
   "Tasks for themselves (and a lead acts on its own subtree); Takeovers, roles and everything else a Person " +
   "does need a Person's session.";
 
+/** Real router matcher inventory, also consumed by security exhaustiveness tests. */
+export const CHANNEL_ROUTE_MATCHERS = {
+  tasks: isTaskRoute,
+  agents: matchAgentRoute,
+  claims: matchClaimRoute,
+  branches: matchBranchRoute,
+  takeover: matchTakeoverRoute,
+  hosts: matchHostRoute,
+  skills: matchSkillRoute,
+  brief: matchBriefRoute,
+  artifacts: matchArtifactRoute,
+  librarian: matchLibrarianRoute,
+  settings: matchSettingsRoute,
+};
+
 async function handleChannel(request: Request, url: URL, env: Env, repo: string, path: string): Promise<Response> {
   const route = `${request.method} ${path}`;
   const inner = new URL(url);
   inner.pathname = path;
-  const taskRoute = isTaskRoute(request.method, path);
-  const agentRoute = matchAgentRoute(request.method, path);
-  const claimRoute = matchClaimRoute(request.method, path);
-  const branchRoute = matchBranchRoute(request.method, path);
-  const takeoverTask = matchTakeoverRoute(request.method, path);
-  const hostRoute = matchHostRoute(request.method, path);
-  const skillRoute = matchSkillRoute(request.method, path);
-  const briefRoute = matchBriefRoute(request.method, path);
-  const artifactRoute = matchArtifactRoute(request.method, path);
-  const librarianRoute = matchLibrarianRoute(request.method, path);
+  const taskRoute = CHANNEL_ROUTE_MATCHERS.tasks(request.method, path);
+  const agentRoute = CHANNEL_ROUTE_MATCHERS.agents(request.method, path);
+  const claimRoute = CHANNEL_ROUTE_MATCHERS.claims(request.method, path);
+  const branchRoute = CHANNEL_ROUTE_MATCHERS.branches(request.method, path);
+  const takeoverTask = CHANNEL_ROUTE_MATCHERS.takeover(request.method, path);
+  const hostRoute = CHANNEL_ROUTE_MATCHERS.hosts(request.method, path);
+  const skillRoute = CHANNEL_ROUTE_MATCHERS.skills(request.method, path);
+  const briefRoute = CHANNEL_ROUTE_MATCHERS.brief(request.method, path);
+  const artifactRoute = CHANNEL_ROUTE_MATCHERS.artifacts(request.method, path);
+  const librarianRoute = CHANNEL_ROUTE_MATCHERS.librarian(request.method, path);
   // A Person's only, so an Agent token is refused below as for any route not on its list.
-  const settingsRoute = matchSettingsRoute(request.method, path);
+  const settingsRoute = CHANNEL_ROUTE_MATCHERS.settings(request.method, path);
   if (
     !ROUTES.has(route) &&
     skillRoute === null &&
@@ -276,6 +292,17 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const credential = await readCredential(request, url, env);
   if (!credential.ok) return fail(credential.status, credential.reason);
   const channel = channelOf(env, repo);
+  if ("managed" in credential) {
+    try {
+      const binding = await authorityRequest(async () => await channel.bindingState());
+      const response = await channel.managedRequest(request, repo);
+      if (response.ok && !(await authorityRequest(async () => await channel.bindingCurrent(binding.generation, true))))
+        return fail(404, "resource_denied");
+      return response;
+    } catch {
+      return fail(503, "authority_unavailable");
+    }
+  }
   const admitted = await channel.admit(repo, credential.credential, devMode(env, url));
   if (!admitted.ok) return fail(admitted.status, admitted.reason);
   const caller: Caller = {

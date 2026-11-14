@@ -33,7 +33,7 @@ import type {
 import { CLAIMED_LABEL, holderName } from "../../shared/src/index";
 import type { AgentRoster } from "./agents";
 import type { NewEvent } from "./channel";
-import type { Caller, ClaimResult, Claims } from "./claims";
+import type { Caller, ClaimMutation, ClaimResult, Claims } from "./claims";
 import { holderPerson, lastUpdate } from "./status-comment";
 import type { Tasks } from "./tasks";
 
@@ -119,7 +119,7 @@ export class StaleClaims {
   }
 
   /** A Person moving a Stale Claim to themselves or to one of their own Agents. */
-  async takeover(caller: Caller, number: TaskNumber, to: Holder): Promise<ClaimResult> {
+  async takeover(caller: Caller, number: TaskNumber, to: Holder, mutation?: ClaimMutation): Promise<ClaimResult> {
     // ADR 0002: Agents cannot take Claims from each other, whoever they act for.
     if (caller.agent !== undefined) {
       return { ok: false, status: 403, reason: "Only a Person can take over a Claim. An Agent never can." };
@@ -127,6 +127,7 @@ export class StaleClaims {
     const synced = await this.host.tasks.ensureSynced();
     if (!synced.ok) return synced;
 
+    const prepared = mutation ? await mutation.prepare() : undefined;
     // From here to the write there is no await: the Takeover is atomic.
     const person = caller.person;
     const target = this.checkTarget(person, to);
@@ -150,37 +151,41 @@ export class StaleClaims {
 
     const from = claim.holder;
     const now = new Date().toISOString();
-    this.host.tasks.write({
-      ...task,
-      claim: { ...claim, holder: to, claimedAt: now, stale: false },
-      updatedAt: now,
-    });
-    const stepsCompleted = task.steps.filter((step) => step.done).map((step) => step.text);
-    const last = lastUpdate(this.host.sql, from, number, claim.claimedAt)?.text;
-    const event = this.host.append({
-      type: "takeover",
-      actor: { kind: "person", person },
-      capture: null,
-      task: number,
-      payload: { from, to, stepsCompleted, ...(last === undefined ? {} : { lastUpdate: last }) },
-    });
-    if (from.kind === "agent") {
-      const lost: LostClaim = { task: number, title: task.title, by: person, to, at: event.at, event: event.id };
-      this.host.sql.exec(
-        "INSERT OR REPLACE INTO lost_claims (event, agent, seq, data) VALUES (?, ?, ?, ?)",
-        event.id,
-        from.agentId,
-        event.seq,
-        JSON.stringify(lost),
-      );
-    }
-
     const { claims, agents } = this.host;
-    claims.status.note(
-      number,
-      `Taken over by Person \`${person}\` for ${claims.describe(to)} from ${claims.describe(from)}, which was Gone.`,
-      now,
-    );
+    const write = () => {
+      this.host.tasks.write({
+        ...task,
+        claim: { ...claim, holder: to, claimedAt: now, stale: false },
+        updatedAt: now,
+      });
+      const stepsCompleted = task.steps.filter((step) => step.done).map((step) => step.text);
+      const last = lastUpdate(this.host.sql, from, number, claim.claimedAt)?.text;
+      const event = this.host.append({
+        type: "takeover",
+        actor: { kind: "person", person },
+        capture: null,
+        task: number,
+        payload: { from, to, stepsCompleted, ...(last === undefined ? {} : { lastUpdate: last }) },
+      });
+      if (from.kind === "agent") {
+        const lost: LostClaim = { task: number, title: task.title, by: person, to, at: event.at, event: event.id };
+        this.host.sql.exec(
+          "INSERT OR REPLACE INTO lost_claims (event, agent, seq, data) VALUES (?, ?, ?, ?)",
+          event.id,
+          from.agentId,
+          event.seq,
+          JSON.stringify(lost),
+        );
+      }
+
+      claims.status.note(
+        number,
+        `Taken over by Person \`${person}\` for ${claims.describe(to)} from ${claims.describe(from)}, which was Gone.`,
+        now,
+      );
+    };
+    if (prepared) prepared.commit(write);
+    else write();
     const fromPerson = holderPerson(agents, from);
     const toPerson = holderPerson(agents, to);
     const acting = { actor: { kind: "person" as const, person }, capture: null, person };

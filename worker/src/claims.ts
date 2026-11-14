@@ -79,6 +79,11 @@ function sameHolder(a: Holder, b: Holder): boolean {
     : b.kind === "person" && a.person === b.person;
 }
 
+/** Request-local managed hook. Preparation follows Task sync; commit must run synchronously. */
+export interface ClaimMutation {
+  prepare(): Promise<{ commit(write: () => void): void }>;
+}
+
 export class Claims {
   constructor(private readonly host: ClaimHost) {}
 
@@ -109,9 +114,10 @@ export class Claims {
     };
   }
 
-  async claim(caller: Caller, number: TaskNumber, forAgent?: AgentId): Promise<ClaimResult> {
+  async claim(caller: Caller, number: TaskNumber, forAgent?: AgentId, mutation?: ClaimMutation): Promise<ClaimResult> {
     const synced = await this.host.tasks.ensureSynced();
     if (!synced.ok) return synced;
+    const prepared = mutation ? await mutation.prepare() : undefined;
 
     // From here to the write there is no await: the Claim is atomic.
     const who = this.resolve(caller);
@@ -126,7 +132,9 @@ export class Claims {
     if (task.claim !== undefined) {
       if (sameHolder(task.claim.holder, holder)) return { ok: true, task };
       const heldBy = task.claim.holder;
-      this.record(acting, "claim.refused", number, { heldBy });
+      const record = () => this.record(acting, "claim.refused", number, { heldBy });
+      if (prepared) prepared.commit(record);
+      else record();
       // A Stale Claim still stands: only a Person can take it over (ADR 0002).
       const stale = task.claim.stale ? " Its Claim is Stale: only a Person can take it over." : "";
       return { ok: false, status: 409, reason: `Task #${number} is held by ${holderName(heldBy)}.${stale}`, heldBy };
@@ -137,14 +145,18 @@ export class Claims {
     }
 
     const now = new Date().toISOString();
-    this.host.tasks.write({
-      ...task,
-      status: "claimed",
-      claim: { task: number, holder, claimedAt: now, stale: false },
-      updatedAt: now,
-    });
-    this.record(acting, "claim", number, { holder });
-    this.host.status.note(number, `Claimed by ${this.describe(holder)}.`, now);
+    const write = () => {
+      this.host.tasks.write({
+        ...task,
+        status: "claimed",
+        claim: { task: number, holder, claimedAt: now, stale: false },
+        updatedAt: now,
+      });
+      this.record(acting, "claim", number, { holder });
+      this.host.status.note(number, `Claimed by ${this.describe(holder)}.`, now);
+    };
+    if (prepared) prepared.commit(write);
+    else write();
     const assignee = holderPerson(this.host.agents, holder);
 
     await this.mirror(acting, "claim", number, async (gitHub) => [
@@ -161,9 +173,10 @@ export class Claims {
     return this.current(number);
   }
 
-  async release(caller: Caller, number: TaskNumber): Promise<ClaimResult> {
+  async release(caller: Caller, number: TaskNumber, mutation?: ClaimMutation): Promise<ClaimResult> {
     const synced = await this.host.tasks.ensureSynced();
     if (!synced.ok) return synced;
+    const prepared = mutation ? await mutation.prepare() : undefined;
 
     const who = this.resolve(caller);
     if (!who.ok) return who;
@@ -173,9 +186,13 @@ export class Claims {
     const { task, holder } = held;
 
     const { claim: _released, ...rest } = task;
-    this.host.tasks.write({ ...rest, status: "open", updatedAt: new Date().toISOString() });
-    this.record(acting, "claim.release", number, { holder });
-    this.host.status.note(number, `Released by ${this.describe(holder)}.`);
+    const write = () => {
+      this.host.tasks.write({ ...rest, status: "open", updatedAt: new Date().toISOString() });
+      this.record(acting, "claim.release", number, { holder });
+      this.host.status.note(number, `Released by ${this.describe(holder)}.`);
+    };
+    if (prepared) prepared.commit(write);
+    else write();
     const assignee = holderPerson(this.host.agents, holder);
 
     await this.mirror(acting, "release", number, async (gitHub) => [
@@ -195,9 +212,15 @@ export class Claims {
     return this.current(number);
   }
 
-  async completeStep(caller: Caller, number: TaskNumber, index: number): Promise<ClaimResult> {
+  async completeStep(
+    caller: Caller,
+    number: TaskNumber,
+    index: number,
+    mutation?: ClaimMutation,
+  ): Promise<ClaimResult> {
     const synced = await this.host.tasks.ensureSynced();
     if (!synced.ok) return synced;
+    const prepared = mutation ? await mutation.prepare() : undefined;
 
     const who = this.resolve(caller);
     if (!who.ok) return who;
@@ -212,13 +235,17 @@ export class Claims {
     if (step.done) return { ok: true, task };
 
     const steps = task.steps.map((s) => (s.index === index ? { ...s, done: true } : s));
-    this.host.tasks.write({
-      ...task,
-      steps,
-      stepsDone: steps.filter((s) => s.done).length,
-      updatedAt: new Date().toISOString(),
-    });
-    this.record(acting, "step.complete", number, { step: index, text: step.text });
+    const write = () => {
+      this.host.tasks.write({
+        ...task,
+        steps,
+        stepsDone: steps.filter((s) => s.done).length,
+        updatedAt: new Date().toISOString(),
+      });
+      this.record(acting, "step.complete", number, { step: index, text: step.text });
+    };
+    if (prepared) prepared.commit(write);
+    else write();
 
     await this.mirror(acting, "step.complete", number, async (gitHub) => [
       [

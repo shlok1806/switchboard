@@ -4,6 +4,7 @@ import { channelRepo, devMode, readCookie, readNativeActor, sessionSecret } from
 import { handleExecutionApi, isExecutionPath } from "./execution-api";
 import { canonical } from "./organization";
 import { workspaceParent } from "./policy";
+import { authorityRequest } from "./policy-permits";
 import { signPayload, tokenHash, verifyPayload } from "./session";
 
 /** Native administration only. No Channel content or P2/P3 action is exposed here. */
@@ -26,7 +27,7 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
       status,
     );
   try {
-    const actor = await readNativeActor(request, url, env);
+    const actor = await authorityRequest(() => readNativeActor(request, url, env));
     if (!actor) return error(401, "native_authentication_required");
     const directory = env.IDENTITY_DIRECTORY.getByName("directory-v1");
     const secret = sessionSecret(env, devMode(env, url));
@@ -130,7 +131,7 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
       organizationId = await directory.invitationOrganization(actor, id);
     if (!organizationId) return error(404, "resource_denied");
     const org = env.ORGANIZATION.getByName(organizationId);
-    using metadata = await org.metadata(actor);
+    using metadata = await authorityRequest(async () => await org.metadata(actor));
     if (!metadata && collection !== "invitations") return error(404, "resource_denied");
     const revision = metadata?.policyRevision ?? 0;
     if (collection === "workspaces" && sub === "channel" && !target && ["POST", "DELETE"].includes(request.method)) {
@@ -160,6 +161,34 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
       return result.ok
         ? reply({ ...result, requestId })
         : error(result.status, result.reason, result.policyRevision, result.operationId);
+    }
+
+    if (
+      collection === "workspaces" &&
+      id &&
+      sub === "consents" &&
+      ((request.method === "POST" && !target) || (request.method === "DELETE" && target))
+    ) {
+      const result = await authorityRequest(
+        async () =>
+          await org.mutateConsent({
+            actor,
+            workspaceId: id,
+            id: target,
+            body,
+            key,
+            requestId,
+            remove: request.method === "DELETE",
+            expectedRevision,
+          }),
+      );
+      return result.ok ? reply({ ...result, requestId }) : error(result.status, result.reason, result.policyRevision);
+    }
+
+    if (collection === "workspaces" && id && sub === "permissions" && !target && request.method === "GET") {
+      if (url.searchParams.has("actor")) return error(403, "self_permissions_only");
+      const result = await authorityRequest(async () => await org.permissions(actor, id));
+      return result.ok ? reply({ ...result, requestId }) : error(result.status, result.reason, result.policyRevision);
     }
 
     if (request.method === "GET") {

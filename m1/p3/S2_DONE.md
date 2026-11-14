@@ -1,0 +1,11 @@
+# S2a complete — ready for manager runtime gate
+- Preserved and hardened the existing managed facade, D1 lifecycle exception, D2 recognition and D4 bounds (`worker/src/channel.ts:794`; `worker/src/auth.ts:116`; `worker/src/managed-retention.ts:6`).
+- Managed reads, SafeAgent, owner consents, writes/permits, update budgets and catalog pagination are implemented; evidence: `m1/p3/P3_IMPLEMENTATION_NOTES.md:74`.
+- PARTIAL real-router inventory now asserts explicit expected actions/denial (`worker/test/managed-route-inventory.test.ts:90`); complete native/integration/frame inventory is S2b.
+- S2b fail-closed: Memory; skill-file byte/chunk reads/uploads and skill publication; artifact PUT; Brief writes; librarian/GitHub proxy; settings/Langfuse.
+- S2b fail-closed: Hosts list/register/allow/remove and spawn/stop/pause/resume; task creation; tool-call telemetry; non-D1 Agent controls.
+- S2b fail-closed: shared history/events/search/roster constituents; continuation/handOff. Durable authority export/reconciliation is deferred to S2b.
+- Streams remain denied for S3; MCP/OAuth remain denied for S4 (`worker/src/managed-channel.ts:11`, `:103`).
+- Observed: Worker typecheck and lint exit 0; git diff --check exit 0. Existing tests/configuration/packages and CLI unchanged.
+- Runtime tests not run: supervisor-confirmed sandbox EROFS; manager owns execution/gating. No runtime passes claimed.
+- Known limits: bounded local audit without export, at-least-once Update retries, correlated PR outcomes without exactly-once guarantees; no managed stream/private-wrapper operational demonstration.
