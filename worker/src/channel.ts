@@ -1085,12 +1085,14 @@ export class Channel extends DurableObject<Env> {
       const organizationId = workspaceParent(fields.workspaceId);
       const channel = this.access.repo();
       const generation = this.binding.generation;
+      // A finalized link retains its operation ID for binding replay evidence.
+      // The state distinguishes it from pending transitions.
       if (
         !organizationId ||
         !channel ||
         this.binding.version !== 1 ||
         this.binding.state !== "linked" ||
-        this.binding.operation !== null ||
+        this.binding.operation === null ||
         this.binding.workspace !== fields.workspaceId
       )
         return deny(403);
@@ -1203,14 +1205,16 @@ export class Channel extends DurableObject<Env> {
   registeredExecutionActive(id: AgentId, executionId: string): boolean {
     const association = this.managedAssociation(id);
     const agent = this.agents.find(id);
+    // Match finalized binding semantics; operation is cleared only on unlink.
     return (
       association?.executionId === executionId &&
       association.active === 1 &&
       agent !== null &&
       agent !== undefined &&
       agent.presence !== "gone" &&
+      this.binding.version === 1 &&
       this.binding.state === "linked" &&
-      this.binding.operation === null
+      this.binding.operation !== null
     );
   }
 
