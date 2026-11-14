@@ -296,9 +296,17 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
     try {
       const binding = await authorityRequest(async () => await channel.bindingState());
       const response = await channel.managedRequest(request, repo);
+      // Managed HTTP replies are finite snapshots. Finish the RPC body while its
+      // producing call is alive, rather than forwarding an RPC-backed stream
+      // through another request context. Fence release after body preparation.
+      const body = response.body === null ? null : await response.arrayBuffer();
       if (response.ok && !(await authorityRequest(async () => await channel.bindingCurrent(binding.generation, true))))
         return fail(404, "resource_denied");
-      return response;
+      return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     } catch {
       return fail(503, "authority_unavailable");
     }

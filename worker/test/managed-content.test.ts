@@ -45,7 +45,12 @@ describe("managed shared content", () => {
     expect(page.status).toBe(200);
     expect(page.headers.get("Content-Security-Policy")).toContain("sandbox");
     expect(page.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    const copy = page.clone();
     expect(await page.text()).toBe("<h1>hi</h1>");
+    expect(await copy.text()).toBe("<h1>hi</h1>");
+    const nextPage = await nativeFetch(`/r/${f.repo}/api/artifacts/own/page`, f.token);
+    expect(nextPage.status).toBe(200);
+    expect(await nextPage.text()).toBe("<h1>hi</h1>");
     const denied = await nativeFetch(`/r/${f.repo}/api/artifacts/foreign`, f.token, { method: "DELETE" });
     expect(denied.status).toBe(403);
     const deleted = await nativeFetch(`/r/${f.repo}/api/artifacts/own`, f.token, { method: "DELETE" });
