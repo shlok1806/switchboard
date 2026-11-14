@@ -312,9 +312,17 @@ describe("native P1 storage and policy", () => {
         "CREATE TRIGGER fail_replay BEFORE INSERT ON replay BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
       );
     });
-    await expect(
-      mutate({ kind: "organization.rename", name: "must rollback" }, owner, "rollback", before),
-    ).rejects.toThrow();
+    await runInDurableObject(stub(), async (object) => {
+      await expect(
+        object.mutate({
+          actor: owner,
+          command: { kind: "organization.rename", name: "must rollback" },
+          key: "rollback",
+          requestId: "rollback",
+          expectedRevision: before,
+        }),
+      ).rejects.toThrow("injected failure");
+    });
     expect(await stub().metadata(owner)).toMatchObject({ name: "Org A", policyRevision: before });
     expect((await stub().auditRecords(owner))?.filter((a) => a.action === "organization.rename")).toEqual([]);
     await runInDurableObject(stub(), (_object, state) => {

@@ -347,3 +347,28 @@ Deviations / Escalations:
 - No dependencies, network requests, credential-file reads, git writes, deploys, existing test changes or remote operations performed.
 
 Final saved-state gate (after restart fixture and S3_DONE.md): individually captured `npm run typecheck` **0**, `npm run lint` **0**, focused eight-file `npx biome check` **0**, `git diff --check` **0**. Completion handoff: `m1/p1/S3_DONE.md:1`. Runtime tests remain **not run**; manager commands are in that file.
+
+### S3 fix 1
+
+Read the complete failing manager log `../engineering-ops/projects/switchboard-m1/p1_logs/S3/06_worker_test.log` and its `summary.tsv` (external read only). Only Worker tests failed: reported 17 failed, 474 passed, two skipped, three unhandled errors, runtime crash/restart and shutdown timeout. Worker typecheck/lint and CLI/Dashboard typechecks exited zero in that manager run. This is historical manager evidence, not a local runtime pass.
+
+Failures → diagnosis → fixes:
+
+- **Eleven Worker terminal failures** (`worker/test/terminal.test.ts:127`, `:148`, `:161`, `:181`, `:195`, `:212`, `:241`, `:249`, `:265`, `:276`, `:294`): S3 inserted an empty identity tag plus binding metadata into Person sockets. Legacy watcher classification requires an absent second identity tag; treating metadata/empty padding as an identity excludes all Person watchers and suppresses their close notifications. Fix: remove the empty padding (`worker/src/channel.ts:2105`), separate binding metadata from identity tags (`:2122`), locate generation by prefix rather than third-slot position (`:2133`), and consistently use identity-only tags for socket routing/history/close/watchers (`:1914`, `:1986`, `:2013`, `:2171`, `:2371`, `:2413`, `:2425`, `:2530`, `:2616`). Generation fences remain enforced independently. Existing terminal tests are untouched and provide the regression assertions.
+- **HTTP history transition test timeout, missing `latestEvents` RPC, associated unhandled rejection**: the new test shadowed the prototype RPC method with a Vitest mock; workerd rejected that receiver instead of invoking the mock, so the test waited forever for its start signal. Fix: pause private `withLocalEvents` while retaining the real prototype `latestEvents` RPC (`worker/test/workspace-binding.test.ts:604`); the delayed response must still be denied with 403 (`:620`), exercising Worker result-release fencing (`worker/src/index.ts:377`). No denial assertion weakened.
+- **Injected SQL failure unhandled rejection**: the new Channel rollback test sent a synchronous throwing transaction over RPC (`worker/src/channel.ts:790`, `:813`). Catch the deliberately injected exception inside `runInDurableObject` (`worker/test/workspace-binding.test.ts:122`), still asserting the exact failure and unchanged durable/cache snapshot (`:125`). The manager log also printed the analogous Organization injected failure (`worker/src/organization.ts:214`, `:482`); apply local exception assertion to this Package 1-owned test (`worker/test/organizations.test.ts:315`). State/revision/audit/replay rollback and successful retry assertions remain (`:326`, `:329`, `:332`). No baseline test edited.
+- **Five additional legacy timeouts**: concurrent claims (`worker/test/claims.test.ts:84`), Proxy registration (`worker/test/proxy.test.ts:201`), Gemini/Codex Interrupts (`worker/test/relay.test.ts:836`), stale takeover (`worker/test/stale-claims.test.ts:233`), transcript wrapper response (`worker/test/transcript.test.ts:235`). The manager log reports only timeouts, with first-test elapsed times around 40 seconds, followed by runtime teardown/crash errors. These do not establish five independent source defects. **Inference only:** runtime contention/teardown from the broken history test may contribute; causation is unverified. No timeout increase, assertion change or unrelated workflow edit. They remain required rerun targets.
+- **Pool exit, deleteAllDurableObjects, WebSocket disconnect, shutdown timeout**: the log shows outstanding HTTP history work during resets, missing-RPC rejection, then fatal runtime termination. Fixing the hanging fixture addresses a concrete outstanding-work cause; the complete crash/shutdown outcome still requires manager verification. Do not count it resolved without a runtime rerun.
+
+Checks actually executed locally with Node 22 PATH, in `worker/`:
+
+- `npx biome check --write src/channel.ts test/workspace-binding.test.ts test/organizations.test.ts`: exit 0, three files, no fixes on final run.
+- `npm run typecheck`: exit 0 after final code/test edits.
+- `npm run lint`: exit 0 after final code/test edits, 158 files.
+- `npx vitest run test/workspace-binding.test.ts test/terminal.test.ts test/claims.test.ts test/proxy.test.ts test/relay.test.ts test/stale-claims.test.ts test/transcript.test.ts`: exit 1 before assertions, `listen EPERM: operation not permitted 127.0.0.1`.
+- `npx vitest run test/organizations.test.ts test/workspace-binding.test.ts test/m1-migration.test.ts`: exit 1 before assertions, same listener EPERM.
+- `git diff --check`: exit 0 before this notes append; final check below. Full suites not run. No runtime pass claimed.
+
+Escalations: local listener restrictions prevent verifying the fixes and distinguishing the five legacy timeouts from runtime-wide disruption. Manager must rerun the failing gate; this revision does not claim the full gate is green. No architectural/trust-boundary change, dependency, network call, baseline-test edit, git write, credential read or deployment.
+
+Final `git diff --check` after notes append: exit 0.

@@ -917,7 +917,7 @@ export class Channel extends DurableObject<Env> {
    * someone removed from the repo stops seeing the Channel even without a new call.
    */
   private async recheckMembers(): Promise<void> {
-    const persons = new Set(this.ctx.getWebSockets().flatMap((ws) => this.ctx.getTags(ws).slice(0, 1)));
+    const persons = new Set(this.ctx.getWebSockets().flatMap((ws) => this.socketIdentityTags(ws).slice(0, 1)));
     await this.access.recheck(persons);
     await this.watchMembers();
   }
@@ -1911,7 +1911,7 @@ export class Channel extends DurableObject<Env> {
       throw new Error("Managed Channel access is closed until P3.");
     for (const { holder, events } of pages) {
       if (events !== null) continue;
-      const [person, tag] = this.ctx.getTags(holder.ws);
+      const [person, tag] = this.socketIdentityTags(holder.ws);
       const who = tag?.startsWith(HOST_TAG) ? tag.slice(HOST_TAG.length) : (holder.asked.agent ?? person ?? "");
       unavailable.push({
         ...(tag?.startsWith(HOST_TAG) ? { host: who as HostId } : {}),
@@ -1983,7 +1983,7 @@ export class Channel extends DurableObject<Env> {
 
   /** Asks one socket for a page of the Local Events it keeps: its page, or null when it does not answer in time. */
   private askHistory(holder: HistoryHolder): Promise<ChannelEvent[] | null> {
-    const [person, tag] = this.ctx.getTags(holder.ws);
+    const [person, tag] = this.socketIdentityTags(holder.ws);
     if (person === undefined || tag === undefined) return Promise.resolve(null);
     const id = crypto.randomUUID();
     return new Promise((resolve) => {
@@ -2010,7 +2010,7 @@ export class Channel extends DurableObject<Env> {
   private historyAnswered(ws: WebSocket, body: Record<string, unknown>): void {
     const read = typeof body.id === "string" ? this.historyReads.get(body.id) : undefined;
     if (read === undefined) return;
-    const [person, tag] = this.ctx.getTags(ws);
+    const [person, tag] = this.socketIdentityTags(ws);
     if (person !== read.person || tag !== read.tag) return;
     if (typeof body.error === "string") {
       read.answer(null);
@@ -2102,9 +2102,7 @@ export class Channel extends DurableObject<Env> {
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(
       server,
-      agent === null
-        ? [name, "", `binding:${generation}`]
-        : [name, agentTag(agent as AgentId), `binding:${generation}`],
+      agent === null ? [name, `binding:${generation}`] : [name, agentTag(agent as AgentId), `binding:${generation}`],
     );
     // Everything below is synchronous, so no other Event can be appended
     // between the backlog and the live stream: none is missed or sent twice.
@@ -2120,6 +2118,11 @@ export class Channel extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** Binding metadata must not occupy the legacy Person/Agent/Host identity slots. */
+  private socketIdentityTags(ws: WebSocket): string[] {
+    return this.ctx.getTags(ws).filter((tag) => !tag.startsWith("binding:"));
+  }
+
   /**
    * The stream is receive-only except for what a wrapper says about its own Agent: its Hook
    * and Proxy Events (with the reply on the same socket), what it holds for the next turn,
@@ -2127,7 +2130,7 @@ export class Channel extends DurableObject<Env> {
    * over HTTP.
    */
   override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    const bindingTag = this.ctx.getTags(ws)[2];
+    const bindingTag = this.ctx.getTags(ws).find((tag) => tag.startsWith("binding:"));
     if (this.managedClosed() || (bindingTag ?? "binding:0") !== `binding:${this.binding.generation}`) {
       ws.close(1008, "Managed Channel access is closed until P3.");
       return;
@@ -2166,7 +2169,7 @@ export class Channel extends DurableObject<Env> {
     ) {
       return;
     }
-    const [person, tag] = this.ctx.getTags(ws);
+    const [person, tag] = this.socketIdentityTags(ws);
     if (person === undefined) return;
     if (type === "history.page") {
       this.historyAnswered(ws, frame as Record<string, unknown>);
@@ -2365,7 +2368,7 @@ export class Channel extends DurableObject<Env> {
     } catch {
       // Already closed.
     }
-    const [person, tag] = this.ctx.getTags(ws);
+    const [person, tag] = this.socketIdentityTags(ws);
     if (person !== undefined && tag?.startsWith(HOST_TAG)) {
       await this.hosts.detached(person, tag.slice(HOST_TAG.length + person.length + 1));
     }
@@ -2407,7 +2410,7 @@ export class Channel extends DurableObject<Env> {
   private watchersOf(id: AgentId): WebSocket[] {
     return this.ctx.getWebSockets().filter((ws) => {
       if (ws.readyState !== WebSocket.READY_STATE_OPEN) return false;
-      if (this.ctx.getTags(ws)[1] !== undefined) return false;
+      if (this.socketIdentityTags(ws)[1] !== undefined) return false;
       return (ws.deserializeAttachment() as WatchAttachment | null)?.watch?.includes(id) === true;
     });
   }
@@ -2419,7 +2422,9 @@ export class Channel extends DurableObject<Env> {
 
   private watchersMessage(id: AgentId): TerminalWatchersMessage {
     const watchers = this.watchersOf(id);
-    const persons = [...new Set(watchers.map((ws) => this.ctx.getTags(ws)[0] ?? ""))].filter((p) => p !== "").sort();
+    const persons = [...new Set(watchers.map((ws) => this.socketIdentityTags(ws)[0] ?? ""))]
+      .filter((p) => p !== "")
+      .sort();
     return { type: "terminal.watchers", agent: id, count: watchers.length, persons };
   }
 
@@ -2523,7 +2528,7 @@ export class Channel extends DurableObject<Env> {
 
   /** `person`'s sockets that carry the stream: theirs and their wrappers', not their Hosts'. */
   private personSockets(person: PersonName): WebSocket[] {
-    return this.ctx.getWebSockets(person).filter((ws) => !this.ctx.getTags(ws)[1]?.startsWith(HOST_TAG));
+    return this.ctx.getWebSockets(person).filter((ws) => !this.socketIdentityTags(ws)[1]?.startsWith(HOST_TAG));
   }
 
   private append<K extends EventType>(event: NewEvent<K>): ChannelEvent {
@@ -2609,7 +2614,7 @@ export class Channel extends DurableObject<Env> {
 
   private broadcast(message: StreamMessage): void {
     for (const ws of this.ctx.getWebSockets()) {
-      if (!this.ctx.getTags(ws)[1]?.startsWith(HOST_TAG)) send(ws, message);
+      if (!this.socketIdentityTags(ws)[1]?.startsWith(HOST_TAG)) send(ws, message);
     }
   }
 }

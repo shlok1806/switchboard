@@ -119,7 +119,9 @@ describe("Channel binding fence foundation", () => {
       state.storage.sql.exec(`CREATE TRIGGER fail_binding BEFORE INSERT ON m1_binding_outbox
         BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
     });
-    await expect(channel().prepareBinding(workspace, "operation-a", 0)).rejects.toThrow();
+    await runInDurableObject(channel(), (object) => {
+      expect(() => object.prepareBinding(workspace, "operation-a", 0)).toThrow("injected failure");
+    });
     expect(await channel().bindingState()).toMatchObject({ generation: 0, state: "unlinked", workspace: null });
   });
 
@@ -600,7 +602,11 @@ it("discards HTTP history results admitted before a pending transition", async (
     release = resolve;
   });
   await runInDurableObject(f.channel, (object) => {
-    vi.spyOn(object, "latestEvents").mockImplementation(async () => {
+    // Keep the prototype RPC method intact; pause its internal history merge.
+    vi.spyOn(
+      object as unknown as { withLocalEvents(): Promise<{ events: []; unavailable: [] }> },
+      "withLocalEvents",
+    ).mockImplementation(async () => {
       started();
       await waiting;
       return { events: [], unavailable: [] };
