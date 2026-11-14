@@ -302,7 +302,9 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       const body = response.body === null ? null : await response.arrayBuffer();
       if (response.ok && !(await authorityRequest(async () => await channel.bindingCurrent(binding.generation, true))))
         return fail(404, "resource_denied");
-      return new Response(body, {
+      // HEAD and null-body statuses must stay bodyless, including an empty buffer.
+      const bodyless = request.method === "HEAD" || [101, 204, 205, 304].includes(response.status);
+      return new Response(bodyless ? null : body, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,

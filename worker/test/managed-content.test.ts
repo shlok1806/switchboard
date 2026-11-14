@@ -1,5 +1,6 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { sha256Hex } from "../../shared/src/index";
 import { managedReadRoute } from "../src/managed-channel";
 import { nativeFetch } from "./m1-helpers";
 import { managedAuthorityFixture } from "./managed-helpers";
@@ -16,10 +17,12 @@ describe("managed shared content", () => {
   it("keeps artifact HTML sandboxed and enforces owner deletion inside a permit", async () => {
     const f = await managedAuthorityFixture();
     const channel = env.CHANNEL.getByName(f.repo);
-    await runInDurableObject(channel, (object, state) => {
+    await runInDurableObject(channel, async (object, state) => {
       Object.assign(object, {
         binding: { version: 1, generation: 1, workspace: f.workspaceId, operation: "binding", state: "linked" },
       });
+      const bytes = new TextEncoder().encode("<h1>hi</h1>");
+      const digest = await sha256Hex(bytes);
       for (const [name, owner] of [
         ["own", "alice"],
         ["foreign", "bob"],
@@ -29,16 +32,12 @@ describe("managed shared content", () => {
           name,
           owner,
           name,
-          12,
-          "fixture-digest",
+          bytes.length,
+          digest,
           JSON.stringify({ person: owner }),
           new Date().toISOString(),
         );
-        state.storage.sql.exec(
-          "INSERT INTO artifact_chunks VALUES(?,1,0,?)",
-          name,
-          new TextEncoder().encode("<h1>hi</h1>"),
-        );
+        state.storage.sql.exec("INSERT INTO artifact_chunks VALUES(?,1,0,?)", name, bytes);
       }
     });
     const page = await nativeFetch(`/r/${f.repo}/api/artifacts/own/page`, f.token);
