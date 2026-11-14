@@ -92,9 +92,12 @@ export class IdentityDirectory extends DurableObject<Env> {
       return { ok: false, status: 403, reason: "creation_rate_limited", policyRevision: 0 };
     if (!reserved) return { ok: false, status: 409, reason: "idempotency_conflict", policyRevision: 0 };
     const org = this.env.ORGANIZATION.getByName(reserved);
-    const result = await org.initialize(reserved, name, actor, requestId);
+    using result = await org.initialize(reserved, name, actor, requestId);
     if (result.ok) await org.repairDirectory();
-    return result;
+    // Forward data, not the RPC result's disposer/capability, across a second RPC boundary.
+    return result.ok
+      ? { ok: true, value: { ...result.value }, policyRevision: result.policyRevision }
+      : { ok: false, status: result.status, reason: result.reason, policyRevision: result.policyRevision };
   }
   /** Internal outbox sink, never authority. Even fabricated candidates disclose nothing. */
   indexCandidate(person: string, organization: string) {
@@ -116,8 +119,8 @@ export class IdentityDirectory extends DurableObject<Env> {
     const organizations: NativeOrganization[] = [];
     for (const { organization } of candidates) {
       // Failure propagates closed; no stale-index fallback or metadata disclosure.
-      const current = await this.env.ORGANIZATION.getByName(organization).metadata(actor);
-      if (current) organizations.push(current);
+      using current = await this.env.ORGANIZATION.getByName(organization).metadata(actor);
+      if (current) organizations.push(structuredClone(current));
     }
     return { organizations, next: candidates.length === 50 ? (candidates.at(-1)?.organization ?? null) : null };
   }

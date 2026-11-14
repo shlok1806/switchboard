@@ -20,12 +20,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Finish both halves of the handshake before reset() deletes the socket's owner. */
+async function closeSocket(socket: WebSocket, closed: Promise<unknown>, owner: DurableObjectStub<Channel>) {
+  socket.close();
+  await closed;
+  await vi.waitFor(async () => {
+    expect(await runInDurableObject(owner, (_object, state) => state.getWebSockets().length)).toBe(0);
+  });
+}
+
 async function bindingFixture() {
   const { actor, token } = await nativeIdentity();
-  const created = await nativeDirectory().createOrganization(actor, "Org", "create", "request");
+  using created = await nativeDirectory().createOrganization(actor, "Org", "create", "request");
   if (!created.ok) throw new Error(created.reason);
   const org = env.ORGANIZATION.getByName(created.value.id);
-  const result = await org.mutate({
+  using result = await org.mutate({
     actor,
     key: "workspace",
     requestId: "workspace",
@@ -44,7 +53,8 @@ async function bindingFixture() {
   installGitHubApp(app);
   const boundChannel = env.CHANNEL.getByName(github.repo);
   const change = async (mode: "bind" | "unbind", key: string, extra: Record<string, unknown> = {}, as = token) => {
-    const revision = (await org.metadata(actor))?.policyRevision ?? 0;
+    using metadata = await org.metadata(actor);
+    const revision = metadata?.policyRevision ?? 0;
     return nativeFetch(`/api/m1/workspaces/${workspaceId}/channel`, as, {
       method: mode === "bind" ? "POST" : "DELETE",
       headers: { "Idempotency-Key": key, "If-Match": String(revision) },
@@ -96,13 +106,17 @@ describe("Channel binding fence foundation", () => {
         headers: { Upgrade: "websocket" },
       }),
     );
-    expect(response.status).toBe(101);
     const socket = response.webSocket;
     if (!socket) throw new Error("Missing socket");
     socket.accept();
     const closed = new Promise<number>((resolve) => socket.addEventListener("close", (event) => resolve(event.code)));
-    expect(await channel().prepareBinding(workspace, "operation-a", 0)).toBe(true);
-    expect(await closed).toBe(1008);
+    try {
+      expect(response.status).toBe(101);
+      expect(await channel().prepareBinding(workspace, "operation-a", 0)).toBe(true);
+      expect(await closed).toBe(1008);
+    } finally {
+      await closeSocket(socket, closed, channel());
+    }
   });
 
   it("replays pending preparation and rejects stale generations and competing workspaces", async () => {
@@ -482,13 +496,17 @@ describe("binding operation recovery", () => {
           });
         }
         if (snapshot.state !== "unlinked") {
-          expect(
-            await f.channel.admit(f.repo, { kind: "session", person: "native-human" as PersonName }, true),
-          ).toMatchObject({ ok: false, status: 403 });
+          using admission = await f.channel.admit(
+            f.repo,
+            { kind: "session", person: "native-human" as PersonName },
+            true,
+          );
+          expect(admission).toMatchObject({ ok: false, status: 403 });
         } else if (mode === "unbind") {
           // Only final journal acknowledgment may be missing after both sides cleared the link.
           expect(interruption).toBe("done");
-          expect(await f.org.workspace(f.actor, f.workspaceId, true)).not.toHaveProperty("channel");
+          using workspace = await f.org.workspace(f.actor, f.workspaceId, true);
+          expect(workspace).not.toHaveProperty("channel");
         }
         await runInDurableObject(local ? f.channel : f.org, (_object, state) => {
           state.storage.sql.exec("DROP TRIGGER s3_fault");
@@ -496,7 +514,8 @@ describe("binding operation recovery", () => {
         const retry = await f.change(mode, "recover-again", { operationId: journal.id });
         expect(retry.status).toBe(200);
         expect(await retry.json()).toMatchObject({ value: { id: journal.id, phase: "done" } });
-        expect(await f.channel.bindingState()).toMatchObject({
+        using recovered = await f.channel.bindingState();
+        expect(recovered).toMatchObject({
           generation: mode === "bind" ? 1 : 2,
           state: mode === "bind" ? "linked" : "unlinked",
         });
@@ -605,11 +624,17 @@ describe("binding transition result boundaries", () => {
     expect((await f.change("unbind", "detach")).status).toBe(200);
     expect((await upgrade(0)).status).toBe(403);
     const fresh = await upgrade(2);
-    expect(fresh.status).toBe(101);
-    fresh.webSocket?.accept();
-    fresh.webSocket?.close();
-    expect(await f.channel.bindingCurrent(0)).toBe(false);
-    expect(await f.channel.bindingCurrent(2)).toBe(true);
+    const socket = fresh.webSocket;
+    if (!socket) throw new Error("Missing socket");
+    socket.accept();
+    const closed = new Promise<void>((resolve) => socket.addEventListener("close", () => resolve(), { once: true }));
+    try {
+      expect(fresh.status).toBe(101);
+      expect(await f.channel.bindingCurrent(0)).toBe(false);
+      expect(await f.channel.bindingCurrent(2)).toBe(true);
+    } finally {
+      await closeSocket(socket, closed, f.channel);
+    }
   });
 });
 
@@ -663,23 +688,31 @@ it("rejects changed-mode idempotency replay and competing operations", async () 
 });
 
 it("fences queued WS dispatch from old generations after legacy access resumes", async () => {
-  await runInDurableObject(channel(), async (object, state) => {
-    const response = await object.fetch(
-      new Request("https://channel.test/?person=alice", { headers: { Upgrade: "websocket" } }),
-    );
-    response.webSocket?.accept();
-    const server = state.getWebSockets()[0];
-    if (!server) throw new Error("Missing server socket");
-    const close = vi.spyOn(server, "close");
-    expect(object.prepareBinding(workspace, "bind-queued", 0)).toBe(true);
-    expect(object.finishBinding(workspace, "bind-queued", 1, false)).toBe(true);
-    expect(object.prepareBinding(workspace, "unbind-queued", 1, true)).toBe(true);
-    expect(object.finishBinding(workspace, "unbind-queued", 2, true)).toBe(true);
-    close.mockClear();
-    object.webSocketMessage(server, JSON.stringify({ type: "hook" }));
-    expect(close).toHaveBeenCalledWith(1008, "Managed Channel access is closed until P3.");
-    expect(object.bindingCurrent(0)).toBe(false);
-  });
+  const response = await channel().fetch(
+    new Request("https://channel.test/?person=alice", { headers: { Upgrade: "websocket" } }),
+  );
+  const socket = response.webSocket;
+  if (!socket) throw new Error("Missing socket");
+  socket.accept();
+  const closed = new Promise<void>((resolve) => socket.addEventListener("close", () => resolve(), { once: true }));
+  try {
+    await runInDurableObject(channel(), (object, state) => {
+      const server = state.getWebSockets()[0];
+      if (!server) throw new Error("Missing server socket");
+      const close = vi.spyOn(server, "close");
+      expect(object.prepareBinding(workspace, "bind-queued", 0)).toBe(true);
+      expect(object.finishBinding(workspace, "bind-queued", 1, false)).toBe(true);
+      expect(object.prepareBinding(workspace, "unbind-queued", 1, true)).toBe(true);
+      expect(object.finishBinding(workspace, "unbind-queued", 2, true)).toBe(true);
+      close.mockClear();
+      object.webSocketMessage(server, JSON.stringify({ type: "hook" }));
+      expect(close).toHaveBeenCalledWith(1008, "Managed Channel access is closed until P3.");
+      expect(object.bindingCurrent(0)).toBe(false);
+    });
+  } finally {
+    // Answer the server-initiated close before the next reset destroys the DO.
+    await closeSocket(socket, closed, channel());
+  }
 });
 
 it("keeps linked HTTP history persons and stream data closed until Package 3", async () => {

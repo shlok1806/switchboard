@@ -115,7 +115,7 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
     if (collection === "operations" && id && !sub && request.method === "GET") {
       const parent = workspaceParent(id);
       if (!parent) return error(404, "resource_denied");
-      const value = await env.ORGANIZATION.getByName(parent).bindingOperation(actor, id);
+      using value = await env.ORGANIZATION.getByName(parent).bindingOperation(actor, id);
       return value ? reply({ value, requestId }) : error(404, "resource_denied");
     }
     let organizationId =
@@ -128,7 +128,7 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
       organizationId = await directory.invitationOrganization(actor, id);
     if (!organizationId) return error(404, "resource_denied");
     const org = env.ORGANIZATION.getByName(organizationId);
-    const metadata = await org.metadata(actor);
+    using metadata = await org.metadata(actor);
     if (!metadata && collection !== "invitations") return error(404, "resource_denied");
     const revision = metadata?.policyRevision ?? 0;
     if (collection === "workspaces" && sub === "channel" && !target && ["POST", "DELETE"].includes(request.method)) {
@@ -143,7 +143,7 @@ export async function handleWorkspaceApi(request: Request, url: URL, env: Env): 
       const token = authorization ? authorization.slice(7).trim() : readCookie(request, SESSION_COOKIE);
       const session = token ? await verifyPayload(secret, token) : null;
       if (typeof session?.login !== "string") return error(401, "native_authentication_required");
-      const result = await org.coordinateBinding({
+      using result = await org.coordinateBinding({
         actor,
         login: session.login,
         workspaceId: id ?? "",
