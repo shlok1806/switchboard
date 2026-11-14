@@ -174,7 +174,7 @@ async function handleStream(request: Request, url: URL, channel: ChannelStub, ca
   // A Host's socket (ADR 0015): one of its Person's own Hosts, never an Agent's.
   const host = url.searchParams.get("host");
   if (host !== null && caller.agent !== undefined) return fail(403, HOST_AGENT_REFUSED);
-  // The Durable Object only ever sees the admitted Person and Agent, never a credential.
+  // The internal stream upgrade carries only the admitted Person, Agent and generation.
   const target = new URL("https://channel/stream");
   target.searchParams.set("person", caller.person);
   target.searchParams.set("generation", url.searchParams.get("bindingGeneration") ?? "-1");
@@ -183,7 +183,7 @@ async function handleStream(request: Request, url: URL, channel: ChannelStub, ca
   // A Host that answers history reads (ADR 0037).
   if (host !== null && url.searchParams.get("history") === "1") target.searchParams.set("history", "1");
   if (after !== null) target.searchParams.set("after", after);
-  return channel.fetch(target, { headers: { Upgrade: "websocket" } });
+  return channel.fetch(new Request(target, { headers: { Upgrade: "websocket" } }));
 }
 
 const ROUTES = new Set([
@@ -240,7 +240,16 @@ const AGENT_REFUSED =
   "Tasks for themselves (and a lead acts on its own subtree); Takeovers, roles and everything else a Person " +
   "does need a Person's session.";
 
-async function handleChannel(request: Request, url: URL, env: Env, repo: string, path: string): Promise<Response> {
+/** Runs inside the Channel DO so dispatch and the release fence need no further RPCs. */
+export async function handleChannel(
+  request: Request,
+  url: URL,
+  env: Env,
+  repo: string,
+  path: string,
+  channel: ChannelStub,
+  bindingCurrent: (generation: number) => boolean,
+): Promise<Response> {
   const route = `${request.method} ${path}`;
   const inner = new URL(url);
   inner.pathname = path;
@@ -275,7 +284,6 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
 
   const credential = await readCredential(request, url, env);
   if (!credential.ok) return fail(credential.status, credential.reason);
-  const channel = channelOf(env, repo);
   const admitted = await channel.admit(repo, credential.credential, devMode(env, url));
   if (!admitted.ok) return fail(admitted.status, admitted.reason);
   const caller: Caller = {
@@ -370,11 +378,11 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   try {
     response = await dispatch();
   } catch (error) {
-    if (!(await channel.bindingCurrent(admitted.generation ?? -1)))
+    if (!bindingCurrent(admitted.generation ?? -1))
       return fail(403, "Channel binding changed; managed access is closed until P3.");
     throw error;
   }
-  if (!(await channel.bindingCurrent(admitted.generation ?? -1))) {
+  if (!bindingCurrent(admitted.generation ?? -1)) {
     void response.body?.cancel();
     return fail(403, "Channel binding changed; managed access is closed until P3.");
   }
@@ -423,7 +431,7 @@ export default {
       }
       const repo = channelRepo(env, named);
       if (repo === null) return fail(404, `There is no Channel for ${named} here.`);
-      return handleChannel(request, url, env, repo, api[2]);
+      return channelOf(env, repo).fetch(request);
     }
 
     const page = DASHBOARD_PATH.exec(url.pathname);

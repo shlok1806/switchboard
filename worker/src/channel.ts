@@ -106,6 +106,7 @@ import { Alarms } from "./alarms";
 import { ARTIFACTS_SCHEMA, type ArtifactResult, Artifacts } from "./artifacts";
 import { askChannel, type ChannelAnswer, type ChannelQuestion, DEFAULT_QUIET_CLAIM_HOURS } from "./ask";
 import type { Credential } from "./auth";
+import { channelRepo } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
 import { BRIEF_SCHEMA, Brief, type BriefResult, migrateBrief } from "./brief";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
@@ -113,6 +114,7 @@ import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Direct
 import { type CodeChange, type GitHub, gitHubFor, readerFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } from "./hosts";
+import { handleChannel } from "./index";
 import { LangfuseProject, type StoredLangfuse } from "./langfuse";
 import { LIBRARIAN_SCHEMA, librarianFeed, moveLibrarianCursor } from "./librarian";
 import { type GrantResult, McpGrants } from "./mcp/grants";
@@ -2091,9 +2093,31 @@ export class Channel extends DurableObject<Env> {
    * is its wrapper's: only it may send that Agent's Hook and Proxy Events.
    */
   override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const api = /^\/r\/([^/]+\/[^/]+)(\/api\/.*)$/.exec(url.pathname);
+    if (api?.[1] !== undefined && api[2] !== undefined) {
+      let named: string;
+      try {
+        named = decodeURIComponent(api[1]);
+      } catch {
+        return new Response("Unknown Channel", { status: 404 });
+      }
+      const repo = channelRepo(this.env, named);
+      if (repo === null) return new Response("Unknown Channel", { status: 404 });
+      // Use the existing route handlers with local methods. In particular the final
+      // generation fence must share this DO's execution context with result release.
+      return handleChannel(
+        request,
+        url,
+        this.env,
+        repo,
+        api[2],
+        this as unknown as DurableObjectStub<Channel>,
+        (generation) => this.bindingCurrent(generation),
+      );
+    }
     if (this.managedClosed()) return new Response("Managed Channel access is closed until P3.", { status: 403 });
     const generation = this.binding.generation;
-    const url = new URL(request.url);
     if (url.searchParams.has("generation") && Number(url.searchParams.get("generation")) !== generation)
       return new Response("Binding changed", { status: 403 });
     const name = url.searchParams.get("person");
