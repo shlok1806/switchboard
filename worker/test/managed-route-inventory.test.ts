@@ -144,7 +144,7 @@ describe("managed RPC bypass closure", () => {
       brief: [
         ["GET", "/api/brief", "channel.update.read"],
         ["GET", "/api/brief/guide", "channel.update.read"],
-        ["PUT", "/api/brief/guide", null],
+        ["PUT", "/api/brief/guide", "channel.update.write"],
       ],
       artifacts: [
         ["GET", "/api/artifacts", "channel.update.read"],
@@ -229,20 +229,23 @@ describe("managed RPC bypass closure", () => {
         const response = await nativeFetch(`/r/${f.repo}${path}`, f.token, { method });
         const memory = binding.state === "linked" && binding.version === 1 && path === "/api/memory";
         const skillFiles = binding.state === "linked" && binding.version === 1 && path === "/api/skill-files/read";
+        const brief = binding.state === "linked" && binding.version === 1 && path === "/api/brief/guide";
         const artifact = binding.state === "linked" && binding.version === 1 && path === "/api/artifacts/guide";
         expect(response.status, `${binding.state}/${binding.version}: ${method} ${path}`).toBe(
-          memory ? (method === "GET" ? 200 : 403) : skillFiles || artifact ? 400 : 404,
+          memory ? (method === "GET" ? 200 : 403) : brief ? 403 : skillFiles || artifact ? 400 : 404,
         );
         expect(await response.json()).toEqual(
           memory
             ? method === "GET"
               ? { notes: [] }
               : { ok: false, reason: "memory_requires_agent" }
-            : artifact
-              ? { ok: false, reason: "invalid_artifact" }
-              : skillFiles
-                ? { ok: false, reason: "invalid_skill_chunks" }
-                : { ok: false, reason: "resource_denied" },
+            : brief
+              ? { ok: false, reason: "brief_requires_agent" }
+              : artifact
+                ? { ok: false, reason: "invalid_artifact" }
+                : skillFiles
+                  ? { ok: false, reason: "invalid_skill_chunks" }
+                  : { ok: false, reason: "resource_denied" },
         );
       }
     }

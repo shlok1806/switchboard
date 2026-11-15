@@ -87,10 +87,11 @@ export interface AdminAuditRecord {
   action: string;
   resource: PolicyResource;
   decision: "allow" | "deny";
-  outcome: "committed" | "denied";
+  outcome: "committed" | "denied" | "external_pending" | "external_intent" | "pr_created" | "pr_failed";
   reason: string;
   policyRevision: number;
   target?: { kind: "person" | "invitation" | "principal" | "execution"; id: string };
+  mutationId?: string;
   count?: number;
   lastTimestamp?: number;
 }

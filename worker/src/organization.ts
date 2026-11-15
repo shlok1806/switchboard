@@ -32,6 +32,7 @@ import {
   secretDigest,
   validConstraints,
 } from "./executions";
+import { managedOutcome, OUTCOME_BATCH_SIZE, outcomeAuditId } from "./managed-outcomes";
 import {
   decide,
   type OwnerConsent,
@@ -106,7 +107,8 @@ export class Organization extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS redemption_codes (digest TEXT PRIMARY KEY, body TEXT NOT NULL, retain_until INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS owner_consents (id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS mutation_permits (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, expires INTEGER NOT NULL, body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS directory_outbox (person TEXT PRIMARY KEY, generation TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS directory_outbox (person TEXT PRIMARY KEY, generation TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS audit_request_decision ON audit(json_extract(body, '$.requestId'), json_extract(body, '$.reason'), json_extract(body, '$.policyRevision'));`);
   }
   private load(): State | undefined {
     const row = this.ctx.storage.sql.exec<{ body: string }>("SELECT body FROM aggregate WHERE id=1").toArray()[0];
@@ -1168,8 +1170,142 @@ export class Organization extends DurableObject<Env> {
         deadline,
         JSON.stringify(permit),
       );
-      this.audit(actor, input.action, input.resource, true, "permit_issued", revision, input.requestId);
+      this.audit(
+        actor,
+        input.action,
+        input.resource,
+        true,
+        "permit_issued",
+        revision,
+        input.requestId,
+        undefined,
+        undefined,
+        permit.id,
+      );
       return { ok: true, value: permit, policyRevision: revision };
+    });
+  }
+  /** Internal audit sink. Historical outcomes confer no present content or mutation authority. */
+  recordChannelOutcomes(batch: import("./managed-outcomes").ManagedOutcome[]): string[] {
+    if (!Array.isArray(batch) || batch.length < 1 || batch.length > OUTCOME_BATCH_SIZE) return [];
+    // An unverifiable historical row cannot poison unrelated evidence in the batch.
+    // Each acknowledgment still follows its own atomic, fully validated audit append.
+    const seen = new Map<string, string>();
+    for (const candidate of batch) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const outcome = managedOutcome(candidate.table, candidate.id, candidate);
+      if (!outcome) continue;
+      const id = outcomeAuditId(outcome);
+      const body = canonical(outcome);
+      if (seen.has(id) && seen.get(id) !== body) return [];
+      seen.set(id, body);
+    }
+    return batch.flatMap((candidate) => this.#recordChannelOutcome(candidate));
+  }
+  #recordChannelOutcome(candidate: import("./managed-outcomes").ManagedOutcome): string[] {
+    const batch = [candidate];
+    const state = this.load();
+    if (!state || !this.env.ORGANIZATION.idFromName(state.organization.id).equals(this.ctx.id)) return [];
+    const records: { id: string; body: string; at: number }[] = [];
+    for (const candidate of batch) {
+      if (!candidate || typeof candidate !== "object") return [];
+      const outcome = managedOutcome(candidate.table, candidate.id, candidate);
+      if (
+        !outcome ||
+        outcome.resource.organizationId !== state.organization.id ||
+        workspaceParent(outcome.resource.id) !== state.organization.id ||
+        !state.workspaces[outcome.resource.id] ||
+        !POLICY_ACTIONS.includes(outcome.action)
+      )
+        return [];
+      // Accept historical commits after revocation/unlink, but never from a foreign Channel.
+      const linked = this.ctx.storage.sql
+        .exec(
+          "SELECT id FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.repo')=? AND json_extract(body, '$.mode')='bind' AND json_extract(body, '$.phase')='done' LIMIT 1",
+          outcome.resource.id,
+          outcome.resource.channel,
+        )
+        .toArray().length;
+      if (!linked) return [];
+      const actor = outcome.actor;
+      if (actor.kind === "person") {
+        if (!state.members[actor.personId]) return [];
+      } else if (actor.kind === "execution") {
+        const execution = this.identityRow<AgentExecution>("executions", actor.executionId);
+        if (
+          !execution ||
+          execution.principalId !== actor.principalId ||
+          execution.workspaceId !== outcome.resource.id ||
+          actor.workspaceId !== outcome.resource.id
+        )
+          return [];
+      } else return [];
+      // Correlate to a decision actually issued here. The internal sink cannot mint authority.
+      // Pre-export rows used permit id as their key; recover its request id while retained.
+      const permit = this.identityRow<MutationPermit>("mutation_permits", outcome.id);
+      const requestId = permit?.requestId ?? outcome.requestId;
+      const decisions = this.ctx.storage.sql
+        .exec<{ body: string }>(
+          "SELECT body FROM audit WHERE json_extract(body, '$.requestId')=? AND json_extract(body, '$.reason')='permit_issued' AND json_extract(body, '$.policyRevision')=? LIMIT 10",
+          requestId,
+          outcome.policyRevision,
+        )
+        .toArray();
+      if (
+        !decisions.some(({ body }) => {
+          const decision = JSON.parse(body) as AdminAuditRecord;
+          return (
+            (outcome.table === "managed_outcome_outbox"
+              ? decision.mutationId === outcome.id || (!decision.mutationId && permit?.id === outcome.id)
+              : outcome.id === requestId) &&
+            decision.action === outcome.action &&
+            canonical(decision.actor) === canonical(outcome.actor) &&
+            canonical(decision.resource) === canonical(outcome.resource) &&
+            decision.timestamp <= outcome.at
+          );
+        })
+      )
+        return [];
+      const id = outcomeAuditId(outcome);
+      const denied = ["local_restriction_denied", "update_budget_exhausted", "pr_failed"].includes(outcome.outcome);
+      const record: AdminAuditRecord = {
+        id,
+        timestamp: outcome.at,
+        requestId,
+        ...(outcome.table === "managed_outcome_outbox" ? { mutationId: outcome.id } : {}),
+        actor,
+        action: outcome.action,
+        resource: outcome.resource,
+        policyRevision: outcome.policyRevision,
+        decision: denied ? "deny" : "allow",
+        outcome:
+          outcome.outcome.startsWith("external_") || outcome.outcome.startsWith("pr_")
+            ? (outcome.outcome as AdminAuditRecord["outcome"])
+            : denied
+              ? "denied"
+              : "committed",
+        reason: `channel_outcome:${outcome.outcome}`,
+      };
+      const body = canonical(record);
+      const existing = this.ctx.storage.sql
+        .exec<{ body: string }>("SELECT body FROM audit WHERE id=?", id)
+        .toArray()[0];
+      // Conflicting replay never overwrites an immutable audit fact or acknowledges it.
+      if ((existing && existing.body !== body) || records.some((record) => record.id === id && record.body !== body))
+        return [];
+      records.push({ id, body, at: outcome.at });
+    }
+    return this.ctx.storage.transactionSync(() => {
+      for (const record of records)
+        this.ctx.storage.sql.exec(
+          "INSERT OR IGNORE INTO audit VALUES(?,?,?,?,1,?)",
+          record.id,
+          record.at,
+          record.body,
+          null,
+          record.at,
+        );
+      return records.map((record) => record.id);
     });
   }
   private enqueue(person: string) {
@@ -1199,6 +1335,7 @@ export class Organization extends DurableObject<Env> {
     requestId: string,
     command?: OrganizationCommand,
     identityTarget?: AdminAuditRecord["target"],
+    mutationId?: string,
   ) {
     const now = Date.now();
     // One redacted denial per actor/action/resource/reason/minute bounds amplification.
@@ -1239,6 +1376,7 @@ export class Organization extends DurableObject<Env> {
       outcome: allowed ? "committed" : "denied",
       reason,
       policyRevision: revision,
+      ...(mutationId ? { mutationId: mutationId.slice(0, 100) } : {}),
       target:
         identityTarget ??
         (command && "personId" in command

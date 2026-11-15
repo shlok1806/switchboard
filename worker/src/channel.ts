@@ -1,5 +1,6 @@
-import { ARTIFACT_CSP, checkArtifact, toBase64 } from "../../shared/src/index";
-import { appendManagedOutcome } from "./managed-retention";
+import { ARTIFACT_CSP, checkArtifact, cleanBriefWrite, toBase64 } from "../../shared/src/index";
+import { managedOutcome, OUTCOME_BATCH_SIZE, OUTCOME_TABLES, outcomeAuditId } from "./managed-outcomes";
+import { appendManagedOutcome, MANAGED_OUTCOME_TTL_MS } from "./managed-retention";
 // One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
 // named by `owner/repo` (ADR 0007). It owns the Channel's Persons, who may join
 // (write access to the repo, and the Agent tokens), its append-only Event stream
@@ -741,6 +742,7 @@ export class Channel extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     const due = this.alarms.takeDue();
     try {
+      if (this.binding.state === "linked" && due.has("managed-outcomes")) await this.#exportManagedOutcomes();
       if (due.has("tasks")) await this.tasks.alarm();
       if (due.has("presence")) await this.agents.expireSilent();
       if (due.has("executions")) await this.retryManagedEnds();
@@ -750,6 +752,88 @@ export class Channel extends DurableObject<Env> {
     } finally {
       await this.alarms.arm();
     }
+  }
+
+  /** Queue durably inside the same transaction as the managed outcome. */
+  #queueManagedOutcomes(): void {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO alarm_deadlines VALUES('managed-outcomes',?) ON CONFLICT(job) DO UPDATE SET at=MIN(at,excluded.at)",
+      Date.now() + 1000,
+    );
+  }
+
+  /** Bounded, redacted batches; lost replies replay and acknowledgments compare the original row. */
+  async #exportManagedOutcomes(): Promise<void> {
+    // No new storage or RPC work on an unlinked Channel's alarm path.
+    const binding = this.binding;
+    if (binding.version !== 1 || binding.state !== "linked" || !binding.workspace || !binding.operation) return;
+    const organizationId = workspaceParent(binding.workspace);
+    if (!organizationId) return;
+    const current = () =>
+      this.binding.version === 1 &&
+      this.binding.state === "linked" &&
+      this.binding.generation === binding.generation &&
+      this.binding.workspace === binding.workspace &&
+      this.binding.operation === binding.operation;
+    // Persist a retry before the RPC, including crashes after the authority commits.
+    await this.alarms.set("managed-outcomes", Date.now() + 60_000);
+    if (!current()) return;
+    let remaining = false;
+    for (const table of OUTCOME_TABLES) {
+      const sql = this.ctx.storage.sql;
+      sql.exec(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, body TEXT NOT NULL)`);
+      sql.exec(
+        `DELETE FROM ${table} WHERE COALESCE(json_extract(body, '$.at'),0)<=?`,
+        Date.now() - MANAGED_OUTCOME_TTL_MS,
+      );
+      // Retained historical/unverifiable rows must not starve later evidence.
+      // Persist before transport so a lost reply also advances to the next bounded batch.
+      sql.exec("CREATE TABLE IF NOT EXISTS managed_outcome_cursors (name TEXT PRIMARY KEY, after_id TEXT NOT NULL)");
+      const after =
+        sql.exec<{ after_id: string }>("SELECT after_id FROM managed_outcome_cursors WHERE name=?", table).toArray()[0]
+          ?.after_id ?? "";
+      const rows = sql
+        .exec<{ id: string; body: string }>(
+          `SELECT id,body FROM ${table} WHERE id>? AND (?='managed_outcome_outbox' OR json_extract(body, '$.outcome') IN ('pr_created','pr_failed')) ORDER BY id LIMIT ?`,
+          after,
+          table,
+          OUTCOME_BATCH_SIZE,
+        )
+        .toArray();
+      sql.exec("INSERT OR REPLACE INTO managed_outcome_cursors VALUES(?,?)", table, rows.at(-1)?.id ?? "");
+      const prepared = rows.flatMap((row) => {
+        try {
+          const outcome = managedOutcome(table, row.id, JSON.parse(row.body));
+          return outcome &&
+            outcome.resource.organizationId === organizationId &&
+            outcome.resource.id === binding.workspace
+            ? [{ row, outcome }]
+            : [];
+        } catch {
+          return [];
+        }
+      });
+      if (prepared.length) {
+        try {
+          const acknowledged = await authorityRequest(() =>
+            this.env.ORGANIZATION.getByName(organizationId).recordChannelOutcomes(
+              prepared.map(({ outcome }) => outcome),
+            ),
+          );
+          if (!current()) return;
+          const ids = new Set(acknowledged);
+          this.ctx.storage.transactionSync(() => {
+            for (const { row, outcome } of prepared)
+              if (ids.has(outcomeAuditId(outcome)))
+                sql.exec(`DELETE FROM ${table} WHERE id=? AND body=?`, row.id, row.body);
+          });
+        } catch {
+          // The durable retry survives transport failure; never delete unacknowledged evidence.
+        }
+      }
+      remaining ||= sql.exec(`SELECT id FROM ${table} LIMIT 1`).toArray().length > 0;
+    }
+    if (current() && !remaining) await this.alarms.set("managed-outcomes", null);
   }
 
   /** The GitHub for this Channel's repo, or null when the App is not configured. */
@@ -1066,6 +1150,7 @@ export class Channel extends DurableObject<Env> {
     const caller = verified ? this.#managedCaller(verified, login) : undefined;
     if (!caller || !current()) throw new ManagedReadFailure(404);
     let outcome = "committed";
+    let intentRevision = 0;
     const prepare = async (intent = false) => {
       // Preparation (including artifact hashing) may yield before requesting a permit.
       if (!current()) throw new ManagedReadFailure(404);
@@ -1084,11 +1169,12 @@ export class Channel extends DurableObject<Env> {
       const result = await authorityRequest(async () => await org.issueMutationPermit(input));
       if (!result.ok || !current()) throw new ManagedReadFailure(404);
       const permit = result.value;
+      if (intent) intentRevision = permit.policyRevision;
 
       const permits = new LocalMutationPermits(this.ctx.storage.sql);
       permits.install(permit);
       return {
-        commit: (write: () => void) =>
+        commit: (write: () => void) => {
           this.ctx.storage.transactionSync(() => {
             if (
               !current() ||
@@ -1098,13 +1184,16 @@ export class Channel extends DurableObject<Env> {
               throw new ManagedReadFailure(404);
             if (intent)
               appendManagedOutcome(this.ctx.storage.sql, "managed_external_outcomes", input.requestId, {
+                requestId: input.requestId,
                 actor: permit.actor,
                 action: permit.action,
                 resource: permit.resource,
+                policyRevision: permit.policyRevision,
                 outcome: "external_pending",
               });
             // Reserve evidence capacity before append/broadcast/Relay side effects.
             appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
+              requestId: input.requestId,
               actor: permit.actor,
               action: permit.action,
               resource: permit.resource,
@@ -1113,6 +1202,7 @@ export class Channel extends DurableObject<Env> {
             });
             write();
             appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
+              requestId: input.requestId,
               actor: permit.actor,
               action: permit.action,
               resource: permit.resource,
@@ -1120,9 +1210,45 @@ export class Channel extends DurableObject<Env> {
               outcome: intent ? "external_intent" : outcome,
               at: Date.now(),
             });
-          }),
+            this.#queueManagedOutcomes();
+          });
+          this.ctx.waitUntil(this.alarms.arm());
+        },
       };
     };
+    if (input.resource.operation === "brief.write") {
+      // Response includes page content: admit and release that read independently of the write permit.
+      const readInput = { ...input, action: "channel.update.read" };
+      const admitted = await authorityRequest(async () => await org.authorizeChannelRead(readInput));
+      if (!admitted.ok || !current()) throw new ManagedReadFailure(404);
+      const page = input.resource.targetId?.slice("brief/".length) ?? "";
+      const checked = cleanBriefWrite(page, body);
+      const prepared = await prepare();
+      if (!caller.agent) return managedError(403, "brief_requires_agent");
+      if (!checked.ok) return managedError(400, "invalid_brief");
+      let result: ReturnType<Channel["writeBriefPage"]> | undefined;
+      prepared.commit(() => {
+        result = this.#writeBriefPage(
+          {
+            person: caller.person,
+            agent: caller.agent,
+            ...(this.agents.find(caller.agent as AgentId)?.librarian ? { librarian: true as const } : {}),
+          },
+          page,
+          checked.write,
+        );
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      const released = await authorityRequest(async () => await org.authorizeChannelRead(readInput));
+      if (!released.ok || !current()) throw new ManagedReadFailure(404);
+      if (!result) throw new ManagedReadFailure(404);
+      return result.ok
+        ? Response.json(
+            { ok: true, ...result.value },
+            { status: result.value.written ? 201 : 200, headers: { "Cache-Control": "no-store" } },
+          )
+        : managedError(result.status, "resource_denied");
+    }
     if (input.resource.operation === "memory.write") {
       // Preserve the existing Agent-only writer predicate; never accept a body author.
       const note = cleanNote(body);
@@ -1253,11 +1379,14 @@ export class Channel extends DurableObject<Env> {
             requestId: input.requestId,
             action: input.action,
             resource: input.resource,
+            policyRevision: intentRevision,
             outcome: pr ? "pr_created" : "pr_failed",
             pr: pr?.number,
             at: Date.now(),
           });
+          this.#queueManagedOutcomes();
         });
+        this.ctx.waitUntil(this.alarms.arm());
       },
     };
     let result: ClaimResult;
@@ -2563,6 +2692,14 @@ export class Channel extends DurableObject<Env> {
     write: WriteBriefRequest,
   ): BriefResult<{ page: BriefPage; written: boolean }> | ClaimRefusal {
     this.requireLegacyAccess();
+    return this.#writeBriefPage(caller, page, write);
+  }
+
+  #writeBriefPage(
+    caller: Caller,
+    page: string,
+    write: WriteBriefRequest,
+  ): BriefResult<{ page: BriefPage; written: boolean }> | ClaimRefusal {
     if (caller.agent === undefined) {
       return {
         ok: false,

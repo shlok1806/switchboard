@@ -107,6 +107,8 @@ export async function managedRead<T>(options: {
 export function managedWriteRoute(method: string, path: string): ManagedReadRoute | null {
   if (method === "DELETE" || method === "PUT") {
     const read = managedReadRoute("GET", path);
+    if (method === "PUT" && read?.operation === "content.read" && read.targetId.startsWith("brief/"))
+      return { ...read, action: "channel.update.write", operation: "brief.write" };
     return read?.operation === "content.read" && read.targetId.startsWith("artifacts/")
       ? {
           ...read,

@@ -399,6 +399,141 @@ export class Skills {
     return { ok: true, value: { complete } };
   }
 
+  /**
+   * Managed-only preparation: no storage mutation before hashing. The returned closure
+   * must run inside the Channel's synchronous permit transaction. A concurrent upload
+   * invalidates preparation instead of allowing unhashed bytes to become complete.
+   */
+  async prepareUpload(
+    input: readonly UploadedChunk[],
+  ): Promise<SkillResult<{ commit: () => SkillResult<{ complete: string[] }> }>> {
+    const denied = (status: number, reason: string): SkillResult<never> => ({ ok: false, status, reason });
+    if (input.length === 0) return denied(400, "invalid_chunks");
+    let transferred = 0;
+    for (const chunk of input) {
+      if (
+        !/^[0-9a-f]{64}$/.test(chunk.digest) ||
+        !Number.isInteger(chunk.size) ||
+        chunk.size < 0 ||
+        chunk.size > MAX_SKILL_FILE_BYTES ||
+        !Number.isInteger(chunk.index) ||
+        chunk.index < 0 ||
+        chunk.index >= chunkCount(chunk.size) ||
+        !(chunk.data instanceof Uint8Array) ||
+        chunk.data.length !== chunkLength(chunk.size, chunk.index)
+      )
+        return denied(400, "invalid_chunks");
+      transferred += chunk.data.length;
+      if (transferred > SKILL_TRANSFER_BYTES) return denied(413, "upload_too_large");
+    }
+    // Own the input across awaits; caller mutations must never alter hashed bytes.
+    const chunks = input.map((chunk) => ({ ...chunk, data: chunk.data.slice() }));
+    const prepared = new Map<
+      string,
+      {
+        size: number;
+        snapshot: string;
+        bytes: Uint8Array | null;
+        text: number;
+        secret: string | null;
+      }
+    >();
+    const snapshot = (digest: string) =>
+      JSON.stringify({
+        blob: this.blob(digest),
+        chunks: this.sql
+          .exec<{ idx: number; data: ArrayBuffer }>(
+            "SELECT idx, data FROM skill_chunks WHERE digest = ? ORDER BY idx",
+            digest,
+          )
+          .toArray()
+          .map((row) => ({ idx: row.idx, data: Array.from(new Uint8Array(row.data)) })),
+      });
+    // Capture every touched blob before the first await.
+    for (const chunk of chunks) {
+      const previous = prepared.get(chunk.digest);
+      if (previous) {
+        if (previous.size !== chunk.size) return denied(400, "inconsistent_size");
+        continue;
+      }
+      const blob = this.blob(chunk.digest);
+      if (blob && blob.size !== chunk.size) return denied(400, "inconsistent_size");
+      const held = this.sql
+        .exec<{ idx: number; data: ArrayBuffer }>(
+          "SELECT idx, data FROM skill_chunks WHERE digest = ? ORDER BY idx",
+          chunk.digest,
+        )
+        .toArray();
+      const merged = new Map(held.map((row) => [row.idx, new Uint8Array(row.data)]));
+      for (const incoming of chunks) if (incoming.digest === chunk.digest) merged.set(incoming.index, incoming.data);
+      let bytes: Uint8Array | null = null;
+      if (merged.size === chunkCount(chunk.size)) {
+        bytes = new Uint8Array(chunk.size);
+        for (let index = 0; index < chunkCount(chunk.size); index++) {
+          const data = merged.get(index);
+          if (!data || data.length !== chunkLength(chunk.size, index)) return denied(409, "upload_changed");
+          bytes.set(data, index * SKILL_CHUNK_BYTES);
+        }
+      }
+      prepared.set(chunk.digest, { size: chunk.size, snapshot: snapshot(chunk.digest), bytes, text: 0, secret: null });
+    }
+    for (const [digest, item] of prepared) {
+      if (!item.bytes) continue;
+      if ((await sha256Hex(item.bytes)) !== digest) return denied(400, "digest_mismatch");
+      item.text = textOf(item.bytes) === null ? 0 : 1;
+      const found = secretIn(item.bytes);
+      item.secret = found === null ? null : JSON.stringify(found);
+    }
+    let used = false;
+    return {
+      ok: true,
+      value: {
+        commit: () => {
+          if (used) return denied(409, "preparation_used");
+          used = true;
+          let added = 0;
+          for (const [digest, item] of prepared) {
+            if (snapshot(digest) !== item.snapshot) return denied(409, "upload_changed");
+            if (!this.blob(digest)) added += item.size;
+          }
+          const stored =
+            this.sql.exec<{ total: number | null }>("SELECT SUM(size) AS total FROM skill_blobs").one().total ?? 0;
+          if (stored + added > MAX_CHANNEL_SKILL_BYTES) return denied(507, "skill_capacity");
+          const complete: string[] = [];
+          this.storage.transactionSync(() => {
+            for (const [digest, item] of prepared) {
+              this.sql.exec(
+                "INSERT OR IGNORE INTO skill_blobs (digest, size, complete, uploaded_at) VALUES (?, ?, 0, ?)",
+                digest,
+                item.size,
+                new Date().toISOString(),
+              );
+              if (this.blob(digest)?.complete !== 1) {
+                for (const chunk of chunks)
+                  if (chunk.digest === digest)
+                    this.sql.exec(
+                      "INSERT OR REPLACE INTO skill_chunks (digest, idx, data) VALUES (?, ?, ?)",
+                      digest,
+                      chunk.index,
+                      chunk.data,
+                    );
+                if (item.bytes)
+                  this.sql.exec(
+                    "UPDATE skill_blobs SET complete = 1, text = ?, secret = ? WHERE digest = ?",
+                    item.text,
+                    item.secret,
+                    digest,
+                  );
+              }
+              if (this.blob(digest)?.complete === 1) complete.push(digest);
+            }
+          });
+          return { ok: true, value: { complete } };
+        },
+      },
+    };
+  }
+
   /** Chunks of files some version holds, at most `SKILL_TRANSFER_BYTES` of them. */
   readChunks(
     wanted: readonly { digest: string; index: number }[],
