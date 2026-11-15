@@ -852,6 +852,8 @@ export class Channel extends DurableObject<Env> {
         input,
         current,
         authorize: async (input) => {
+          // Return local denials: authorityRequest maps thrown errors to authority outages.
+          const denied = { ok: false, status: 403, reason: "resource_denied", policyRevision: 0 } as const;
           let projectionRevision: number | undefined;
           for (const check of rosterChecks) {
             if (route.operation === "memory.read") {
@@ -860,18 +862,17 @@ export class Channel extends DurableObject<Env> {
                 return { ok: false, status: 403, reason: "target_enrollment_required", policyRevision: 0 };
             }
             const result = await org.authorizeChannelRead(check);
-            if (!current()) throw new ManagedReadFailure(404);
+            if (!current()) return denied;
             if (!result.ok) return result;
             if (route.operation === "memory.read") {
-              if (projectionRevision !== undefined && projectionRevision !== result.policyRevision)
-                throw new ManagedReadFailure(404);
+              if (projectionRevision !== undefined && projectionRevision !== result.policyRevision) return denied;
               projectionRevision = result.policyRevision;
             }
           }
           let authorization = input;
           if (!token) {
             const currentActor = await readNativeActor(request, url, this.env);
-            if (!current()) throw new ManagedReadFailure(404);
+            if (!current()) return denied;
             if (!currentActor)
               return { ok: false, status: 403, reason: "native_authentication_required", policyRevision: 0 };
             authorization = { ...input, actor: currentActor };
@@ -879,8 +880,7 @@ export class Channel extends DurableObject<Env> {
           const result = await org.authorizeChannelRead(authorization);
           // Do not combine author checks from different authority revisions into a
           // response that a later, weaker top-level history check could release.
-          if (projectionRevision !== undefined && projectionRevision !== result.policyRevision)
-            throw new ManagedReadFailure(404);
+          if (projectionRevision !== undefined && projectionRevision !== result.policyRevision) return denied;
           return result;
         },
         read: async () => {
