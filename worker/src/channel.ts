@@ -1151,7 +1151,7 @@ export class Channel extends DurableObject<Env> {
     if (!caller || !current()) throw new ManagedReadFailure(404);
     let outcome = "committed";
     let intentRevision = 0;
-    const prepare = async (intent = false) => {
+    const prepare = async (intent = false, issuedPermit?: MutationPermit) => {
       // Preparation (including artifact hashing) may yield before requesting a permit.
       if (!current()) throw new ManagedReadFailure(404);
       if (!("token" in input.actor)) {
@@ -1166,7 +1166,9 @@ export class Channel extends DurableObject<Env> {
         if (typeof expiry !== "number" || !Number.isFinite(expiry)) throw new ManagedReadFailure(404);
         input = { ...input, credentialExpiresAt: expiry * 1000 };
       }
-      const result = await authorityRequest(async () => await org.issueMutationPermit(input));
+      const result = issuedPermit
+        ? { ok: true as const, value: issuedPermit }
+        : await authorityRequest(async () => await org.issueMutationPermit(input));
       if (!result.ok || !current()) throw new ManagedReadFailure(404);
       const permit = result.value;
       if (intent) intentRevision = permit.policyRevision;
@@ -1220,10 +1222,17 @@ export class Channel extends DurableObject<Env> {
       // Response includes page content: admit and release that read independently of the write permit.
       const readInput = { ...input, action: "channel.update.read" };
       const admitted = await authorityRequest(async () => await org.authorizeChannelRead(readInput));
-      if (!admitted.ok || !current()) throw new ManagedReadFailure(404);
+      if (!admitted.ok || !current()) return managedError(404, "resource_denied");
       const page = input.resource.targetId?.slice("brief/".length) ?? "";
       const checked = cleanBriefWrite(page, body);
-      const prepared = await prepare();
+      // Keep resource denials outside the authority transport error path.
+      let issuedPermit: MutationPermit | undefined;
+      if ("token" in input.actor) {
+        const issued = await authorityRequest(async () => await org.issueMutationPermit(input));
+        if (!issued.ok || !current()) return managedError(404, "resource_denied");
+        issuedPermit = issued.value;
+      }
+      const prepared = await prepare(false, issuedPermit);
       if (!caller.agent) return managedError(403, "brief_requires_agent");
       if (!checked.ok) return managedError(400, "invalid_brief");
       let result: ReturnType<Channel["writeBriefPage"]> | undefined;
@@ -1240,7 +1249,7 @@ export class Channel extends DurableObject<Env> {
         if (!result.ok) outcome = "local_restriction_denied";
       });
       const released = await authorityRequest(async () => await org.authorizeChannelRead(readInput));
-      if (!released.ok || !current()) throw new ManagedReadFailure(404);
+      if (!released.ok || !current()) return managedError(404, "resource_denied");
       if (!result) throw new ManagedReadFailure(404);
       return result.ok
         ? Response.json(
