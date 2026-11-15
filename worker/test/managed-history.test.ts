@@ -1,5 +1,6 @@
-import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { env, reset, runInDurableObject } from "cloudflare:test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { agentIdFor } from "../../shared/src/index";
 import type { IdentityCommand } from "../../shared/src/m1";
 import type { ChannelAuthorization } from "../src/organization";
 import { bareChannel, managedAuthorityFixture } from "./managed-helpers";
@@ -242,6 +243,10 @@ describe("managed stored history real handler", () => {
 });
 
 describe("Stored history handler with real Organization policy", () => {
+  // Each case provisions the same named Channel; discard the prior linked fixture.
+  beforeEach(async () => {
+    await reset();
+  });
   for (const denial of [
     "none",
     "non_member",
@@ -254,10 +259,9 @@ describe("Stored history handler with real Organization policy", () => {
     "historical_author",
   ] as const) {
     it(`uses decide and withholds history access for ${denial}`, async () => {
-      const f = await managedAuthorityFixture();
-      // The base fixture seeds a placeholder target for private-read tests. This
-      // handler uses a real granted execution; remove the placeholder to avoid
-      // same-millisecond ordering between two registrations of one legacy ID.
+      const f = { ...(await managedAuthorityFixture()), targetId: agentIdFor("alice", "codex", "session") };
+      // The base fixture seeds a placeholder execution for private-read tests.
+      // This handler uses only the real execution attached to the registered session.
       await runInDurableObject(f.org, (_object, state) => {
         state.storage.sql.exec("DELETE FROM executions WHERE id=?", f.executionId);
       });
@@ -305,7 +309,7 @@ describe("Stored history handler with real Organization policy", () => {
       const executionId = started.value.execution.id;
       const credential = started.value.secret;
       // Credential verification consults the actual Channel DO, not the bare
-      // handler below. Complete its live registration/association before linking.
+      // handler below. After reset, register its server-derived AgentId before linking.
       await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object, state) => {
         const registered = await object.registerAgent("alice", {
           cli: "codex",
@@ -356,6 +360,7 @@ describe("Stored history handler with real Organization policy", () => {
       });
       let reads = 0;
       const row = stored();
+      row.actor = JSON.stringify({ kind: "agent", agentId: f.targetId });
       if (denial === "historical_author") row.at = new Date(0).toISOString();
       const sql = {
         exec: (query: string) => {

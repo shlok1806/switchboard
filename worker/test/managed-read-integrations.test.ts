@@ -1,5 +1,6 @@
-import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { env, reset, runInDurableObject } from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { agentIdFor } from "../../shared/src/index";
 import type { IdentityCommand } from "../../shared/src/m1";
 import { type GitHubApp, installGitHubApp } from "../src/github/index";
 import { managedOperationRoute } from "../src/managed-channel";
@@ -235,6 +236,10 @@ describe("managed GitHub HTTP read", () => {
 });
 
 describe("GitHub handler with real Organization policy", () => {
+  // Each case provisions the same named Channel; discard the prior linked fixture.
+  beforeEach(async () => {
+    await reset();
+  });
   for (const denial of [
     "none",
     "non_member",
@@ -246,7 +251,7 @@ describe("GitHub handler with real Organization policy", () => {
     "insufficient_scope",
   ] as const) {
     it(`uses decide and withholds upstream access for ${denial}`, async () => {
-      const f = await managedAuthorityFixture();
+      const f = { ...(await managedAuthorityFixture()), targetId: agentIdFor("alice", "codex", "session") };
       let sequence = 0;
       const mutate = async (command: IdentityCommand) =>
         f.org.mutateIdentity({
@@ -291,7 +296,7 @@ describe("GitHub handler with real Organization policy", () => {
       const executionId = started.value.execution.id;
       const credential = started.value.secret;
       // Credential verification consults the actual Channel DO, not the bare
-      // handler below. Complete its live registration/association before linking.
+      // handler below. After reset, register its server-derived AgentId before linking.
       await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object, state) => {
         const registered = await object.registerAgent("alice", {
           cli: "codex",
