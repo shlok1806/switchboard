@@ -184,16 +184,18 @@ describe("managed Brief writes", () => {
     const f = await fixture();
     await runInDurableObject(f.channel, async (object, state) => {
       const originalEnv = (object as unknown as { env: Env }).env;
+      // RPC stubs must be created in the Channel callback's I/O context.
+      const org = originalEnv.ORGANIZATION.getByName(f.organizationId);
       Object.assign(object, {
         env: {
           ...originalEnv,
           ORGANIZATION: {
             getByName: () => ({
-              verifyExecution: (token: string) => f.org.verifyExecution(token),
+              verifyExecution: (token: string) => org.verifyExecution(token),
               authorizeChannelRead: (input: Parameters<typeof f.org.authorizeChannelRead>[0]) =>
-                f.org.authorizeChannelRead(input),
+                org.authorizeChannelRead(input),
               issueMutationPermit: async (input: Parameters<typeof f.org.issueMutationPermit>[0]) => {
-                const result = await f.org.issueMutationPermit(input);
+                const result = await org.issueMutationPermit(input);
                 Object.assign(object, {
                   binding: {
                     version: 1,
@@ -241,18 +243,20 @@ describe("managed Brief writes", () => {
     const f = await fixture();
     await runInDurableObject(f.channel, async (object) => {
       const originalEnv = (object as unknown as { env: Env }).env;
+      // RPC stubs must be created in the Channel callback's I/O context.
+      const org = originalEnv.ORGANIZATION.getByName(f.organizationId);
       let reads = 0;
       Object.assign(object, {
         env: {
           ...originalEnv,
           ORGANIZATION: {
             getByName: () => ({
-              verifyExecution: (token: string) => f.org.verifyExecution(token),
+              verifyExecution: (token: string) => org.verifyExecution(token),
               issueMutationPermit: (input: Parameters<typeof f.org.issueMutationPermit>[0]) =>
-                f.org.issueMutationPermit(input),
+                org.issueMutationPermit(input),
               authorizeChannelRead: async (input: Parameters<typeof f.org.authorizeChannelRead>[0]) => {
                 if (++reads === 2) return { ok: false, status: 403, reason: "revoked", policyRevision: 1 };
-                return await f.org.authorizeChannelRead(input);
+                return await org.authorizeChannelRead(input);
               },
             }),
           },
