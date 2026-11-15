@@ -1,4 +1,5 @@
 import type { NativeResult } from "../../shared/src/m1";
+import { type QueryAuthority, type QueryGuard, type QueryPlan, runManagedQuery } from "./managed-query";
 import type { ChannelAuthorization } from "./organization";
 import type { MutationPermit, PermitBinding } from "./policy-permits";
 import { AuthorityUnavailable, authorityRequest, resourceKey } from "./policy-permits";
@@ -225,6 +226,9 @@ export function managedEnforcement<TAuthority>(options: {
   authorize(input: ChannelAuthorization): Promise<NativeResult<TAuthority>>;
 }) {
   return {
+    query<T>(this: QueryAuthority, plan: QueryPlan<T>, guard: QueryGuard) {
+      return runManagedQuery(plan, this, guard);
+    },
     async check(input: ChannelAuthorization): Promise<NativeResult<TAuthority>> {
       if (!options.current()) return { ok: false, status: 403, reason: "resource_denied", policyRevision: 0 };
       const result = await authorityRequest(() => options.authorize(input));

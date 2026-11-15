@@ -57,13 +57,14 @@ function fixture(
   const reads: string[] = [];
   const sql = {
     exec: (query: string, ...args: unknown[]) => {
+      if (query.includes("managed_")) return { toArray: () => [] };
       if (query.includes("m1_agent_executions"))
         return { toArray: () => [{ organizationId, executionId: "execution", active: options.inactive ? 0 : 1 }] };
       reads.push(query);
       if (options.changeGeneration) binding.generation++;
       const result = query.includes("WHERE id =")
         ? rows.filter((row) => row.id === args[0])
-        : rows.filter((row) => row.seq > Number(args[0]));
+        : rows.filter((row) => row.seq > Number(args[0])).slice(0, Number(args[1]));
       return { toArray: () => result };
     },
   };
@@ -94,7 +95,7 @@ function fixture(
               (options.authorDenied || (options.authorReleaseDenied && occurrences === 2))
             )
               return { ok: false, status: 403, reason: "historical_enrollment_required", policyRevision: 1 };
-            return { ok: true, value: {}, policyRevision: 1 };
+            return { ok: true, value: { deadline: Date.now() + 60000 }, policyRevision: 1 };
           },
         }),
       },
@@ -364,6 +365,7 @@ describe("Stored history handler with real Organization policy", () => {
       if (denial === "historical_author") row.at = new Date(0).toISOString();
       const sql = {
         exec: (query: string) => {
+          if (query.includes("managed_")) return { toArray: () => [] };
           if (query.includes("m1_agent_executions"))
             return { toArray: () => [{ organizationId: f.organizationId, executionId, active: 1 }] };
           reads++;

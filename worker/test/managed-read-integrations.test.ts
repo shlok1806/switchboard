@@ -6,6 +6,7 @@ import { type GitHubApp, installGitHubApp } from "../src/github/index";
 import { managedOperationRoute } from "../src/managed-channel";
 import type { ChannelAuthorization } from "../src/organization";
 import { bareChannel, managedAuthorityFixture } from "./managed-helpers";
+import { queryMetadataSql } from "./managed-query-cases";
 
 afterEach(() => installGitHubApp(null));
 
@@ -75,7 +76,7 @@ function fixture(
     },
   } as unknown as GitHubApp);
   Object.assign(channel, {
-    ctx: { id: env.CHANNEL.idFromName(repo) },
+    ctx: { id: env.CHANNEL.idFromName(repo), storage: { sql: queryMetadataSql } },
     env: {
       CHANNEL: env.CHANNEL,
       ORGANIZATION: {
@@ -86,7 +87,7 @@ function fixture(
             if (options.outage) throw new Error("authority-private-marker");
             if (options.deny && (!options.release || calls.length === 2))
               return { ok: false, status: 403, reason: options.deny, policyRevision: 1 };
-            return { ok: true, value: {}, policyRevision: 1 };
+            return { ok: true, value: { deadline: Date.now() + 60000 }, policyRevision: 1 };
           },
         }),
       },
@@ -382,7 +383,7 @@ describe("GitHub handler with real Organization policy", () => {
         operation: "binding",
         state: "linked",
       });
-      Object.assign(channel, { ctx: { id: env.CHANNEL.idFromName(f.repo) }, env });
+      Object.assign(channel, { ctx: { id: env.CHANNEL.idFromName(f.repo), storage: { sql: queryMetadataSql } }, env });
       const response = await channel.managedRequest(
         new Request(`https://switchboard.test/r/${f.repo}/api/github?about=README.md`, {
           headers: { Authorization: `Bearer ${credential}` },

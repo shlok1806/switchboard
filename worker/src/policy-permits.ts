@@ -60,7 +60,7 @@ export class LocalMutationPermits {
       this.revisionFloor(workspace),
     );
   }
-  private revisionFloor(workspace: string): number {
+  revisionFloor(workspace: string): number {
     return (
       this.sql
         .exec<{ revision: number }>("SELECT revision FROM managed_policy_floor WHERE id=1 AND workspace=?", workspace)

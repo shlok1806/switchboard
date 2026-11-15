@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { ChannelAuthorization } from "../src/organization";
 import { bareChannel } from "./managed-helpers";
+import { queryMetadataSql } from "./managed-query-cases";
 
 function fixture(deny?: string, atRelease = false, change?: "enrollment" | "revision") {
   const repo = "shlok1806/other";
@@ -21,7 +22,7 @@ function fixture(deny?: string, atRelease = false, change?: "enrollment" | "revi
     session: "private-marker",
   };
   Object.assign(channel, {
-    ctx: { id: env.CHANNEL.idFromName(repo) },
+    ctx: { id: env.CHANNEL.idFromName(repo), storage: { sql: queryMetadataSql } },
     managedAssociation: () => association,
     agents: { list: () => [agent], find: () => agent },
     env: {
@@ -35,7 +36,10 @@ function fixture(deny?: string, atRelease = false, change?: "enrollment" | "revi
               return { ok: false, status: 403, reason: deny, policyRevision: 2 };
             return {
               ok: true,
-              value: { target: { principalId: "principal", executionId: "execution", ownerPersonId: "owner" } },
+              value: {
+                deadline: Date.now() + 60000,
+                target: { principalId: "principal", executionId: "execution", ownerPersonId: "owner" },
+              },
               policyRevision: change === "revision" && calls.length === 3 ? 3 : 2,
             };
           },

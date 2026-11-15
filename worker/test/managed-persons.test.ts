@@ -2,6 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { ChannelAuthorization } from "../src/organization";
 import { bareChannel, managedAuthorityFixture } from "./managed-helpers";
+import { queryMetadataSql } from "./managed-query-cases";
 
 const denials = [
   "non_member",
@@ -27,7 +28,7 @@ function fixture(deny?: string, release = false, changeGeneration = false, chang
   const calls: ChannelAuthorization[] = [];
   let reads = 0;
   Object.assign(channel, {
-    ctx: { id: env.CHANNEL.idFromName(repo) },
+    ctx: { id: env.CHANNEL.idFromName(repo), storage: { sql: queryMetadataSql } },
     env: {
       CHANNEL: env.CHANNEL,
       ORGANIZATION: {
@@ -35,7 +36,7 @@ function fixture(deny?: string, release = false, changeGeneration = false, chang
           authorizeChannelRead: async (input: ChannelAuthorization) => {
             calls.push(input);
             if (deny && (!release || reads > 0)) return { ok: false, reason: deny, status: 403, policyRevision: 1 };
-            return { ok: true, value: {}, policyRevision: 1 };
+            return { ok: true, value: { deadline: Date.now() + 60000 }, policyRevision: 1 };
           },
           readChannelPersons: async (input: ChannelAuthorization) => {
             calls.push(input);

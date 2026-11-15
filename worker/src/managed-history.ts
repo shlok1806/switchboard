@@ -2,6 +2,7 @@ import type { ChannelEvent } from "../../shared/src/index";
 import { MAX_EVENT_IDS, MAX_HISTORY_LIMIT } from "../../shared/src/index";
 import { ManagedReadFailure } from "./managed-channel";
 import { safeSharedEvent } from "./managed-projection";
+import type { CandidateWindow } from "./managed-query";
 
 /** Stored queries only. Merged/local queries remain closed in this subset. */
 export type ManagedHistoryQuery =
@@ -48,4 +49,30 @@ export function managedStoredEvent(event: ChannelEvent) {
       payload: { verdicts: [], events: [], directives: [] },
     };
   return safeSharedEvent(event);
+}
+
+/** SQL source only; the executor authorizes constituents before invoking this. */
+export function managedStoredWindow<T extends { id: string; seq: number }>(
+  sql: SqlStorage,
+  query: ManagedHistoryQuery,
+  position: string | null,
+  limit: number,
+): CandidateWindow {
+  const rows = query.ids
+    ? query.ids
+        .flatMap((id) => sql.exec<T>("SELECT * FROM events WHERE id = ?", id).toArray())
+        .sort((a, b) => a.seq - b.seq)
+    : sql
+        .exec<T>(
+          "SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
+          position === null ? query.after : Number(position),
+          limit,
+        )
+        .toArray();
+  return {
+    rows: rows.map((row) => ({ key: row.id, value: row })),
+    nextInternal: rows.length ? String(rows.at(-1)?.seq) : null,
+    // Short windows are not exhaustion evidence; forward reads continue to empty.
+    exhausted: !!query.ids || rows.length === 0,
+  };
 }

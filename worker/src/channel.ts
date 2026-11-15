@@ -1,7 +1,9 @@
 import { ARTIFACT_CSP, checkArtifact, cleanBriefWrite, toBase64 } from "../../shared/src/index";
 import { managedGitHubRead } from "./managed-github";
-import { managedHistoryQuery, managedStoredEvent } from "./managed-history";
+import { managedHistoryQuery, managedStoredEvent, managedStoredWindow } from "./managed-history";
 import { managedOutcome, OUTCOME_BATCH_SIZE, OUTCOME_TABLES, outcomeAuditId } from "./managed-outcomes";
+import { type ConstituentDescriptor, managedQueryResponse } from "./managed-query";
+import { createManagedQuery, managedQueryId } from "./managed-query-registry";
 import { appendManagedOutcome, MANAGED_OUTCOME_TTL_MS } from "./managed-retention";
 // One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
 // named by `owner/repo` (ADR 0007). It owns the Channel's Persons, who may join
@@ -907,6 +909,7 @@ export class Channel extends DurableObject<Env> {
     if (!route) return managedError(404, "resource_denied");
     const organizationId = workspaceParent(binding.workspace);
     if (!organizationId) return managedError(404, "resource_denied");
+    const preparationDeadline = Date.now() + 10000;
     const bindingCurrent = () =>
       this.binding.version === 1 &&
       this.binding.state === "linked" &&
@@ -938,8 +941,6 @@ export class Channel extends DurableObject<Env> {
         },
       };
       const rosterChecks: ChannelAuthorization[] = [];
-      const queryChecks: ChannelAuthorization[] = [];
-      let personsSnapshot: { persons: { personId: string }[] } | undefined;
       const current = () =>
         bindingCurrent() &&
         rosterChecks.every((check) => {
@@ -948,6 +949,190 @@ export class Channel extends DurableObject<Env> {
         });
       const enforcement = managedEnforcement({ current, authorize: (check) => org.authorizeChannelRead(check) });
       if (route.mode === "write") return await this.#managedWrite(request, path, input, current);
+      const queryId = managedQueryId(route.operation);
+      if (queryId) {
+        const pinnedTargets = new Set<string>();
+        const pinTarget = (check: ChannelAuthorization) => {
+          const key = JSON.stringify([check.resource.targetId, check.targetExecutionId]);
+          if (!pinnedTargets.has(key)) {
+            pinnedTargets.add(key);
+            rosterChecks.push(check);
+          }
+        };
+        const workspaceId = binding.workspace;
+        const permits = new LocalMutationPermits(this.ctx.storage.sql);
+        const guard = {
+          preparationDeadline,
+          bindingCurrent: current,
+          revisionFloor: () => permits.revisionFloor(workspaceId),
+          now: () => Date.now(),
+        };
+        const authorizeQuery = async (check: ChannelAuthorization) => {
+          if (!token) {
+            const actor = await readNativeActor(request, url, this.env);
+            if (
+              !actor ||
+              !current() ||
+              "token" in check.actor ||
+              actor.personId !== check.actor.personId ||
+              actor.githubId !== check.actor.githubId
+            )
+              return { ok: false as const, status: 403 as const, reason: "resource_denied", policyRevision: 0 };
+            check = { ...check, actor };
+          }
+          return org.authorizeChannelRead(check);
+        };
+        const queryEnforcement = managedEnforcement({ current, authorize: authorizeQuery });
+        const scope = {
+          id: queryId,
+          binding: {
+            organizationId,
+            workspaceId: binding.workspace,
+            channel: repo,
+            generation: binding.generation,
+            operation: binding.operation,
+          },
+          authorization: input,
+        };
+        const page = { source: "stored" as const, selector: { kind: "tail" as const }, wakesOnly: false, limit: 1000 };
+        const constituents: ConstituentDescriptor<unknown>[] = [];
+        let assemble: (parts: ReadonlyMap<string, readonly unknown[]>) => unknown;
+        if (queryId === "history") {
+          const query = managedHistoryQuery(url.searchParams);
+          // Explicit exhaustion uses an empty SQL window, never a short window.
+          constituents.push({
+            id: "events",
+            authorization: { ...input, action: "channel.update.read" },
+            page: {
+              ...page,
+              selector: query.ids ? { kind: "ids", ids: query.ids } : { kind: "forward", after: query.after },
+              wakesOnly: query.wakes,
+              limit: query.limit,
+            },
+            projection: {
+              id: "stored-event",
+              project: async (row, context) => {
+                const event = rowToEvent(row.value as EventRow);
+                const projected = managedStoredEvent(event);
+                if (!projected || (query.wakes && projected.type !== "wake") || event.actor.kind !== "agent")
+                  return null;
+                const association = this.managedAssociation(event.actor.agentId);
+                if (association?.active !== 1) return null;
+                const check: ChannelAuthorization = {
+                  ...input,
+                  action: "agent.view",
+                  targetExecutionId: association.executionId,
+                  eventAt: Date.parse(event.at),
+                  resource: { ...input.resource, targetId: event.actor.agentId, operation: "history.author" },
+                };
+                const allowed = await context.check(check);
+                context.boundary();
+                const latest = this.managedAssociation(event.actor.agentId);
+                if (!allowed || latest?.active !== 1 || latest.executionId !== association.executionId) return null;
+                pinTarget(check);
+                return projected;
+              },
+            },
+            readWindow: async (position, limit) =>
+              managedStoredWindow<EventRow>(this.ctx.storage.sql, query, position, limit),
+          });
+          // AV is an independently protected constituent, admitted before any Event scan.
+          constituents.unshift({
+            id: "agents",
+            authorization: { ...input, action: "agent.view", resource: { ...input.resource, targetId: "agents" } },
+            page,
+            projection: { id: "empty", project: async () => null },
+            readWindow: async () => ({ rows: [], nextInternal: null, exhausted: true }),
+          });
+          assemble = (parts) => {
+            const events = parts.get("events") as { seq: number }[];
+            return { events, cursor: events.at(-1)?.seq ?? query.after };
+          };
+        } else if (queryId === "agents") {
+          constituents.push({
+            id: "agents",
+            authorization: input,
+            page,
+            readWindow: async () => ({
+              rows: this.agents.list(false).map((agent) => ({ key: agent.id, value: agent })),
+              nextInternal: null,
+              exhausted: true,
+            }),
+            projection: {
+              id: "safe-agent",
+              project: async (row, context) => {
+                const candidate = row.value as Agent;
+                const association = this.managedAssociation(candidate.id);
+                if (association?.active !== 1) return null;
+                const check = {
+                  ...input,
+                  targetExecutionId: association.executionId,
+                  resource: { ...input.resource, targetId: candidate.id },
+                };
+                const result = await context.check(check);
+                context.boundary();
+                const latest = this.managedAssociation(candidate.id);
+                const agent = this.agents.find(candidate.id);
+                if (
+                  !result?.target ||
+                  !agent ||
+                  agent.presence === "gone" ||
+                  latest?.active !== 1 ||
+                  latest.executionId !== association.executionId
+                )
+                  return null;
+                pinTarget(check);
+                return safeAgent(agent, result.target);
+              },
+            },
+          });
+          assemble = (parts) => ({ agents: parts.get("agents") });
+        } else {
+          let snapshot: unknown;
+          const read = async () => {
+            if (queryId === "github") return managedGitHubRead(this.env, repo, url);
+            const result = await authorityRequest(async () => await org.readChannelPersons(input));
+            if (!result.ok || !current()) throw new ManagedReadFailure(404);
+            snapshot = result.value;
+            return snapshot;
+          };
+          constituents.push({
+            id: queryId === "persons" ? "persons" : "tasks",
+            authorization: input,
+            page: { ...page, limit: queryId === "persons" ? 1000 : 1 },
+            readWindow: async () => {
+              const value = await read();
+              const rows =
+                queryId === "persons"
+                  ? (value as { persons: { personId: string }[] }).persons.map((person) => ({
+                      key: person.personId,
+                      value: person,
+                    }))
+                  : [{ key: queryId, value }];
+              return { rows, nextInternal: null, exhausted: true };
+            },
+            projection: { id: queryId, project: async (row) => row.value },
+          });
+          assemble = (parts) => (queryId === "persons" ? { persons: parts.get("persons") } : parts.get("tasks")?.[0]);
+          // The roster adapter independently checks subject memberships at release.
+          const queryFacade = managedEnforcement({
+            current,
+            authorize: async (check) => {
+              if (snapshot !== undefined && queryId === "persons") {
+                const latest = await org.readChannelPersons(check);
+                if (!latest.ok || !current() || JSON.stringify(latest.value) !== JSON.stringify(snapshot))
+                  return { ok: false as const, status: 403 as const, reason: "resource_denied", policyRevision: 0 };
+              }
+              return authorizeQuery(check);
+            },
+          });
+          const result = await queryFacade.query(createManagedQuery({ scope, constituents, assemble }), guard);
+          return managedQueryResponse(result, guard);
+        }
+        const result = await queryEnforcement.query(createManagedQuery({ scope, constituents, assemble }), guard);
+        return managedQueryResponse(result, guard);
+      }
+
       return managedEnforcement({
         current,
         authorize: async (input) => {
@@ -961,71 +1146,14 @@ export class Channel extends DurableObject<Env> {
               return { ok: false, status: 403, reason: "native_authentication_required", policyRevision: 0 };
             authorization = { ...input, actor: currentActor };
           }
-          if (personsSnapshot) {
-            const latest = await org.readChannelPersons(authorization);
-            if (!latest.ok || !current() || JSON.stringify(latest.value) !== JSON.stringify(personsSnapshot))
-              return denied;
-          }
           return managedQueryAuthorization(
             authorization,
-            [...queryChecks, ...rosterChecks],
+            rosterChecks,
             (check) => org.authorizeChannelRead(check),
             current,
           );
         },
       }).read(input, async () => {
-        if (route.operation === "persons.read") {
-          const result = await authorityRequest(async () => await org.readChannelPersons(input));
-          if (!result.ok || !current()) throw new ManagedReadFailure(404);
-          personsSnapshot = result.value;
-          return personsSnapshot;
-        }
-        if (route.operation === "history.read") {
-          const query = managedHistoryQuery(url.searchParams);
-          // Constituent scopes precede SQL access, independently of HR admission.
-          for (const action of ["channel.update.read", "agent.view"]) {
-            const check: ChannelAuthorization = {
-              ...input,
-              action,
-              resource: { ...input.resource, targetId: action === "agent.view" ? "agents" : "events" },
-            };
-            const allowed = await enforcement.check(check);
-            if (!allowed.ok || !current()) throw new ManagedReadFailure(404);
-            queryChecks.push(check);
-          }
-          const sql = this.ctx.storage.sql;
-          // A fixed scan bound avoids hidden rows affecting returned counts/cursors.
-          // No cursor is derived from rejected candidates; sparse pages can be short.
-          const rows = query.ids
-            ? query.ids.flatMap((id) => sql.exec<EventRow>("SELECT * FROM events WHERE id = ?", id).toArray())
-            : sql
-                .exec<EventRow>("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?", query.after, 1000)
-                .toArray();
-          const events: NonNullable<ReturnType<typeof managedStoredEvent>>[] = [];
-          for (const row of rows.sort((a, b) => a.seq - b.seq)) {
-            const event = rowToEvent(row);
-            const projected = managedStoredEvent(event);
-            if (!projected || (query.wakes && projected.type !== "wake") || event.actor.kind !== "agent") continue;
-            const association = this.managedAssociation(event.actor.agentId);
-            if (association?.active !== 1) continue;
-            const check: ChannelAuthorization = {
-              ...input,
-              action: "agent.view",
-              targetExecutionId: association.executionId,
-              eventAt: Date.parse(event.at),
-              resource: { ...input.resource, targetId: event.actor.agentId, operation: "history.author" },
-            };
-            const allowed = await enforcement.check(check);
-            if (!current()) throw new ManagedReadFailure(404);
-            const latest = this.managedAssociation(event.actor.agentId);
-            if (!allowed.ok || latest?.active !== 1 || latest.executionId !== association.executionId) continue;
-            rosterChecks.push(check);
-            events.push(projected);
-            if (events.length === query.limit) break;
-          }
-          return { events, cursor: events.at(-1)?.seq ?? query.after };
-        }
-        if (route.operation === "github.read") return managedGitHubRead(this.env, repo, url);
         if (path === "/api/relay") return { relay: relaySettings(this.env) };
         if (route.operation === "skill-files.read") {
           // Parsing and bytes stay behind initial authorization. The local Skills
