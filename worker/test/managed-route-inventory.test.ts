@@ -156,7 +156,7 @@ describe("managed RPC bypass closure", () => {
       librarian: [
         ["GET", "/api/librarian", null],
         ["PUT", "/api/librarian", null],
-        ["GET", "/api/github", null],
+        ["GET", "/api/github", "task.read"],
       ],
       settings: [
         ["GET", "/api/settings/langfuse", null],
@@ -166,8 +166,8 @@ describe("managed RPC bypass closure", () => {
     };
     const fixed: Example[] = [
       ["POST", "/api/join", null],
-      ["GET", "/api/events", null],
-      ["GET", "/api/persons", null],
+      ["GET", "/api/events", "channel.history.read"],
+      ["GET", "/api/persons", "workspace.read"],
       ["GET", "/api/relay", "workspace.read"],
       ["POST", "/api/updates", "channel.update.write"],
       ["GET", "/api/stream", null],
@@ -227,25 +227,45 @@ describe("managed RPC bypass closure", () => {
       });
       for (const [method, path] of paths) {
         const response = await nativeFetch(`/r/${f.repo}${path}`, f.token, { method });
+        const persons = binding.state === "linked" && binding.version === 1 && path === "/api/persons";
+        const history = binding.state === "linked" && binding.version === 1 && path === "/api/events";
         const memory = binding.state === "linked" && binding.version === 1 && path === "/api/memory";
         const skillFiles = binding.state === "linked" && binding.version === 1 && path === "/api/skill-files/read";
         const brief = binding.state === "linked" && binding.version === 1 && path === "/api/brief/guide";
         const artifact = binding.state === "linked" && binding.version === 1 && path === "/api/artifacts/guide";
         expect(response.status, `${binding.state}/${binding.version}: ${method} ${path}`).toBe(
-          memory ? (method === "GET" ? 200 : 403) : brief ? 403 : skillFiles || artifact ? 400 : 404,
+          persons || history
+            ? 200
+            : memory
+              ? method === "GET"
+                ? 200
+                : 403
+              : brief
+                ? 403
+                : skillFiles || artifact
+                  ? 400
+                  : 404,
         );
         expect(await response.json()).toEqual(
-          memory
-            ? method === "GET"
-              ? { notes: [] }
-              : { ok: false, reason: "memory_requires_agent" }
-            : brief
-              ? { ok: false, reason: "brief_requires_agent" }
-              : artifact
-                ? { ok: false, reason: "invalid_artifact" }
-                : skillFiles
-                  ? { ok: false, reason: "invalid_skill_chunks" }
-                  : { ok: false, reason: "resource_denied" },
+          persons
+            ? {
+                persons: [f.actor.personId, f.recipient.personId]
+                  .sort((a, b) => a.localeCompare(b))
+                  .map((personId) => ({ personId })),
+              }
+            : history
+              ? { events: [], cursor: 0 }
+              : memory
+                ? method === "GET"
+                  ? { notes: [] }
+                  : { ok: false, reason: "memory_requires_agent" }
+                : brief
+                  ? { ok: false, reason: "brief_requires_agent" }
+                  : artifact
+                    ? { ok: false, reason: "invalid_artifact" }
+                    : skillFiles
+                      ? { ok: false, reason: "invalid_skill_chunks" }
+                      : { ok: false, reason: "resource_denied" },
         );
       }
     }

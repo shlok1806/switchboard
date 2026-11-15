@@ -53,6 +53,8 @@ export interface ChannelAuthorization {
   generation: number;
   requestId: string;
   targetExecutionId?: string;
+  /** Stored Event timestamp; historical attribution must belong to the current execution. */
+  eventAt?: number;
   credentialExpiresAt?: number;
 }
 interface State {
@@ -1065,6 +1067,14 @@ export class Organization extends DurableObject<Env> {
         state.workspaceMembers[input.resource.id]?.[target.ownerPersonId]?.status !== "active"
       )
         return deny("target_enrollment_required");
+      if (
+        input.resource.operation === "history.author" &&
+        (!Number.isFinite(input.eventAt) ||
+          !Number.isFinite(target.startedAt) ||
+          (input.eventAt as number) < target.startedAt ||
+          (input.eventAt as number) > now)
+      )
+        return deny("historical_enrollment_required");
       const principal = this.identityRow<AgentPrincipal>("principals", target.principalId);
       const grant = this.grantFor(target.principalId, input.resource.id);
       if (
@@ -1143,6 +1153,37 @@ export class Organization extends DurableObject<Env> {
         input.requestId,
       );
     return result;
+  }
+
+  /** Native roster only: legacy login rows cannot establish Person identity. */
+  async readChannelPersons(input: ChannelAuthorization): Promise<NativeResult<{ persons: { personId: string }[] }>> {
+    if (
+      input.action !== "workspace.read" ||
+      input.resource.operation !== "persons.read" ||
+      input.resource.targetId !== "persons"
+    )
+      return { ok: false, status: 403, reason: "resource_denied", policyRevision: 0 };
+    const admission = await this.authorizeChannelRead(input);
+    if (!admission.ok) return admission;
+    // Recheck after asynchronous credential verification before touching roster
+    // facts. No await between this decision, membership load and projection.
+    const current = this.channelDecision(
+      input,
+      admission.value.actor.kind === "execution" ? admission.value.actor : undefined,
+    );
+    if (!current.ok) return current;
+    const state = this.load();
+    if (!state) return { ok: false, status: 403, reason: "resource_denied", policyRevision: 0 };
+    const persons = Object.values(state.workspaceMembers[input.resource.id] ?? {})
+      .filter(
+        (member) =>
+          member.workspaceId === input.resource.id &&
+          member.status === "active" &&
+          state.members[member.personId]?.status === "active",
+      )
+      .map((member) => ({ personId: member.personId }))
+      .sort((a, b) => a.personId.localeCompare(b.personId));
+    return { ok: true, value: { persons }, policyRevision: current.policyRevision };
   }
 
   /** Internal authority RPC; HTTP adapters must resolve the Person, never accept body actors. */

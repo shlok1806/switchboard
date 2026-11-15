@@ -20,6 +20,9 @@ describe("managed facade migration", () => {
       ]),
       ["GET", "/api/tasks"],
       ["GET", "/api/relay"],
+      ["GET", "/api/github"],
+      ["GET", "/api/events"],
+      ["GET", "/api/persons"],
       ["PUT", "/api/brief/example"],
       ["PUT", "/api/artifacts/example"],
       ["DELETE", "/api/artifacts/example"],
@@ -53,7 +56,17 @@ describe("managed facade migration", () => {
       targetId: "12",
       operation: "task.steps/3/complete",
     });
-    for (const path of ["/api/events", "/api/persons", "/api/accounts", "/api/stream", "/api/settings/langfuse"])
+    expect(managedReadRoute("GET", "/api/events")).toEqual({
+      action: "channel.history.read",
+      targetId: "events",
+      operation: "history.read",
+    });
+    expect(managedReadRoute("GET", "/api/persons")).toEqual({
+      action: "workspace.read",
+      targetId: "persons",
+      operation: "persons.read",
+    });
+    for (const path of ["/api/accounts", "/api/stream", "/api/settings/langfuse"])
       expect(managedReadRoute("GET", path)).toBeNull();
     expect(managedWriteRoute("POST", "/api/agents")).toBeNull();
     expect(Object.hasOwn(MANAGED_OPERATIONS, "constructor")).toBe(false);

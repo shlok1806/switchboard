@@ -1,4 +1,6 @@
 import { ARTIFACT_CSP, checkArtifact, cleanBriefWrite, toBase64 } from "../../shared/src/index";
+import { managedGitHubRead } from "./managed-github";
+import { managedHistoryQuery, managedStoredEvent } from "./managed-history";
 import { managedOutcome, OUTCOME_BATCH_SIZE, OUTCOME_TABLES, outcomeAuditId } from "./managed-outcomes";
 import { appendManagedOutcome, MANAGED_OUTCOME_TTL_MS } from "./managed-retention";
 // One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
@@ -936,6 +938,8 @@ export class Channel extends DurableObject<Env> {
         },
       };
       const rosterChecks: ChannelAuthorization[] = [];
+      const queryChecks: ChannelAuthorization[] = [];
+      let personsSnapshot: { persons: { personId: string }[] } | undefined;
       const current = () =>
         bindingCurrent() &&
         rosterChecks.every((check) => {
@@ -957,14 +961,71 @@ export class Channel extends DurableObject<Env> {
               return { ok: false, status: 403, reason: "native_authentication_required", policyRevision: 0 };
             authorization = { ...input, actor: currentActor };
           }
+          if (personsSnapshot) {
+            const latest = await org.readChannelPersons(authorization);
+            if (!latest.ok || !current() || JSON.stringify(latest.value) !== JSON.stringify(personsSnapshot))
+              return denied;
+          }
           return managedQueryAuthorization(
             authorization,
-            rosterChecks,
+            [...queryChecks, ...rosterChecks],
             (check) => org.authorizeChannelRead(check),
             current,
           );
         },
       }).read(input, async () => {
+        if (route.operation === "persons.read") {
+          const result = await authorityRequest(async () => await org.readChannelPersons(input));
+          if (!result.ok || !current()) throw new ManagedReadFailure(404);
+          personsSnapshot = result.value;
+          return personsSnapshot;
+        }
+        if (route.operation === "history.read") {
+          const query = managedHistoryQuery(url.searchParams);
+          // Constituent scopes precede SQL access, independently of HR admission.
+          for (const action of ["channel.update.read", "agent.view"]) {
+            const check: ChannelAuthorization = {
+              ...input,
+              action,
+              resource: { ...input.resource, targetId: action === "agent.view" ? "agents" : "events" },
+            };
+            const allowed = await enforcement.check(check);
+            if (!allowed.ok || !current()) throw new ManagedReadFailure(404);
+            queryChecks.push(check);
+          }
+          const sql = this.ctx.storage.sql;
+          // A fixed scan bound avoids hidden rows affecting returned counts/cursors.
+          // No cursor is derived from rejected candidates; sparse pages can be short.
+          const rows = query.ids
+            ? query.ids.flatMap((id) => sql.exec<EventRow>("SELECT * FROM events WHERE id = ?", id).toArray())
+            : sql
+                .exec<EventRow>("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?", query.after, 1000)
+                .toArray();
+          const events: NonNullable<ReturnType<typeof managedStoredEvent>>[] = [];
+          for (const row of rows.sort((a, b) => a.seq - b.seq)) {
+            const event = rowToEvent(row);
+            const projected = managedStoredEvent(event);
+            if (!projected || (query.wakes && projected.type !== "wake") || event.actor.kind !== "agent") continue;
+            const association = this.managedAssociation(event.actor.agentId);
+            if (association?.active !== 1) continue;
+            const check: ChannelAuthorization = {
+              ...input,
+              action: "agent.view",
+              targetExecutionId: association.executionId,
+              eventAt: Date.parse(event.at),
+              resource: { ...input.resource, targetId: event.actor.agentId, operation: "history.author" },
+            };
+            const allowed = await enforcement.check(check);
+            if (!current()) throw new ManagedReadFailure(404);
+            const latest = this.managedAssociation(event.actor.agentId);
+            if (!allowed.ok || latest?.active !== 1 || latest.executionId !== association.executionId) continue;
+            rosterChecks.push(check);
+            events.push(projected);
+            if (events.length === query.limit) break;
+          }
+          return { events, cursor: events.at(-1)?.seq ?? query.after };
+        }
+        if (route.operation === "github.read") return managedGitHubRead(this.env, repo, url);
         if (path === "/api/relay") return { relay: relaySettings(this.env) };
         if (route.operation === "skill-files.read") {
           // Parsing and bytes stay behind initial authorization. The local Skills

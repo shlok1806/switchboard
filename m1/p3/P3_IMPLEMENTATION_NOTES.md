@@ -429,3 +429,139 @@ No design decision needed and no incompatible existing expectation changes. No D
 B1b still owns opening history/Persons/librarian/GitHub/summary constituents. B2/B3/B4 remain untouched as route openings. B4 must extend the invalidation preparation with durable retry/completion, stream leases and pending-request cancellation; the B1a push alone is not a complete revocation protocol or an asserted delivery bound. DD-1/DD-2 remain pending: H23 accounts, terminal keyboard input, approval approve/deny control, delegated private actions for agents, Langfuse settings GET/PUT and MCP costs stay fail-closed. Task release mapping remains for B2a; manager-only START remains unchanged.
 
 Final completion verification: worker typecheck passed (exit 0), worker lint passed (193 files, exit 0), `git diff --check` passed (exit 0), and the baseline comparison again reported 138 files / zero changes. `m1/p3/B1a_DONE.md:1` records implementation completion pending the manager's runtime/review gate.
+
+## B1b
+
+### Status and implemented subset
+
+**Incomplete; no `B1b_DONE.md` or `B1_DONE.md` written.** This run leaves a coherent H33 HTTP read subset for the manager's runtime/review gate. Remaining B1b work is listed below; it is not moved to another milestone. No new architectural decision is requested.
+
+### Changes (file:line + symbol)
+
+- `worker/src/managed-channel.ts:16` (`matchReadRoute`) and `:162` (`MANAGED_OPERATIONS`) register GET `/api/github` as `github.read`, exact target `github`, action `task.read`, read mode. `worker/src/channel.ts:969` (`managedRequest`) invokes the new preparation only inside the already-selected managed facade read callback. Admission and release continue through `managedEnforcement.read` / `managedRead` (`worker/src/managed-channel.ts:229`, `:111`); both call the Organization authority without a positive cache, with binding checks after awaits. Existing unlinked dispatch and all legacy RPC guards are unchanged by this diff.
+- `worker/src/managed-github.ts:6` (`managedGitHubRead`) reuses the existing GitHub tool, limiting its App reader to the server-selected linked repository. Only `about` and `since` become tool arguments (`:46`); repository/API/query selectors are ignored. The tool supplies fixed query documents and repository variables (`worker/src/mcp/github.ts:214`, `:240`, `:262`, `:278`, `:291`); word searches strip GitHub qualifiers (`:701`). The managed context provides deny-only callbacks for Channel/Brief/Langfuse (`worker/src/managed-github.ts:18`, `:39`), never bare `askChannel` or credential access. No new public search endpoint or MCP admission was added.
+- `worker/src/managed-github.ts:11` validates bounded `about` text after admission but before client preparation; `:27` rejects successful GraphQL responses containing partial errors; `:50` converts tool-caught upstream errors to a redacted 502. These guards prevent the legacy tool's error strings from becoming managed content. HTTP authority errors retain the shared bounded 503 behavior (`worker/src/managed-channel.ts:122`); generation or release denial discards the entire prepared result (`:115`). No Channel storage/schema or mutation/permit changes.
+- `m1/p3/P3_ROUTE_INVENTORY.md:97` changes H33 BLOCKED → IMPLEMENTED with facade/helper/test evidence. M03 (`:241`) remains BLOCKED for connector admission, with H33 preparation noted. All other row classes remain unchanged. ADD-TO-B1 INV-4/INV-6 were already handled in B1a (`P3_IMPLEMENTATION_NOTES.md:406`); this subset does not modify index dispatch or reopen artifact writes.
+
+### Tests added (runtime not run)
+
+`worker/test/managed-read-integrations.test.ts` exercises the production `Channel.managedRequest` handler and the real GitHub tool with a synthetic App reader; it does not make network calls:
+
+- `:109`, it("admits the real handler through task.read and the exact registered binding at admission and release"): action, descriptor, exact target, generation, no-store, fixed repository/path query variables, and admitted bytes.
+- `:153`, parameterized it("withholds GitHub bytes on <reason> at <admission/release> for <query>"): nonmember, foreign Organization, foreign Workspace, revoked execution, expired execution, wrong generation, insufficient role and insufficient scope. Runs each at admission/release for file, direct Issue lookup, word search and recent activity. No client preparation/upstream reads before denial; no content/count/cursor bytes on release denial. These cases inject authority decisions to isolate the route boundary.
+- `:166`, it("admits the existing GitHub query variant <query> through the same scoped handler"): recent activity, Issue lookup, word search and directory/path query; repository variables remain pinned.
+- `:177`, it("bounds a hung authority at two seconds before preparing a GitHub read"); `:191`, it("discards the GitHub result when generation changes during the upstream wait"); `:198`, it("fails closed before client preparation on an authority outage without exposing its error").
+- `:206`, it("redacts tool-caught upstream errors"); `:212`, it("rejects partial GraphQL success without exposing upstream error messages"); `:218`, it("rejects invalid input after admission before creating the App client"); `:226`, it("ignores caller-supplied repository and API selectors").
+- `:248`, parameterized it("uses decide and withholds upstream access for <denial>"): real Organization/grant/credential issuance and authorization, through the production handler. Positive case plus sponsor nonmembership, foreign Organization/Workspace, revoked execution, expired credential, wrong binding generation and removed task.read scope; rejected actors never prepare the upstream reader. Direct SQL edits isolate one authority fact per case; these are not assertions of the revocation API's fanout protocol.
+
+### D5 expectation changes / incompatible existing expectations
+
+- `worker/test/managed-route-inventory.test.ts:159`: GET `/api/github` action `null` → `task.read`, deliberately opening H33 only. Coverage is the new real-handler positive/negative matrix above.
+- `worker/test/managed-facade.test.ts:23`: added GET `/api/github` to the concrete descriptor examples so registry exhaustiveness continues to include every implemented descriptor; no denial was removed or loosened.
+- All other deferral, pending/unknown-binding, S3/S4 and unlinked expectations remain unchanged. **Incompatible existing expectations: none.** Read-only comparison of all 138 test-tree files present at `0bfb31f` found zero byte changes.
+
+### Commands and observed results
+
+Node 22 PATH: `/home/box/.local/node22/bin`.
+
+- Worker `npm run typecheck` / `npm run typecheck --prefix worker`: final exit 0. An intermediate invocation after adding the partial-error test failed because its fixture option was missing from the type; added that declaration and reran successfully.
+- Worker `npm run lint`: final exit 0, 195 files checked. Initial lint failed on import ordering/formatting and control-character regex; used character-code validation and formatted only touched files/new tests via targeted `npx biome check --write`, exit 0.
+- `git diff --check`: exit 0. Baseline byte comparison: 138 files, zero changes. No git mutation, dependency/config change, network call, credential-file access or CLI/adapters change.
+- Vitest: **not run**, per binding coordinator mechanics (shared node_modules/Vite generated-config EROFS; manager runs suites). Intended targeted gate: `npx vitest run test/managed-read-integrations.test.ts test/managed-facade.test.ts test/managed-route-inventory.test.ts`. No runtime pass claimed. Full Worker/CLI/Dashboard/e2e suites: not run, manager-owned.
+
+### Remaining
+
+This is a partial B1b run, not completion of its acceptance criteria. Remaining requires the larger shared query/projection implementation and its complete handler matrix:
+
+1. H02: history variants, direct Event IDs, wakes and merged-local queries; authorize constituent scopes/authors, safe historical attribution, and exclude private Events before counts/cursors; preserve unavailable-holder behavior without opening unguarded streams.
+2. H03: Persons projection with current native Organization AND Workspace membership, excluding historical login-only identities. Existing `listPersons` remains actor-free denied (`worker/src/channel.ts:3157`); no login-derived authority introduced.
+3. H31: librarian feed with separately authorized task/history/Brief constituents and eligible holders/authors. Cursor mutation remains B2.
+4. H19/M02–M04/W10/W11/W15/J04: permitted summary constituents and connector/search query preparation, independent TR/UR/HR/AV checks and allowlist projections. Existing safe-agent-only summary and Memory search remain unchanged, not asserted complete for B1b. Actual stream/connector admission remains B4.
+5. Required per-family positive/negative handler tests and D5 expectation flips for those remaining families, followed by final inventory/notes and B1b DONE only after all eligible B1b work is finished.
+
+### Escalations / pending owner decisions
+
+No new trust-boundary design escalation. **Pending DD-1/DD-2:** H23 accounts, terminal keyboard input, approval approve/deny control, delegated private agent actions, Langfuse settings GET/PUT and MCP costs remain fail-closed. Reviewer recommendations are not an owner decision. Manager-only START (P2R-2) remains unchanged. This subset makes no stream revocation timing or full-suite compatibility claim.
+
+### B1b continuation — stored history subset (in progress)
+
+Continuing the H33 subset above. B1b is still incomplete; no DONE file is written.
+Added `worker/src/managed-history.ts` (`managedHistoryQuery`, `managedStoredEvent`) and `Channel.managedRequest` stored-history preparation, with HR admission, separate UR/AV constituent checks before SQL, per-Event enrolled-author AV and timestamp checks, allowlist projection and release rechecks. Exact citations, commands and test evidence will be appended after verification.
+
+Remaining: merged/tail/scoped local history; native Persons; librarian feed; summary/query constituents and connector preparation. DD-1/DD-2 operations remain closed. Stored history omits login-only Persons, system authors and private/unknown Event types; Wakes expose empty reference arrays. These are deny-safe interim restrictions, not completion of H02 or all B1b history semantics.
+
+### B1b continuation — implementation evidence and gate handoff
+
+This supersedes the “in progress” paragraph above for this stored-history subset only. **B1b remains incomplete; no B1b/B1 DONE file exists.** The complete batch cannot be claimed from H33 plus this bounded stored-history implementation.
+
+Changes:
+
+- `worker/src/managed-channel.ts:16` (`matchReadRoute`) / `:163` (`MANAGED_OPERATIONS`) register H02's GET `/api/events` through `history.read`, target `events`, action HR. `worker/src/channel.ts:971` (`managedRequest`) prepares only stored forward, ID lookup and Wake-filter queries. The existing managed-only dispatch boundary remains `worker/src/channel.ts:897`; no constructor, legacy history RPC, socket, adapter, or unlinked dispatch implementation was changed by this continuation.
+- `worker/src/managed-history.ts:11` (`managedHistoryQuery`) validates bounded numbers, unique parameter keys and at most MAX_EVENT_IDS IDs; rejects unknown/merged/scoped selectors rather than silently changing query meaning. SQL is bounded to 1,000 candidate Events or individual unique indexed ID lookups (`worker/src/channel.ts:987`). Projection/author admission precedes applying the requested result limit and choosing the returned cursor (`:993`, `:1014`). No hidden-row cursor/count is returned. **Availability limitation:** the fixed candidate window can yield a short/empty page; if all 1,000 rows are rejected the cursor does not advance. Completing full sparse-history pagination remains B1b work; no completeness claim is made for this interim subset.
+- UR and roster AV are independently checked before candidate SQL (`worker/src/channel.ts:974`). Only active local enrolled-agent associations are considered (`:997`), with exact execution AV checks and the Event timestamp (`:999`). Checks are retained for fresh release authorization (`:965`), and the existing synchronous association/generation fence covers retained authors (`:942`). This is request-local preparation, with no reusable positive authorization cache.
+- `worker/src/organization.ts:57` adds a trusted internal `eventAt` fact to `ChannelAuthorization`. `channelDecision` at `:1070` adds an operation-specific historical predicate: the stored timestamp must be finite, at/after the currently enrolled execution's start and no later than authority time. Existing `decide()` remains the action decision point (`worker/src/organization.ts:1119`, `worker/src/policy.ts:92`); no role/membership decision was duplicated in Channel.
+- `worker/src/managed-history.ts:38` (`managedStoredEvent`) projects only enrolled-agent shared Updates/presence via the existing allowlist (`worker/src/managed-projection.ts:46`), or Wake metadata with empty reference arrays. All Capture, turn, private/directed/unknown Event payloads, login-only Person attribution and system authors are omitted. Wake delivery/Directive reference IDs remain redacted until separately authorized reference projection is implemented. No managed stream, local-holder request or MCP entry is opened.
+- `m1/p3/P3_ROUTE_INVENTORY.md:66` changes H02 BLOCKED → PARTIAL, explicitly retaining merged/tail/scoped denials and the omitted attribution/reference cases. H33's earlier classification is retained. No other inventory row class changes in this continuation.
+
+New tests (`worker/test/managed-history.test.ts`; **runtime not run**):
+
+- `:119`, it("admits <query> through HR, UR and AV with exact enrolled-author release checks"): production handler for forward, direct IDs, Wake filter and single-ID lookup; action/target/generation, no-store, projection and retained-author release checks.
+- `:159`, it("withholds bytes counts and cursors for <query>: <denial> at <admission/release>"): each variant with nonmember, foreign Organization, foreign Workspace, revoked execution, expired execution, wrong generation, insufficient role and insufficient scope; no candidate SQL before admission denial. These cases inject authority denials to isolate the real handler boundary.
+- `:170`, it("requires constituent <action> before SQL and again at release"); `:180`, it("drops historical or inactive authors before counting and cursor construction"); `:188`, it("discards the complete page on author release denial"); `:194`, it("fences a binding change after the SQL read"); `:200`, it("redacts authority failures before any SQL read").
+- `:219`, it("denies unsupported or invalid <query> without reading candidates"); `:225`, it("projects before applying the page limit"); `:230`, it("bounds authority waits without querying history") uses a genuinely hung authority and fake time at two seconds.
+- `:256`, it("uses decide and withholds history access for <denial>"): real Organization/grant/credential issuance and authority verification through production `Channel.managedRequest`, with a synthetic local SQL source. Covers positive data, sponsor nonmembership, foreign org/Workspace, revoked execution, expired credential, wrong binding generation, insufficient scope and pre-enrollment historical omission. Removes only the fixture's placeholder execution before starting its real target to prevent tied timestamps selecting a dummy target (`:261`). This does not certify revocation API fanout or stream timing.
+
+D5 expectation changes (only the deliberately opened H02 stored-history family):
+
+- `worker/test/managed-route-inventory.test.ts:169`: GET `/api/events` action null → `channel.history.read`.
+- `worker/test/managed-route-inventory.test.ts:230`, `:236`, `:239`: for **version-1 linked** GET `/api/events` only, expected 404/resource_denied → 200/`{events:[],cursor:0}`. Pending and unknown-version paths retain the original 404/resource_denied; every other family's expected value is unchanged.
+- `worker/test/managed-facade.test.ts:24`: adds the descriptor example for registry coverage; `:58`: replaces the `/api/events` member of the deferred-null assertion with an explicit equality assertion for action HR / target events / operation history.read. Other deferred assertions remain intact.
+- Earlier H33 changes remain listed in the preceding B1b section. **Incompatible existing expectations: none.** Read-only comparison of all 138 baseline (`0bfb31f`) Worker/CLI/dashboard test-tree files found zero byte changes.
+
+Commands observed in this continuation (Node 22 PATH):
+
+- `npm run typecheck --prefix worker`, exit 0; subsequent Worker `npm run typecheck`, exit 0.
+- Worker `npm run lint`, exit 0: 197 files checked, no fixes applied. Targeted formatting from Worker cwd applied formatting/import ordering only to the touched files. An initial repository-root Biome invocation failed on existing nested-root configuration; reran from Worker cwd successfully, with no configuration change. One maintenance Python invocation used Worker cwd with repo-relative paths and failed before any edit; corrected the cwd and applied it successfully.
+- `git diff --check`, exit 0. Baseline comparison: 138 files, zero changed.
+- Vitest **not run**, per the binding coordinator mechanics: sandbox cannot run the suites (shared generated-config EROFS expected); manager owns runtime gates. Suggested targeted gate: `npx vitest run test/managed-history.test.ts test/managed-read-integrations.test.ts test/managed-facade.test.ts test/managed-route-inventory.test.ts`. Full suites/e2e: not run. No network, dependency/configuration change, git mutation or secret-file access was performed.
+
+Remaining (not moved to M2 or later batches):
+
+1. H02 merged/tail/before/Agent/Task queries with guarded local-holder preparation and bounded unavailable-holder behavior; full sparse-history pagination and native historical attribution/reference rules. Current unsupported selectors explicitly deny (`worker/src/managed-history.ts:13`).
+2. H03 native active-org AND active-Workspace Persons projection; H31 librarian feed with independent task/history/Brief checks and authorized holders/authors.
+3. H19/M02–M04/W10/W11/W15/J04 summary and connector/search query preparation, distinct TR/UR/HR/AV constituents; existing safe-agent summary/Memory behavior is not asserted complete for B1b.
+4. Complete positive/negative matrices and D5 expectation flips as each remaining family opens; final inventory and DONE only after all eligible B1b work is complete.
+
+Escalations: no new owner decision requested. Deny-safe interim historical-attribution restrictions and sparse-page availability limitations are explicit above, not silent completion claims. **Pending DD-1/DD-2:** H23 accounts, terminal keyboard input, approval approve/deny, delegated private agent actions, Langfuse settings GET/PUT and MCP costs remain closed, as instructed. START remains manager-only; no change to `worker/src/principals.ts` or `worker/src/policy.ts`.
+
+### B1b continuation — native Persons subset
+
+**B1b remains incomplete; no DONE file written.** This continuation preserves the earlier uncommitted GitHub/history work and adds H03 only.
+
+Changes and evidence:
+
+- `worker/src/managed-channel.ts:16`, `:164` (`persons.read`) admit GET `/api/persons` declaratively with WR and exact target `persons`. `worker/src/channel.ts:977` prepares through the existing managed facade after admission; `:964` re-fetches the native projection at release and denies the whole response if any membership changed. Binding is fenced after the awaits. The existing managed-only dispatch remains `:897`; legacy `listPersons` at `:3216` is untouched. No new managed storage, schema, bindings or legacy-path work.
+- `worker/src/organization.ts:1159` (`readChannelPersons`) attenuates to exact WR/persons.read/persons, calls existing `authorizeChannelRead` (central `channelDecision` → `decide`), then repeats the synchronous decision after the credential await before projection. Subject filtering requires active Organization AND exact Workspace membership. Projection constructs `{personId}` only, sorted by native ID. This is deliberately a native managed response `{persons:[{personId}]}`; historical Channel login/timezone/join data cannot be attributed to native identities and is never read or synthesized. No membership roles, grant metadata, account fields or historical logins are returned.
+- `m1/p3/P3_ROUTE_INVENTORY.md:67` H03 BLOCKED → IMPLEMENTED; O09 (`:179`) now enumerates the policy-guarded internal projection RPC. Actor-free legacy `listPersons` remains denied on linked Channels. Pending/unknown bindings remain denied.
+
+Tests added (`worker/test/managed-persons.test.ts`; runtime **not run**):
+
+- `:70` it("admits the native allowlist through WR and rechecks membership before release") exercises production HTTP handler, exact action/target/operation/generation, projection, no-store and two roster reads.
+- `:89` it("withholds roster and counts for <denial> at <admission/release>") exercises nonmember, foreign Organization, foreign Workspace, revoked execution, expired execution, wrong generation, insufficient role and insufficient scope with authority stubs. Initial denials assert zero roster reads; release denials assert no roster bytes.
+- `:97` it("discards a page if the binding changes during preparation"); `:102` it("discards a page if a projected membership disappears at release"); `:107` it("redacts projection authority outages").
+- `:116` it("projects only current dual memberships with <none/organization/workspace> revocation") exercises real Organization RPC/policy and filters org-only/Workspace-only/revoked subjects; wrong generation, action and foreign Workspace also deny. The existing inventory test (`worker/test/managed-route-inventory.test.ts:228`) exercises real Worker HTTP with native authentication. The parameterized execution-denial handler cases use stubs, not a claim of real credential issuance/revocation integration coverage.
+
+D5 expectation changes, only H03:
+
+- `worker/test/managed-route-inventory.test.ts:170`: GET `/api/persons` expected null action → WR.
+- `worker/test/managed-route-inventory.test.ts:230`, `:237`, `:250`: version-1 linked GET `/api/persons` only, 404/resource_denied → 200/native fixture Person IDs. Pending/unknown-generation-version states retain the original denial. Other family expectations are unchanged (formatting adjusts ternary indentation).
+- `worker/test/managed-facade.test.ts:25`, `:64`: add registry coverage and replace only `/api/persons` deferred-null assertion with WR/persons/persons.read equality. All other deferred assertions remain.
+- **Incompatible existing expectations: none.** Read-only comparison of 138 test-tree files at `0bfb31f` found zero changed bytes.
+
+Commands observed (Node 22 PATH): Worker `npm run typecheck` exit 0; Worker `npm run lint` exit 0 (198 files, no fixes); targeted Biome formatting exit 0; `git diff --check` exit 0. Initial typecheck failed on Workers RPC union inference; changed the bounded preparation callback to `async () => await ...` and reran successfully. One maintenance Python command used the wrong cwd and failed before edits; reran from repository root. Vitest/full suites/e2e **not run**, per coordinator mechanics (manager owns runtime gates; sandbox generated-config EROFS expected). Suggested additional gate: `npx vitest run test/managed-persons.test.ts test/managed-route-inventory.test.ts test/managed-facade.test.ts` together with the prior history/GitHub gates. No network or git writes.
+
+### Remaining after native Persons
+
+H02 merged/local, tail/before/scoped queries and sparse-pagination/history attribution remain as recorded above. H31 librarian feed and H19 summary constituents, M02–M04 connector/search preparation, W10/W11/W15/J04 preparation still require implementation and complete handler matrices. No later-batch stream or MCP admission was opened. Final B1b completion inventory and DONE remain outstanding. This is a coherent H03 review subset, not completion of the requested sub-batch.
+
+Escalations: no new owner decision. Pending DD-1/DD-2 remain H23 accounts, terminal keyboard input, approval control, delegated private agent actions, Langfuse GET/PUT and MCP costs. START remains manager-only.
