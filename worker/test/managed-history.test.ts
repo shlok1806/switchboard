@@ -304,6 +304,28 @@ describe("Stored history handler with real Organization policy", () => {
       if (!started.ok || !started.value.execution || !started.value.secret) throw new Error("fixture execution denied");
       const executionId = started.value.execution.id;
       const credential = started.value.secret;
+      // Credential verification consults the actual Channel DO, not the bare
+      // handler below. Complete its live registration/association before linking.
+      await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object, state) => {
+        const registered = await object.registerAgent("alice", {
+          cli: "codex",
+          sessionId: "session",
+          resumed: false,
+          cwd: "/repo",
+        });
+        if (!registered.ok) throw new Error("fixture roster denied");
+        state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS m1_agent_executions (
+          agent TEXT PRIMARY KEY, organizationId TEXT NOT NULL, executionId TEXT NOT NULL, active INTEGER NOT NULL)`);
+        state.storage.sql.exec(
+          "INSERT OR REPLACE INTO m1_agent_executions VALUES(?,?,?,1)",
+          f.targetId,
+          f.organizationId,
+          executionId,
+        );
+        Object.assign(object, {
+          binding: { version: 1, generation: 1, workspace: f.workspaceId, operation: "binding", state: "linked" },
+        });
+      });
       await runInDurableObject(f.org, (_object, state) => {
         if (denial === "non_member") {
           const row = JSON.parse(
