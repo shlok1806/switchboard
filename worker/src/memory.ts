@@ -103,7 +103,7 @@ export class Memory {
   }
 
   /** Notes matching `query`: best match first for a search, else newest first. */
-  read(query: MemoryQuery): MemoryReadResult {
+  read(query: MemoryQuery, eligibleAuthors?: readonly string[]): MemoryReadResult {
     const limit = Math.min(query.limit ?? 20, MAX_MEMORY_LIMIT);
     const where: string[] = [];
     const args: (string | number)[] = [];
@@ -139,6 +139,12 @@ export class Memory {
     if (query.before !== undefined) {
       where.push(`${key} < ?`);
       args.push(query.before);
+    }
+    // Managed callers supply freshly authorized authors. Filter in SQL before rank,
+    // limit and the extra row used for `more`; an empty allowlist reveals nothing.
+    if (eligibleAuthors !== undefined) {
+      where.push("n.author IN (SELECT value FROM json_each(?))");
+      args.push(JSON.stringify(eligibleAuthors));
     }
     const clause = where.length === 0 ? "" : `WHERE ${where.join(" AND ")}`;
     const order = query.q === undefined ? `${key} DESC` : "f.rank";

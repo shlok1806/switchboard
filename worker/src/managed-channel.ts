@@ -9,7 +9,10 @@ export interface ManagedReadRoute {
 }
 /** Explicit read inventory. Every other managed operation remains closed until implemented. */
 export function managedReadRoute(method: string, path: string): ManagedReadRoute | null {
+  if (method === "POST" && path === "/api/skill-files/read")
+    return { action: "channel.update.read", targetId: "skill-files", operation: "skill-files.read" };
   if (method !== "GET") return null;
+  if (path === "/api/memory") return { action: "channel.history.read", targetId: "memory", operation: "memory.read" };
   if (["/api/skills", "/api/artifacts", "/api/brief"].includes(path))
     return { action: "channel.update.read", targetId: path.slice(5), operation: "content.list" };
   const content = /^\/api\/(skills|artifacts|brief)\/([^/]+)(\/page)?$/.exec(path);
@@ -87,6 +90,7 @@ export async function managedRead<T>(options: {
     const admitted = await authorityRequest(() => options.authorize(options.input));
     if (!admitted.ok || !options.current()) return managedError(404, "resource_denied");
     const value = await options.read();
+    if (!options.current()) return managedError(404, "resource_denied");
     const released = await authorityRequest(() => options.authorize(options.input));
     if (!released.ok || !options.current()) return managedError(404, "resource_denied");
     return value instanceof Response ? value : Response.json(value, { headers: { "Cache-Control": "no-store" } });
@@ -101,13 +105,18 @@ export async function managedRead<T>(options: {
 
 /** Only implemented mutations are admitted; an unrecognized router path remains denied. */
 export function managedWriteRoute(method: string, path: string): ManagedReadRoute | null {
-  if (method === "DELETE") {
+  if (method === "DELETE" || method === "PUT") {
     const read = managedReadRoute("GET", path);
     return read?.operation === "content.read" && read.targetId.startsWith("artifacts/")
-      ? { ...read, action: "channel.update.write", operation: "artifact.delete" }
+      ? {
+          ...read,
+          action: "channel.update.write",
+          operation: method === "PUT" ? "artifact.publish" : "artifact.delete",
+        }
       : null;
   }
   if (method !== "POST") return null;
+  if (path === "/api/memory") return { action: "channel.update.write", targetId: "memory", operation: "memory.write" };
   if (path === "/api/directives")
     return { action: "agent.directive.send", targetId: "directives", operation: "directive.send" };
   if (path === "/api/updates") return { action: "channel.update.write", targetId: "updates", operation: "update.post" };

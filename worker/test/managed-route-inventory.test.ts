@@ -80,9 +80,14 @@ describe("managed RPC bypass closure", () => {
     );
   });
   it("keeps streams mutations MCP unknown HTTP routes and malformed private targets closed in the read facade", () => {
-    for (const path of ["/api/stream", "/api/agents/a/transcript", "/api/memory", "/mcp", "/api/new-route"])
+    for (const path of ["/api/stream", "/api/agents/a/transcript", "/mcp", "/api/new-route"])
       expect(managedReadRoute("GET", path)).toBeNull();
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) expect(managedReadRoute(method, "/api/tasks")).toBeNull();
+    expect(managedReadRoute("GET", "/api/memory")).toEqual({
+      action: "channel.history.read",
+      targetId: "memory",
+      operation: "memory.read",
+    });
     expect(managedReadRoute("GET", "/api/tasks/1")?.action).toBe("task.read");
     expect(managedReadRoute("GET", "/api/tasks/0")).toBeNull();
     expect(managedReadRoute("GET", "/api/tasks/1/extra")).toBeNull();
@@ -134,7 +139,7 @@ describe("managed RPC bypass closure", () => {
         ["GET", "/api/skills/guide", "channel.update.read"],
         ["POST", "/api/skills/guide", null],
         ["POST", "/api/skill-files", null],
-        ["POST", "/api/skill-files/read", null],
+        ["POST", "/api/skill-files/read", "channel.update.read"],
       ],
       brief: [
         ["GET", "/api/brief", "channel.update.read"],
@@ -146,7 +151,7 @@ describe("managed RPC bypass closure", () => {
         ["GET", "/api/artifacts/guide", "channel.update.read"],
         ["GET", "/api/artifacts/guide/page", "channel.update.read"],
         ["DELETE", "/api/artifacts/guide", "channel.update.write"],
-        ["PUT", "/api/artifacts/guide", null],
+        ["PUT", "/api/artifacts/guide", "channel.update.write"],
       ],
       librarian: [
         ["GET", "/api/librarian", null],
@@ -167,8 +172,8 @@ describe("managed RPC bypass closure", () => {
       ["POST", "/api/updates", "channel.update.write"],
       ["GET", "/api/stream", null],
       ["POST", "/api/directives", "agent.directive.send"],
-      ["POST", "/api/memory", null],
-      ["GET", "/api/memory", null],
+      ["POST", "/api/memory", "channel.update.write"],
+      ["GET", "/api/memory", "channel.history.read"],
     ];
     expect(fixed.map(([method, path]) => `${method} ${path}`).sort()).toEqual([...ROUTES].sort());
     expect(Object.keys(examples).sort()).toEqual(Object.keys(CHANNEL_ROUTE_MATCHERS).sort());
@@ -222,8 +227,23 @@ describe("managed RPC bypass closure", () => {
       });
       for (const [method, path] of paths) {
         const response = await nativeFetch(`/r/${f.repo}${path}`, f.token, { method });
-        expect(response.status, `${binding.state}/${binding.version}: ${method} ${path}`).toBe(404);
-        expect(await response.json()).toEqual({ ok: false, reason: "resource_denied" });
+        const memory = binding.state === "linked" && binding.version === 1 && path === "/api/memory";
+        const skillFiles = binding.state === "linked" && binding.version === 1 && path === "/api/skill-files/read";
+        const artifact = binding.state === "linked" && binding.version === 1 && path === "/api/artifacts/guide";
+        expect(response.status, `${binding.state}/${binding.version}: ${method} ${path}`).toBe(
+          memory ? (method === "GET" ? 200 : 403) : skillFiles || artifact ? 400 : 404,
+        );
+        expect(await response.json()).toEqual(
+          memory
+            ? method === "GET"
+              ? { notes: [] }
+              : { ok: false, reason: "memory_requires_agent" }
+            : artifact
+              ? { ok: false, reason: "invalid_artifact" }
+              : skillFiles
+                ? { ok: false, reason: "invalid_skill_chunks" }
+                : { ok: false, reason: "resource_denied" },
+        );
       }
     }
   });

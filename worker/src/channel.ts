@@ -1,4 +1,4 @@
-import { ARTIFACT_CSP } from "../../shared/src/index";
+import { ARTIFACT_CSP, checkArtifact, toBase64 } from "../../shared/src/index";
 import { appendManagedOutcome } from "./managed-retention";
 // One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
 // named by `owner/repo` (ADR 0007). It owns the Channel's Persons, who may join
@@ -79,6 +79,7 @@ import type {
 import {
   agentIdFor,
   cleanHistoryPage,
+  cleanNote,
   cleanTerminalText,
   cleanTranscriptPage,
   DEFAULT_ARTIFACT_PUBLISHES_PER_DAY,
@@ -131,6 +132,7 @@ import { ManagedReadFailure, managedError, managedRead, managedReadRoute, manage
 import { safeAgent } from "./managed-projection";
 import { type GrantResult, McpGrants } from "./mcp/grants";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
+import { memoryQuery } from "./memory-api";
 import type { ChannelAuthorization } from "./organization";
 import { workspaceParent } from "./policy";
 import { authorityRequest, LocalMutationPermits, type MutationPermit } from "./policy-permits";
@@ -807,12 +809,18 @@ export class Channel extends DurableObject<Env> {
     if (!route) return managedError(404, "resource_denied");
     const organizationId = workspaceParent(binding.workspace);
     if (!organizationId) return managedError(404, "resource_denied");
+    const bindingCurrent = () =>
+      this.binding.version === 1 &&
+      this.binding.state === "linked" &&
+      this.binding.generation === binding.generation &&
+      this.binding.workspace === binding.workspace &&
+      this.binding.operation === binding.operation;
     try {
       const token = request.headers.get("Authorization")?.startsWith("Bearer m1.")
         ? request.headers.get("Authorization")?.slice(7).trim()
         : undefined;
       const actor = token ? { token } : await authorityRequest(() => readNativeActor(request, url, this.env));
-      if (!actor) return managedError(404, "resource_denied");
+      if (!actor || !bindingCurrent()) return managedError(404, "resource_denied");
       const org = this.env.ORGANIZATION.getByName(organizationId);
       const input: ChannelAuthorization = {
         actor,
@@ -831,31 +839,102 @@ export class Channel extends DurableObject<Env> {
           operation: route.operation,
         },
       };
-      const current = () =>
-        this.binding.version === 1 &&
-        this.binding.state === "linked" &&
-        this.binding.generation === binding.generation &&
-        this.binding.workspace === binding.workspace;
-      if (writeRoute) return await this.#managedWrite(request, path, input, current);
       const rosterChecks: ChannelAuthorization[] = [];
+      const current = () =>
+        bindingCurrent() &&
+        (route.operation !== "memory.read" ||
+          rosterChecks.every((check) => {
+            const association = this.managedAssociation(check.resource.targetId as AgentId);
+            return association?.active === 1 && association.executionId === check.targetExecutionId;
+          }));
+      if (writeRoute) return await this.#managedWrite(request, path, input, current);
       return managedRead({
         input,
         current,
         authorize: async (input) => {
+          let projectionRevision: number | undefined;
           for (const check of rosterChecks) {
+            if (route.operation === "memory.read") {
+              const association = this.managedAssociation(check.resource.targetId as AgentId);
+              if (association?.active !== 1 || association.executionId !== check.targetExecutionId)
+                return { ok: false, status: 403, reason: "target_enrollment_required", policyRevision: 0 };
+            }
             const result = await org.authorizeChannelRead(check);
+            if (!current()) throw new ManagedReadFailure(404);
             if (!result.ok) return result;
+            if (route.operation === "memory.read") {
+              if (projectionRevision !== undefined && projectionRevision !== result.policyRevision)
+                throw new ManagedReadFailure(404);
+              projectionRevision = result.policyRevision;
+            }
           }
+          let authorization = input;
           if (!token) {
             const currentActor = await readNativeActor(request, url, this.env);
+            if (!current()) throw new ManagedReadFailure(404);
             if (!currentActor)
               return { ok: false, status: 403, reason: "native_authentication_required", policyRevision: 0 };
-            return org.authorizeChannelRead({ ...input, actor: currentActor });
+            authorization = { ...input, actor: currentActor };
           }
-          return org.authorizeChannelRead(input);
+          const result = await org.authorizeChannelRead(authorization);
+          // Do not combine author checks from different authority revisions into a
+          // response that a later, weaker top-level history check could release.
+          if (projectionRevision !== undefined && projectionRevision !== result.policyRevision)
+            throw new ManagedReadFailure(404);
+          return result;
         },
         read: async () => {
           if (path === "/api/relay") return { relay: relaySettings(this.env) };
+          if (route.operation === "skill-files.read") {
+            // Parsing and bytes stay behind initial authorization. The local Skills
+            // store only releases completed blobs held by this Channel's publications.
+            const { chunks } = await readJson(request);
+            if (!current()) throw new ManagedReadFailure(404);
+            if (!Array.isArray(chunks) || chunks.length === 0) return managedError(400, "invalid_skill_chunks");
+            const wanted: { digest: string; index: number }[] = [];
+            for (const chunk of chunks) {
+              if (
+                typeof chunk?.digest !== "string" ||
+                !/^[0-9a-f]{64}$/.test(chunk.digest) ||
+                !Number.isSafeInteger(chunk.index) ||
+                chunk.index < 0
+              )
+                throw new ManagedReadFailure(404);
+              wanted.push({ digest: chunk.digest, index: chunk.index });
+            }
+            const result = this.skills.readChunks(wanted);
+            if (!result.ok) {
+              if (result.status === 413) return managedError(413, "skill_transfer_limit");
+              throw new ManagedReadFailure(404);
+            }
+            return {
+              chunks: result.value.map(({ digest, index, data }) => ({ digest, index, data: toBase64(data) })),
+            };
+          }
+          if (route.operation === "memory.read") {
+            const parsed = memoryQuery(url.searchParams);
+            if (!parsed.ok) return managedError(400, "invalid_memory_query");
+            const authors: AgentId[] = [];
+            for (const agent of this.agents.list(false)) {
+              const association = this.managedAssociation(agent.id);
+              if (association?.active !== 1) continue;
+              const check: ChannelAuthorization = {
+                ...input,
+                action: "agent.view",
+                targetExecutionId: association.executionId,
+                resource: { ...input.resource, targetId: agent.id, operation: "memory.author" },
+              };
+              const allowed = await authorityRequest(async () => await org.authorizeChannelRead(check));
+              if (!current()) throw new ManagedReadFailure(404);
+              const latest = this.managedAssociation(agent.id);
+              if (!allowed.ok || latest?.active !== 1 || latest.executionId !== association.executionId) continue;
+              rosterChecks.push(check);
+              authors.push(agent.id);
+            }
+            const result = this.memory.read(parsed.query, authors);
+            if (!result.ok) return managedError(400, "invalid_memory_query");
+            return { notes: result.notes, ...(result.more ? { more: true } : {}) };
+          }
           if (route.action === "channel.update.read") {
             const versionText = url.searchParams.get("version");
             if (versionText !== null && !/^[1-9]\d{0,8}$/.test(versionText)) throw new ManagedReadFailure(404);
@@ -977,6 +1056,7 @@ export class Channel extends DurableObject<Env> {
     }
     const org = this.env.ORGANIZATION.getByName(input.resource.organizationId);
     const login = "token" in input.actor ? null : await authorityRequest(() => this.nativeLogin(request));
+    if (!current()) throw new ManagedReadFailure(404);
     const verified =
       "token" in input.actor
         ? await authorityRequest(
@@ -987,6 +1067,8 @@ export class Channel extends DurableObject<Env> {
     if (!caller || !current()) throw new ManagedReadFailure(404);
     let outcome = "committed";
     const prepare = async (intent = false) => {
+      // Preparation (including artifact hashing) may yield before requesting a permit.
+      if (!current()) throw new ManagedReadFailure(404);
       if (!("token" in input.actor)) {
         const actor = await authorityRequest(() => readNativeActor(request, new URL(request.url), this.env));
         if (!actor || actor.personId !== input.actor.personId || actor.githubId !== input.actor.githubId || !current())
@@ -1041,6 +1123,59 @@ export class Channel extends DurableObject<Env> {
           }),
       };
     };
+    if (input.resource.operation === "memory.write") {
+      // Preserve the existing Agent-only writer predicate; never accept a body author.
+      const note = cleanNote(body);
+      const prepared = await prepare();
+      if (!caller.agent) return managedError(403, "memory_requires_agent");
+      if (!note.ok) return managedError(400, "invalid_note");
+      let result: NoteResult | ClaimRefusal | undefined;
+      prepared.commit(() => {
+        result =
+          caller.agent && this.agents.find(caller.agent)?.librarian
+            ? { ok: false, status: 403, reason: "librarian_write_denied" }
+            : this.#writeNote(caller, note.note);
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result) return managedError(404, "resource_denied");
+      return result.ok
+        ? Response.json(result, { status: 201, headers: { "Cache-Control": "no-store" } })
+        : managedError(result.status, "resource_denied");
+    }
+    if (input.resource.operation === "artifact.publish") {
+      // Admission precedes payload validation/preparation, so even malformed
+      // publications from nonmembers receive the same denial. This permit is
+      // deliberately not installed or used: hashing precedes a fresh commit permit.
+      const admitted = await authorityRequest(async () => await org.issueMutationPermit(input));
+      if (!admitted.ok || !current()) throw new ManagedReadFailure(404);
+      const name = input.resource.targetId?.slice("artifacts/".length) ?? "";
+      const checked = checkArtifact(name, body);
+      if (!checked.ok) return managedError(400, "invalid_artifact");
+      const result = await this.artifacts.publish(
+        { person: caller.person, ...(caller.agent ? { agent: caller.agent } : {}) },
+        name,
+        checked.publish,
+        async () => {
+          const prepared = await prepare();
+          return {
+            commit: (write: () => void) =>
+              prepared.commit(() => {
+                if (caller.agent && this.agents.find(caller.agent)?.librarian) throw new ManagedReadFailure(404);
+                write();
+              }),
+          };
+        },
+        (result) => {
+          if (!result.ok) outcome = "local_restriction_denied";
+        },
+      );
+      return result.ok
+        ? Response.json(result.value, {
+            status: result.value.published ? 201 : 200,
+            headers: { "Cache-Control": "no-store" },
+          })
+        : managedError(result.status, "resource_denied");
+    }
     if (input.resource.operation === "artifact.delete") {
       if (caller.agent) return managedError(403, "artifact_delete_requires_person");
       const prepared = await prepare();
@@ -2155,6 +2290,10 @@ export class Channel extends DurableObject<Env> {
    */
   writeNote(caller: Caller, note: PostNoteRequest): NoteResult | ClaimRefusal {
     this.requireLegacyAccess();
+    return this.#writeNote(caller, note);
+  }
+
+  #writeNote(caller: Caller, note: PostNoteRequest): NoteResult | ClaimRefusal {
     if (caller.agent === undefined) {
       return {
         ok: false,

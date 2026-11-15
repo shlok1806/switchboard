@@ -1,0 +1,11 @@
+# S2b1 complete — ready for independent review and manager runtime gate
+- Retained/hardened only existing Memory read/search/recent/writeNote, skill-file chunk reads and artifact PUT (`worker/src/managed-channel.ts:11`, `:107`).
+- Fresh read/release decisions, post-await binding fences, exact-resource synchronous permit commits and redacted failures are implemented (`worker/src/channel.ts:798`, `:1069`).
+- Artifact admission precedes validation; hashing precedes its fresh commit permit (`worker/src/channel.ts:1145`; `worker/src/artifacts.ts:155`).
+- Four new test files cover admission/release denial, foreign scope, revoked execution, generation races, ownership and rollback; details: `m1/p3/P3_IMPLEMENTATION_NOTES.md:219`.
+- Observed: Worker typecheck/lint exit 0; diff whitespace check exit 0; 138 baseline test files byte-identical.
+- Vitest not run: coordinator specifies sandbox EROFS; manager must execute and gate runtime tests. No runtime passes claimed.
+- Deferred to S2c and fail-closed: skill uploads/publication; Brief writes/librarian; settings/Langfuse; Hosts/spawn/stop/pause/resume; task creation; telemetry; non-D1 Agent controls.
+- Deferred to S2c and fail-closed: shared history/events/search/roster constituents and continuation/handOff. Streams remain S3; MCP/OAuth remain S4.
+- Inventory remains explicitly PARTIAL (`worker/test/managed-route-inventory.test.ts:96`); durable Organization export remains S2c. Local outcomes retain D4 caps/expiry (`worker/src/managed-retention.ts:2`).
+- Known limits: runtime/security review pending; conservative historical Memory author omission; no distributed atomicity or durable outcome export claimed.

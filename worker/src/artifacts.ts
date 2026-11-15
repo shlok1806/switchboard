@@ -156,9 +156,30 @@ export class Artifacts {
     publisher: ArtifactPublisher,
     name: string,
     page: { html: string; title: string },
+    prepare?: () => Promise<{ commit(write: () => void): void }>,
+    observed?: (result: ArtifactResult<{ artifact: ArtifactSummary; published: boolean }>) => void,
   ): Promise<ArtifactResult<{ artifact: ArtifactSummary; published: boolean }>> {
     const bytes = new TextEncoder().encode(page.html);
     const digest = await sha256Hex(bytes);
+    const prepared = prepare ? await prepare() : undefined;
+    let result: ArtifactResult<{ artifact: ArtifactSummary; published: boolean }> | undefined;
+    const write = () => {
+      result = this.publishPrepared(publisher, name, page, bytes, digest);
+      observed?.(result);
+    };
+    if (prepared) prepared.commit(write);
+    else write();
+    if (!result) throw new Error("artifact_commit_missing");
+    return result;
+  }
+
+  private publishPrepared(
+    publisher: ArtifactPublisher,
+    name: string,
+    page: { html: string; title: string },
+    bytes: Uint8Array,
+    digest: string,
+  ): ArtifactResult<{ artifact: ArtifactSummary; published: boolean }> {
     const latest = this.sql
       .exec<VersionRow>("SELECT * FROM artifact_versions WHERE name = ? ORDER BY version DESC LIMIT 1", name)
       .toArray()[0];
