@@ -1,0 +1,273 @@
+# Package 3 route and trust-boundary inventory
+
+## Scope and reading conventions
+
+Inventory inspected at HEAD `8a9ee8e`. This was a read-only inspection. Tests, builds, typechecks and lint: **not run**. Test filenames below identify existing evidence to review, not passing results.
+
+Rows are **surface groups**, not endpoint counts. Every member of a grouped row is explicitly named. HTTP, RPC and frame representations of one operation are intentionally separate rows because each is an independent enforcement boundary.
+
+Classes:
+
+- **IMPLEMENTED**: current managed admission reaches `decide()` and has relevant tests. This does not certify every required adversarial case or completion of downstream stream enforcement.
+- **DENIED**: actor-free, unsupported or invalid access deliberately remains closed in the final design.
+- **PARTIAL**: existing functionality/checks exist, but listed policy, projection, lifecycle or inventory gaps remain.
+- **BLOCKED**: managed admission is a fail-closed placeholder that must be opened during Package 3.
+
+Public shell/auth/protocol surfaces are marked PARTIAL where their legitimate policy exemption still needs explicit exhaustive-inventory coverage. They do not need artificial Workspace decisions to return public protocol data.
+
+All paths beginning `/api/` in H rows are under `/r/:owner/:repo`. `:agent` is URL-encoded. `:w`, `:e`, and `:p` are Workspace, execution and principal identifiers.
+
+### Common decision points and permits
+
+These abbreviations are references to actual code, not additional policy functions:
+
+| Key | Current decision/enforcement point |
+|---|---|
+| R | `managedRead`, `worker/src/managed-channel.ts:83`, calls Organization authorization before read and before release; `authorizeChannelRead`, `worker/src/organization.ts:1097`, reaches `channelDecision`, `:937`, then `decide`, `worker/src/policy.ts:92` via `worker/src/organization.ts:1087`. |
+| W | `#managedWrite`, `worker/src/channel.ts:1130`; `prepare`, `:1161`; `issueMutationPermit`, `worker/src/organization.ts:1127`; `decide` through `channelDecision`, `:1087`; local synchronous consume/write/outcome transaction at `worker/src/channel.ts:1182`. |
+| F | Unopened managed HTTP route returns 404 at `worker/src/channel.ts:898`; allowlists are `worker/src/managed-channel.ts:11` and `:107`. No `decide()` call for that unopened operation. |
+| L | Bare legacy RPC fence `requireLegacyAccess`, `worker/src/channel.ts:1453`, using loaded binding through `managedClosed`, `:869`; no positive managed decision. |
+| B | Binding fence `bindingCurrent`, `worker/src/channel.ts:857`; legacy form rejects linked Channels. |
+| P | Required exact-resource, single-use, maximum two-second Organization permit. Consume with generation/deadline/unused checks inside the synchronous local state/write/audit transaction; implementation primitives at `worker/src/policy-permits.ts:40` and `worker/src/channel.ts:1182`. |
+| E+P | External-intent authorization/correlation before external effect; reacquire P before subsequent local commit. Existing finish integration: `worker/src/channel.ts:1382`. |
+| OTX | Organization-local authoritative mutation and audit transaction, not a Channel permit. Native mutation entry points: `worker/src/organization.ts:181`, `:822`, `:1434`. |
+| LEASE | Required authority-issued stream eligibility, maximum decision-time + 5,000 ms, capped by credential/grant expiry. Not implemented by the current `send`, `worker/src/channel.ts:3769`. |
+
+Action abbreviations:
+
+| Key | Exact action |
+|---|---|
+| WR / WM | `workspace.read` / `workspace.manage` |
+| TR / TC / TU | `task.read` / `task.claim` / `task.update` |
+| UR / UW | `channel.update.read` / `channel.update.write` |
+| HR / SUB | `channel.history.read` / `channel.subscribe` |
+| AV / START / REVOKE | `agent.view` / `agent.execution.start` / `agent.execution.revoke` |
+| PT / PS | `agent.private_transcript.read` / `agent.private_screen.read` |
+| DIR / HAND | `agent.directive.send` / `agent.handoff.cross_owner` |
+
+Current action sets: `worker/src/principals.ts:12`; private actions: `worker/src/policy.ts:21`. “Mapping decision” means the approved action vocabulary does not yet have an adequately narrow mapping for the operation; see batch-plan design decisions.
+
+Test filenames in tables are relative to `worker/test/`. `—` means no dedicated managed test identified for that surface.
+
+UNLINKED column:
+
+- **Legacy**: preserve existing route/RPC/frame behavior and cost exactly; managed additions must branch synchronously on loaded binding before extra work.
+- **Native**: native identity/admin API; no legacy Channel dispatch change.
+- **Public**: preserve public shell/auth/protocol behavior.
+- **Internal**: preserve existing internal job/service behavior on unlinked Channels.
+
+## H. Channel HTTP router
+
+Actual dispatch: `worker/src/index.ts:192` fixed routes, `:256` matcher inventory, `:270` handler, `:313` managed dispatch, `:386` delegated handlers. These rows enumerate matcher variants rather than copying comments.
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| H01 | POST `/api/join`; `worker/src/index.ts:192`, `:402` | Presence; write | BLOCKED | F | WR; P, narrow presence operation | managed-route-inventory.test.ts | B2 | Legacy |
+| H02 | GET `/api/events`: `ids`, `tail`, `before`, `agent`, `task`, `after`, `limit`, `type=wake`; `worker/src/index.ts:109` | History/lookup; read | BLOCKED | F; no managed event projection or merged-history release | HR plus constituent actions; none | history.test.ts, history-indexes.test.ts, managed-route-inventory.test.ts | B1 | Legacy |
+| H03 | GET `/api/persons`; `worker/src/index.ts:406` | Roster; read | BLOCKED | F; historical membership filtering absent from managed HTTP | WR; none | managed-route-inventory.test.ts | B1 | Legacy |
+| H04 | GET `/api/relay`; `worker/src/index.ts:408`, `worker/src/managed-channel.ts:68` | Configuration; read | IMPLEMENTED | R | WR; none | managed-read-paths.test.ts, managed-route-inventory.test.ts | B1 migration/B4 | Legacy |
+| H05 | POST `/api/updates`; `worker/src/index.ts:410`, `worker/src/channel.ts:1344` | Shared update; write | IMPLEMENTED | W; budget enforced before append | UW; P | managed-budgets.test.ts, managed-claims.test.ts | B2 migration/B4 | Legacy |
+| H06 | GET `/api/stream`, normal/agent/Host/history variants; `worker/src/index.ts:171` | Subscription; read/control | BLOCKED | F; `Channel.fetch` also closed | SUB plus per-frame actions; LEASE | managed-route-inventory.test.ts, managed-broadcast.test.ts | B4/S3 | Legacy |
+| H07 | POST `/api/directives`; `worker/src/directives-api.ts:15`, `worker/src/channel.ts:1327` | Agent control; write/control | PARTIAL | W at enqueue; delayed delivery/queue use lacks fresh managed checks | DIR + target-owner consent; P and delivery recheck | managed-private.test.ts, managed-claims.test.ts, directives.test.ts | B2; B4/S3 delivery | Legacy |
+| H08 | GET `/api/memory`, including query/search/recent/filter/cursor behavior; `worker/src/memory-api.ts:25`, `worker/src/channel.ts:1001` | Memory/search; read | IMPLEMENTED | R plus enrolled author AV checks | HR + AV for projected authors; none | managed-memory.test.ts, managed-s2b-boundaries.test.ts | B1 migration/B4 | Legacy |
+| H09 | POST `/api/memory`; `worker/src/memory-api.ts:58`, `worker/src/channel.ts:1268` | Memory; write | IMPLEMENTED | W; Agent-only/librarian restrictions retained | UW; P | managed-memory.test.ts | B2 migration/B4 | Legacy |
+| H10 | GET `/api/tasks`, GET `/api/tasks/:number`; `worker/src/tasks-api.ts:30`, `worker/src/managed-channel.ts:65` | Tasks; read | IMPLEMENTED | R around task synchronization/read | TR; none | managed-read-paths.test.ts, managed-route-inventory.test.ts | B1 migration/B4 | Legacy |
+| H11 | POST `/api/tasks`; `worker/src/tasks-api.ts:30`, `:43` | Tasks/GitHub issue; write | BLOCKED | F | Human TU; agents deny; E+P | tasks.test.ts, managed-route-inventory.test.ts | B2 | Legacy |
+| H12 | POST `/api/tasks/:number/claim`; `worker/src/claims-api.ts:33`, `worker/src/channel.ts:1402` | Claims; write | IMPLEMENTED | W and existing claim mutation hook | TC; P after sync | managed-claims.test.ts | B2 migration/B4 | Legacy |
+| H13 | POST `/api/tasks/:number/release`; `worker/src/claims-api.ts:33`, `worker/src/managed-channel.ts:137` | Claims; write | PARTIAL | W currently maps release to TU; approved proposal §7 maps release to TC | TC; P; resolve map discrepancy explicitly | managed-claims.test.ts, managed-route-inventory.test.ts | B2 | Legacy |
+| H14 | POST `/api/tasks/:number/steps/:index/complete`; `worker/src/claims-api.ts:40`, `worker/src/channel.ts:1432` | Tasks; write | IMPLEMENTED | W | TU; P after sync | managed-claims.test.ts | B2 migration/B4 | Legacy |
+| H15 | POST `/api/tasks/:number/branch`; `worker/src/branches-api.ts:20`, `worker/src/channel.ts:1409` | Branch metadata; write | IMPLEMENTED | W | TU; P after sync | managed-claims.test.ts | B2 migration/B4 | Legacy |
+| H16 | POST `/api/tasks/:number/finish`; `worker/src/branches-api.ts:20`, `worker/src/channel.ts:1412` | Finish/PR; write | IMPLEMENTED | W; external intent and later commit permits | TU; E+P | managed-claims.test.ts, managed-outcomes.test.ts | B2 migration/B4 | Legacy |
+| H17 | POST `/api/tasks/:number/takeover`; `worker/src/takeover-api.ts:16`, `worker/src/channel.ts:1419` | Stale claim; write | IMPLEMENTED | W plus Person/holder/stale predicates | TU; P | managed-claims.test.ts | B2 migration/B4 | Legacy |
+| H18 | POST `/api/tool-calls`; `worker/src/claims-api.ts:35` | Telemetry; write | BLOCKED | F | UW + own execution; P; safe metadata only | hooks.test.ts, managed-route-inventory.test.ts | B2 | Legacy |
+| H19 | GET `/api/agents`; GET `/api/agents/:agent/summary`; `worker/src/agents-api.ts:119`, `worker/src/managed-channel.ts:38` | Roster/detail; read | IMPLEMENTED | R, per-target AV, `safeAgent`; summary currently returns only safe agent | AV; constituent TR/UR/HR when summary extended; none | managed-read-paths.test.ts, policy.test.ts | B1 | Legacy |
+| H20 | POST `/api/agents`, including `managed` registration and `continues`; `worker/src/agents-api.ts:267`, `worker/src/channel.ts:1757` | Registration/continuation; write/control | PARTIAL | Managed HTTP hits F; direct registration RPC reaches Organization identity policy but lacks common local permit/projection/release handling; `continues` explicitly denies | START; HAND for foreign predecessor; OTX + P | managed-registration.test.ts, managed-route-inventory.test.ts, handoff.test.ts | B2 | Legacy |
+| H21 | POST `/api/agents/:agent/heartbeat`, `/end`; `worker/src/agents-api.ts:279`, `:285` | Lifecycle; write | BLOCKED | F externally; D1 internal exception is not HTTP authorization | Own verified execution, UW narrowing; P for external managed mutation, preserving D1 | managed-lifecycle.test.ts, managed-route-inventory.test.ts | B2 | Legacy |
+| H22 | GET `/api/agents/:agent/transcript`, `/terminal`, `/touched-files`; `worker/src/agents-api.ts:289`, `:294`, `:307`; `worker/src/managed-channel.ts:51` | Private reads; read/control request | IMPLEMENTED | R, pinned target execution and consent; real wrapper transport remains unavailable until streams open | PT for transcript/files; PS for screen; none; response recheck | managed-private.test.ts, managed-read-paths.test.ts | B1 migration/B4/S3 | Legacy |
+| H23 | GET `/api/accounts`; `worker/src/agents-api.ts:120` | Private usage/accounts; read | BLOCKED | F; AV cannot authorize global account output | Owner/field-specific consent + Workspace scope; mapping decision; none | agents.test.ts, managed-route-inventory.test.ts | B1/B3 decision | Legacy |
+| H24 | POST `/api/agents/:agent/proxy-mode`, `/nickname`, `/model`, `/approval`, `/approval/deny`; PUT and DELETE `/role`; `worker/src/agents-api.ts:85`, `:311` | Agent controls/reporting; write/control | BLOCKED | F; owner/self/Lead restrictions exist only behind legacy handlers | Own-report UW; owner management WM with narrowing, approval/terminal-control mapping decision; P | agents.test.ts, roles.test.ts, managed-route-inventory.test.ts | B2 | Legacy |
+| H25 | GET `/api/skills`, `/api/skills/:name`; POST `/api/skill-files/read`; `worker/src/skills-api.ts:45`, `worker/src/managed-channel.ts:12` | Skills/blob bytes; read | IMPLEMENTED | R; chunk reads verify publication ownership | UR; none | managed-content.test.ts, managed-skill-files.test.ts, managed-s2b-boundaries.test.ts | B1 migration/B4 | Legacy |
+| H26 | POST `/api/skill-files`; POST `/api/skills/:name`; `worker/src/skills-api.ts:47`, `:58` | Skills; write | BLOCKED | F; upload preparation exists but admission/publication commit integration absent | UW + publisher ownership/librarian ceiling; P after preparation | managed-skill-preparation.test.ts, skills.test.ts | B3 | Legacy |
+| H27 | GET `/api/artifacts`, `/api/artifacts/:name`, `/api/artifacts/:name/page`; `worker/src/artifacts-api.ts:40` | Artifacts/HTML; read | IMPLEMENTED | R, protected HTML response | UR; none | managed-content.test.ts, managed-s2b-boundaries.test.ts | B1 migration/B4 | Legacy |
+| H28 | PUT and DELETE `/api/artifacts/:name`; `worker/src/artifacts-api.ts:52`, `worker/src/channel.ts:1284` | Artifacts; write | IMPLEMENTED | W; hashing before final permit; delete Person-owner restriction | UW + existing ownership; P | managed-artifact-publication.test.ts, managed-content.test.ts | B3 migration/B4 | Legacy |
+| H29 | GET `/api/brief`, `/api/brief/:page`; `worker/src/brief-api.ts:21` | Brief; read | IMPLEMENTED | R | UR; none | managed-content.test.ts, managed-s2b-boundaries.test.ts | B1 migration/B4 | Legacy |
+| H30 | PUT `/api/brief/:page`; `worker/src/brief-api.ts:32`, `worker/src/channel.ts:1221` | Brief; write/read response | IMPLEMENTED | W plus independent UR admission/release; Agent/librarian restrictions | UW + UR for returned page; P | managed-brief-writes.test.ts | B3 migration/B4 | Legacy |
+| H31 | GET `/api/librarian`; `worker/src/librarian-api.ts:28` | Feed; read | BLOCKED | F | HR + constituent projection; none | librarian.test.ts, managed-route-inventory.test.ts | B1 | Legacy |
+| H32 | PUT `/api/librarian`; `worker/src/librarian-api.ts:30` | Cursor; write | BLOCKED | F | UW + own librarian; P | librarian.test.ts, managed-route-inventory.test.ts | B2 | Legacy |
+| H33 | GET `/api/github`; `worker/src/librarian-api.ts:31` | App-backed GitHub proxy; read | BLOCKED | F | TR + linked repository/path restriction; none, release recheck | librarian.test.ts, github-app.test.ts, managed-route-inventory.test.ts | B1 | Legacy |
+| H34 | GET `/api/settings/langfuse`; `worker/src/settings-api.ts:22`, `:38` | Integration configuration; read | BLOCKED | F; legacy handler reads sealed row before returning redacted connection | WM + fresh repo-admin predicate under approved design; none | langfuse-related settings coverage to locate/extend; managed-route-inventory.test.ts | B1, storage decision B3 | Legacy |
+| H35 | PUT and DELETE `/api/settings/langfuse`; `worker/src/settings-api.ts:48`, `:55` | Integration credentials; write | BLOCKED | F; existing PUT persists sealed credential in Channel | WM + fresh repo-admin; OTX if credentials move to Organization; P only for Channel metadata | managed-route-inventory.test.ts | B3 | Legacy |
+
+## G. Worker-global, delegated auth and protocol HTTP
+
+Top-level dispatch is `worker/src/index.ts:451`. Only three DO classes are exported there at `:63`: Channel, IdentityDirectory and Organization.
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| G01 | GET `/:owner/:repo[/]`; `worker/src/index.ts:440`, `:492` | Dashboard shell; read | PARTIAL | none; static asset shell, no Workspace payload; record public exemption | None; none | — | B4 | Public |
+| G02 | GET `/auth/config`; POST `/auth/signout`; `worker/src/auth-api.ts:98`, `:107` | Auth protocol; read/write | PARTIAL | none; legitimate public/session operations, inventory exemption missing | None; none | identity.test.ts, native-auth.test.ts | B4 | Public |
+| G03 | GET `/auth/github/start`, `/auth/github/callback`, `/auth/dev/signin`; POST `/auth/device/code`, `/auth/device/token`, `/auth/device/session`, `/auth/dev/session`; `worker/src/auth-api.ts:109` | Login/device/native identity; control | PARTIAL | Authentication/identity resolution; no Workspace decision at sign-in, which must not confer membership | None for login; later Workspace actions decide; none | identity.test.ts, native-auth.test.ts | B4 | Public |
+| G04 | POST `/api/github/webhook`, issue/dependency/push/PR dispatch; `worker/src/index.ts:454`, `worker/src/tasks-api.ts:84`, `worker/src/branches-api.ts:53` | Integration mirror; write | PARTIAL | Signature/repo checks, no `decide`; Channel mirror RPCs callable internally; typed integration scope and safe recipient fanout incomplete | Typed mirror-only integration context; local mirror transaction, not user impersonation | tasks.test.ts, github-app.test.ts, branches-related coverage in claims/hosts suites | B2 typed boundary; B4 output | Internal |
+| G05 | OPTIONS `/r/:owner/:repo/mcp`; non-POST MCP methods reject 405; `worker/src/mcp/server.ts:68` | Protocol/rejection; read | DENIED | none; no content returned | None; none | — | B4 inventory | Public |
+| G06 | OPTIONS OAuth; GET `/.well-known/oauth-authorization-server[/…]`, `/.well-known/oauth-protected-resource/…`; POST `/oauth/register`; `worker/src/mcp/oauth.ts:163`, `:187`, paths `worker/src/mcp/paths.ts:4` | Public OAuth metadata/client registration; read/write | PARTIAL | none; public protocol, no Workspace authority; explicit exemption/abuse tests needed | None for public metadata/client registration; none | — | B4/S4 | Public |
+| G07 | GET/POST `/oauth/authorize`; POST `/oauth/token` authorization-code and refresh grants; `worker/src/mcp/oauth.ts:189`, `:461` | Connector consent/credentials; control | BLOCKED | Legacy `admit` at `:356`; linked Channel rejects; no managed connector lifecycle | WR + current concrete Person membership and attenuated tool rights; credential authority outside Channel | — | B4/S4 | Legacy |
+| G08 | POST `/r/:owner/:repo/mcp`, single/batched JSON-RPC; `worker/src/index.ts:460`, `worker/src/mcp/server.ts:61` | Connector; read | BLOCKED | `admitConnector` → linked denial; closures lack managed actor | Per-tool actions; no mutation permits; each entry/release rechecked | — | B4/S4 | Legacy |
+
+Unknown HTTP methods/paths remain rejected by `worker/src/index.ts:287`, `:495`, `worker/src/workspace-api.ts:320`, and `worker/src/mcp/oauth.ts:195`; these rejection branches must be inventory-test cases.
+
+## N. Native `/api/m1` HTTP routes
+
+Native routing: `worker/src/workspace-api.ts:11`; identity/execution routing: `worker/src/execution-api.ts:8`. These APIs apply to native Organizations/Workspaces regardless of whether a Channel is linked.
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| N01 | GET/POST `/api/m1/organizations`; `worker/src/workspace-api.ts:101` | Organization list/create; read/write | PARTIAL | Directory association/bootstrap and per-candidate metadata membership; no `decide` on creation/list metadata | Explicit bootstrap/metadata policy classification needed; OTX for initialize | organizations.test.ts, native-auth.test.ts | B4 | Native |
+| N02 | GET `/organizations/:org`; `worker/src/workspace-api.ts:194` | Metadata; read | PARTIAL | `Organization.metadata`, `worker/src/organization.ts:1991`, checks membership directly, no `decide` | Scoped Organization metadata action/exemption decision; none | organizations.test.ts | B4 | Native |
+| N03 | PATCH `/organizations/:org` name/ceiling; `worker/src/workspace-api.ts:224`, `:249` | Organization policy; write | IMPLEMENTED | `mutate` / `mutateIdentity` → decide | `organization.manage`; OTX | organizations.test.ts, scoped-executions.test.ts | B4 | Native |
+| N04 | GET/PATCH `/workspaces/:w`; GET/POST `/organizations/:org/workspaces`; Workspace ceiling PATCH; `worker/src/workspace-api.ts:198`, `:224`, `:265` | Workspace metadata/lifecycle; read/write | IMPLEMENTED | `workspace`, `catalog`, `mutate`, `mutateIdentity` → decide; metadata-only exception | WR metadata / WM / `workspace.create`; OTX for writes | organizations.test.ts | B4 | Native |
+| N05 | GET/POST `/organizations/:org/members`, `/workspaces/:w/members`; PATCH/DELETE respective `/members/:person`; `worker/src/workspace-api.ts:210`, `:275`, `:298` | Membership/invitations; read/write | IMPLEMENTED | Organization mutate/catalog policy | `organization.member.manage` / `workspace.member.manage`; OTX | organizations.test.ts, policy.test.ts | B4 revocation | Native |
+| N06 | POST `/invitations/:id/accept`; `worker/src/workspace-api.ts:130`, `:273` | Invitation acceptance; write | IMPLEMENTED | `mutate`, invitation-specific numeric identity checks and policy where applicable | Bound invitation acceptance; OTX | organizations.test.ts | B4 | Native |
+| N07 | POST/DELETE `/workspaces/:w/channel`; GET `/operations/:id`; `worker/src/workspace-api.ts:118`, `:139` | Binding; control/write | IMPLEMENTED | `coordinateBinding` / `bindingOperation` → decide, fresh repository admin and generation protocol | WM + repo-admin; Organization transaction and Channel CAS protocol | workspace-binding.test.ts | B4 | Native |
+| N08 | GET `/organizations/:org/audit`; `worker/src/workspace-api.ts:201` | Audit; read | IMPLEMENTED | `auditRecords`, `worker/src/organization.ts:2024` → decide | `organization.manage`; none | organizations.test.ts, managed-outcomes.test.ts | B4 | Native |
+| N09 | POST `/workspaces/:w/consents`; DELETE `/workspaces/:w/consents/:id`; `worker/src/workspace-api.ts:166` | Owner consent; write | IMPLEMENTED | `mutateConsent`, `worker/src/organization.ts:822` → decide plus target owner | Applicable private action, owner-only; OTX | managed-private.test.ts | B2 extension/B4 | Native |
+| N10 | GET `/workspaces/:w/permissions`; `worker/src/workspace-api.ts:188` | Self-permissions; read | IMPLEMENTED | `permissions`, `worker/src/organization.ts:784` → decide | WR plus evaluated actions; self only; none | managed-private.test.ts, policy.test.ts | B4 | Native |
+| N11 | GET/POST `/organizations/:org/agents`; PATCH `/organizations/:org/agents/:p`; `worker/src/execution-api.ts:82`, `:152` | Principal metadata/lifecycle; read/write | IMPLEMENTED | `identityCatalog` / `executionPrincipal` / `mutateIdentity` policy | AV / `agent.register`; OTX for writes | execution-api.test.ts, scoped-executions.test.ts, managed-read-paths.test.ts | B4 | Native |
+| N12 | GET/PUT/DELETE `/workspaces/:w/grants/:p`; `worker/src/execution-api.ts:128`, `:179` | Grants; read/write | IMPLEMENTED | `identityGrant` / `mutateIdentity` → decide | `agent.grant.manage`; OTX | execution-api.test.ts, scoped-executions.test.ts | B4 | Native |
+| N13 | POST `/workspaces/:w/executions`; POST `/executions/:e/redemption`, `/rotate`; DELETE `/executions/:e`; `worker/src/execution-api.ts:191` | Execution credentials; control/write | IMPLEMENTED | `mutateIdentity` policy plus redemption/generation constraints; execution actors explicitly attenuated at `:48` | START / REVOKE; bound Person redemption; OTX | execution-api.test.ts, scoped-executions.test.ts | B2 continuation; B4 revocation | Native |
+
+## C. Channel RPC and fetch entry points
+
+Bare content/control RPCs must stay denied on linked Channels even after equivalent authenticated HTTP routes open. “DENIED” below therefore does not mean dropping the corresponding managed feature.
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| C01 | `bindingState`, `bindingCurrent`; `worker/src/channel.ts:846`, `:857` | Internal fence; read | PARTIAL | none; internal binding metadata/fence, not content authority | Internal-only exemption; none | workspace-binding.test.ts, managed-route-inventory.test.ts | B4 | Internal |
+| C02 | `bindingOwner`, `transitionBinding`, `prepareBinding`, `finishBinding`; `worker/src/channel.ts:1457`, `:1482`, `:1502`, `:1567` | Binding; control/write | PARTIAL | Owner/GitHub/CAS locally; originating Organization decides at `worker/src/organization.ts:1722`; no actor at each Channel CAS seam | WM + repo-admin at coordinator; exact internal operation/generation fencing | workspace-binding.test.ts | B4 | Internal |
+| C03 | `admit`, `admitConnector`; `worker/src/channel.ts:1620`, `:2838` | Legacy admission; read/control | DENIED | Linked denial; connector grant checked before legacy admission | Keep legacy methods closed; separate managed facade | managed-route-inventory.test.ts | B4/S4 | Legacy |
+| C04 | `managedRequest`; `worker/src/channel.ts:882` | Managed HTTP facade; read/write | IMPLEMENTED | R/W and named-DO/repo/binding checks | Exact descriptor action; P for writes | managed-route-inventory.test.ts, managed-read-paths.test.ts | B1 facade | Legacy |
+| C05 | `registerManagedAgent`; `worker/src/channel.ts:1757` | Registration; write/control | PARTIAL | Organization START policy, but legacy internal registration issues token and returns raw Agent; no common commit permit/release | START, HAND where applicable; OTX + P; SafeAgent | managed-registration.test.ts | B2 | Internal |
+| C06 | `heartbeat`, `endSession`; `worker/src/channel.ts:2121`, `:2202`; `requireManagedLifecycle`, `:2154` | D1 lifecycle; write | PARTIAL | No decide under explicit D1 exception; recorded active association/owner/org only; heartbeat suppresses queues/context/usage | Preserve D1, prevent external use without execution authentication; internal lifecycle narrowing | managed-lifecycle.test.ts | B2; B4 inventory | Legacy |
+| C07 | `registeredExecutionActive`; `worker/src/channel.ts:1900` | Internal enrollment check; read | PARTIAL | none; local execution association query used by authority verification | Internal verification fact only; no content authority | managed-registration.test.ts, scoped-executions.test.ts | B4 | Internal |
+| C08 | `gitHubWebhook`, `gitHubCodeWebhook`; `worker/src/channel.ts:1745`, `:1710` | Mirror integration; write | PARTIAL | No decide or actor; sets repo and invokes mirror algorithms | Typed repository/binding-scoped integration; safe output fence | tasks.test.ts, github-app.test.ts | B2/B4 | Internal |
+| C09 | `listTasks`, `getTask`, `createTask`; `worker/src/channel.ts:1663`, `:1668`, `:1674` | Tasks; read/write | DENIED | L | Managed alternatives TR/TU; P/E+P for writes | managed-route-inventory.test.ts | B2/B4 | Legacy |
+| C10 | `claimTask`, `releaseTask`, `completeStep`, `recordBranch`, `finishTask`, `takeoverTask`, `recordToolCall`; `worker/src/channel.ts:1681`, `:1687`, `:1692`, `:1698`, `:1704`, `:1716`, `:1723` | Coordination; write | DENIED | L | Managed TC/TU/UW; P or E+P | managed-route-inventory.test.ts, managed-claims.test.ts | B2/B4 | Legacy |
+| C11 | `listAgents`, `registerAgent`, `agentSummary`, `listAccounts`; `worker/src/channel.ts:1751`, `:1987`, `:2061`, `:2170` | Roster/identity; read/write | DENIED | L | Managed AV/START/owner-scoped fields; P for local writes | managed-route-inventory.test.ts | B1/B2 | Legacy |
+| C12 | `readTranscript`, `readTerminal`, `touchedFiles`; `worker/src/channel.ts:2468`, `:2512`, `:3440` | Private; read | DENIED | Legacy read/fence paths; no managed actor | PT/PS in managed facade; none | managed-route-inventory.test.ts, managed-private.test.ts | B1/B4 | Legacy |
+| C13 | `sendDirective`, `setAgentRole`, `renameAgent`, `setAgentModel`, `setAgentApproval`, `denyAgentApproval`, `setProxyMode`; `worker/src/channel.ts:2211`, `:2245`, `:2262`, `:2282`, `:2301`, `:2314`, `:2331` | Agent control; write | DENIED | L | Managed DIR/UW/owner-management mappings; P | managed-route-inventory.test.ts | B2 | Legacy |
+| C14 | `join`, `postUpdate`, `writeNote`, `readMemory`; `worker/src/channel.ts:2341`, `:2378`, `:2429`, `:2862`; `listSkills`, `readSkill`, `publishSkill`, `uploadSkillFiles`, `readSkillFiles`, `:2608`, `:2614`, `:2620`, `:2630`, `:2636`; `listArtifacts`, `readArtifact`, `artifactPage`, `publishArtifact`, `deleteArtifact`, `:2644`, `:2650`, `:2656`, `:2662`, `:2680`; `briefPages`, `readBriefPage`, `writeBriefPage`, `:2686`, `:2692`, `:2698` | Shared content; read/write | DENIED | L | Managed WR/HR/UR/UW; P for writes | managed-route-inventory.test.ts, managed-content.test.ts | B1–B3 | Legacy |
+| C15 | `librarianFeed`, `moveLibrarianCursor`, `langfuseProject`, `setLangfuseProject`, `removeLangfuseProject`; `worker/src/channel.ts:2734`, `:2761`, `:2791`, `:2797`, `:2803` | Integration/config; read/write | DENIED | L or B on sealed-row read | Managed HR/UW/WM; P or OTX; never return credential rows | managed-route-inventory.test.ts | B1–B3 | Legacy |
+| C16 | `askChannel`, `askBrief`, `startMcpGrant`, `rotateMcpGrant`; `worker/src/channel.ts:2814`, `:2776`, `:2851`, `:2857` | Connector/credential; read/write | DENIED | B or L; actor-free managed access rejected | Actor-aware managed facade; connector credential authority outside Channel | managed-route-inventory.test.ts | B4/S4 | Legacy |
+| C17 | `history`, `latestEvents`, `latestEventsOfAgent`, `latestEventsOfTask`, `eventsById`, `wakesAfter`, `listPersons`; `worker/src/channel.ts:2868`, `:2880`, `:2893`, `:2935`, `:3100`, `:3113`, `:3128` | History/lookup/presence; read | DENIED | L; legacy history merges local machine results | Managed HR/WR plus projections; none | managed-route-inventory.test.ts, history.test.ts | B1 | Legacy |
+| C18 | `listHosts`, `registerHost`, `setHostAllow`, `removeHost`, `spawnAgent`, `stopAgent`, `controlAgent`; `worker/src/channel.ts:3514`, `:3530`, `:3537`, `:3543`, `:3549`, `:3568`, `:3580` | Host lifecycle/control; read/write/control | DENIED | L | Managed WR/WM/START/REVOKE + Host owner ceiling/consent; P/E+P | managed-route-inventory.test.ts, hosts.test.ts | B3 | Legacy |
+| C19 | `isOwner`; `worker/src/channel.ts:2782` | GitHub permission fact; read | PARTIAL | No decide; returns repository-admin fact, not Workspace authority | Additional predicate only; never substitute for WM | — | B1/B3/B4 | Legacy |
+| C20 | `fetch`: normal, agent and Host upgrade branches; `worker/src/channel.ts:3139` | Stream transport; read/control | BLOCKED | Immediate `managedClosed`; pathname itself is not matched—query/upgrade branch is the surface | Authenticated managed upgrade + SUB and frame-specific scopes; LEASE | managed-route-inventory.test.ts, managed-broadcast.test.ts | B4/S3 | Legacy |
+
+## O. Organization RPC entry points
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| O01 | `initialize`; `worker/src/organization.ts:123` | Bootstrap; write | PARTIAL | No decide; valid Person, named-DO and bootstrap checks | Explicit bootstrap exemption; OTX | organizations.test.ts | B4 | Native |
+| O02 | `mutateIdentity`; `worker/src/organization.ts:181`, policy call `:268` | Principals/grants/executions/ceilings; write | IMPLEMENTED | decide plus command-specific restrictions | Native identity actions; OTX | scoped-executions.test.ts, execution-api.test.ts | B2/B4 | Native |
+| O03 | `identityCatalog`; `worker/src/organization.ts:542` | Principal lookup/list; read | IMPLEMENTED | decide at `:551`, `:556`; SQL filter/keyset LIMIT at `:566` | AV; none; preserve P2R-1 fix | managed-read-paths.test.ts | B4 | Native |
+| O04 | `identityGrant`; `worker/src/organization.ts:585` | Grant lookup; read | IMPLEMENTED | decide at `:594` | `agent.grant.manage`; none | execution-api.test.ts | B4 | Native |
+| O05 | `executionPrincipal`, `verifyExecution`; `worker/src/organization.ts:621`, `:712` | Credential verification/metadata; read | PARTIAL | Principal projection reaches decide at `:652`; verifier supplies facts, not route authority | AV for metadata; fresh managed decide still mandatory after verification | scoped-executions.test.ts, execution-api.test.ts | B4 | Native |
+| O06 | `auditExecutionDenial`; `worker/src/organization.ts:604` | Audit; write | PARTIAL | Credential verification and denial logging, no allow decision | Internal authenticated denial sink; cannot grant authority | execution-api.test.ts | B4 | Native |
+| O07 | `touchRegisteredExecution`, `registeredExecutionOwnedBy`, `endRegisteredExecution`; `worker/src/organization.ts:661`, `:670`, `:675` | D1 lifecycle/facts; read/write | PARTIAL | No decide; execution/legacy-agent matching; end increments revision and cancels authority permits via save | Narrow internal lifecycle exception; revocation push still needed | managed-lifecycle.test.ts, managed-registration.test.ts | B2/B4 | Internal |
+| O08 | `permissions`, `mutateConsent`; `worker/src/organization.ts:784`, `:822` | Permission/consent; read/write | IMPLEMENTED | decide at `:794`, `:800`, `:869` | WR/private action + owner restrictions; OTX for consent | managed-private.test.ts, policy.test.ts | B2/B4 | Native |
+| O09 | `authorizeChannelRead`, `issueMutationPermit`; `worker/src/organization.ts:1097`, `:1127` | Central managed authority; read/control | IMPLEMENTED | `channelDecision` → decide; exact binding/target facts; action attenuation | Exact managed action; P issuance for supported writes | policy.test.ts, managed-read-paths.test.ts, managed-claims.test.ts | B1 facade/B4 | Internal |
+| O10 | `recordChannelOutcomes`; `worker/src/organization.ts:1189` | Historical audit sink; write | PARTIAL | Correlation/field/batch checks, no present permission decision; historical rows can remain unverifiable | Internal historical evidence only; no fresh authority from old outcomes | managed-outcomes.test.ts | B4 | Internal |
+| O11 | `mutate`, `bindingOperation`, `coordinateBinding`; `worker/src/organization.ts:1434`, `:1749`, `:1766` | Native administration/binding; write/control/read | IMPLEMENTED | decide at `:1488`, `:1755`, binding helper `:1722` | Native admin/WM; OTX + binding protocol | organizations.test.ts, workspace-binding.test.ts | B4 | Native |
+| O12 | `metadata`; `worker/src/organization.ts:1991` | Organization metadata; read | PARTIAL | Direct active-membership check, no decide | Explicit metadata policy/exemption decision | organizations.test.ts | B4 | Native |
+| O13 | `workspace`, `auditRecords`, `catalog`; `worker/src/organization.ts:2006`, `:2024`, `:2053` | Native lookup/catalog/audit; read | IMPLEMENTED | decide at `:2010`, `:2029`, `:2063`; workspace catalogs filter through workspace policy | WR metadata / organization.manage / membership manage; none | organizations.test.ts | B4 | Native |
+| O14 | `repairDirectory`, `alarm`; `worker/src/organization.ts:2089`, `:1319` | Maintenance; write | PARTIAL | No decide; derived index/retry/cleanup, no Channel invalidation outbox yet | Internal maintenance; new revocation fanout must use common deadline | organizations.test.ts | B4/S3 | Internal |
+
+## D. IdentityDirectory RPC entry points
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| D01 | `resolve`, `personForGithub`, `associated`; `worker/src/identity-directory.ts:15`, `:32`, `:39` | Identity facts; read/write | PARTIAL | No decide; verified numeric identity/association seam; internal-only exemption needs coverage | Authentication facts only; no Workspace rights | native-auth.test.ts | B4 | Native |
+| D02 | `createOrganization`; `worker/src/identity-directory.ts:47` | Bootstrap; write | PARTIAL | Associated Person/rate/idempotency checks, delegates initialize | Explicit bootstrap policy/exemption; OTX | organizations.test.ts | B4 | Native |
+| D03 | `indexCandidate`, `routeInvitation`; `worker/src/identity-directory.ts:103`, `:127` | Derived index; write | PARTIAL | No decide; stale candidates confer no authority | Internal bounded sink; recheck at lookup | organizations.test.ts | B4 | Native |
+| D04 | `organizations`; `worker/src/identity-directory.ts:106` | Metadata list; read | PARTIAL | Associated actor and bounded candidate SQL; each result calls direct-membership metadata, no decide | Same metadata policy decision as O12; none | organizations.test.ts | B4 | Native |
+| D05 | `invitationOrganization`; `worker/src/identity-directory.ts:130` | Invitation routing; read | PARTIAL | Associated actor plus invitation numeric GitHub binding, no decide | Bound identity-routing exemption; no membership grant here | organizations.test.ts | B4 | Native |
+
+No additional Durable Object class was found: declarations are `worker/src/channel.ts:441`, `worker/src/organization.ts:93`, and `worker/src/identity-directory.ts:6`.
+
+## W. WebSocket inbound and outbound surfaces
+
+Every accepted inbound type is enumerated in `worker/src/channel.ts:3233`; current linked admission is closed at `:3211`. Outbound `send` has no managed lease/revision check at `:3769`. Opening upgrades without replacing those boundaries would expose the following currently unreachable surfaces.
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| W01 | Inbound `hook`, `proxy`; `worker/src/channel.ts:3234`, `:3398`; capture processors `worker/src/hook-capture.ts:186`, `worker/src/proxy-capture.ts:157` | Telemetry/capture; write | BLOCKED | Managed inbound fence; legacy self identity only afterward | Own execution + UW; P before safe append; raw content excluded | hooks.test.ts, proxy.test.ts | B2 preparation/B4-S3 | Legacy |
+| W02 | Inbound `delivery.ack`, `directive.ack`; `worker/src/channel.ts:3387` | Queue acknowledgment; write | BLOCKED | Managed inbound fence; legacy execution/ID match | Matching execution + current source action; P | relay.test.ts, directives.test.ts | B4/S3 | Legacy |
+| W03 | Inbound `interrupt.attach`, `interrupt.result`, `directive.result`; `worker/src/channel.ts:3326` | Wrapper delivery; write/control | BLOCKED | Managed inbound fence; legacy wrapper matching | Own execution, outstanding authorized request, current delivery authority; P for state changes | relay.test.ts, directives.test.ts | B4/S3 | Legacy |
+| W04 | Inbound `wake`, `wake.capped`; `worker/src/channel.ts:3367`, `worker/src/wakes.ts:23` | Wake reporting; write | BLOCKED | Managed inbound fence; legacy own-agent matching | Own execution + current queue authority/UW; P | relay.test.ts | B4/S3 | Legacy |
+| W05 | Inbound `transcript.page`, `terminal.text`; `worker/src/channel.ts:3350`, `:3360` | Private response; read release | BLOCKED | Managed inbound fence; legacy pending ID and target wrapper checks | Original requester PT/PS recheck and pinned target/request; none | transcript.test.ts, terminal.test.ts, managed-private.test.ts | B4/S3 | Legacy |
+| W06 | Inbound `history.page`; `worker/src/channel.ts:3268`, `:3073` | Machine-local history response; read release | BLOCKED | Managed inbound fence; existing holder/request matching | HR + original query scope, projection/release check | history.test.ts | B1 preparation/B4-S3 | Legacy |
+| W07 | Inbound `host.spawn.failed`, `host.control.failed`, `host.paused`, `host.allow.result`; `worker/src/channel.ts:3272`, `:3282`, `:3290` | Host results/lifecycle; write | BLOCKED | Managed inbound fence; legacy Host identity and pending-operation checks | Authenticated Host owner + pending exact operation; START/REVOKE/WM as applicable; P for local result mutation | hosts.test.ts | B3 preparation/B4-S3 | Legacy |
+| W08 | Inbound `terminal.watch`, `terminal.input`; `worker/src/channel.ts:3301`, `:3465`, `:3477` | Private watch/keyboard; control | BLOCKED | Managed inbound fence; legacy Person-only socket gate | PS for watch; input needs separate owner-control mapping, never PS alone; P for control dispatch | terminal.test.ts | B3 design/B4-S3 | Legacy |
+| W09 | Inbound `terminal.screen`, `terminal.refused`, `terminal.attached`; `worker/src/channel.ts:3308` | Terminal results; read/write | BLOCKED | Managed inbound fence; legacy target wrapper match and unguarded watcher sends | Own target wrapper + per-watcher PS; P for attached event; LEASE for output | terminal.test.ts | B4/S3 | Legacy |
+| W10 | Broadcast `event`, `agent`, `task`, `person`, `account`, `verdict`; `worker/src/channel.ts:606`, `:616`, `:2180`, `:2353`, `:3678`, `:3704`; `worker/src/relay/relay.ts:445` | Shared live projections; read | PARTIAL | Generation fence implemented; no recipient decision/lease or SafeAgent/event projection at broadcast | HR/UR/TR/WR/AV by payload; account owner-private; LEASE | managed-broadcast.test.ts, policy.test.ts | B1 projector/B4-S3 | Legacy |
+| W11 | Connect backlog `event` and roster snapshot `agent`; `worker/src/channel.ts:3175` | Snapshot/replay; read | BLOCKED | Managed upgrade closed; legacy raw history/Agent sends | SUB plus HR/AV/constituent scopes; safe projections; LEASE | history.test.ts, managed-route-inventory.test.ts | B1 projector/B4-S3 | Legacy |
+| W12 | Outbound `delivery`, `directives`; `worker/src/channel.ts:682`, `:693`; `worker/src/relay/relay.ts:456`; `worker/src/directives.ts:244` | Person queue notifications; read/control | PARTIAL | Raw Person socket send callbacks; no managed lease or enqueue/take/release checks | Source-content action; DIR owner consent for Directive; LEASE | relay.test.ts, directives.test.ts | B2 queue metadata/B4-S3 | Legacy |
+| W13 | Outbound `interrupt`, `directive.interrupt`, `approval.deny`, `interrupt.attached`; `worker/src/channel.ts:3408`, `:2321`, `:3339` | Wrapper control; control | PARTIAL | Socket/attachment selection only; no lease/use-time consent | Current source authorization, DIR or explicit approval-control mapping; P for control intent, LEASE at send | relay.test.ts, directives.test.ts, terminal.test.ts | B2/B3/B4-S3 | Legacy |
+| W14 | Outbound `transcript.request`, `terminal.read.request`; `worker/src/channel.ts:1091`, `:1102`, `:2580`, `:3408` | Private request; control/read | PARTIAL | Managed HTTP R exists; transport has no recipient lease and pending requester invalidation | PT/PS before request and release; exact pending requester/target; LEASE | managed-private.test.ts, transcript.test.ts, terminal.test.ts | B4/S3 | Legacy |
+| W15 | Outbound `history.request`; `worker/src/channel.ts:3048`, `:3067` | Host/wrapper local history; read | BLOCKED | Managed history/stream admission closed; legacy direct send | HR + bounded original scope; LEASE | history.test.ts | B1 preparation/B4-S3 | Legacy |
+| W16 | Outbound `host.spawn`, `host.spawned`, `host.stop`, `host.pause`, `host.resume`, `host.allow`; `worker/src/hosts.ts:499`, `:564`, `:322`, control `:581`; sender `worker/src/channel.ts:711` | Machine control; control | BLOCKED | Host HTTP/upgrade closed; legacy sender lacks managed lease/use-time authorization | START/REVOKE/WM + explicit local ceiling/owner consent + HAND for foreign `from`; P/E+P and LEASE | hosts.test.ts | B3/B4-S3 | Legacy |
+| W17 | Outbound `terminal.watchers`, `terminal.input`, `terminal.screen`, `terminal.refused`; `worker/src/channel.ts:3322`, `:3341`, `:3477`, `:3505` | Terminal watch/keyboard; control/read | BLOCKED | Managed stream closed; legacy send paths lack managed recipient checks | PS for screen/watch; separate input-control authority; LEASE, control intent P | terminal.test.ts | B3 design/B4-S3 | Legacy |
+| W18 | Outbound `hook.ack`, `hook.refused`, `proxy.ack`, `proxy.refused`; `worker/src/channel.ts:3398`; `worker/src/hook-capture.ts:186`, `:221`; `worker/src/proxy-capture.ts:157`, `:193` | Capture response; read | BLOCKED | Managed input closed; acknowledgments may carry recorded Events | Own execution + projected content scope; LEASE | hooks.test.ts, proxy.test.ts | B4/S3 | Legacy |
+
+Unknown inbound types are ignored at `worker/src/channel.ts:3256`. Future `policy.invalidated` is a required new outbound type, not an existing implemented surface.
+
+## J. Internal jobs, queues, local history and historical outcomes
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| J01 | Channel alarm jobs `tasks`, `presence`, `members`, `hosts`, `directives`, `executions`, `managed-outcomes`; `worker/src/alarms.ts:10`, `worker/src/channel.ts:742` | Maintenance; write/control | PARTIAL | Job dispatch without decide; managed export branch exists; recipient/control work needs typed contexts and revalidation | Integration/lifecycle maintenance only; recipient policy and P where originating protected commits; lease cleanup is not lease enforcement | managed-lifecycle.test.ts, managed-outcomes.test.ts, hosts.test.ts, directives.test.ts | B2/B3/B4 | Internal |
+| J02 | Relay `consider`, `takeDeliveries`, `acknowledge`, `interruptAnswered`, async Jev input/result, `deliver`, `interrupt`, `queue`; `worker/src/relay/relay.ts:254`, `:267`, `:276`, `:281`, `:310`, `:358`, `:379`, `:456`; heartbeat `withNextTurn`, `worker/src/channel.ts:2189` | Relevance/notification; read/write/control | PARTIAL | No managed authorization inside Relay; D1 heartbeat suppresses queue drain; relevance is not authority | Authorized shared input before Jev; recheck after await and before enqueue/take/send; LEASE at send | relay.test.ts, managed-lifecycle.test.ts | B2 context; B4/S3 delivery | Legacy |
+| J03 | Directives `attached`, `alarm`, `answered`, `takeDirectives`, `acknowledge`, delayed `type`/`hold`/`settle`/`queue`; `worker/src/directives.ts:134`, `:150`, `:163`, `:170`, `:179`, `:189`, `:201`, `:235`, `:244` | Delayed machine control; write/control | PARTIAL | Enqueue W exists, delayed operations lack fresh consent/revocation cancellation | DIR + exact current target-owner consent; protected state P; LEASE at delivery | directives.test.ts, managed-private.test.ts | B2/B4-S3 | Legacy |
+| J04 | `withLocalEvents`, `historyHolders`, `askHistory`, `historyAnswered`; `worker/src/channel.ts:2963`, `:2996`, `:3048`, `:3073`; `webSocketClose`, `:3445` | Merged local reads/socket cleanup; read/control | PARTIAL | Legacy pending/holder handling; managed admission closed; no requester revocation propagation | HR + source scope/projection; response recheck; cancel pending reads/watchers on revoke | history.test.ts, terminal.test.ts | B1/B4-S3 | Legacy |
+| J05 | `#queueManagedOutcomes`, `#exportManagedOutcomes`, execution-end retries, Organization cleanup/directory alarm; `worker/src/channel.ts:757`, `:765`, `:1916`, `:1935`, `:1955`; `worker/src/organization.ts:1319`, `:1397` | Audit/lifecycle retry; write | PARTIAL | Current correlated export and bounded retry implemented; historical unverifiable rows and revocation delivery remain incomplete | Historical evidence, not present authority; explicit provenance/retention; durable invalidation outbox | managed-outcomes.test.ts, managed-retention.test.ts, managed-lifecycle.test.ts | B4 | Internal |
+
+## M. MCP tools, search and resources
+
+| ID | Surface; code evidence | Family; mode | Linked class | Decision today; gap | Required action; permit | Existing tests | Batch | UNLINKED |
+|---|---|---|---|---|---|---|---|---|
+| M01 | JSON-RPC `initialize`, `ping`, `tools/list`, `tools/call`; batch of up to eight; `worker/src/mcp/server.ts:25`, `:119`, `:142` | Connector protocol; read | BLOCKED | Linked connector admission closed; current batch shares actor-free closures | WR for managed session eligibility; each tool separately attenuated/rechecked; none | — | B4/S4 | Legacy |
+| M02 | Tool `channel`: task/agent/person/word lookup, counts, unknown markers, updates/Directives/notes/agents; `worker/src/mcp/tools.ts:77`, `:117`; `worker/src/ask.ts:29`, `:49`, `:152` | Search/summary; read | BLOCKED | Bare askChannel fenced; legacy ChannelAnswer includes Directive bodies and raw Agent[] | Decompose TR/UR/HR/AV; omit unauthorized constituents before counts/formatting; SafeAgent; none | managed-route-inventory.test.ts; managed connector tests absent | B1 query/projector; B4/S4 | Legacy |
+| M03 | Tool `github`: REST GET and read-only GraphQL query; `worker/src/mcp/tools.ts:26`, tool list `:133`; `worker/src/mcp/github.ts:36` | App-backed integration; read | BLOCKED | Linked connector admission closed; read-only is not Workspace authorization | TR + exact linked repository; admission/release around external await; none | github-app.test.ts; managed connector tests absent | B1 facade; B4/S4 | Legacy |
+| M04 | Tools `brief`, `costs`; `worker/src/mcp/tools.ts:9`, `:10`, `:133`; source closures `worker/src/mcp/server.ts:99`, `:106` | Brief/Langfuse; read | BLOCKED | Linked connector closed; costs currently opens Channel-stored sealed credentials | UR; managed credential service outside Channel; release recheck; none | managed-content.test.ts; managed connector tests absent | B1/B3 preparation; B4/S4 | Legacy |
+| M05 | MCP resources/prompts/subscriptions and unknown JSON-RPC methods; `worker/src/mcp/server.ts:142`, `:212` | Unsupported protocol; read/control | DENIED | No resources/prompts handlers registered; default method-not-found; no MCP SSE/session transport | Keep unsupported methods denied; none | — | B4 inventory | Legacy |
+
+## Counts
+
+Counts are of the 123 stable row IDs above, including separately inventoried alternate paths.
+
+| Section | IMPLEMENTED | DENIED | PARTIAL | BLOCKED | Total |
+|---|---:|---:|---:|---:|---:|
+| H | 17 | 0 | 3 | 15 | 35 |
+| G | 0 | 1 | 5 | 2 | 8 |
+| N | 11 | 0 | 2 | 0 | 13 |
+| C | 1 | 11 | 7 | 1 | 20 |
+| O | 7 | 0 | 7 | 0 | 14 |
+| D | 0 | 0 | 5 | 0 | 5 |
+| W | 0 | 0 | 4 | 14 | 18 |
+| J | 0 | 0 | 5 | 0 | 5 |
+| M | 0 | 1 | 0 | 4 | 5 |
+| **Total** | **36** | **13** | **38** | **36** | **123** |
+
+### Reachable linked surfaces with no `decide()` decision point
+
+This list distinguishes explicit internal exceptions and public metadata from actual user-content bypasses.
+
+1. **Native Organization metadata/list path:** N01/N02, O12, D04. `Organization.metadata` directly checks membership (`worker/src/organization.ts:1991`); directory listings call it (`worker/src/identity-directory.ts:120`). This is a central-policy coverage gap, although it is not private Channel access.
+2. **Bootstrap and identity facts:** O01, D01/D02/D05; association/initialization checks instead of policy (`worker/src/organization.ts:123`; `worker/src/identity-directory.ts:15`, `:47`, `:130`). These need explicit bootstrap/authentication exceptions, not Workspace content authority.
+3. **D1 lifecycle and verification facts:** C06/C07, O05–O07. Explicit D1 permits recorded-owner lifecycle RPCs without policy actor (`worker/src/channel.ts:2154`); external managed heartbeat/end remain closed. Verification alone must never admit content.
+4. **Signed webhook/internal mirror writes:** G04/C08 and task alarm reconciliation J01. Signature verification occurs at `worker/src/tasks-api.ts:91`, but Channel mirror RPCs themselves have no typed actor/decision (`worker/src/channel.ts:1710`, `:1745`). This is the main live internal mutation boundary needing closure.
+5. **Internal binding, permission facts and maintenance sinks:** C01/C02/C19, O06/O10/O14, D03, J05. Coordinator policy, operation fencing or evidence validation substitutes for a local decision; they must be explicit, narrowly tested internal protocols.
+6. **Public shell/login/OAuth metadata:** G01–G03/G06 contain no Workspace content. Their absence of `decide()` is a legitimate public exception requiring inventory coverage.
+7. **Background and outbound callbacks:** W10/W12–W14, J02/J03 do not independently decide or check leases (`worker/src/channel.ts:682`, `:693`, `:3408`, `:3704`, `:3769`). Managed socket admission is currently closed, so this inspection does **not** establish an externally reachable linked stream leak. These become immediate bypasses if upgrade admission opens first.
+8. **Direct managed registration:** C05 can execute through its DO RPC while ordinary managed POST registration is closed. It reaches Organization START policy, but its local registration/token/raw-response stages are not protected by the shared permit/projection/release protocol (`worker/src/channel.ts:1810`, `:1838`, `:1864`). This is a partial enforcement path, not an actor-free admission.
+
+No successful actor-free linked Channel content read was identified through the fenced legacy RPCs. That is a source-inspection finding, not an exhaustive runtime proof. The present inventory test explicitly covers only HTTP matcher families and selected examples (`worker/test/managed-route-inventory.test.ts:96`); it does not yet prove exhaustiveness across native APIs, all RPCs or frames.
