@@ -177,3 +177,22 @@
 - 4:08 PM CT: [P3] tests B1b-fix1: == totals (B1b-fix1, quick, HEAD 990193e) == 06_worker_test:  Test Files 2 failed | 61 passed | 2 skipped (65) | Tests 17 failed | 925 passed | 2 skipped (944)  | strict: FAIL  06_worker_test=1; | eval(T=0): cli failures: [] FAIL 06_worker_test exit=1; worker totals (17, 925, 944)  | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=1 07_cli_typecheck=0 11_dashboard_typecheck=0 
 - 4:08 PM CT: [P3] M1-P3-B1b-FIX2 run attempt 1 started (P3-#17 driver)
 - 4:10 PM CT: [P3] M1-P3-B1b-FIX2 done
+- 4:10 PM CT: [P3] tests B1b-fix2 (quick) started at HEAD 57412ce [run directly by P3-#17, identical to chain gate()]
+- 4:11 PM CT: [P3] tests B1b-fix2: == totals (B1b-fix2, quick, HEAD 57412ce) == 06_worker_test:  Test Files 63 passed | 2 skipped (65) | Tests 942 passed | 2 skipped (944)  | strict: PASS  | eval(T=0): cli failures: [] PASS   | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=0 07_cli_typecheck=0 11_dashboard_typecheck=0 
+- 4:11 PM CT: [P3] M1-P3-B1c run attempt 1 started
+- 4:17 PM CT: [P3] M1-P3-B1c done
+- 4:17 PM CT: [P3] M1-P3-B1c done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/B1c_DONE.md missing — requeue (1)
+- 4:17 PM CT: [P3] M1-P3-B1c run attempt 1 started
+- 4:22 PM CT: [P3] M1-P3-B1c done
+- 4:22 PM CT: [P3] M1-P3-B1c done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/B1c_DONE.md missing — requeue (2)
+- 4:22 PM CT: [P3] M1-P3-B1c run attempt 1 started
+- 4:26 PM CT: [P3] M1-P3-B1c done
+- 4:26 PM CT: [P3] M1-P3-B1c done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/B1c_DONE.md missing — requeue (3)
+- 4:26 PM CT: [P3] CHAIN STOP: slice B1c incomplete
+- 4:31 PM CT: [P3] tests B1c-wip-diag (quick) started at HEAD 57412ce [run directly by P3-#17, identical to chain gate()]
+- 4:32 PM CT: [P3] tests B1c-wip-diag: == totals (B1c-wip-diag, quick, HEAD 57412ce) == 06_worker_test:  Test Files 2 failed | 65 passed | 2 skipped (69) | Tests 72 failed | 1062 passed | 2 skipped (1136)  | strict: FAIL  06_worker_test=1; | eval(T=0): cli failures: [] FAIL 06_worker_test exit=1; worker totals (72, 1062, 1136)  | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=1 07_cli_typecheck=0 11_dashboard_typecheck=0 
+- 4:35 PM CT: [coordinator] OWNER_DESIGN_DECISIONS.txt written (DD-1 existing actions + terminal_control consent; DD-2 Org store + owner-approved migrate-and-delete with recovery journal); chain not relaunched pending read-surface approach decision
+- 4:35 PM CT: [P3-#18] started; B1c WIP saved as wip/B1c_wip.patch (git diff --binary incl. 4 new test files, applies cleanly to 57412ce) + wip/B1c_wip_files.tgz + local stash 'B1c WIP P3-#18 backup'; worktree clean at 57412ce, nothing committed.
+- 4:37 PM CT: [P3] codex quota check: codex: 5h: 37% left, resets Sun Nov 15 18:49 CT [official:codex-rollout, as of Sun Nov 15 16:26 CT]; weekly: 33% left, resets Wed Nov 18 12:31 CT [official:codex-rollout, as of Sun Nov 15 16:26 CT]; 15% personal reserve held back; usable fo
+- 4:37 PM CT: [P3] M1-P3-QDESIGN direct read-only codex exec attempt 1 started (P3-#18 driver)
+- 4:39 PM CT: [P3-#18] Design phase launched 4:37 PM: nohup p3_18_qdesign_driver.sh (direct read-only codex exec with prompt prompts/p3/_qdesign_full.txt = COMMON+DIRECTIVE+D-decisions+BATCH_RULES+OWNER_DESIGN_DECISIONS+QDESIGN.txt → verbatim m1/p3/P3_QUERY_LAYER_DESIGN.md + QDESIGN_DONE.md → docs-only commit 'shared managed query layer design' → agy M1-P3-QUERYLAYER (prompt QDREVIEW.txt, inputs _agy_inputs/M1-P3-QD) → reports/M1-P3-QUERYLAYER.agy.md + m1/p3/reviews/P3_QUERY_LAYER_REVIEW.md; NO-GO → one Codex QDREVISE + agy M1-P3-QUERYLAYER-RECHECK). Watcher nohup p3_18_postgo.sh waits for it: ONLY on final GO it writes B1qN_SCOPE.txt (design+review verbatim), backs up DB + chain (bak-p3-18), installs chain_p3.sh.next (loop S1 S2 S2b B1a B1q1 B1q2 B1q3 B2a B2b B3a B3b B4a B4b, BT=${S:0:2}, B1 breview after last B1q), appends item 10 to BREVIEW_EXTRA_B1.txt, blocks M1-P3-B1c (superseded) and nohup-launches chain_p3.sh; otherwise logs and stops. Logs: p3_18_qdesign.out, p3_18_postgo.out.
