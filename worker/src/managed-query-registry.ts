@@ -2,6 +2,16 @@ import type { QueryId, QueryPlan } from "./managed-query";
 
 /** Trusted factories only. Request bodies never supply callbacks or policy scopes. */
 export const MANAGED_QUERIES = {
+  librarian: {
+    operation: "librarian.read",
+    action: "channel.history.read",
+    constituents: ["tasks", "brief", "events"],
+  },
+  summary: {
+    operation: "agent.summary",
+    action: "agent.view",
+    constituents: ["history", "agents", "tasks", "events", "notes"],
+  },
   history: { operation: "history.read", action: "channel.history.read", constituents: ["events", "agents"] },
   persons: { operation: "persons.read", action: "workspace.read", constituents: ["persons"] },
   agents: { operation: "agents.list", action: "agent.view", constituents: ["agents"] },
@@ -29,6 +39,9 @@ export function createManagedQuery<T>(plan: QueryPlan<T>): QueryPlan<T> {
     throw new Error("unknown_managed_query");
   const actions = {
     events: "channel.update.read",
+    history: "channel.history.read",
+    notes: "channel.update.read",
+    brief: "channel.update.read",
     agents: "agent.view",
     persons: "workspace.read",
     tasks: "task.read",

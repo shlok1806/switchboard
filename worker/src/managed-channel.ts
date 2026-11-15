@@ -14,6 +14,8 @@ function matchReadRoute(method: string, path: string): ManagedReadRoute | null {
   if (method === "POST" && path === "/api/skill-files/read")
     return { action: "channel.update.read", targetId: "skill-files", operation: "skill-files.read" };
   if (method !== "GET") return null;
+  if (path === "/api/librarian")
+    return { action: "channel.history.read", targetId: "librarian", operation: "librarian.read" };
   if (path === "/api/persons") return { action: "workspace.read", targetId: "persons", operation: "persons.read" };
   if (path === "/api/events") return { action: "channel.history.read", targetId: "events", operation: "history.read" };
   if (path === "/api/github") return { action: "task.read", targetId: "github", operation: "github.read" };
@@ -162,6 +164,7 @@ function matchWriteRoute(method: string, path: string): ManagedReadRoute | null 
 /** Admission metadata for implemented operations only. Unknown operations stay closed. */
 export const MANAGED_OPERATIONS = {
   "skill-files.read": { action: "channel.update.read", mode: "read" },
+  "librarian.read": { action: "channel.history.read", mode: "read" },
   "persons.read": { action: "workspace.read", mode: "read" },
   "history.read": { action: "channel.history.read", mode: "read" },
   "github.read": { action: "task.read", mode: "read" },

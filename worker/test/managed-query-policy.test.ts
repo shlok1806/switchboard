@@ -1,7 +1,7 @@
 import { reset, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type GitHubApp, installGitHubApp } from "../src/github/index";
-import { queryDenials, queryExecutionFixture, querySurfaces } from "./managed-query-cases";
+import { composedQuerySurfaces, queryDenials, queryExecutionFixture, querySurfaces } from "./managed-query-cases";
 
 beforeEach(reset);
 afterEach(() => installGitHubApp(null));
@@ -68,7 +68,14 @@ describe("shared query real Organization/decide matrix", () => {
             },
           });
         }
-        for (const surface of querySurfaces) {
+        const surfaces = [
+          ...querySurfaces,
+          ...composedQuerySurfaces.map((surface) => ({
+            ...surface,
+            path: surface.path(f.targetId),
+          })),
+        ];
+        for (const surface of surfaces) {
           const response = await object.managedRequest(
             new Request(`https://switchboard.test/r/${f.repo}${surface.path}`, {
               headers: { Authorization: `Bearer ${f.credential}` },

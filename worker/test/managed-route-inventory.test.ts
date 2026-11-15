@@ -154,7 +154,7 @@ describe("managed RPC bypass closure", () => {
         ["PUT", "/api/artifacts/guide", "channel.update.write"],
       ],
       librarian: [
-        ["GET", "/api/librarian", null],
+        ["GET", "/api/librarian", "channel.history.read"],
         ["PUT", "/api/librarian", null],
         ["GET", "/api/github", "task.read"],
       ],

@@ -1,10 +1,12 @@
 import { ARTIFACT_CSP, checkArtifact, cleanBriefWrite, toBase64 } from "../../shared/src/index";
 import { managedGitHubRead } from "./managed-github";
 import { managedHistoryQuery, managedStoredEvent, managedStoredWindow } from "./managed-history";
+import { managedLibrarian } from "./managed-librarian";
 import { managedOutcome, OUTCOME_BATCH_SIZE, OUTCOME_TABLES, outcomeAuditId } from "./managed-outcomes";
 import { type ConstituentDescriptor, managedQueryResponse } from "./managed-query";
 import { createManagedQuery, managedQueryId } from "./managed-query-registry";
 import { appendManagedOutcome, MANAGED_OUTCOME_TTL_MS } from "./managed-retention";
+import { managedSummary } from "./managed-summary";
 // One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
 // named by `owner/repo` (ADR 0007). It owns the Channel's Persons, who may join
 // (write access to the repo, and the Agent tokens), its append-only Event stream
@@ -997,7 +999,33 @@ export class Channel extends DurableObject<Env> {
         const page = { source: "stored" as const, selector: { kind: "tail" as const }, wakesOnly: false, limit: 1000 };
         const constituents: ConstituentDescriptor<unknown>[] = [];
         let assemble: (parts: ReadonlyMap<string, readonly unknown[]>) => unknown;
-        if (queryId === "history") {
+        if (queryId === "librarian") {
+          const feed = managedLibrarian({
+            sql: this.ctx.storage.sql,
+            input,
+            agent: (id) => this.agents.find(id),
+            association: (id) => this.managedAssociation(id),
+            event: (row) => rowToEvent(row as EventRow),
+            pin: pinTarget,
+            budget: () => this.brief.budget(),
+            now: Date.now(),
+            quietAfterMs: this.quietAfterMs,
+          });
+          constituents.push(...feed.constituents);
+          assemble = feed.assemble;
+        } else if (queryId === "summary") {
+          if (input.targetExecutionId) pinTarget(input);
+          const summary = managedSummary({
+            sql: this.ctx.storage.sql,
+            input,
+            agent: (id) => this.agents.find(id),
+            association: (id) => this.managedAssociation(id),
+            event: (row) => rowToEvent(row as EventRow),
+            pin: pinTarget,
+          });
+          constituents.push(...summary.constituents);
+          assemble = summary.assemble;
+        } else if (queryId === "history") {
           const query = managedHistoryQuery(url.searchParams);
           // Explicit exhaustion uses an empty SQL window, never a short window.
           constituents.push({

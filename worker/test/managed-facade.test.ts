@@ -21,6 +21,7 @@ describe("managed facade migration", () => {
       ["GET", "/api/tasks"],
       ["GET", "/api/relay"],
       ["GET", "/api/github"],
+      ["GET", "/api/librarian"],
       ["GET", "/api/events"],
       ["GET", "/api/persons"],
       ["PUT", "/api/brief/example"],

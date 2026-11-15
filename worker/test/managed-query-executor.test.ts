@@ -134,6 +134,25 @@ describe("managed query executor bounds and release", () => {
     expect(f.calls.filter((call) => call.resource.targetId === "omitted-author")).toHaveLength(1);
     expect(await managedQueryResponse(result, f.guard).json()).toEqual({ persons: [] });
   });
+  it("retains synchronous execution pins only for admitted projection rows", async () => {
+    const pins: string[] = [];
+    const f = fixture(async (row, context) => {
+      context.onRetain(() => pins.push(row.key));
+      return row.key === "omitted" ? null : row.value;
+    });
+    f.windows.push({
+      rows: [
+        { key: "omitted", value: "hidden" },
+        { key: "included", value: "visible" },
+      ],
+      nextInternal: null,
+      exhausted: true,
+    });
+    const result = await runManagedQuery(createManagedQuery(f.plan), f.authority, f.guard);
+    expect(result.ok).toBe(true);
+    expect(pins).toEqual(["included"]);
+    expect(await managedQueryResponse(result, f.guard).json()).toEqual({ persons: ["visible"] });
+  });
   for (const change of ["floor", "transition", "expire"] as const) {
     it(`rechecks ${change} synchronously after preparation and before serialization`, async () => {
       const f = fixture();

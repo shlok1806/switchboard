@@ -103,3 +103,21 @@ export async function queryExecutionFixture() {
   });
   return { ...f, principalId, executionId, credential, channel };
 }
+
+/** B1q2 composed surfaces share the same denial vocabulary and authority fixture. */
+export const composedQuerySurfaces = [
+  {
+    id: "summary",
+    operation: "agent.summary",
+    path: (agent: string) => `/api/agents/${encodeURIComponent(agent)}/summary`,
+    action: "agent.view",
+    target: (agent: string) => agent,
+  },
+  {
+    id: "librarian",
+    operation: "librarian.read",
+    path: (_agent: string) => "/api/librarian",
+    action: "channel.history.read",
+    target: (_agent: string) => "librarian",
+  },
+] as const;

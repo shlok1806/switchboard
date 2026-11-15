@@ -4,8 +4,8 @@ import type { ChannelAuthorization, Organization } from "./organization";
 import { AuthorityUnavailable, authorityRequest } from "./policy-permits";
 
 export type AuthorityValue = Extract<Awaited<ReturnType<Organization["authorizeChannelRead"]>>, { ok: true }>["value"];
-export type QueryId = "history" | "persons" | "agents" | "github";
-export type ConstituentId = "events" | "agents" | "persons" | "tasks";
+export type QueryId = "history" | "persons" | "agents" | "github" | "summary" | "librarian";
+export type ConstituentId = "events" | "agents" | "persons" | "tasks" | "history" | "notes" | "brief";
 export interface QueryBinding {
   organizationId: string;
   workspaceId: string;
@@ -33,6 +33,8 @@ export interface QueryRow {
   value: unknown;
 }
 export interface ProjectionContext {
+  /** Synchronous local fences are installed only if this projection survives. */
+  onRetain(effect: () => void): void;
   check(input: ChannelAuthorization): Promise<AuthorityValue | null>;
   boundary(): void;
 }
@@ -193,10 +195,12 @@ export async function runManagedQuery<T>(
           boundary();
           if (keys.has(row.key)) continue;
           const dependencies: ChannelAuthorization[] = [];
+          const retainedEffects: (() => void)[] = [];
           const deadlineStart = deadlines.length;
           const projected = await wait(() =>
             constituent.projection.project(row, {
               boundary,
+              onRetain: (effect) => retainedEffects.push(effect),
               check: async (input) => {
                 const result = await check(input);
                 if (result) dependencies.push(input);
@@ -209,6 +213,8 @@ export async function runManagedQuery<T>(
             deadlines.splice(deadlineStart);
             continue;
           }
+          for (const effect of retainedEffects) effect();
+          boundary();
           keys.add(row.key);
           output.push(projected);
           rowRelease.push(...dependencies);
