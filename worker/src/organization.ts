@@ -42,7 +42,7 @@ import {
   validPerson,
   workspaceParent,
 } from "./policy";
-import { type MutationPermit, resourceKey } from "./policy-permits";
+import { authorityRequest, type MutationPermit, resourceKey } from "./policy-permits";
 import { administrator, DELEGABLE_ACTIONS, effectiveActions, humanActions, managesPrincipal } from "./principals";
 
 const DAY = 86_400_000;
@@ -118,6 +118,28 @@ export class Organization extends DurableObject<Env> {
     // Any authority change cancels every outstanding authorization from older revisions.
     this.ctx.storage.sql.exec("DELETE FROM mutation_permits WHERE revision<>?", state.organization.policyRevision);
     this.ctx.storage.sql.exec("INSERT OR REPLACE INTO aggregate VALUES(1, ?)", JSON.stringify(state));
+    const revision = state.organization.policyRevision;
+    const linked = Object.values(state.workspaces).flatMap((workspace) =>
+      workspace.channel ? [{ id: workspace.id, channel: workspace.channel }] : [],
+    );
+    if (linked.length) {
+      const deadline = Date.now() + 2000;
+      // Defer until the synchronous authority transaction has finished; all
+      // recipients share one absolute deadline, never serial per-Channel waits.
+      this.ctx.waitUntil(
+        Promise.resolve().then(async () => {
+          await Promise.allSettled(
+            linked.map((workspace) =>
+              authorityRequest(
+                async () =>
+                  this.env.CHANNEL.getByName(workspace.channel).invalidateManagedPolicy(workspace.id, revision),
+                deadline - Date.now(),
+              ),
+            ),
+          );
+        }),
+      );
+    }
   }
   /** Directory reserves a random org id before calling; repeat initialization never mutates it. */
   initialize(id: string, name: string, actor: PersonActor, requestId: string): NativeResult<NativeOrganization> {

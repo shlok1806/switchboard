@@ -129,7 +129,13 @@ import { readJson } from "./http";
 import { LangfuseProject, type StoredLangfuse } from "./langfuse";
 import { LIBRARIAN_SCHEMA, librarianFeed, moveLibrarianCursor } from "./librarian";
 import { ManagedUpdateBudgets } from "./managed-budgets";
-import { ManagedReadFailure, managedError, managedRead, managedReadRoute, managedWriteRoute } from "./managed-channel";
+import {
+  ManagedReadFailure,
+  managedEnforcement,
+  managedError,
+  managedOperationRoute,
+  managedQueryAuthorization,
+} from "./managed-channel";
 import { safeAgent } from "./managed-projection";
 import { type GrantResult, McpGrants } from "./mcp/grants";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
@@ -853,6 +859,13 @@ export class Channel extends DurableObject<Env> {
     return { ...this.binding };
   }
 
+  /** Trusted internal Organization RPC: can only invalidate, never grant access. */
+  invalidateManagedPolicy(workspace: string, revision: number): void {
+    // No managed storage or extra work for legacy Channels.
+    if (this.binding.state !== "linked" || this.binding.version !== 1 || this.binding.workspace !== workspace) return;
+    new LocalMutationPermits(this.ctx.storage.sql).observeRevision(workspace, revision);
+  }
+
   /** Synchronous transition fence, immediately before dispatch or result release. */
   bindingCurrent(generation: number, managed = false): boolean {
     if (managed)
@@ -888,8 +901,7 @@ export class Channel extends DurableObject<Env> {
     if (!this.env.CHANNEL.idFromName(repo).equals(this.ctx.id) || !url.pathname.startsWith(`/r/${repo}/api/`))
       return managedError(404, "resource_denied");
     const path = url.pathname.slice(`/r/${repo}`.length);
-    const writeRoute = managedWriteRoute(request.method, path);
-    const route = writeRoute ?? managedReadRoute(request.method, path);
+    const route = managedOperationRoute(request.method, path);
     if (!route) return managedError(404, "resource_denied");
     const organizationId = workspaceParent(binding.workspace);
     if (!organizationId) return managedError(404, "resource_denied");
@@ -926,33 +938,17 @@ export class Channel extends DurableObject<Env> {
       const rosterChecks: ChannelAuthorization[] = [];
       const current = () =>
         bindingCurrent() &&
-        (route.operation !== "memory.read" ||
-          rosterChecks.every((check) => {
-            const association = this.managedAssociation(check.resource.targetId as AgentId);
-            return association?.active === 1 && association.executionId === check.targetExecutionId;
-          }));
-      if (writeRoute) return await this.#managedWrite(request, path, input, current);
-      return managedRead({
-        input,
+        rosterChecks.every((check) => {
+          const association = this.managedAssociation(check.resource.targetId as AgentId);
+          return association?.active === 1 && association.executionId === check.targetExecutionId;
+        });
+      const enforcement = managedEnforcement({ current, authorize: (check) => org.authorizeChannelRead(check) });
+      if (route.mode === "write") return await this.#managedWrite(request, path, input, current);
+      return managedEnforcement({
         current,
         authorize: async (input) => {
           // Return local denials: authorityRequest maps thrown errors to authority outages.
           const denied = { ok: false, status: 403, reason: "resource_denied", policyRevision: 0 } as const;
-          let projectionRevision: number | undefined;
-          for (const check of rosterChecks) {
-            if (route.operation === "memory.read") {
-              const association = this.managedAssociation(check.resource.targetId as AgentId);
-              if (association?.active !== 1 || association.executionId !== check.targetExecutionId)
-                return { ok: false, status: 403, reason: "target_enrollment_required", policyRevision: 0 };
-            }
-            const result = await org.authorizeChannelRead(check);
-            if (!current()) return denied;
-            if (!result.ok) return result;
-            if (route.operation === "memory.read") {
-              if (projectionRevision !== undefined && projectionRevision !== result.policyRevision) return denied;
-              projectionRevision = result.policyRevision;
-            }
-          }
           let authorization = input;
           if (!token) {
             const currentActor = await readNativeActor(request, url, this.env);
@@ -961,159 +957,159 @@ export class Channel extends DurableObject<Env> {
               return { ok: false, status: 403, reason: "native_authentication_required", policyRevision: 0 };
             authorization = { ...input, actor: currentActor };
           }
-          const result = await org.authorizeChannelRead(authorization);
-          // Do not combine author checks from different authority revisions into a
-          // response that a later, weaker top-level history check could release.
-          if (projectionRevision !== undefined && projectionRevision !== result.policyRevision) return denied;
-          return result;
+          return managedQueryAuthorization(
+            authorization,
+            rosterChecks,
+            (check) => org.authorizeChannelRead(check),
+            current,
+          );
         },
-        read: async () => {
-          if (path === "/api/relay") return { relay: relaySettings(this.env) };
-          if (route.operation === "skill-files.read") {
-            // Parsing and bytes stay behind initial authorization. The local Skills
-            // store only releases completed blobs held by this Channel's publications.
-            const { chunks } = await readJson(request);
-            if (!current()) throw new ManagedReadFailure(404);
-            if (!Array.isArray(chunks) || chunks.length === 0) return managedError(400, "invalid_skill_chunks");
-            const wanted: { digest: string; index: number }[] = [];
-            for (const chunk of chunks) {
-              if (
-                typeof chunk?.digest !== "string" ||
-                !/^[0-9a-f]{64}$/.test(chunk.digest) ||
-                !Number.isSafeInteger(chunk.index) ||
-                chunk.index < 0
-              )
-                throw new ManagedReadFailure(404);
-              wanted.push({ digest: chunk.digest, index: chunk.index });
-            }
-            const result = this.skills.readChunks(wanted);
-            if (!result.ok) {
-              if (result.status === 413) return managedError(413, "skill_transfer_limit");
+      }).read(input, async () => {
+        if (path === "/api/relay") return { relay: relaySettings(this.env) };
+        if (route.operation === "skill-files.read") {
+          // Parsing and bytes stay behind initial authorization. The local Skills
+          // store only releases completed blobs held by this Channel's publications.
+          const { chunks } = await readJson(request);
+          if (!current()) throw new ManagedReadFailure(404);
+          if (!Array.isArray(chunks) || chunks.length === 0) return managedError(400, "invalid_skill_chunks");
+          const wanted: { digest: string; index: number }[] = [];
+          for (const chunk of chunks) {
+            if (
+              typeof chunk?.digest !== "string" ||
+              !/^[0-9a-f]{64}$/.test(chunk.digest) ||
+              !Number.isSafeInteger(chunk.index) ||
+              chunk.index < 0
+            )
               throw new ManagedReadFailure(404);
-            }
-            return {
-              chunks: result.value.map(({ digest, index, data }) => ({ digest, index, data: toBase64(data) })),
+            wanted.push({ digest: chunk.digest, index: chunk.index });
+          }
+          const result = this.skills.readChunks(wanted);
+          if (!result.ok) {
+            if (result.status === 413) return managedError(413, "skill_transfer_limit");
+            throw new ManagedReadFailure(404);
+          }
+          return {
+            chunks: result.value.map(({ digest, index, data }) => ({ digest, index, data: toBase64(data) })),
+          };
+        }
+        if (route.operation === "memory.read") {
+          const parsed = memoryQuery(url.searchParams);
+          if (!parsed.ok) return managedError(400, "invalid_memory_query");
+          const authors: AgentId[] = [];
+          for (const agent of this.agents.list(false)) {
+            const association = this.managedAssociation(agent.id);
+            if (association?.active !== 1) continue;
+            const check: ChannelAuthorization = {
+              ...input,
+              action: "agent.view",
+              targetExecutionId: association.executionId,
+              resource: { ...input.resource, targetId: agent.id, operation: "memory.author" },
             };
+            const allowed = await enforcement.check(check);
+            if (!current()) throw new ManagedReadFailure(404);
+            const latest = this.managedAssociation(agent.id);
+            if (!allowed.ok || latest?.active !== 1 || latest.executionId !== association.executionId) continue;
+            rosterChecks.push(check);
+            authors.push(agent.id);
           }
-          if (route.operation === "memory.read") {
-            const parsed = memoryQuery(url.searchParams);
-            if (!parsed.ok) return managedError(400, "invalid_memory_query");
-            const authors: AgentId[] = [];
-            for (const agent of this.agents.list(false)) {
-              const association = this.managedAssociation(agent.id);
-              if (association?.active !== 1) continue;
-              const check: ChannelAuthorization = {
-                ...input,
-                action: "agent.view",
-                targetExecutionId: association.executionId,
-                resource: { ...input.resource, targetId: agent.id, operation: "memory.author" },
-              };
-              const allowed = await authorityRequest(async () => await org.authorizeChannelRead(check));
-              if (!current()) throw new ManagedReadFailure(404);
-              const latest = this.managedAssociation(agent.id);
-              if (!allowed.ok || latest?.active !== 1 || latest.executionId !== association.executionId) continue;
-              rosterChecks.push(check);
-              authors.push(agent.id);
-            }
-            const result = this.memory.read(parsed.query, authors);
-            if (!result.ok) return managedError(400, "invalid_memory_query");
-            return { notes: result.notes, ...(result.more ? { more: true } : {}) };
+          const result = this.memory.read(parsed.query, authors);
+          if (!result.ok) return managedError(400, "invalid_memory_query");
+          return { notes: result.notes, ...(result.more ? { more: true } : {}) };
+        }
+        if (route.action === "channel.update.read") {
+          const versionText = url.searchParams.get("version");
+          if (versionText !== null && !/^[1-9]\d{0,8}$/.test(versionText)) throw new ManagedReadFailure(404);
+          const version = versionText === null ? undefined : Number(versionText);
+          if (path === "/api/skills") return { skills: this.skills.list() };
+          if (path === "/api/artifacts") return { artifacts: this.artifacts.list() };
+          if (path === "/api/brief") return { pages: this.brief.pages() };
+          const separator = route.targetId.indexOf("/");
+          const family = route.targetId.slice(0, separator);
+          const name = route.targetId.slice(separator + 1);
+          const result =
+            family === "skills"
+              ? this.skills.read(name, version)
+              : family === "brief"
+                ? this.brief.read(name, version)
+                : route.operation === "content.page"
+                  ? this.artifacts.page(name, version)
+                  : this.artifacts.read(name, version);
+          if (!result.ok) throw new ManagedReadFailure(404);
+          if (route.operation === "content.page" && "html" in result.value) {
+            return new Response(result.value.html, {
+              headers: {
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Security-Policy": ARTIFACT_CSP,
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+                "Cache-Control": "no-store",
+                ...(url.searchParams.get("download") === "1" ? { "Content-Disposition": "attachment" } : {}),
+              },
+            });
           }
-          if (route.action === "channel.update.read") {
-            const versionText = url.searchParams.get("version");
-            if (versionText !== null && !/^[1-9]\d{0,8}$/.test(versionText)) throw new ManagedReadFailure(404);
-            const version = versionText === null ? undefined : Number(versionText);
-            if (path === "/api/skills") return { skills: this.skills.list() };
-            if (path === "/api/artifacts") return { artifacts: this.artifacts.list() };
-            if (path === "/api/brief") return { pages: this.brief.pages() };
-            const separator = route.targetId.indexOf("/");
-            const family = route.targetId.slice(0, separator);
-            const name = route.targetId.slice(separator + 1);
-            const result =
-              family === "skills"
-                ? this.skills.read(name, version)
-                : family === "brief"
-                  ? this.brief.read(name, version)
-                  : route.operation === "content.page"
-                    ? this.artifacts.page(name, version)
-                    : this.artifacts.read(name, version);
-            if (!result.ok) throw new ManagedReadFailure(404);
-            if (route.operation === "content.page" && "html" in result.value) {
-              return new Response(result.value.html, {
-                headers: {
-                  "Content-Type": "text/html; charset=utf-8",
-                  "Content-Security-Policy": ARTIFACT_CSP,
-                  "X-Content-Type-Options": "nosniff",
-                  "Referrer-Policy": "no-referrer",
-                  "Cache-Control": "no-store",
-                  ...(url.searchParams.get("download") === "1" ? { "Content-Disposition": "attachment" } : {}),
-                },
-              });
-            }
-            return result.value;
-          }
+          return result.value;
+        }
 
-          if (route.action === "agent.view") {
-            const candidates =
-              route.targetId === "agents"
-                ? this.agents.list(false)
-                : [this.agents.find(route.targetId as AgentId)].filter((a): a is Agent => a !== null);
-            const agents: SafeAgent[] = [];
-            for (const candidate of candidates) {
-              const association = this.managedAssociation(candidate.id);
-              if (association?.active !== 1) continue;
-              const check: ChannelAuthorization = {
-                ...input,
-                targetExecutionId: association.executionId,
-                resource: { ...input.resource, targetId: candidate.id },
-              };
-              const result = await authorityRequest(async () => await org.authorizeChannelRead(check));
-              if (!current()) throw new ManagedReadFailure(404);
-              if (!result.ok || !result.value.target) continue;
-              const agent = this.agents.find(candidate.id);
-              if (!agent || agent.presence === "gone") continue;
-              rosterChecks.push(check);
-              agents.push(safeAgent(agent, result.value.target));
-            }
-            if (route.targetId !== "agents" && !agents[0]) throw new ManagedReadFailure(404);
-            return route.targetId === "agents" ? { agents } : { agent: agents[0] };
+        if (route.action === "agent.view") {
+          const candidates =
+            route.targetId === "agents"
+              ? this.agents.list(false)
+              : [this.agents.find(route.targetId as AgentId)].filter((a): a is Agent => a !== null);
+          const agents: SafeAgent[] = [];
+          for (const candidate of candidates) {
+            const association = this.managedAssociation(candidate.id);
+            if (association?.active !== 1) continue;
+            const check: ChannelAuthorization = {
+              ...input,
+              targetExecutionId: association.executionId,
+              resource: { ...input.resource, targetId: candidate.id },
+            };
+            const result = await enforcement.check(check);
+            if (!current()) throw new ManagedReadFailure(404);
+            if (!result.ok || !result.value.target) continue;
+            const agent = this.agents.find(candidate.id);
+            if (!agent || agent.presence === "gone") continue;
+            rosterChecks.push(check);
+            agents.push(safeAgent(agent, result.value.target));
           }
+          if (route.targetId !== "agents" && !agents[0]) throw new ManagedReadFailure(404);
+          return route.targetId === "agents" ? { agents } : { agent: agents[0] };
+        }
 
-          if (route.action.startsWith("agent.private_")) {
-            const id = route.targetId as AgentId;
-            const agent = this.agents.find(id);
-            if (!agent || agent.presence === "gone") throw new ManagedReadFailure(404);
-            if (route.operation === "touched-files") return { agent: id, files: this.hooks.touchedFiles(id) };
-            if (route.operation === "terminal") {
-              const screen = await this.askWrapper(
-                this.terminalReads,
-                id,
-                (request): TerminalReadRequestMessage => ({ type: "terminal.read.request", agent: id, id: request }),
-              );
-              if (!screen || typeof screen === "string") throw new ManagedReadFailure(503);
-              return { screen: { agent: id, ...screen } };
-            }
-            const from = Number(url.searchParams.get("from") ?? 0);
-            if (!Number.isSafeInteger(from) || from < 0) throw new ManagedReadFailure(404);
-            const page = await this.askWrapper(
-              this.transcriptReads,
+        if (route.action.startsWith("agent.private_")) {
+          const id = route.targetId as AgentId;
+          const agent = this.agents.find(id);
+          if (!agent || agent.presence === "gone") throw new ManagedReadFailure(404);
+          if (route.operation === "touched-files") return { agent: id, files: this.hooks.touchedFiles(id) };
+          if (route.operation === "terminal") {
+            const screen = await this.askWrapper(
+              this.terminalReads,
               id,
-              (request): TranscriptRequestMessage => ({
-                type: "transcript.request",
-                agent: id,
-                id: request,
-                from,
-                ...(url.searchParams.get("latest") === "true" ? { latest: true } : {}),
-              }),
+              (request): TerminalReadRequestMessage => ({ type: "terminal.read.request", agent: id, id: request }),
             );
-            if (!page || typeof page === "string") throw new ManagedReadFailure(503);
-            return { page: { agent: id, ...page } };
+            if (!screen || typeof screen === "string") throw new ManagedReadFailure(503);
+            return { screen: { agent: id, ...screen } };
           }
+          const from = Number(url.searchParams.get("from") ?? 0);
+          if (!Number.isSafeInteger(from) || from < 0) throw new ManagedReadFailure(404);
+          const page = await this.askWrapper(
+            this.transcriptReads,
+            id,
+            (request): TranscriptRequestMessage => ({
+              type: "transcript.request",
+              agent: id,
+              id: request,
+              from,
+              ...(url.searchParams.get("latest") === "true" ? { latest: true } : {}),
+            }),
+          );
+          if (!page || typeof page === "string") throw new ManagedReadFailure(503);
+          return { page: { agent: id, ...page } };
+        }
 
-          const result = path === "/api/tasks" ? await this.tasks.list() : await this.tasks.get(Number(route.targetId));
-          if (!result.ok) throw new ManagedReadFailure(result.status);
-          return path === "/api/tasks" ? { tasks: result.value } : { task: result.value };
-        },
+        const result = path === "/api/tasks" ? await this.tasks.list() : await this.tasks.get(Number(route.targetId));
+        if (!result.ok) throw new ManagedReadFailure(result.status);
+        return path === "/api/tasks" ? { tasks: result.value } : { task: result.value };
       });
     } catch (error) {
       if (error instanceof ManagedReadFailure) return managedError(error.status, "resource_denied");
@@ -1139,6 +1135,23 @@ export class Channel extends DurableObject<Env> {
       };
     }
     const org = this.env.ORGANIZATION.getByName(input.resource.organizationId);
+    const enforcement = managedEnforcement({
+      current,
+      authorize: async (check) => {
+        if (!("token" in check.actor)) {
+          const actor = await readNativeActor(request, new URL(request.url), this.env);
+          if (
+            !actor ||
+            actor.personId !== check.actor.personId ||
+            actor.githubId !== check.actor.githubId ||
+            !current()
+          )
+            return { ok: false as const, status: 403 as const, reason: "resource_denied", policyRevision: 0 };
+          check = { ...check, actor };
+        }
+        return org.authorizeChannelRead(check);
+      },
+    });
     const login = "token" in input.actor ? null : await authorityRequest(() => this.nativeLogin(request));
     if (!current()) throw new ManagedReadFailure(404);
     const verified =
@@ -1148,7 +1161,7 @@ export class Channel extends DurableObject<Env> {
           )
         : input.actor;
     const caller = verified ? this.#managedCaller(verified, login) : undefined;
-    if (!caller || !current()) throw new ManagedReadFailure(404);
+    if (!verified || !caller || !current()) throw new ManagedReadFailure(404);
     let outcome = "committed";
     let intentRevision = 0;
     const prepare = async (intent = false, issuedPermit?: MutationPermit) => {
@@ -1166,62 +1179,80 @@ export class Channel extends DurableObject<Env> {
         if (typeof expiry !== "number" || !Number.isFinite(expiry)) throw new ManagedReadFailure(404);
         input = { ...input, credentialExpiresAt: expiry * 1000 };
       }
-      const result = issuedPermit
-        ? { ok: true as const, value: issuedPermit }
-        : await authorityRequest(async () => await org.issueMutationPermit(input));
-      if (!result.ok || !current()) throw new ManagedReadFailure(404);
-      const permit = result.value;
-      if (intent) intentRevision = permit.policyRevision;
-
-      const permits = new LocalMutationPermits(this.ctx.storage.sql);
-      permits.install(permit);
-      return {
-        commit: (write: () => void) => {
-          this.ctx.storage.transactionSync(() => {
-            if (
-              !current() ||
-              !this.#managedCaller(permit.actor, login) ||
-              !permits.consume(permit.id, { ...permit, generation: this.binding.generation })
-            )
-              throw new ManagedReadFailure(404);
-            if (intent)
-              appendManagedOutcome(this.ctx.storage.sql, "managed_external_outcomes", input.requestId, {
-                requestId: input.requestId,
-                actor: permit.actor,
-                action: permit.action,
-                resource: permit.resource,
-                policyRevision: permit.policyRevision,
-                outcome: "external_pending",
-              });
-            // Reserve evidence capacity before append/broadcast/Relay side effects.
-            appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
-              requestId: input.requestId,
-              actor: permit.actor,
-              action: permit.action,
-              resource: permit.resource,
-              policyRevision: permit.policyRevision,
-              outcome: "pending_commit",
-            });
-            write();
-            appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
-              requestId: input.requestId,
-              actor: permit.actor,
-              action: permit.action,
-              resource: permit.resource,
-              policyRevision: permit.policyRevision,
-              outcome: intent ? "external_intent" : outcome,
-              at: Date.now(),
-            });
-            this.#queueManagedOutcomes();
-          });
-          this.ctx.waitUntil(this.alarms.arm());
+      return enforcement.prepare(
+        {
+          actor: verified,
+          action: input.action,
+          resource: input.resource,
+          requestId: input.requestId,
+          generation: input.generation,
         },
-      };
+        async () =>
+          issuedPermit
+            ? { ok: true as const, value: issuedPermit, policyRevision: issuedPermit.policyRevision }
+            : await org.issueMutationPermit(input),
+        (permit) => {
+          if (intent) intentRevision = permit.policyRevision;
+
+          const permits = new LocalMutationPermits(this.ctx.storage.sql);
+          permits.observeRevision(input.resource.id, permit.policyRevision);
+          permits.install(permit);
+          return {
+            commit: (write: () => void) => {
+              this.ctx.storage.transactionSync(() => {
+                if (
+                  !current() ||
+                  !this.#managedCaller(permit.actor, login) ||
+                  !permits.consume(permit.id, {
+                    actor: verified,
+                    action: input.action,
+                    resource: input.resource,
+                    requestId: input.requestId,
+                    generation: this.binding.generation,
+                    policyRevision: permit.policyRevision,
+                  })
+                )
+                  throw new ManagedReadFailure(404);
+                if (intent)
+                  appendManagedOutcome(this.ctx.storage.sql, "managed_external_outcomes", input.requestId, {
+                    requestId: input.requestId,
+                    actor: permit.actor,
+                    action: permit.action,
+                    resource: permit.resource,
+                    policyRevision: permit.policyRevision,
+                    outcome: "external_pending",
+                  });
+                // Reserve evidence capacity before append/broadcast/Relay side effects.
+                appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
+                  requestId: input.requestId,
+                  actor: permit.actor,
+                  action: permit.action,
+                  resource: permit.resource,
+                  policyRevision: permit.policyRevision,
+                  outcome: "pending_commit",
+                });
+                write();
+                appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
+                  requestId: input.requestId,
+                  actor: permit.actor,
+                  action: permit.action,
+                  resource: permit.resource,
+                  policyRevision: permit.policyRevision,
+                  outcome: intent ? "external_intent" : outcome,
+                  at: Date.now(),
+                });
+                this.#queueManagedOutcomes();
+              });
+              this.ctx.waitUntil(this.alarms.arm());
+            },
+          };
+        },
+      );
     };
     if (input.resource.operation === "brief.write") {
       // Response includes page content: admit and release that read independently of the write permit.
       const readInput = { ...input, action: "channel.update.read" };
-      const admitted = await authorityRequest(async () => await org.authorizeChannelRead(readInput));
+      const admitted = await enforcement.check(readInput);
       if (!admitted.ok || !current()) return managedError(404, "resource_denied");
       const page = input.resource.targetId?.slice("brief/".length) ?? "";
       const checked = cleanBriefWrite(page, body);
@@ -1248,7 +1279,7 @@ export class Channel extends DurableObject<Env> {
         );
         if (!result.ok) outcome = "local_restriction_denied";
       });
-      const released = await authorityRequest(async () => await org.authorizeChannelRead(readInput));
+      const released = await enforcement.check(readInput);
       if (!released.ok || !current()) return managedError(404, "resource_denied");
       if (!result) throw new ManagedReadFailure(404);
       return result.ok
@@ -1372,9 +1403,7 @@ export class Channel extends DurableObject<Env> {
         headers: { "Cache-Control": "no-store" },
       });
     }
-    const admitted = await authorityRequest(
-      async () => await org.authorizeChannelRead({ ...input, action: "task.read" }),
-    );
+    const admitted = await enforcement.check({ ...input, action: "task.read" });
     if (!admitted.ok || !current()) return managedError(404, "resource_denied");
 
     const number = Number(input.resource.targetId);
@@ -1430,9 +1459,7 @@ export class Channel extends DurableObject<Env> {
         Number(input.resource.operation?.split("/")[1]),
         mutation,
       );
-    const released = await authorityRequest(
-      async () => await org.authorizeChannelRead({ ...input, action: "task.read" }),
-    );
+    const released = await enforcement.check({ ...input, action: "task.read" });
     if (!released.ok || !current()) return managedError(404, "resource_denied");
     return Response.json(result, { status: result.ok ? 200 : result.status, headers: { "Cache-Control": "no-store" } });
   }

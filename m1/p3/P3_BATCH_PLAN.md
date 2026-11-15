@@ -145,7 +145,7 @@ Add outage/timeout 503, exact permit expiry/replay, revoke-during-await, generat
 
 ## B3 — Privileged operations and Host authority
 
-**Scope:** H26/H28/H30/H35, Host HTTP variants enumerated at C18/H06; H23/H24 owner-control decision remnants; C15/C18/C19; W07/W08/W13/W16/W17 preparation; M04 credential source.
+**Scope:** H26/H30/H35, Host HTTP variants enumerated at C18/H06; H23/H24 owner-control decision remnants; C15/C18/C19; W07/W08/W13/W16/W17 preparation; M04 credential source. H28 PUT/DELETE are already implemented and migrate in B1a (inventory review INV-6).
 
 **B3a:** skill upload/publication preparation → permit → synchronous revalidation/commit; preserve publisher ownership and librarian limits. Reuse upload preparation at `worker/src/skills.ts:407`; publication still awaits hashing at `:572`. Implement managed Langfuse storage/transition selected by owner, metadata GET/write and costs source; never put secrets/digests into Channel storage or audit.
 
