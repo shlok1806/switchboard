@@ -4,7 +4,19 @@ import type { ChannelAuthorization, Organization } from "./organization";
 import { AuthorityUnavailable, authorityRequest } from "./policy-permits";
 
 export type AuthorityValue = Extract<Awaited<ReturnType<Organization["authorizeChannelRead"]>>, { ok: true }>["value"];
-export type QueryId = "history" | "persons" | "agents" | "github" | "summary" | "librarian";
+export type QueryId =
+  | "history"
+  | "persons"
+  | "agents"
+  | "github"
+  | "summary"
+  | "librarian"
+  | "connector.channel"
+  | "connector.github"
+  | "connector.brief"
+  | "stream.event"
+  | "stream.backlog"
+  | "local.history";
 export type ConstituentId = "events" | "agents" | "persons" | "tasks" | "history" | "notes" | "brief";
 export interface QueryBinding {
   organizationId: string;

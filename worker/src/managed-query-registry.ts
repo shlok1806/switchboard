@@ -2,6 +2,24 @@ import type { QueryId, QueryPlan } from "./managed-query";
 
 /** Trusted factories only. Request bodies never supply callbacks or policy scopes. */
 export const MANAGED_QUERIES = {
+  "connector.channel": {
+    operation: "connector.channel",
+    action: "workspace.read",
+    constituents: ["events", "agents", "history", "tasks", "notes"],
+  },
+  "connector.github": { operation: "connector.github", action: "task.read", constituents: ["tasks"] },
+  "connector.brief": { operation: "connector.brief", action: "channel.update.read", constituents: ["brief"] },
+  "stream.event": {
+    operation: "stream.event",
+    action: "channel.history.read",
+    constituents: ["events", "agents", "tasks", "persons"],
+  },
+  "stream.backlog": {
+    operation: "stream.backlog",
+    action: "channel.history.read",
+    constituents: ["events", "agents", "tasks", "persons"],
+  },
+  "local.history": { operation: "local.history", action: "channel.history.read", constituents: ["events", "agents"] },
   librarian: {
     operation: "librarian.read",
     action: "channel.history.read",
@@ -72,4 +90,24 @@ export function registeredQueryPlan(plan: object): boolean {
 /** Resolve completed operation metadata, never a client-supplied query ID. */
 export function managedQueryId(operation: string): QueryId | undefined {
   return (Object.keys(MANAGED_QUERIES) as QueryId[]).find((id) => MANAGED_QUERIES[id].operation === operation);
+}
+
+/** Actor-aware internal preparation only; this is not MCP/stream admission. */
+export const MANAGED_PREPARATIONS = {
+  "connector.channel": { path: "/api/events", targetId: "channel", base: "history" },
+  "connector.github": { path: "/api/github", targetId: "github", base: "github" },
+  "connector.brief": { path: "/api/brief", targetId: "brief", base: "brief" },
+  "stream.event": { path: "/api/events", targetId: "events", base: "history" },
+  "stream.backlog": { path: "/api/events", targetId: "events", base: "history" },
+  "local.history": { path: "/api/events", targetId: "events", base: "history" },
+} as const;
+export type ManagedPreparationId = keyof typeof MANAGED_PREPARATIONS;
+export interface ManagedPreparationRequest {
+  id: ManagedPreparationId;
+  actor: import("./organization").ChannelAuthorization["actor"];
+  generation: number;
+  /** Required for a native Person resolved from an expiring session by the caller. */
+  credentialExpiresAt?: number;
+  /** Parsed by the same bounded selectors as HTTP; never authority metadata. */
+  selectors?: string;
 }

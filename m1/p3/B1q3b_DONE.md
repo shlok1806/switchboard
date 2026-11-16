@@ -1,0 +1,17 @@
+# B1q3b complete — ready for manager runtime gate and independent review
+
+- B1q3b: six actor-aware internal preparation plans and RPC through the shared Organization/decide query boundary (`worker/src/channel.ts:919`, `worker/src/managed-query-registry.ts:4`); no external MCP/stream opening.
+- Production changes: Channel adapters; managed-query.ts/registry; new managed-connectors.ts; managed-summary.ts and managed-local-history.ts. Context is memory-only and single-use; native Person expiry is bounded; no credential persistence.
+- Tests: extended managed-query-cases.ts, managed-query-policy.test.ts and managed-query.test.ts; new managed-source-inventory.test.ts / inventory table / raw-source type declaration. One shared real-authority positive/eight-denial matrix, independent constituents, await failures, projection/insertion/lookup tests and source-discovered coverage (`worker/test/managed-query-policy.test.ts:19`, `worker/test/managed-query.test.ts:186`, `worker/test/managed-source-inventory.test.ts:71`).
+- B1a: facade/registry and inherited writes remain IMPLEMENTED, including H28/H30; no new write is opened here (`m1/p3/B1a_DONE.md:1`).
+- B1b part 1 + fixes / B1q1: H02 stored/IDs/Wakes, H03 native Persons, H19 roster/detail and H33 constrained GitHub remain IMPLEMENTED (`m1/p3/B1q1_DONE.md:1`).
+- B1q2: H19 shared summary/successors/notes and H31 READ remain IMPLEMENTED; cursor mutation H32 stays BLOCKED (`m1/p3/B1q2_DONE.md:1`).
+- B1q3a: H02 merged/local/tail/before/agent/task selectors and admitted cursors IMPLEMENTED as preparation; eligible machine transport remains closed (`m1/p3/B1q3a_DONE.md:1`).
+- Final other B1 HTTP classes: H04/H08/H10/H22/H25/H27/H29 IMPLEMENTED; private transport returns unavailable until admitted; H23/H34 BLOCKED pending allocated owner-decision implementation (`m1/p3/P3_ROUTE_INVENTORY.md:305`).
+- Final RPC classes: C04/C22 IMPLEMENTED actor-aware boundaries; C11/C12/C15/C17 bare RPCs DENIED; C19 permission fact remains an additional predicate only (`m1/p3/P3_ROUTE_INVENTORY.md:167`).
+- M02/M03/M04-Brief and W10/W11/W15/J04: query/projection preparation implemented; MCP/stream/local transport admission stays CLOSED for B3/B4. Summary local activity reports authorized unavailable; no native Host or lease is fabricated.
+- Pending DD-1/DD-2 implementation: accounts, keyboard/approval control, delegated private-agent actions, Langfuse settings/migrate-and-delete credentials and MCP costs remain fail-closed. START stays manager-only. No B2 work started.
+- D5 deferral flips this slice: none. Authorized upstream-count expectation 1 → 2 for added connector.github invocation, denial count remains zero; marker assertion strengthened (`worker/test/managed-query-policy.test.ts:217`, `:221`). Earlier B1q3a flips remain documented in its notes.
+- Incompatible existing expectations: none. Read-only comparison found all 138 baseline test-tree files byte-identical to 0bfb31f.
+- Observed final checks: Worker typecheck exit 0; Worker lint exit 0 (218 files); git diff --check exit 0. Vitest/npm test/full suites NOT RUN, as instructed; manager owns runtime gates. No commit/push/merge/deploy or configuration/dependency changes.
+- Detailed changes, titles, evidence, deviations and final B1 disposition: `m1/p3/P3_IMPLEMENTATION_NOTES.md:871`; `m1/p3/P3_ROUTE_INVENTORY.md:305`. Earlier B1q3 Remaining items 3–5 are closed; no B1q3b implementation remains.

@@ -121,3 +121,111 @@ export const composedQuerySurfaces = [
     target: (_agent: string) => "librarian",
   },
 ] as const;
+
+/** All B1 real handler invocations share one real authority/denial matrix. */
+export const b1AdditionalSurfaces = [
+  { id: "relay", path: "/api/relay", action: "workspace.read", target: "relay" },
+  { id: "tasks", path: "/api/tasks", action: "task.read", target: "tasks" },
+  { id: "task", path: "/api/tasks/1", action: "task.read", target: "1" },
+  { id: "memory", path: "/api/memory", action: "channel.history.read", target: "memory" },
+  ...["skills", "artifacts", "brief"].map((name) => ({
+    id: name,
+    path: `/api/${name}`,
+    action: "channel.update.read",
+    target: name,
+  })),
+  ...["source=merged", "source=local", "tail=2", "before=9", "task=1", "source=stored&before=9"].map((selector) => ({
+    id: selector,
+    path: `/api/events?${selector}`,
+    action: "channel.history.read",
+    target: "events",
+  })),
+];
+export const preparationSurfaces = [
+  { id: "connector.channel", selectors: "", action: "workspace.read", target: "channel" },
+  { id: "connector.github", selectors: "about=README.md", action: "task.read", target: "github" },
+  { id: "connector.brief", selectors: "", action: "channel.update.read", target: "brief" },
+  { id: "stream.event", selectors: "", action: "channel.history.read", target: "events" },
+  { id: "stream.backlog", selectors: "", action: "channel.history.read", target: "events" },
+  { id: "local.history", selectors: "", action: "channel.history.read", target: "events" },
+] as const;
+
+/** Seed ordinary shared readers, preserving their real SQL/byte projection code. */
+export async function seedB1Content(f: Awaited<ReturnType<typeof queryExecutionFixture>>) {
+  const { runInDurableObject } = await import("cloudflare:test");
+  await runInDurableObject(f.channel, (_object, state) => {
+    const now = new Date().toISOString();
+    state.storage.sql.exec(
+      "INSERT INTO tasks(number,data,holder_agent) VALUES(?,?,?)",
+      1,
+      JSON.stringify({
+        number: 1,
+        title: "B1 shared task",
+        description: "Shared work",
+        labels: [],
+        blockedBy: [],
+        subtasks: [],
+        subtasksDone: 0,
+        steps: [],
+        stepsDone: 0,
+        url: "https://example.test/issues/1",
+        status: "claimed",
+        updatedAt: now,
+        claim: { task: 1, holder: { kind: "agent", agentId: f.targetId }, claimedAt: now, stale: false },
+      }),
+      f.targetId,
+    );
+    for (const [id, type, payload] of [
+      ["b1-shared", "update", { text: "B1 shared content" }],
+      ["b1-note", "memory.note", { text: "B1 shared note", tags: ["decision"] }],
+      ["b1-private", "directive", { text: "private-marker", to: f.targetId }],
+      ["b1-directed", "update", { text: "private-marker", to: [f.targetId] }],
+    ] as const)
+      state.storage.sql.exec(
+        "INSERT INTO events(id,at,type,actor,payload,actor_kind,actor_id) VALUES(?,?,?,?,?,?,?)",
+        id,
+        now,
+        type,
+        JSON.stringify({ kind: "agent", agentId: f.targetId }),
+        JSON.stringify(payload),
+        "agent",
+        f.targetId,
+      );
+    state.storage.sql.exec(
+      "INSERT INTO brief_pages VALUES('guide','Guide',1,'Shared guide',?,?, '[]')",
+      JSON.stringify({ person: "alice", agent: f.targetId }),
+      now,
+    );
+    const digest = "a".repeat(64);
+    state.storage.sql.exec("INSERT INTO skill_versions VALUES('guide',1,'alice',NULL,?,?,3,NULL)", now, digest);
+    state.storage.sql.exec("INSERT INTO skill_blobs VALUES(?,3,1,1,NULL,?)", digest, now);
+    state.storage.sql.exec("INSERT INTO skill_entries VALUES('guide',1,'SKILL.md',?,3,'utf8')", digest);
+    state.storage.sql.exec("INSERT INTO skill_chunks VALUES(?,0,?)", digest, new Uint8Array([65, 66, 67]));
+    state.storage.sql.exec(
+      "INSERT INTO artifact_versions VALUES('guide',1,'alice','Guide',3,?,?,?)",
+      digest,
+      JSON.stringify({ person: "alice" }),
+      now,
+    );
+    state.storage.sql.exec("INSERT INTO artifact_chunks VALUES('guide',1,0,?)", new Uint8Array([65, 66, 67]));
+  });
+}
+export const b1ContentDetails = [
+  ...["skills", "brief", "artifacts"].map((family) => ({ id: `${family}.detail`, path: `/api/${family}/guide` })),
+  { id: "artifact.page", path: "/api/artifacts/guide/page" },
+  {
+    id: "skill-files",
+    path: "/api/skill-files/read",
+    method: "POST",
+    body: { chunks: [{ digest: "a".repeat(64), index: 0 }] },
+  },
+] as const;
+
+export const preparationScopes: Record<(typeof preparationSurfaces)[number]["id"], readonly string[]> = {
+  "connector.channel": ["workspace.read", "channel.history.read", "channel.update.read", "agent.view", "task.read"],
+  "connector.github": ["task.read"],
+  "connector.brief": ["channel.update.read"],
+  "stream.event": ["channel.history.read", "channel.update.read", "agent.view", "task.read", "workspace.read"],
+  "stream.backlog": ["channel.history.read", "channel.update.read", "agent.view", "task.read", "workspace.read"],
+  "local.history": ["channel.history.read", "channel.update.read", "agent.view"],
+};

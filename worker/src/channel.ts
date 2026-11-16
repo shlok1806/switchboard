@@ -1,4 +1,5 @@
-import { ARTIFACT_CSP, checkArtifact, cleanBriefWrite, toBase64 } from "../../shared/src/index";
+import { ARTIFACT_CSP, BRIEF_PAGE_PATTERN, checkArtifact, cleanBriefWrite, toBase64 } from "../../shared/src/index";
+import { managedBriefConstituent, managedConnectorConstituents } from "./managed-connectors";
 import { managedGitHubRead } from "./managed-github";
 import { managedHistoryQuery, managedStoredEvent, managedStoredWindow } from "./managed-history";
 import { extendedHistory, HistoryCursors } from "./managed-history-selectors";
@@ -6,9 +7,17 @@ import { managedLibrarian } from "./managed-librarian";
 import { ManagedLocalHistory } from "./managed-local-history";
 import { managedOutcome, OUTCOME_BATCH_SIZE, OUTCOME_TABLES, outcomeAuditId } from "./managed-outcomes";
 import { type ConstituentDescriptor, managedQueryResponse } from "./managed-query";
-import { createManagedQuery, managedQueryId } from "./managed-query-registry";
+import { managedAgentAttribution } from "./managed-query-attribution";
+import {
+  createManagedQuery,
+  MANAGED_PREPARATIONS,
+  MANAGED_QUERIES,
+  type ManagedPreparationRequest,
+  managedQueryId,
+} from "./managed-query-registry";
 import { appendManagedOutcome, MANAGED_OUTCOME_TTL_MS } from "./managed-retention";
 import { managedSummary } from "./managed-summary";
+import { parseSince } from "./mcp/since";
 // One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
 // named by `owner/repo` (ADR 0007). It owns the Channel's Persons, who may join
 // (write access to the repo, and the Agent tokens), its append-only Event stream
@@ -451,6 +460,10 @@ function isTimeZone(zone: string): boolean {
     return false;
   }
 }
+
+// A request object created only by the trusted internal RPC carries its preparation
+// context in memory. HTTP serialization cannot forge this identity; consume once.
+const managedPreparationContexts = new WeakMap<Request, ManagedPreparationRequest>();
 
 export class Channel extends DurableObject<Env> {
   /** The one Durable Object alarm, shared by every job that wakes on a timer. */
@@ -902,17 +915,56 @@ export class Channel extends DurableObject<Env> {
     );
   }
 
-  /** Native credentials are resolved here, never from caller-supplied Person/Agent query fields. */
+  /** Trusted internal RPC. Actor-free calls and unknown plans deny before content access. */
+  async prepareManagedQuery(repo: string, preparation: ManagedPreparationRequest): Promise<Response> {
+    if (
+      this.binding.state !== "linked" ||
+      !preparation?.actor ||
+      typeof preparation.actor !== "object" ||
+      ("token" in preparation.actor
+        ? typeof preparation.actor.token !== "string" || preparation.actor.token.length > 4096
+        : preparation.actor.kind !== "person" ||
+          typeof preparation.actor.personId !== "string" ||
+          typeof preparation.actor.githubId !== "string" ||
+          !Number.isFinite(preparation.credentialExpiresAt) ||
+          (preparation.credentialExpiresAt ?? 0) <= Date.now()) ||
+      (preparation.selectors !== undefined &&
+        (typeof preparation.selectors !== "string" || preparation.selectors.length > 8192)) ||
+      preparation.generation !== this.binding.generation ||
+      !Object.hasOwn(MANAGED_PREPARATIONS, preparation.id)
+    )
+      return managedError(404, "resource_denied");
+    const descriptor = MANAGED_PREPARATIONS[preparation.id];
+    const url = new URL(`https://managed.invalid/r/${repo}${descriptor.path}`);
+    url.search = preparation.selectors ?? "";
+    if (preparation.id === "local.history") url.searchParams.set("source", "local");
+    const request = new Request(url);
+    managedPreparationContexts.set(request, preparation);
+    return this.managedRequest(request, repo);
+  }
+
+  /** Native credentials are resolved here, never from HTTP Person/Agent query fields. */
   async managedRequest(request: Request, repo: string): Promise<Response> {
     const binding = this.bindingState();
     if (binding.version !== 1 || binding.state !== "linked" || !binding.workspace || !binding.operation)
       return managedError(404, "resource_denied");
+    const preparation = managedPreparationContexts.get(request);
+    managedPreparationContexts.delete(request);
     const url = new URL(request.url);
     // Bind the HTTP route to the actual named DO, even for direct internal invocations.
     if (!this.env.CHANNEL.idFromName(repo).equals(this.ctx.id) || !url.pathname.startsWith(`/r/${repo}/api/`))
       return managedError(404, "resource_denied");
     const path = url.pathname.slice(`/r/${repo}`.length);
-    const route = managedOperationRoute(request.method, path);
+    const prepared = preparation ? MANAGED_PREPARATIONS[preparation.id] : undefined;
+    const route =
+      preparation && prepared
+        ? {
+            ...MANAGED_QUERIES[preparation.id],
+            operation: preparation.id,
+            targetId: prepared.targetId,
+            mode: "read" as const,
+          }
+        : managedOperationRoute(request.method, path);
     if (!route) return managedError(404, "resource_denied");
     const organizationId = workspaceParent(binding.workspace);
     if (!organizationId) return managedError(404, "resource_denied");
@@ -927,11 +979,16 @@ export class Channel extends DurableObject<Env> {
       const token = request.headers.get("Authorization")?.startsWith("Bearer m1.")
         ? request.headers.get("Authorization")?.slice(7).trim()
         : undefined;
-      const actor = token ? { token } : await authorityRequest(() => readNativeActor(request, url, this.env));
+      const actor =
+        preparation?.actor ??
+        (token ? { token } : await authorityRequest(() => readNativeActor(request, url, this.env)));
       if (!actor || !bindingCurrent()) return managedError(404, "resource_denied");
       const org = this.env.ORGANIZATION.getByName(organizationId);
       const input: ChannelAuthorization = {
         actor,
+        ...(preparation?.credentialExpiresAt === undefined
+          ? {}
+          : { credentialExpiresAt: preparation.credentialExpiresAt }),
         action: route.action,
         generation: binding.generation,
         requestId: crypto.randomUUID(),
@@ -974,8 +1031,14 @@ export class Channel extends DurableObject<Env> {
           revisionFloor: () => permits.revisionFloor(workspaceId),
           now: () => Date.now(),
         };
+        let streamPersons: unknown;
         const authorizeQuery = async (check: ChannelAuthorization) => {
-          if (!token) {
+          if (streamPersons !== undefined && check.resource.operation === "persons.read") {
+            const latest = await org.readChannelPersons(check);
+            if (!latest.ok || !current() || JSON.stringify(latest.value) !== JSON.stringify(streamPersons))
+              return { ok: false as const, status: 403 as const, reason: "resource_denied", policyRevision: 0 };
+          }
+          if (!token && !preparation) {
             const actor = await readNativeActor(request, url, this.env);
             if (
               !actor ||
@@ -1004,7 +1067,29 @@ export class Channel extends DurableObject<Env> {
         const page = { source: "stored" as const, selector: { kind: "tail" as const }, wakesOnly: false, limit: 1000 };
         const constituents: ConstituentDescriptor<unknown>[] = [];
         let assemble: (parts: ReadonlyMap<string, readonly unknown[]>) => unknown;
-        if (queryId === "librarian") {
+        const sourceId = prepared?.base ?? queryId;
+        let about: string | undefined;
+        let since: number | undefined;
+        if (queryId === "connector.channel") {
+          for (const key of url.searchParams.keys())
+            if (!["about", "since", "limit"].includes(key) || url.searchParams.getAll(key).length !== 1)
+              throw new ManagedReadFailure(404);
+          about = url.searchParams.get("about")?.trim().toLowerCase();
+          const sinceText = url.searchParams.get("since");
+          const parsedSince = parseSince(sinceText, Date.now());
+          if ((about?.length ?? 0) > 200 || "error" in parsedSince) throw new ManagedReadFailure(404);
+          since = Date.parse(parsedSince.at);
+          url.searchParams.delete("about");
+          url.searchParams.delete("since");
+        }
+        if (sourceId === "brief") {
+          for (const key of url.searchParams.keys())
+            if (key !== "area" || url.searchParams.getAll(key).length !== 1) throw new ManagedReadFailure(404);
+          const area = url.searchParams.get("area") ?? undefined;
+          if (area !== undefined && !BRIEF_PAGE_PATTERN.test(area)) throw new ManagedReadFailure(404);
+          constituents.push(managedBriefConstituent(this.ctx.storage.sql, input, area));
+          assemble = (parts) => ({ pages: parts.get("brief") });
+        } else if (queryId === "librarian") {
           const feed = managedLibrarian({
             sql: this.ctx.storage.sql,
             input,
@@ -1020,7 +1105,10 @@ export class Channel extends DurableObject<Env> {
           assemble = feed.assemble;
         } else if (queryId === "summary") {
           if (input.targetExecutionId) pinTarget(input);
+          this.managedHistoryAdapter ??= new ManagedLocalHistory();
+          const localHistory = this.managedHistoryAdapter;
           const summary = managedSummary({
+            localActivity: () => localHistory.unavailableActivity(),
             sql: this.ctx.storage.sql,
             input,
             agent: (id) => this.agents.find(id),
@@ -1030,7 +1118,7 @@ export class Channel extends DurableObject<Env> {
           });
           constituents.push(...summary.constituents);
           assemble = summary.assemble;
-        } else if (queryId === "history") {
+        } else if (sourceId === "history") {
           const selection = extendedHistory(url.searchParams);
           // B4 has not admitted any managed recipient transport. Do not derive native
           // Host ownership/local limits from advisory login-based legacy Host rows.
@@ -1080,7 +1168,7 @@ export class Channel extends DurableObject<Env> {
                 context.boundary();
                 const latest = this.managedAssociation(event.actor.agentId);
                 if (!allowed || latest?.active !== 1 || latest.executionId !== association.executionId) return null;
-                pinTarget(check);
+                context.onRetain(() => pinTarget(check));
                 if (!selection || !cursors) return projected;
                 const cursor = await cursors.encode(scope.binding, selection, projected.seq);
                 context.boundary();
@@ -1115,8 +1203,28 @@ export class Channel extends DurableObject<Env> {
             id: "agents",
             authorization: { ...input, action: "agent.view", resource: { ...input.resource, targetId: "agents" } },
             page,
-            projection: { id: "empty", project: async () => null },
-            readWindow: async () => ({ rows: [], nextInternal: null, exhausted: true }),
+            projection: {
+              id: "safe-prepared-agent",
+              project: async (row, context) =>
+                managedAgentAttribution(
+                  {
+                    input,
+                    agent: (id) => this.agents.find(id),
+                    association: (id) => this.managedAssociation(id),
+                    pin: pinTarget,
+                  },
+                  row.value as AgentId,
+                  context,
+                ),
+            },
+            readWindow: async () => ({
+              rows:
+                queryId === "connector.channel" || queryId === "stream.backlog" || queryId === "stream.event"
+                  ? this.agents.list(false).map((agent) => ({ key: agent.id, value: agent.id }))
+                  : [],
+              nextInternal: null,
+              exhausted: true,
+            }),
           });
           assemble = (parts) => {
             if (!selection) {
@@ -1179,7 +1287,7 @@ export class Channel extends DurableObject<Env> {
         } else {
           let snapshot: unknown;
           const read = async () => {
-            if (queryId === "github") return managedGitHubRead(this.env, repo, url);
+            if (sourceId === "github") return managedGitHubRead(this.env, repo, url);
             const result = await authorityRequest(async () => await org.readChannelPersons(input));
             if (!result.ok || !current()) throw new ManagedReadFailure(404);
             snapshot = result.value;
@@ -1217,6 +1325,94 @@ export class Channel extends DurableObject<Env> {
           });
           const result = await queryFacade.query(createManagedQuery({ scope, constituents, assemble }), guard);
           return managedQueryResponse(result, guard);
+        }
+        if (queryId === "stream.event" || queryId === "stream.backlog") {
+          const host = {
+            sql: this.ctx.storage.sql,
+            input,
+            agent: (id: AgentId) => this.agents.find(id),
+            association: (id: AgentId) => this.managedAssociation(id),
+            event: (row: unknown) => rowToEvent(row as EventRow),
+            pin: pinTarget,
+            budget: () => this.brief.budget(),
+            now: Date.now(),
+            quietAfterMs: this.quietAfterMs,
+          };
+          const tasks = managedLibrarian(host).constituents.find((part) => part.id === "tasks");
+          if (!tasks) throw new ManagedReadFailure(404);
+          const personsInput: ChannelAuthorization = {
+            ...input,
+            action: "workspace.read",
+            resource: { ...input.resource, targetId: "persons", operation: "persons.read" },
+          };
+          constituents.push(tasks, {
+            id: "persons",
+            authorization: personsInput,
+            page,
+            readWindow: async () => {
+              const result = await org.readChannelPersons(personsInput);
+              if (!result.ok || !current()) throw new ManagedReadFailure(404);
+              streamPersons = result.value;
+              return {
+                rows: result.value.persons.map((person) => ({ key: person.personId, value: person })),
+                nextInternal: null,
+                exhausted: true,
+              };
+            },
+            projection: { id: "native-person", project: async (row) => row.value },
+          });
+          const events = assemble;
+          assemble = (parts) => ({
+            ...(events(parts) as object),
+            agents: parts.get("agents"),
+            tasks: parts.get("tasks"),
+            persons: parts.get("persons"),
+          });
+        }
+        if (queryId === "connector.channel") {
+          const host = {
+            sql: this.ctx.storage.sql,
+            input,
+            agent: (id: AgentId) => this.agents.find(id),
+            association: (id: AgentId) => this.managedAssociation(id),
+            event: (row: unknown) => rowToEvent(row as EventRow),
+            pin: pinTarget,
+            budget: () => this.brief.budget(),
+            now: Date.now(),
+            quietAfterMs: this.quietAfterMs,
+          };
+          const tasks = managedLibrarian(host).constituents.find((part) => part.id === "tasks");
+          if (!tasks) throw new ManagedReadFailure(404);
+          const [historyScope, notes] = managedConnectorConstituents(host);
+          if (!historyScope || !notes) throw new ManagedReadFailure(404);
+          constituents.unshift(historyScope);
+          constituents.push(tasks, notes);
+          // Filter projected rows before the executor retains row dependencies/cursors.
+          for (let index = 0; index < constituents.length; index++) {
+            const part = constituents[index];
+            if (!part) throw new ManagedReadFailure(404);
+            const projection = part.projection;
+            constituents[index] = {
+              ...part,
+              projection: {
+                id: projection.id,
+                project: async (row, context) => {
+                  const projected = await projection.project(row, context);
+                  context.boundary();
+                  if (projected === null) return null;
+                  const value = projected as { at?: string };
+                  if (since !== undefined && value.at && Date.parse(value.at) < since) return null;
+                  return !about || JSON.stringify(projected).toLowerCase().includes(about) ? projected : null;
+                },
+              },
+            };
+          }
+          assemble = (parts) => ({
+            tasks: parts.get("tasks"),
+            events: parts.get("events"),
+            agents: parts.get("agents"),
+            notes: parts.get("notes"),
+          });
         }
         const result = await queryEnforcement.query(createManagedQuery({ scope, constituents, assemble }), guard);
         return managedQueryResponse(result, guard);

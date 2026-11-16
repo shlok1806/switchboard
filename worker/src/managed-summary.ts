@@ -14,6 +14,8 @@ import type { ChannelAuthorization } from "./organization";
 interface SummaryHost extends ManagedAttributionHost {
   sql: SqlStorage;
   event(row: unknown): ChannelEvent;
+  /** No eligible native Host/leased transport means an explicit unavailable result. */
+  localActivity?(): { files: readonly never[]; unavailable: string };
 }
 /** Declarative summary sources. No local-machine history or legacy memory attribution. */
 export function managedSummary(host: SummaryHost) {
@@ -50,8 +52,23 @@ export function managedSummary(host: SummaryHost) {
       id: "history",
       authorization: scope("channel.history.read", "events"),
       page,
-      projection: { id: "history-scope", project: async () => null },
-      readWindow: async () => ({ rows: [], nextInternal: null, exhausted: true }),
+      projection: {
+        id: "local-activity",
+        project: async (row, context) => {
+          context.boundary();
+          return row.value;
+        },
+      },
+      readWindow: async () => ({
+        rows: [
+          {
+            key: "local-activity",
+            value: host.localActivity?.() ?? { files: [], unavailable: "managed_local_history_unavailable" },
+          },
+        ],
+        nextInternal: null,
+        exhausted: true,
+      }),
     },
     {
       id: "agents",
@@ -180,6 +197,8 @@ export function managedSummary(host: SummaryHost) {
             held.has(note.task) &&
             note.tags.some((tag) => tag === "question" || tag === "dead-end")),
       );
+      const activity = parts.get("history")?.[0] as { files: readonly never[]; unavailable: string } | undefined;
+      if (!activity) throw new ManagedReadFailure(503);
       return {
         agent: targetAgent,
         tasks,
@@ -188,8 +207,8 @@ export function managedSummary(host: SummaryHost) {
           .slice(0, SUMMARY_MAX_UPDATES),
         notes: notes.toSorted((a, b) => b.seq - a.seq).slice(0, SUMMARY_MAX_NOTES),
         successors: agents.filter((agent) => agent.id !== target),
-        files: [],
-        historyUnavailable: "managed_local_history_unavailable",
+        files: activity.files,
+        historyUnavailable: activity.unavailable,
       };
     },
   };

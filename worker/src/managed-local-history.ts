@@ -142,6 +142,11 @@ export class ManagedLocalHistory {
   private readonly pending = new Map<string, Pending>();
   private readonly queries = new Map<string, number>();
 
+  /** B1 prepares local activity; B3 enrollment/B4 leases must exist before any dispatch. */
+  unavailableActivity(): { files: readonly never[]; unavailable: string } {
+    return { files: [], unavailable: "managed_local_history_unavailable" };
+  }
+
   get size(): number {
     return this.pending.size;
   }
