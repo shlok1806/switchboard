@@ -229,6 +229,10 @@ describe("B1q3a selectors with real Organization/decide", () => {
           1,
           JSON.stringify({ text: "selector-shared" }),
         );
+        // Channel sequences are timestamp-based, unlike the small stub sequences.
+        const visibleSeq = state.storage.sql
+          .exec<{ seq: number }>("SELECT seq FROM events WHERE id=?", "selector-visible")
+          .one().seq;
         if (["foreign_organization", "foreign_workspace", "wrong_generation"].includes(denial))
           Object.assign(object, {
             binding: {
@@ -245,7 +249,9 @@ describe("B1q3a selectors with real Organization/decide", () => {
         for (const selector of surfaces) {
           // Real registrations use the server-derived short AgentId, not the
           // literal ID used by the isolated HTTP preparation fixture above.
-          const query = selector.replace("agent=alice/codex/session", `agent=${encodeURIComponent(f.targetId)}`);
+          const query = selector
+            .replace("agent=alice/codex/session", `agent=${encodeURIComponent(f.targetId)}`)
+            .replace("before=9", `before=${visibleSeq + 1}`);
           const response = await object.managedRequest(
             new Request(`https://switchboard.test/r/${f.repo}/api/events?${query}`, {
               headers: { Authorization: `Bearer ${f.credential}` },
@@ -258,12 +264,27 @@ describe("B1q3a selectors with real Organization/decide", () => {
           else {
             const value = JSON.parse(body);
             expect(value).toHaveProperty("events");
-            expect(value.events.some((event: { id: string }) => event.id === "selector-visible")).toBe(
-              !selector.includes("local"),
-            );
+            expect(
+              value.events.some((event: { id: string }) => event.id === "selector-visible"),
+              selector,
+            ).toBe(!selector.includes("local"));
           }
         }
         if (denial === "none") {
+          for (const source of ["stored", "merged"]) {
+            const response = await object.managedRequest(
+              new Request(`https://switchboard.test/r/${f.repo}/api/events?source=${source}&before=${visibleSeq}`, {
+                headers: { Authorization: `Bearer ${f.credential}` },
+              }),
+              f.repo,
+            );
+            expect(response.status).toBe(200);
+            const value = await response.json<{ events: { id: string }[] }>();
+            expect(
+              value.events.some((event) => event.id === "selector-visible"),
+              source,
+            ).toBe(false);
+          }
           const response = await object.managedRequest(
             new Request(`https://switchboard.test/r/${f.repo}/api/events?agent=alice/codex/session`, {
               headers: { Authorization: `Bearer ${f.credential}` },
