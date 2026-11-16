@@ -1,0 +1,162 @@
+VERDICT: GO
+
+### Numbered Findings
+
+#### B1R-1: Caller-asserted Person context in `Channel.prepareManagedQuery` trust boundary (REQUIRED-IN-B4)
+- **Severity**: P2 (should-fix / future B4 obligation)
+- **File:line**: [channel.ts:919-936](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L919-L936)
+- **Problem**: `Channel.prepareManagedQuery` accepts an unverified `PersonActor` payload `{ kind: "person", personId, githubId }` directly from the caller. Although `prepareManagedQuery` currently has zero callers in the Worker and is not addressable from external networks (Durable Object RPC methods are internal to the Cloudflare Workers isolate), future B4 callers that expose MCP tools or WebSocket streams must not trust client-asserted `personId` or `githubId` fields.
+- **Evidence**: In [channel.ts:926-928](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L926-L928), `prepareManagedQuery` checks `preparation.actor.kind === "person" && typeof preparation.actor.personId === "string" && typeof preparation.actor.githubId === "string"` and attaches this actor to `managedPreparationContexts`. In [channel.ts:983](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L983), `managedRequest` prefers `preparation?.actor` over resolving `readNativeActor`. While [organization.ts:1490-1491](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/organization.ts#L1490-L1491) verifies that `personId` is an active organization and workspace member before granting permissions, an internal caller asserting another active member's `personId` would assume that member's identity.
+- **Exact correction**: When Batch B4 wires external callers (e.g., authenticated WebSocket upgrade or MCP requests in `worker/src/index.ts` / `worker/src/mcp/`), the Worker caller must derive the `PersonActor` strictly from verified session credentials (`readNativeActor(request, url, env)`) and attach its native session expiry, never passing client-supplied JSON/query parameters. Add a test in [managed-query.test.ts](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-query.test.ts) proving that external frames or MCP invocations asserting foreign person IDs fail authentication.
+- **Tag**: **REQUIRED-IN-B4**
+
+#### B1R-2: Task release route mapped to `task.update` instead of `task.claim` (scheduled for B2a)
+- **Severity**: P3 (nit)
+- **File:line**: [managed-channel.ts:158](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L158), [managed-channel.ts:189](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L189)
+- **Problem**: `POST /api/tasks/:id/release` is mapped to action `"task.update"` in `matchWriteRoute` and `MANAGED_OPERATIONS`. Proposal §7 ([M1_ARCHITECTURE_PROPOSAL.md:110](file:///home/box/engineering-workspace/worktrees/_agy_inputs/M1-P3-B1R/M1_ARCHITECTURE_PROPOSAL.md)) and [P3_BATCH_PLAN.md:68](file:///home/box/engineering-workspace/worktrees/_agy_inputs/M1-P3-B1R/P3_BATCH_PLAN.md#L68) specify that `release` should map to action `"task.claim"` (`TC`) rather than `"task.update"` (`TU`).
+- **Evidence**: [managed-channel.ts:158](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L158) retains the S2 migration ternary `action: task[2] === "claim" ? "task.claim" : "task.update"`. This is explicitly listed as a known S2 migration artifact in [P3_ROUTE_INVENTORY.md:77](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/P3_ROUTE_INVENTORY.md#L77) (row H13) and scheduled for correction in Batch B2a.
+- **Exact correction**: In Batch B2a, update [managed-channel.ts:158](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L158) and [managed-channel.ts:189](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L189) so `task[2] === "release"` maps to action `"task.claim"`. Update [managed-claims.test.ts](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-claims.test.ts) to assert that Task release requires `task.claim` permission.
+
+---
+
+### Verified OK
+
+#### 1. Scope
+- **Status**: Verified OK.
+- **Evidence**: All 18 route/read families allocated to Batch B1 in [P3_BATCH_PLAN.md:106-125](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/P3_BATCH_PLAN.md#L106-L125) are either IMPLEMENTED via the shared query and enforcement facade or explicitly listed as fail-closed pending owner design decisions DD-1/DD-2:
+  - **H02** (Events stored forward/ID/Wake, selectors, merged/local preparation): IMPLEMENTED at [channel.ts:1121-1247](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1121-L1247) and [managed-history-selectors.ts:19-59](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-history-selectors.ts#L19-L59).
+  - **H03** (Persons minimal projection): IMPLEMENTED at [channel.ts:1288-1327](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1288-L1327) and [organization.ts:1159-1187](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/organization.ts#L1159-L1187).
+  - **H04** (Relay configuration): IMPLEMENTED at [channel.ts:1442](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1442).
+  - **H08** (Memory notes read): IMPLEMENTED at [channel.ts:1469-1492](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1469-L1492).
+  - **H10, H25, H27, H29** (Content lists/detail/pages for skills, artifacts, brief, and skill-files chunks): IMPLEMENTED at [channel.ts:1443-1525](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1443-L1525).
+  - **H19** (Roster and agent summary): IMPLEMENTED at [channel.ts:1106-1120](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1106-L1120), [channel.ts:1248-1286](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1248-L1286), and [managed-summary.ts:21-215](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-summary.ts#L21-L215).
+  - **H22** (Private agent reads for transcripts, terminal screen, touched files): IMPLEMENTED at [channel.ts:1553-1582](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1553-L1582).
+  - **H23** (Accounts): BLOCKED fail-closed pending DD-1 at [managed-channel.ts:13-76](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L13-L76).
+  - **H28** (Artifact PUT/DELETE): Migrated to shared facade at [channel.ts:1493-1525](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1493-L1525) and [managed-channel.ts:135-146](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L135-L146) (resolving INV-6).
+  - **H30** (Brief PUT): Migrated to shared facade at [managed-channel.ts:136-138](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L136-L138).
+  - **H31** (Librarian feed READ): IMPLEMENTED at [channel.ts:1092-1105](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1092-L1105) and [managed-librarian.ts:77-238](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-librarian.ts#L77-L238); cursor mutation H32 remains BLOCKED fail-closed.
+  - **H33** (Constrained GitHub reads): IMPLEMENTED at [channel.ts:1290](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1290) and [managed-github.ts:11-51](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-github.ts#L11-L51).
+  - **H34** (Langfuse settings GET): BLOCKED fail-closed pending DD-2 at [managed-channel.ts:13-76](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L13-L76).
+  - **C04, C22** (Internal actor-aware RPCs): IMPLEMENTED at [channel.ts:919-944](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L919-L944); legacy bare RPCs C11/C12/C15/C17 remain DENIED via `requireLegacyAccess()` at [channel.ts:1954-1956](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1954-L1956).
+  - **M02–M04, W10/W11/W15, J04**: Query preparation plans registered in [managed-query-registry.ts:15-32](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query-registry.ts#L15-L32); external MCP and stream admission remain strictly fail-closed.
+  - **Inventory Review Findings**: INV-4 line citation shifts updated in [P3_ROUTE_INVENTORY.md:62-115](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/P3_ROUTE_INVENTORY.md#L62-L115); INV-6 H28 scope resolved in [P3_BATCH_PLAN.md:148](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/P3_BATCH_PLAN.md#L148).
+  - No surface from B2, B3, or B4 is half-opened.
+
+#### 2. Shared Boundary
+- **Status**: Verified OK.
+- **Evidence**:
+  - `decide()` in [policy.ts:92](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/policy.ts#L92) is the sole policy decision point. All read authorization passes through `Organization.authorizeChannelRead` ([organization.ts:1129-1156](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/organization.ts#L1129-L1156)), which invokes `channelDecision` ([organization.ts:961-1126](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/organization.ts#L961-L1126)) and calls `decide()` at line 1119.
+  - No per-route duplicate authorization or ad-hoc checks; all opened routes dispatch through `managedEnforcement` ([managed-channel.ts:227-286](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L227-L286)) and `runManagedQuery` ([managed-query.ts:104-272](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L104-L272)).
+  - Zero positive authorization cache. Outages and authority RPC timeouts (>2 s) bound to 503 `authority_unavailable` via `authorityRequest` at [policy-permits.ts:121](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/policy-permits.ts#L121).
+  - Single-use exact-resource permits (lifetime ≤2 s) consumed synchronously inside `ctx.storage.transactionSync` at [channel.ts:1676-1707](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1676-L1707) and [policy-permits.ts:85-115](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/policy-permits.ts#L85-L115).
+  - Post-await generation and binding fences at [channel.ts:972-977](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L972-L977) and [managed-query.ts:137-142](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L137-L142).
+  - Response-time recheck for private and cross-owner results before release at [managed-channel.ts:121](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L121) and [managed-query.ts:258-267](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L258-L267).
+  - `SafeAgent` explicit allowlist projections constructed without object spreading at [managed-projection.ts:6-19](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-projection.ts#L6-L19).
+
+#### 3. Tests
+- **Status**: Verified OK.
+- **Evidence**:
+  - The shared real Organization/decide matrix in [managed-query-policy.test.ts:17-232](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-query-policy.test.ts#L17-L232) exercises positive admission and all 8 required negative classes (`non_member`, `foreign_organization`, `foreign_workspace`, `revoked_execution`, `expired_execution`, `wrong_generation`, `insufficient_role`, `insufficient_scope`) against the real Channel handlers for all opened B1 routes.
+  - History selectors and lookahead: [managed-history-selectors.test.ts:121-190](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-history-selectors.test.ts#L121-L190).
+  - Native Persons minimal projection and dual membership: [managed-persons.test.ts:70-125](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-persons.test.ts#L70-L125).
+  - Private reads and target-owner consent: [managed-private.test.ts:5-104](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-private.test.ts#L5-L104) and [managed-read-paths.test.ts:25-115](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-read-paths.test.ts#L25-L115).
+  - Guarded holder ceilings and consent: [managed-local-history.test.ts:537-600](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-local-history.test.ts#L537-L600).
+  - Librarian feed and Brief budgets: [managed-composed-queries.test.ts:251-340](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-composed-queries.test.ts#L251-L340) and [managed-composed-query-policy.test.ts:7-148](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-composed-query-policy.test.ts#L7-L148).
+  - Zero untested opened routes.
+
+#### 4. Test Integrity
+- **Status**: Verified OK.
+- **Evidence**:
+  - `git diff 0bfb31f -- <file>` is empty across all 138 test-tree files present at `0bfb31f`.
+  - Zero changes to test runners, vitest configs, wrangler configs, tsconfig, or dependencies.
+  - Under "Incompatible existing expectations" in [P3_IMPLEMENTATION_NOTES.md:461](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/P3_IMPLEMENTATION_NOTES.md#L461), none are listed ("Incompatible existing expectations: none").
+  - Under D5 governance, the only changed expectations in Package-3-added tests are:
+    1. [managed-route-inventory.test.ts:157](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-route-inventory.test.ts#L157): `GET /api/librarian` null -> `channel.history.read`.
+    2. [managed-route-inventory.test.ts:159](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-route-inventory.test.ts#L159): `GET /api/github` null -> `task.read`.
+    3. [managed-route-inventory.test.ts:169](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-route-inventory.test.ts#L169): `GET /api/events` null -> `channel.history.read`.
+    4. [managed-route-inventory.test.ts:170](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-route-inventory.test.ts#L170): `GET /api/persons` null -> `workspace.read`.
+    5. [managed-route-inventory.test.ts:230-250](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-route-inventory.test.ts#L230-L250): for version-1 linked bindings only, flipped 404 to 200 with the exact response schemas for `events`, `persons`, and `librarian`.
+    6. [managed-history.test.ts:224-233](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-history.test.ts#L224-L233): `tail=10`, `task=1`, `before=3` flipped from deferred 404 to policy-admitted 200.
+    7. [managed-query-policy.test.ts:221](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-query-policy.test.ts#L221): upstream count expectation 1 -> 2 due to connector.github running the H33 reader in the authorized case.
+    All changed expectations match opened B1 families and maintain full positive and negative tests.
+
+#### 5. Host Authority
+- **Status**: Verified OK.
+- **Evidence**:
+  - A Workspace grant never authorizes controlling another Person's Host: enforced in [managed-local-history.ts:259](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-local-history.ts#L259) (`if (requester.kind !== "person" || requester.personId !== target.ownerPersonId) fail(404);`).
+  - Machine-local ceilings hold and are rechecked before send and before result release in [managed-local-history.ts:195-223](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-local-history.ts#L195-L223) against [cli/src/host/check.ts:23-45](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/cli/src/host/check.ts#L23-L45) (`cleanAbsolutePath(resolvedCwd)`, `underRoots(resolvedCwd, roots)`, `permissionModeWithin(mode, maxMode)`, `activeExecutions <= maxExecutions`, `allowedPersonIds.includes(requesterPersonId)`, and ceiling expiration).
+  - Admins cannot commandeer machines or read private history across owners.
+
+#### 6. Unlinked Baseline
+- **Status**: Verified OK.
+- **Evidence**:
+  - Hot paths on unlinked Channels take a synchronous in-memory branch before any extra `await`, storage read, JSON parse, or RPC:
+    - [channel.ts:888](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L888) (`invalidateManagedPolicy`): `if (this.binding.state !== "linked" || ...) return;`.
+    - [channel.ts:921](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L921) (`prepareManagedQuery`): `if (this.binding.state !== "linked" || ...) return managedError(404, ...);`.
+    - [channel.ts:948](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L948) (`managedRequest`): `if (binding.version !== 1 || binding.state !== "linked" || ...) return managedError(404, ...);`.
+    - [channel.ts:1955](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1955) (`requireLegacyAccess`): `if (this.managedClosed()) throw new Error("managed_actor_required");` (where `managedClosed()` returns false synchronously for unlinked channels).
+    - [index.ts:295](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/index.ts#L295): synchronous `if ("managed" in credential)` check.
+  - Generation fence intact: untagged sockets evaluate to generation 0 in [channel.ts:3718](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L3718) (`(this.ctx.getTags(ws).find((tag) => tag.startsWith("binding:")) ?? "binding:0") !== \`binding:${this.binding.generation}\``).
+
+#### 7. Secrets and Storage
+- **Status**: Verified OK.
+- **Evidence**:
+  - No credentials, tokens, session IDs, passwords, hashes, or one-time codes in Channel storage, events, audit logs, or errors.
+  - D4 boundedness: `LocalMutationPermits` prunes expired permits on write and caps storage at `MANAGED_RECORD_CAP = 1024` in [policy-permits.ts:74-76](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/policy-permits.ts#L74-L76). `managed_outcome_outbox` and `managed_external_outcomes` prune records older than 24 hours (`MANAGED_OUTCOME_TTL_MS`) and enforce `MANAGED_RECORD_CAP` in [managed-retention.ts:13-19](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-retention.ts#L13-L19).
+  - Zero new DO or service bindings in `wrangler.toml`.
+  - Channel class and binding not renamed. `START` action remains strictly manager-only in [principals.ts:21](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/principals.ts#L21) and [policy.ts:246](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/policy.ts#L246).
+
+#### 8. Maintainability
+- **Status**: Verified OK.
+- **Evidence**:
+  - The shared managed query layer (`runManagedQuery`) and enforcement facade (`managedEnforcement`) provide a clean, declarative registry ([managed-channel.ts:165-194](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-channel.ts#L165-L194), [managed-query-registry.ts:4-32](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query-registry.ts#L4-L32)) rather than ad-hoc patches.
+  - No architectural blockers requiring a design stop.
+
+#### 9. Batch B1 Specific: Pagination & Projections
+- **Status**: Verified OK.
+- **Evidence**:
+  - **(a) H02 pagination & cursor non-leak**: Forward numeric queries echo `query.after` when no admitted events are present in the window ([channel.ts:1232](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1232)). Trailing private/withheld events never advance the cursor. Extended selector queries encode only admitted event boundaries into opaque AES-GCM encrypted tokens bound to the specific query identity and binding tuple ([managed-history-selectors.ts:76-92](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-history-selectors.ts#L76-L92)). Lookahead `more: true` requires an extra admitted row beyond `selection.limit`, not merely stored candidate rows ([channel.ts:1238](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1238)). Tested in [managed-history-selectors.test.ts:155-175](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-history-selectors.test.ts#L155-L175).
+  - **(b) H03 Persons minimal projection**: [organization.ts:1177-1185](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/organization.ts#L1177-L1185) filters exclusively for dual active membership (`member.status === "active" && state.members[member.personId]?.status === "active"`) and projects only `{ personId: member.personId }`. No names, logins, emails, nicknames, historical login-only identities, or cross-organization persons are exposed. Cross-organization and cross-workspace leakage is prevented by strict binding pinning. Tested in [managed-persons.test.ts:70-125](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-persons.test.ts#L70-L125).
+
+#### 10. Query Layer Design Compliance
+- **Status**: Verified OK.
+- **Evidence**:
+  - Implements all 5 findings from [P3_QUERY_LAYER_REVIEW.md:76-118](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/reviews/P3_QUERY_LAYER_REVIEW.md#L76-L118):
+    - **QL-1**: `managedQueryResponse` serializes `envelope.value` directly into `Response.json(...)` without wrapping in `QueryEnvelope` or leaking `policyRevision` ([managed-query.ts:282-302](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L282-L302)).
+    - **QL-2**: `QueryFailureReason` includes `"resource_denied" | "query_unavailable" | "authority_unavailable" | "managed_read_unavailable"` ([managed-query.ts:96-100](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L96-L100)).
+    - **QL-3**: Omitted candidate rows rollback their dependency checks and deadlines; only admitted rows commit dependencies to `rowRelease` ([managed-query.ts:236-246](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L236-L246)).
+    - **QL-4**: Formalized `SafeTask` and `SafeMemoryNote` types in [managed-projection.ts:63-91](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-projection.ts#L63-L91) attributing authors strictly to `{ kind: "agent", agentId }` or `{ kind: "person", personId }`.
+    - **QL-5**: Individual holder socket reply timeouts are bounded to `Math.min(configuredHistoryWaitMs, remainingQueryBudgetMs, 2000)` in [managed-local-history.ts:265](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-local-history.ts#L265).
+
+#### 11. Coordinator P3-#20: Reason Strings & Discarded Row Revision State
+- **Status**: Verified OK.
+- **Evidence**:
+  - **(a) Reason string `query_unavailable`**: Introduced in [managed-query.ts:136, 159](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L136) specifically for query preparation timeout (exceeding the 10 s preparation deadline). Consistently mapped to HTTP 503 with Cache-Control no-store ([managed-query.ts:298-301](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L298-L301)), documented in [P3_IMPLEMENTATION_NOTES.md:465](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/P3_IMPLEMENTATION_NOTES.md#L465), tested in [managed-query-executor.test.ts](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-query-executor.test.ts), and causes no change or breakage to pre-existing routes.
+  - **(b) Discarded candidate row policy revision retention**: Retaining the monotonic `policyRevision` integer observed during discarded candidate evaluation ([managed-query.ts:181](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L181)) is purely a consistency fence. It ensures that if any policy revision occurs within the Organization mid-query, any subsequent check or release check will detect the revision mismatch and fail closed ([managed-query.ts:180, 260](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query.ts#L180)). It cannot admit unauthorized data or leak information, as internal revisions are never serialized into HTTP responses.
+
+#### 12. Coordinator P3-#20: H31 Librarian Feed Assessment
+- **Status**: Verified OK.
+- **Evidence**:
+  - **Cursor and through boundaries**: In [managed-librarian.ts:201-224](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-librarian.ts#L201-L224), `visibleCursor` and `through` are computed exclusively from admitted events (`events.filter((event) => event.seq <= storedCursor).at(-1)?.seq`). Withheld and private events return `null` in projection and are never included in the constituent event array.
+  - **Brief budget counters**: In [managed-librarian.ts:138-139](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-librarian.ts#L138-L139), every Brief page in the channel is checked against the caller's authorization. If any Brief page is inaccessible to the caller, the handler throws `ManagedReadFailure(404)`. The channel-wide Brief budget (`writesToday`/`librarianToday`) is never released unless the caller has full read access to all Brief pages.
+  - **Attribution**: Task and Note attribution in summary and librarian feeds is strictly `{ kind: "agent", agentId }` or `{ kind: "person", personId }` via [managed-query-attribution.ts:13-71](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query-attribution.ts#L13-L71). Person-held claims and person-authored notes are omitted (`return null`) rather than login-attributed ([managed-query-attribution.ts:51](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query-attribution.ts#L51), [managed-summary.ts:162](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-summary.ts#L162)).
+
+#### 13. Coordinator P3-#23: B1q3 Limits Assessment
+- **Status**: Verified OK.
+- **Evidence**:
+  - **(1) Ineligible holder fail-closed boundary**: Verdict: PASS. Native Host enrollment and B4 recipient leases do not exist yet. In [channel.ts:1183](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1183), local history queries return `{ rows: [], nextInternal: null, exhausted: true }` without contacting any holder socket, returning `{ events: [], cursor: null, unavailable: [{ reason: "managed_local_history_unavailable" }] }`. Merged queries return admitted stored events plus the redacted unavailable marker ([channel.ts:1245](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L1245)). No private bytes, counts, holder identities, cursor positions, or timings are disclosed, and unlinked Channels take the synchronous in-memory skip.
+  - **(2) Cross-owner / delegated holder history denial & scheduling**: Verdict: PASS. In [managed-local-history.ts:259](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-local-history.ts#L259), requests where `requester.personId !== target.ownerPersonId` fail closed with 404 without admin/workspace overrides. No parallel consent store was introduced. The scoped consent is traceably scheduled as an obligation in [P3_BATCH_PLAN.md:128, 146](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/P3_BATCH_PLAN.md#L128), [P3_ROUTE_INVENTORY.md:305](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/P3_ROUTE_INVENTORY.md#L305), and [B1q3a_DONE.md:7](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/B1q3a_DONE.md#L7) for Batch B2b / B3a, with negative test coverage in [managed-local-history.test.ts:582](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-local-history.test.ts#L582).
+
+#### 14. Coordinator P3-#24: `prepareManagedQuery` RPC Assessment
+- **Status**: Verified OK.
+- **Evidence**:
+  - **(a) Caller-asserted Person context**: In [organization.ts:1490-1491](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/organization.ts#L1490-L1491), `Organization.authorizeChannelRead` loads `state.members[actor.personId]` and `state.workspaceMembers[workspaceId]?.[actor.personId]` directly from durable storage. The Organization re-verifies native membership and role via `decide()` rather than trusting caller-asserted roles or claims.
+  - **(b) External reachability audit**: `prepareManagedQuery` is defined at [channel.ts:919](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L919) and has zero callers across `worker/src/`. Cloudflare Workers isolates do not expose DO RPC methods directly to the Internet; no external HTTP, MCP, or WebSocket path can reach this method.
+  - **(c) External MCP/stream admission fail-closed**: All six preparations (`connector.channel`, `connector.github`, `connector.brief`, `stream.event`, `stream.backlog`, `local.history`) in [managed-query-registry.ts:15-32](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/managed-query-registry.ts#L15-L32) remain strictly internal. WebSocket stream upgrades hit fail-closed 403 at [channel.ts:3720](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/channel.ts#L3720), and MCP tools hit fail-closed 404 via [index.ts:295](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/src/index.ts#L295). Verified by tests in [managed-query-policy.test.ts:157-173](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-query-policy.test.ts#L157-L173).
+  - **(d) Source-discovered inventory verification**: [managed-source-inventory.test.ts:71-77](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-source-inventory.test.ts#L71-L77) statically parses all router regexes, Channel public RPCs, WebSocket frame types, and MCP tool declarations via raw Vite imports against [managed-source-inventory.ts:1-201](file:///home/box/engineering-workspace/worktrees/switchboard-m1-p3/worker/test/managed-source-inventory.ts#L1-L201). Any unclassified route, frame, tool, or RPC immediately causes test failure. The requirement that future B4 callers supply a verified session-derived Person is documented in finding **B1R-1** (REQUIRED-IN-B4).
+
+#### Runtime Gate Evidence
+- Manager runtime gate results for HEAD `ab3d36f` in [TESTS.txt:57-61](file:///home/box/engineering-workspace/worktrees/_agy_inputs/M1-P3-B1R/TESTS.txt#L57-L61):
+  - `06_worker_test`: 72 passed, 2 skipped, 0 failed (1,509 tests passed, 2 skipped).
+  - `cli failures`: []
+  - Result: **PASS**.
