@@ -193,7 +193,7 @@ describe("managed RPC bypass closure", () => {
     expect(managedWriteRoute("POST", "/api/agents/alice%2Fcodex%2Fs/heartbeat")).toBeNull();
     expect(managedWriteRoute("POST", "/api/agents/alice%2Fcodex%2Fs/end")).toBeNull();
   });
-  it("leaves unopened families denied on linked pending and unknown bindings", async () => {
+  it("admits implemented reads only on linked bindings and leaves unopened families denied", async () => {
     const f = await managedAuthorityFixture();
     const channel = env.CHANNEL.getByName(f.repo);
     const paths: [string, string][] = [
@@ -205,6 +205,7 @@ describe("managed RPC bypass closure", () => {
       ["PUT", "/api/artifacts/guide"],
       ["PUT", "/api/brief/guide"],
       ["GET", "/api/librarian"],
+      ["PUT", "/api/librarian"],
       ["GET", "/api/settings/langfuse"],
       ["GET", "/api/hosts"],
       ["POST", "/api/agents/spawn"],
@@ -229,12 +230,14 @@ describe("managed RPC bypass closure", () => {
         const response = await nativeFetch(`/r/${f.repo}${path}`, f.token, { method });
         const persons = binding.state === "linked" && binding.version === 1 && path === "/api/persons";
         const history = binding.state === "linked" && binding.version === 1 && path === "/api/events";
+        const librarian =
+          binding.state === "linked" && binding.version === 1 && method === "GET" && path === "/api/librarian";
         const memory = binding.state === "linked" && binding.version === 1 && path === "/api/memory";
         const skillFiles = binding.state === "linked" && binding.version === 1 && path === "/api/skill-files/read";
         const brief = binding.state === "linked" && binding.version === 1 && path === "/api/brief/guide";
         const artifact = binding.state === "linked" && binding.version === 1 && path === "/api/artifacts/guide";
         expect(response.status, `${binding.state}/${binding.version}: ${method} ${path}`).toBe(
-          persons || history
+          persons || history || librarian
             ? 200
             : memory
               ? method === "GET"
@@ -255,17 +258,28 @@ describe("managed RPC bypass closure", () => {
               }
             : history
               ? { events: [], cursor: 0 }
-              : memory
-                ? method === "GET"
-                  ? { notes: [] }
-                  : { ok: false, reason: "memory_requires_agent" }
-                : brief
-                  ? { ok: false, reason: "brief_requires_agent" }
-                  : artifact
-                    ? { ok: false, reason: "invalid_artifact" }
-                    : skillFiles
-                      ? { ok: false, reason: "invalid_skill_chunks" }
-                      : { ok: false, reason: "resource_denied" },
+              : librarian
+                ? {
+                    cursor: null,
+                    through: 0,
+                    more: false,
+                    changes: [],
+                    quiet: [],
+                    quietStarted: [],
+                    quietEnded: [],
+                    brief: { pages: 0, writesToday: 0, perDay: 40, librarianToday: 0, librarianPerDay: 30 },
+                  }
+                : memory
+                  ? method === "GET"
+                    ? { notes: [] }
+                    : { ok: false, reason: "memory_requires_agent" }
+                  : brief
+                    ? { ok: false, reason: "brief_requires_agent" }
+                    : artifact
+                      ? { ok: false, reason: "invalid_artifact" }
+                      : skillFiles
+                        ? { ok: false, reason: "invalid_skill_chunks" }
+                        : { ok: false, reason: "resource_denied" },
         );
       }
     }
