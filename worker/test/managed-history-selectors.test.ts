@@ -243,8 +243,11 @@ describe("B1q3a selectors with real Organization/decide", () => {
             },
           });
         for (const selector of surfaces) {
+          // Real registrations use the server-derived short AgentId, not the
+          // literal ID used by the isolated HTTP preparation fixture above.
+          const query = selector.replace("agent=alice/codex/session", `agent=${encodeURIComponent(f.targetId)}`);
           const response = await object.managedRequest(
-            new Request(`https://switchboard.test/r/${f.repo}/api/events?${selector}`, {
+            new Request(`https://switchboard.test/r/${f.repo}/api/events?${query}`, {
               headers: { Authorization: `Bearer ${f.credential}` },
             }),
             f.repo,
@@ -259,6 +262,16 @@ describe("B1q3a selectors with real Organization/decide", () => {
               !selector.includes("local"),
             );
           }
+        }
+        if (denial === "none") {
+          const response = await object.managedRequest(
+            new Request(`https://switchboard.test/r/${f.repo}/api/events?agent=alice/codex/session`, {
+              headers: { Authorization: `Bearer ${f.credential}` },
+            }),
+            f.repo,
+          );
+          expect(response.status).toBe(200);
+          expect((await response.json<{ events: unknown[] }>()).events).toEqual([]);
         }
       });
     });
