@@ -207,10 +207,7 @@ describe("managed stored history real handler", () => {
     expect(f.reads).toHaveLength(0);
   });
   for (const query of [
-    "tail=10",
     "agent=alice",
-    "task=1",
-    "before=3",
     "after=-1",
     "limit=0",
     "type=directive",
@@ -222,6 +219,16 @@ describe("managed stored history real handler", () => {
       const f = fixture();
       expect((await f.request(query)).status).toBe(404);
       expect(f.reads).toHaveLength(0);
+    });
+  }
+  for (const query of ["tail=10", "task=1", "before=3"]) {
+    it(`admits newly opened ${query} through the shared policy query`, async () => {
+      const f = fixture();
+      const response = await f.request(query);
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toMatch(/secret|capture|turn/);
+      for (const action of ["channel.history.read", "channel.update.read", "agent.view"])
+        expect(f.calls.some((call) => call.action === action)).toBe(true);
     });
   }
   it("projects before applying the page limit", async () => {

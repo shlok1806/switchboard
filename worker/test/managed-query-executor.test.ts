@@ -81,6 +81,54 @@ function fixture(project?: (row: QueryRow, context: ProjectionContext) => Promis
 }
 
 describe("managed query executor bounds and release", () => {
+  for (const nested of [9999, 10000]) {
+    it(`shares the 10,000-candidate ceiling with nested holder rows (${nested})`, async () => {
+      const f = fixture(async (_row, context) => {
+        context.consumeCandidates(nested);
+        return "visible";
+      });
+      f.windows.push({ rows: [{ key: "holder", value: null }], nextInternal: null, exhausted: true });
+      const result = await runManagedQuery(createManagedQuery(f.plan), f.authority, f.guard);
+      if (nested === 9999) {
+        expect(result.ok).toBe(true);
+        expect(await managedQueryResponse(result, f.guard).json()).toEqual({ persons: ["visible"] });
+      } else {
+        expect(result).toEqual({ ok: false, error: { status: 503, reason: "managed_read_unavailable" } });
+        expect(await managedQueryResponse(result, f.guard).text()).not.toMatch(/visible|cursor|persons/);
+      }
+    });
+  }
+  it("does not refund candidate work when a nested projection is omitted", async () => {
+    const f = fixture(async (row, context) => {
+      context.consumeCandidates(5000);
+      return row.key === "private" ? null : "visible";
+    });
+    f.windows.push({
+      rows: [
+        { key: "private", value: null },
+        { key: "shared", value: null },
+      ],
+      nextInternal: null,
+      exhausted: true,
+    });
+    expect(await runManagedQuery(createManagedQuery(f.plan), f.authority, f.guard)).toEqual({
+      ok: false,
+      error: { status: 503, reason: "managed_read_unavailable" },
+    });
+  });
+  for (const count of [-1, 0.5, NaN, Infinity]) {
+    it(`fails closed on an invalid nested candidate charge: ${count}`, async () => {
+      const f = fixture(async (_row, context) => {
+        context.consumeCandidates(count);
+        return "visible";
+      });
+      f.windows.push({ rows: [{ key: "holder", value: null }], nextInternal: null, exhausted: true });
+      expect(await runManagedQuery(createManagedQuery(f.plan), f.authority, f.guard)).toEqual({
+        ok: false,
+        error: { status: 503, reason: "managed_read_unavailable" },
+      });
+    });
+  }
   it("rejects unregistered plans before any source or authority access", async () => {
     const f = fixture();
     const result = await runManagedQuery(f.plan, f.authority, f.guard);
@@ -162,6 +210,32 @@ describe("managed query executor bounds and release", () => {
       const response = managedQueryResponse(result, f.guard);
       expect(response.status).toBe(404);
       expect(await response.json()).toEqual({ ok: false, reason: "resource_denied" });
+    });
+  }
+});
+
+describe("B1q3a retained use-time fences", () => {
+  for (const omitted of [false, true]) {
+    it(`rechecks only retained row guards at final release (omitted=${omitted})`, async () => {
+      let valid = true;
+      let calls = 0;
+      const f = fixture(async (_row, context) => {
+        context.onRelease?.(() => {
+          calls++;
+          if (!valid) throw Object.assign(new Error("resource_denied"), { status: 404 });
+        });
+        return omitted ? null : "visible";
+      });
+      f.windows.push({ rows: [{ key: "candidate", value: null }], nextInternal: null, exhausted: true });
+      const check = f.authority.check;
+      f.authority.check = async (input) => {
+        if (f.calls.length > 0) valid = false;
+        return check(input);
+      };
+      const result = await runManagedQuery(createManagedQuery(f.plan), f.authority, f.guard);
+      expect(result.ok).toBe(omitted);
+      expect(calls).toBe(omitted ? 0 : 1);
+      if (!result.ok) expect(result.error).toEqual({ status: 404, reason: "resource_denied" });
     });
   }
 });

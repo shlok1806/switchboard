@@ -4,7 +4,7 @@ import { ManagedReadFailure } from "./managed-channel";
 import { safeSharedEvent } from "./managed-projection";
 import type { CandidateWindow } from "./managed-query";
 
-/** Stored queries only. Merged/local queries remain closed in this subset. */
+/** Shipped forward/ID/Wake parser; extended selectors use managed-history-selectors. */
 export type ManagedHistoryQuery =
   | { ids: string[]; after: 0; limit: number; wakes: false }
   | { ids?: undefined; after: number; limit: number; wakes: boolean };

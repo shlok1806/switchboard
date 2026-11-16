@@ -1,7 +1,9 @@
 import { ARTIFACT_CSP, checkArtifact, cleanBriefWrite, toBase64 } from "../../shared/src/index";
 import { managedGitHubRead } from "./managed-github";
 import { managedHistoryQuery, managedStoredEvent, managedStoredWindow } from "./managed-history";
+import { extendedHistory, HistoryCursors } from "./managed-history-selectors";
 import { managedLibrarian } from "./managed-librarian";
+import { ManagedLocalHistory } from "./managed-local-history";
 import { managedOutcome, OUTCOME_BATCH_SIZE, OUTCOME_TABLES, outcomeAuditId } from "./managed-outcomes";
 import { type ConstituentDescriptor, managedQueryResponse } from "./managed-query";
 import { createManagedQuery, managedQueryId } from "./managed-query-registry";
@@ -473,6 +475,8 @@ export class Channel extends DurableObject<Env> {
   /** Directives from Persons to Agents, delivered without the Relay (ADR 0005). */
   private readonly directives: Directives;
   private readonly hosts: Hosts;
+  private managedHistoryAdapter?: ManagedLocalHistory;
+  private managedHistoryCursors?: HistoryCursors;
   /** Records the wrappers' idle wakes. */
   private readonly wakes: Wakes;
   private readonly inputRate = new InputRate();
@@ -869,6 +873,7 @@ export class Channel extends DurableObject<Env> {
   invalidateManagedPolicy(workspace: string, revision: number): void {
     // No managed storage or extra work for legacy Channels.
     if (this.binding.state !== "linked" || this.binding.version !== 1 || this.binding.workspace !== workspace) return;
+    this.managedHistoryAdapter?.invalidate();
     new LocalMutationPermits(this.ctx.storage.sql).observeRevision(workspace, revision);
   }
 
@@ -1026,13 +1031,24 @@ export class Channel extends DurableObject<Env> {
           constituents.push(...summary.constituents);
           assemble = summary.assemble;
         } else if (queryId === "history") {
-          const query = managedHistoryQuery(url.searchParams);
+          const selection = extendedHistory(url.searchParams);
+          // B4 has not admitted any managed recipient transport. Do not derive native
+          // Host ownership/local limits from advisory login-based legacy Host rows.
+          // Keep a lazy Channel-owned cancellation boundary ready for admitted holders.
+          if (selection) this.managedHistoryCursors ??= new HistoryCursors();
+          const cursors = selection ? this.managedHistoryCursors : undefined;
+          const boundary = selection && cursors ? await cursors.decode(scope.binding, selection) : 0;
+          if (!current()) throw new ManagedReadFailure(404);
+          const query = selection
+            ? { after: 0, limit: selection.limit + 1, wakes: false }
+            : managedHistoryQuery(url.searchParams);
           // Explicit exhaustion uses an empty SQL window, never a short window.
           constituents.push({
             id: "events",
             authorization: { ...input, action: "channel.update.read" },
             page: {
               ...page,
+              ...(selection ? { source: selection.source, agentId: selection.agent, taskNumber: selection.task } : {}),
               selector: query.ids ? { kind: "ids", ids: query.ids } : { kind: "forward", after: query.after },
               wakesOnly: query.wakes,
               limit: query.limit,
@@ -1042,6 +1058,13 @@ export class Channel extends DurableObject<Env> {
               project: async (row, context) => {
                 const event = rowToEvent(row.value as EventRow);
                 const projected = managedStoredEvent(event);
+                if (
+                  selection &&
+                  ((selection.agent !== undefined &&
+                    (event.actor.kind !== "agent" || event.actor.agentId !== selection.agent)) ||
+                    (selection.task !== undefined && event.task !== selection.task))
+                )
+                  return null;
                 if (!projected || (query.wakes && projected.type !== "wake") || event.actor.kind !== "agent")
                   return null;
                 const association = this.managedAssociation(event.actor.agentId);
@@ -1058,11 +1081,34 @@ export class Channel extends DurableObject<Env> {
                 const latest = this.managedAssociation(event.actor.agentId);
                 if (!allowed || latest?.active !== 1 || latest.executionId !== association.executionId) return null;
                 pinTarget(check);
-                return projected;
+                if (!selection || !cursors) return projected;
+                const cursor = await cursors.encode(scope.binding, selection, projected.seq);
+                context.boundary();
+                return { event: projected, cursor };
               },
             },
-            readWindow: async (position, limit) =>
-              managedStoredWindow<EventRow>(this.ctx.storage.sql, query, position, limit),
+            readWindow: async (position, limit) => {
+              if (!selection) return managedStoredWindow<EventRow>(this.ctx.storage.sql, query, position, limit);
+              if (selection.source !== "stored") this.managedHistoryAdapter ??= new ManagedLocalHistory();
+              // No holder is eligible until native enrollment, local ceiling AND B4
+              // recipient lease exist. Unavailability is not exhaustion evidence.
+              if (selection.source === "local") return { rows: [], nextInternal: null, exhausted: true };
+              const forward = selection.direction === "forward";
+              const rows = this.ctx.storage.sql
+                .exec<EventRow>(
+                  forward
+                    ? "SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?"
+                    : "SELECT * FROM events WHERE seq < ? ORDER BY seq DESC LIMIT ?",
+                  position === null ? boundary : Number(position),
+                  limit,
+                )
+                .toArray();
+              return {
+                rows: rows.map((row) => ({ key: row.id, value: row })),
+                nextInternal: rows.length ? String(rows.at(-1)?.seq) : null,
+                exhausted: rows.length === 0,
+              };
+            },
           });
           // AV is an independently protected constituent, admitted before any Event scan.
           constituents.unshift({
@@ -1073,8 +1119,23 @@ export class Channel extends DurableObject<Env> {
             readWindow: async () => ({ rows: [], nextInternal: null, exhausted: true }),
           });
           assemble = (parts) => {
-            const events = parts.get("events") as { seq: number }[];
-            return { events, cursor: events.at(-1)?.seq ?? query.after };
+            if (!selection) {
+              const events = parts.get("events") as { seq: number }[];
+              return { events, cursor: events.at(-1)?.seq ?? query.after };
+            }
+            const candidates = parts.get("events") as { event: { seq: number; id: string }; cursor: string }[];
+            const selected = candidates.slice(0, selection.limit);
+            const cursor = selected.at(-1)?.cursor ?? selection.cursor ?? null;
+            // Lookahead comes only from an additional admitted Event, never raw rows.
+            const more = candidates.length > selection.limit ? true : selection.source === "stored" ? false : undefined;
+            return {
+              events: selected.map((row) => row.event).sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id)),
+              cursor,
+              ...(more === undefined ? {} : { more }),
+              ...(selection.source === "stored"
+                ? {}
+                : { unavailable: [{ reason: "managed_local_history_unavailable" }] }),
+            };
           };
         } else if (queryId === "agents") {
           constituents.push({
@@ -1790,6 +1851,7 @@ export class Channel extends DurableObject<Env> {
       };
     });
     if (accepted) {
+      this.managedHistoryAdapter?.invalidate();
       this.binding = accepted;
       // Resolve outstanding reads before closing their transports. Their completion
       // checks below discard data captured before the pending transition.
@@ -1852,7 +1914,10 @@ export class Channel extends DurableObject<Env> {
         state: unlink ? "unlinked" : "linked",
       };
     });
-    if (accepted) this.binding = accepted;
+    if (accepted) {
+      this.managedHistoryAdapter?.invalidate();
+      this.binding = accepted;
+    }
     return accepted !== false;
   }
 
@@ -3694,6 +3759,7 @@ export class Channel extends DurableObject<Env> {
     } catch {
       // Already closed.
     }
+    if (this.binding.state === "linked") this.managedHistoryAdapter?.disconnect(ws);
     const [person, tag] = this.socketIdentityTags(ws);
     if (person !== undefined && tag?.startsWith(HOST_TAG)) {
       await this.hosts.detached(person, tag.slice(HOST_TAG.length + person.length + 1));

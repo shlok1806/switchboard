@@ -33,8 +33,12 @@ export interface QueryRow {
   value: unknown;
 }
 export interface ProjectionContext {
+  /** Nested holder replies share the executor's budget, even when omitted. */
+  consumeCandidates(count: number): void;
   /** Synchronous local fences are installed only if this projection survives. */
   onRetain(effect: () => void): void;
+  /** Pure synchronous use-time guards, retained only for emitted projections. */
+  onRelease?(fence: () => void): void;
   check(input: ChannelAuthorization): Promise<AuthorityValue | null>;
   boundary(): void;
 }
@@ -113,6 +117,7 @@ export async function runManagedQuery<T>(
   const deadlines: number[] = [];
   const release: ChannelAuthorization[] = [];
   const rowRelease: ChannelAuthorization[] = [];
+  const retainedFences: (() => void)[] = [];
   const binding = plan.scope.binding;
   const boundary = () => {
     const now = guard.now();
@@ -173,6 +178,11 @@ export async function runManagedQuery<T>(
 
     const parts = new Map<ConstituentId, readonly unknown[]>();
     let candidates = 0;
+    const consumeCandidates = (count: number) => {
+      boundary();
+      if (!Number.isSafeInteger(count) || count < 0 || count > QUERY_CANDIDATE_CAP - candidates) unavailable();
+      candidates += count;
+    };
     let retained = 0;
     let windows = 0;
     for (const constituent of plan.constituents) {
@@ -190,17 +200,20 @@ export async function runManagedQuery<T>(
         const limit = Math.min(QUERY_WINDOW_CAP, QUERY_CANDIDATE_CAP - candidates);
         const window = await wait(() => constituent.readWindow(position, limit));
         if (window.rows.length > limit) unavailable();
-        candidates += window.rows.length;
+        consumeCandidates(window.rows.length);
         for (const row of window.rows) {
           boundary();
           if (keys.has(row.key)) continue;
           const dependencies: ChannelAuthorization[] = [];
           const retainedEffects: (() => void)[] = [];
+          const rowFences: (() => void)[] = [];
           const deadlineStart = deadlines.length;
           const projected = await wait(() =>
             constituent.projection.project(row, {
               boundary,
+              consumeCandidates,
               onRetain: (effect) => retainedEffects.push(effect),
+              onRelease: (fence) => rowFences.push(fence),
               check: async (input) => {
                 const result = await check(input);
                 if (result) dependencies.push(input);
@@ -214,6 +227,7 @@ export async function runManagedQuery<T>(
             continue;
           }
           for (const effect of retainedEffects) effect();
+          retainedFences.push(...rowFences);
           boundary();
           keys.add(row.key);
           output.push(projected);
@@ -232,7 +246,9 @@ export async function runManagedQuery<T>(
     }
     for (const input of [...rowRelease, ...release, plan.scope.authorization]) if (!(await check(input))) deny();
     boundary();
+    for (const fence of retainedFences) fence();
     const value = plan.assemble(parts);
+    for (const fence of retainedFences) fence();
     boundary();
     return {
       ok: true,
