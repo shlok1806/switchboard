@@ -98,6 +98,8 @@ Actual dispatch: `worker/src/index.ts:192` fixed routes, `:256` matcher inventor
 | H34 | GET `/api/settings/langfuse`; `worker/src/settings-api.ts:22`, `:38` | Integration configuration; read | BLOCKED | F; legacy handler reads sealed row before returning redacted connection | WM + fresh repo-admin predicate under approved design; none | langfuse-related settings coverage to locate/extend; managed-route-inventory.test.ts | B1, storage decision B3 | Legacy |
 | H35 | PUT and DELETE `/api/settings/langfuse`; `worker/src/settings-api.ts:48`, `:55` | Integration credentials; write | BLOCKED | F; existing PUT persists sealed credential in Channel | WM + fresh repo-admin; OTX if credentials move to Organization; P only for Channel metadata | managed-route-inventory.test.ts | B3 | Legacy |
 
+| H36 | GET/POST `/api/hosts`; DELETE `/api/hosts/:name`; POST `/api/hosts/:name/allow`, `/api/agents/spawn`, `/api/agents/:agent/stop`, `/pause`, `/resume`; `worker/src/hosts-api.ts:55`, `:59`, `:65`, `:67`, `:69` | Host inventory and machine control; read/write/control | BLOCKED | F: no managed route descriptor (`worker/src/managed-channel.ts:13`, `:76`); unknown routes deny before authority/source access (`worker/src/channel.ts:968`). Bare Host RPCs remain C18 denied; transport W16 remains closed | Separate WR/START/REVOKE/WM scopes with native machine ceiling and owner consent; exact mapping in B3; P/E+P and LEASE for control | managed-source-inventory.test.ts; hosts.test.ts | B3/B4 | Legacy |
+
 ## G. Worker-global, delegated auth and protocol HTTP
 
 Top-level dispatch is `worker/src/index.ts:451`. Only three DO classes are exported there at `:63`: Channel, IdentityDirectory and Organization.
@@ -246,11 +248,11 @@ Unknown inbound types are ignored at `worker/src/channel.ts:3256`. Future `polic
 
 ## Counts
 
-Counts are of the 123 stable row IDs above, including separately inventoried alternate paths.
+Historical classification counts from the initial inventory, plus H36 added in B1q3b fix 1. Later slice status changes and C21/C22 additions are described in their rows and the disposition below; these counts are not a current implementation-completion tally.
 
 | Section | IMPLEMENTED | DENIED | PARTIAL | BLOCKED | Total |
 |---|---:|---:|---:|---:|---:|
-| H | 17 | 0 | 3 | 15 | 35 |
+| H | 17 | 0 | 3 | 16 | 36 |
 | G | 0 | 1 | 5 | 2 | 8 |
 | N | 11 | 0 | 2 | 0 | 13 |
 | C | 1 | 11 | 7 | 1 | 20 |
@@ -259,7 +261,7 @@ Counts are of the 123 stable row IDs above, including separately inventoried alt
 | W | 0 | 0 | 4 | 14 | 18 |
 | J | 0 | 0 | 5 | 0 | 5 |
 | M | 0 | 1 | 0 | 4 | 5 |
-| **Total** | **36** | **13** | **38** | **36** | **123** |
+| **Total** | **36** | **13** | **38** | **37** | **124** |
 
 ### Reachable linked surfaces with no `decide()` decision point
 

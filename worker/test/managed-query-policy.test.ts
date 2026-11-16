@@ -98,7 +98,6 @@ describe("shared query real Organization/decide matrix", () => {
           ...b1ContentDetails,
           { id: "agent-selector", path: `/api/events?agent=${encodeURIComponent(f.targetId)}` },
           { id: "memory-search", path: "/api/memory?q=shared" },
-          { id: "detail", path: `/api/agents/${encodeURIComponent(f.targetId)}` },
           ...preparationSurfaces.map((surface) => ({ ...surface, path: "", preparation: surface.id })),
           ...composedQuerySurfaces.map((surface) => ({
             ...surface,
@@ -145,6 +144,16 @@ describe("shared query real Organization/decide matrix", () => {
             pages: [{ page: "guide", title: "Guide", text: "Shared guide", version: 1 }],
           });
         }
+        // No bare Agent detail route exists, even for an authorized execution.
+        // Shared Agent projections are exercised through roster and summary below.
+        const unsupportedDetail = await object.managedRequest(
+          new Request(`https://switchboard.test/r/${f.repo}/api/agents/${encodeURIComponent(f.targetId)}`, {
+            headers: { Authorization: `Bearer ${f.credential}` },
+          }),
+          f.repo,
+        );
+        expect(unsupportedDetail.status).toBe(404);
+        expect(await unsupportedDetail.json()).toEqual({ ok: false, reason: "resource_denied" });
         // Internal preparation must not open any actual managed transport.
         const upgrade = await object.fetch(
           new Request("https://channel/stream?person=alice&generation=1", {
