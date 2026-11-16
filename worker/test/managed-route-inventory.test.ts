@@ -100,7 +100,7 @@ describe("managed RPC bypass closure", () => {
     const examples: Record<keyof typeof CHANNEL_ROUTE_MATCHERS, Example[]> = {
       tasks: [
         ["GET", "/api/tasks", "task.read"],
-        ["POST", "/api/tasks", null],
+        ["POST", "/api/tasks", "task.update"],
         ["GET", "/api/tasks/1", "task.read"],
       ],
       agents: [
@@ -115,9 +115,9 @@ describe("managed RPC bypass closure", () => {
       ],
       claims: [
         ["POST", "/api/tasks/1/claim", "task.claim"],
-        ["POST", "/api/tasks/1/release", "task.update"],
+        ["POST", "/api/tasks/1/release", "task.claim"],
         ["POST", "/api/tasks/1/steps/0/complete", "task.update"],
-        ["POST", "/api/tool-calls", null],
+        ["POST", "/api/tool-calls", "channel.update.write"],
       ],
       branches: [
         ["POST", "/api/tasks/1/branch", "task.update"],
@@ -155,7 +155,7 @@ describe("managed RPC bypass closure", () => {
       ],
       librarian: [
         ["GET", "/api/librarian", "channel.history.read"],
-        ["PUT", "/api/librarian", null],
+        ["PUT", "/api/librarian", "channel.update.write"],
         ["GET", "/api/github", "task.read"],
       ],
       settings: [
@@ -165,7 +165,7 @@ describe("managed RPC bypass closure", () => {
       ],
     };
     const fixed: Example[] = [
-      ["POST", "/api/join", null],
+      ["POST", "/api/join", "workspace.read"],
       ["GET", "/api/events", "channel.history.read"],
       ["GET", "/api/persons", "workspace.read"],
       ["GET", "/api/relay", "workspace.read"],
@@ -235,6 +235,8 @@ describe("managed RPC bypass closure", () => {
         const memory = binding.state === "linked" && binding.version === 1 && path === "/api/memory";
         const skillFiles = binding.state === "linked" && binding.version === 1 && path === "/api/skill-files/read";
         const brief = binding.state === "linked" && binding.version === 1 && path === "/api/brief/guide";
+        const taskCreate =
+          binding.state === "linked" && binding.version === 1 && method === "POST" && path === "/api/tasks";
         const artifact = binding.state === "linked" && binding.version === 1 && path === "/api/artifacts/guide";
         expect(response.status, `${binding.state}/${binding.version}: ${method} ${path}`).toBe(
           persons || history || librarian
@@ -245,7 +247,7 @@ describe("managed RPC bypass closure", () => {
                 : 403
               : brief
                 ? 403
-                : skillFiles || artifact
+                : skillFiles || artifact || taskCreate
                   ? 400
                   : 404,
         );
@@ -279,7 +281,9 @@ describe("managed RPC bypass closure", () => {
                       ? { ok: false, reason: "invalid_artifact" }
                       : skillFiles
                         ? { ok: false, reason: "invalid_skill_chunks" }
-                        : { ok: false, reason: "resource_denied" },
+                        : taskCreate
+                          ? { ok: false, reason: "invalid_task" }
+                          : { ok: false, reason: "resource_denied" },
         );
       }
     }

@@ -1,9 +1,12 @@
-import type { PersonActor, PolicyResource, VerifiedExecution } from "../../shared/src/m1";
+import type { IntegrationActor, PersonActor, PolicyResource, VerifiedExecution } from "../../shared/src/m1";
 import { MANAGED_RECORD_CAP } from "./managed-retention";
 
-export interface MutationPermit {
+export type { IntegrationActor } from "../../shared/src/m1";
+
+type PermitActor = PersonActor | VerifiedExecution | IntegrationActor;
+export interface MutationPermit<A extends PermitActor = PersonActor | VerifiedExecution> {
   id: string;
-  actor: PersonActor | VerifiedExecution;
+  actor: A;
   action: string;
   resource: PolicyResource;
   requestId: string;
@@ -12,15 +15,17 @@ export interface MutationPermit {
   issuedAt: number;
   expiresAt: number;
 }
-export interface PermitBinding {
-  actor: MutationPermit["actor"];
+export interface PermitBinding<A extends PermitActor = PersonActor | VerifiedExecution> {
+  actor: A;
   action: string;
   resource: PolicyResource;
   requestId: string;
   generation: number;
   policyRevision: number;
 }
-function actorKey(actor: MutationPermit["actor"]) {
+function actorKey(actor: PermitActor) {
+  if (actor.kind === "integration")
+    return JSON.stringify([actor.kind, actor.provider, actor.repository, actor.workspaceId, actor.generation]);
   return actor.kind === "person"
     ? `person:${actor.personId}:${actor.githubId}`
     : `execution:${actor.principalId}:${actor.executionId}:${actor.workspaceId}`;
@@ -37,7 +42,7 @@ export function resourceKey(resource: PolicyResource): string {
   ]);
 }
 /** Instantiate only for managed Channels. Receipt must come directly from Organization RPC. */
-export class LocalMutationPermits {
+export class LocalMutationPermits<A extends PermitActor = PersonActor | VerifiedExecution> {
   constructor(private sql: SqlStorage) {
     sql.exec("CREATE TABLE IF NOT EXISTS managed_permits (id TEXT PRIMARY KEY, body TEXT NOT NULL)");
     sql.exec(
@@ -67,7 +72,7 @@ export class LocalMutationPermits {
         .toArray()[0]?.revision ?? 0
     );
   }
-  install(permit: MutationPermit) {
+  install(permit: MutationPermit<A>) {
     const existing = this.sql.exec("SELECT id FROM managed_permits WHERE id=?", permit.id).toArray();
     if (existing.length) return;
     const now = Date.now();
@@ -82,10 +87,10 @@ export class LocalMutationPermits {
     );
   }
   /** Inside the SAME transactionSync as local state reread, write, audit and outbox. No await. */
-  consume(permitId: string, binding: PermitBinding, now = Date.now()): boolean {
+  consume(permitId: string, binding: PermitBinding<A>, now = Date.now()): boolean {
     const row = this.sql.exec<{ body: string }>("SELECT body FROM managed_permits WHERE id=?", permitId).toArray()[0];
     if (!row) return false;
-    const { permit, used } = JSON.parse(row.body) as { permit: MutationPermit; used: boolean };
+    const { permit, used } = JSON.parse(row.body) as { permit: MutationPermit<A>; used: boolean };
     if (
       used ||
       !Number.isFinite(now) ||

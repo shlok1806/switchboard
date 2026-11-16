@@ -51,7 +51,11 @@ export interface NewTask {
 }
 
 /** What the Channel Durable Object lends this module. */
+export type MirrorOperation = "github.mirror" | "github.code" | "github.coordination";
+export type MirrorPreparation = Promise<{ commit(write: () => void): void }> | undefined;
 export interface TaskHost {
+  /** Undefined synchronously on legacy Channels. Applies only GitHub-owned mirror effects. */
+  mirror?(target: string, operation: MirrorOperation): MirrorPreparation;
   storage: DurableObjectStorage;
   /** The GitHub to sync with, or null when sync is not configured. */
   gitHub(): GitHub | null;
@@ -189,6 +193,44 @@ export class Tasks {
     });
   }
 
+  /** Managed creation stays in the same sync queue; all mirror reads precede the final permit. */
+  async createManaged(
+    person: PersonName,
+    input: NewTask,
+    hooks: {
+      intent(): Promise<{ commit(write: () => void): void }>;
+      external(number: number | null): void;
+      prepare(number: number): Promise<{ commit(write: () => void): void }>;
+    },
+  ): Promise<TaskResult<Task>> {
+    const gitHub = this.host.gitHub();
+    if (!gitHub) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
+    await this.schedule();
+    return this.exclusive(async () => {
+      const intent = await hooks.intent();
+      intent.commit(() => {});
+      let issue: GitHubIssue;
+      try {
+        issue = await gitHub.createIssue({ title: input.title, body: input.description, labels: input.labels });
+      } catch {
+        hooks.external(null);
+        return { ok: false, status: 502, reason: "managed_external_unavailable" };
+      }
+      // Persist success even if mirror preparation or the final authorization fails.
+      hooks.external(issue.number);
+      let mirror: Mirror;
+      try {
+        mirror = await readMirror(gitHub, issue);
+      } catch {
+        return { ok: false, status: 502, reason: "managed_external_unavailable" };
+      }
+      const prepared = await hooks.prepare(issue.number);
+      prepared.commit(() => this.apply(mirror, "channel", { createdBy: person }));
+      const task = this.read(issue.number);
+      return task ? { ok: true, value: task } : { ok: false, status: 503, reason: "managed_external_unavailable" };
+    });
+  }
+
   /** Re-reads the Issues a webhook delivery names. */
   webhook(change: WebhookChange): Promise<TaskResult<null>> {
     return this.withGitHub(async (gitHub) => {
@@ -258,10 +300,16 @@ export class Tasks {
 
   /** Re-reads every open Issue, plus every Task GitHub no longer lists as open. */
   private async reconcile(gitHub: GitHub): Promise<void> {
+    const admission = this.host.mirror?.("reconcile", "github.mirror");
+    if (admission) (await admission).commit(() => {});
     const open = (await gitHub.listOpenIssues()).sort((a, b) => a.number - b.number);
     const openNumbers = new Set(open.map((issue) => issue.number));
     const mirrors = await mapPooled(open, (issue) => readMirror(gitHub, issue));
-    for (const mirror of mirrors) this.apply(mirror, "reconcile");
+    for (const mirror of mirrors) {
+      const pending = this.host.mirror?.(String(mirror.issue.number), "github.mirror");
+      if (pending) (await pending).commit(() => this.apply(mirror, "reconcile"));
+      else this.apply(mirror, "reconcile");
+    }
 
     const vanished = this.host.storage.sql
       .exec<TaskRow>("SELECT * FROM tasks ORDER BY number")
@@ -271,10 +319,15 @@ export class Tasks {
       .map((task) => task.number);
     await this.refresh(gitHub, vanished, "reconcile");
 
-    this.host.storage.sql.exec(
-      "INSERT OR REPLACE INTO task_sync (key, value) VALUES ('syncedAt', ?)",
-      new Date().toISOString(),
-    );
+    const pending = this.host.mirror?.("task-sync", "github.mirror");
+    const prepared = pending ? await pending : undefined;
+    const write = () =>
+      this.host.storage.sql.exec(
+        "INSERT OR REPLACE INTO task_sync (key, value) VALUES ('syncedAt', ?)",
+        new Date().toISOString(),
+      );
+    if (prepared) prepared.commit(write);
+    else write();
   }
 
   /**
@@ -295,7 +348,11 @@ export class Tasks {
       const before = this.read(number);
       const issue = await gitHub.getIssue(number);
       if (issue === null) {
-        if (before !== null) this.remove(number, via);
+        if (before !== null) {
+          const pending = this.host.mirror?.(String(number), "github.mirror");
+          if (pending) (await pending).commit(() => this.remove(number, via));
+          else this.remove(number, via);
+        }
         continue;
       }
       if (issue.parent !== undefined) queue.push(issue.parent);
@@ -304,7 +361,10 @@ export class Tasks {
         queue.push(...(await gitHub.listBlocking(number)).map((ref) => ref.number));
       }
       const closedBy = closed?.issue === number ? closed.by : undefined;
-      this.apply(await readMirror(gitHub, issue), via, closedBy === undefined ? {} : { closedBy });
+      const mirror = await readMirror(gitHub, issue);
+      const pending = this.host.mirror?.(String(number), "github.mirror");
+      if (pending) (await pending).commit(() => this.apply(mirror, via, closedBy === undefined ? {} : { closedBy }));
+      else this.apply(mirror, via, closedBy === undefined ? {} : { closedBy });
     }
   }
 

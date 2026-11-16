@@ -11,6 +11,8 @@ const OUTCOMES = new Set([
   "external_intent",
   "pr_created",
   "pr_failed",
+  "issue_created",
+  "issue_failed",
 ]);
 
 /** Internal audit delivery protocol, never a content or authorization facade. */
@@ -24,6 +26,7 @@ export interface ManagedOutcome {
   policyRevision: number;
   outcome: string;
   at: number;
+  issue?: number;
 }
 function identifier(value: unknown, max = 500): value is string {
   return (
@@ -79,6 +82,23 @@ export function managedOutcome(
       principalId: actor.principalId,
       workspaceId: actor.workspaceId,
     };
+  else if (
+    actor.kind === "integration" &&
+    actor.provider === "github" &&
+    actor.repository === resource.channel &&
+    actor.workspaceId === resource.id &&
+    typeof actor.generation === "number" &&
+    Number.isSafeInteger(actor.generation) &&
+    actor.generation > 0 &&
+    ["github.mirror", "github.code", "github.coordination"].includes(resource.operation ?? "")
+  )
+    safeActor = {
+      kind: "integration",
+      provider: "github",
+      repository: actor.repository,
+      workspaceId: actor.workspaceId,
+      generation: actor.generation,
+    };
   else return null;
   return {
     table,
@@ -97,6 +117,9 @@ export function managedOutcome(
     policyRevision: body.policyRevision as number,
     outcome: body.outcome,
     at: body.at,
+    ...(typeof body.issue === "number" && Number.isSafeInteger(body.issue) && body.issue > 0
+      ? { issue: body.issue }
+      : {}),
   };
 }
 

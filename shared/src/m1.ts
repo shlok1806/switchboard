@@ -79,11 +79,19 @@ export interface SafeAgent {
   startedAt: Agent["startedAt"];
   lastSeenAt: Agent["lastSeenAt"];
 }
+/** Trusted GitHub mirror identity; never a user or execution credential. */
+export interface IntegrationActor {
+  kind: "integration";
+  provider: "github";
+  repository: string;
+  workspaceId: string;
+  generation: number;
+}
 export interface AdminAuditRecord {
   id: string;
   timestamp: number;
   requestId: string;
-  actor: { kind: "person"; personId: string } | ExecutionActor | { kind: "unknown" };
+  actor: { kind: "person"; personId: string } | ExecutionActor | IntegrationActor | { kind: "unknown" };
   action: string;
   resource: PolicyResource;
   decision: "allow" | "deny";

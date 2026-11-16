@@ -957,6 +957,35 @@ export class Organization extends DurableObject<Env> {
     });
   }
 
+  /** Binding facts shared by user and typed mirror authority; no caller-supplied membership. */
+  private channelLinked(state: State, resource: PolicyResource, generation: number): boolean {
+    const workspace = state.workspaces[resource.id];
+    const pending =
+      this.ctx.storage.sql
+        .exec(
+          "SELECT id FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.phase') NOT IN ('done','conflict') LIMIT 1",
+          resource.id,
+        )
+        .toArray().length > 0;
+    const completed = this.ctx.storage.sql
+      .exec<{ body: string }>(
+        "SELECT body FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.repo')=? AND json_extract(body, '$.phase')='done' ORDER BY json_extract(body, '$.generation') DESC LIMIT 1",
+        resource.id,
+        resource.channel,
+      )
+      .toArray()[0];
+    const operation = completed ? (JSON.parse(completed.body) as BindingOperation) : undefined;
+    const linked =
+      !pending &&
+      operation?.mode === "bind" &&
+      operation.generation !== null &&
+      operation.generation + 1 === generation &&
+      workspace?.channel === resource.channel;
+
+    if (!linked || !Number.isSafeInteger(generation) || generation <= 0) return false;
+    return true;
+  }
+
   /** Current facts and exact finalized binding, shared by read decisions and permit issuance. */
   private channelDecision(
     input: ChannelAuthorization,
@@ -991,29 +1020,7 @@ export class Organization extends DurableObject<Env> {
     )
       return deny("invalid_permit");
     const workspace = state.workspaces[input.resource.id];
-    const pending =
-      this.ctx.storage.sql
-        .exec(
-          "SELECT id FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.phase') NOT IN ('done','conflict') LIMIT 1",
-          input.resource.id,
-        )
-        .toArray().length > 0;
-    const completed = this.ctx.storage.sql
-      .exec<{ body: string }>(
-        "SELECT body FROM binding_operations WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.repo')=? AND json_extract(body, '$.phase')='done' ORDER BY json_extract(body, '$.generation') DESC LIMIT 1",
-        input.resource.id,
-        input.resource.channel,
-      )
-      .toArray()[0];
-    const operation = completed ? (JSON.parse(completed.body) as BindingOperation) : undefined;
-    const linked =
-      !pending &&
-      operation?.mode === "bind" &&
-      operation.generation !== null &&
-      operation.generation + 1 === input.generation &&
-      workspace?.channel === input.resource.channel;
-
-    if (!linked || !Number.isSafeInteger(input.generation) || input.generation <= 0) return deny("binding_mismatch");
+    if (!this.channelLinked(state, input.resource, input.generation)) return deny("binding_mismatch");
     const actor = verified ?? ("token" in input.actor ? undefined : input.actor);
     if (!actor) return deny("invalid_actor");
     const now = Date.now();
@@ -1125,6 +1132,64 @@ export class Organization extends DurableObject<Env> {
     };
   }
 
+  /** Worker/Channel-only mirror scope. Grants no user content read or control authority. */
+  issueIntegrationPermit(input: {
+    actor: import("./policy-permits").IntegrationActor;
+    resource: PolicyResource;
+    requestId: string;
+  }): NativeResult<import("./policy-permits").MutationPermit<import("./policy-permits").IntegrationActor>> {
+    return this.ctx.storage.transactionSync(() => {
+      this.cleanup();
+      const state = this.load();
+      const revision = state?.organization.policyRevision ?? 0;
+      const bound =
+        state &&
+        state.organization.status === "active" &&
+        this.channelLinked(state, input.resource, input.actor.generation);
+      const decision = decide(input.actor, "task.update", input.resource, {
+        organizationId: state?.organization.id ?? "",
+        policyRevision: revision,
+        available: !!bound,
+        workspaceActive: state?.workspaces[input.resource.id]?.status === "active",
+        integration: bound ? input.actor : undefined,
+      });
+      if (decision.decision !== "allow" || !text(input.requestId, 200))
+        return { ok: false, status: 403, reason: "integration_scope_denied", policyRevision: revision };
+      const now = Date.now();
+      const permit: import("./policy-permits").MutationPermit<import("./policy-permits").IntegrationActor> = {
+        id: crypto.randomUUID(),
+        actor: input.actor,
+        action: "task.update",
+        resource: input.resource,
+        requestId: input.requestId,
+        generation: input.actor.generation,
+        policyRevision: revision,
+        issuedAt: now,
+        expiresAt: now + 2000,
+      };
+      this.ctx.storage.sql.exec(
+        "INSERT INTO mutation_permits VALUES(?,?,?,?)",
+        permit.id,
+        revision,
+        permit.expiresAt,
+        JSON.stringify(permit),
+      );
+      this.audit(
+        permit.actor,
+        permit.action,
+        permit.resource,
+        true,
+        "permit_issued",
+        revision,
+        input.requestId,
+        undefined,
+        undefined,
+        permit.id,
+      );
+      return { ok: true, value: permit, policyRevision: revision };
+    });
+  }
+
   /** Internal RPC: callers resolve native Persons or pass execution credentials for fresh verification. */
   async authorizeChannelRead(input: ChannelAuthorization) {
     const verified = "token" in input.actor ? await this.verifyExecution(input.actor.token) : undefined;
@@ -1209,7 +1274,13 @@ export class Organization extends DurableObject<Env> {
           "channel.update.write",
           "agent.directive.send",
           "agent.handoff.cross_owner",
-        ].includes(input.action)
+        ].includes(input.action) &&
+        !(
+          input.action === "workspace.read" &&
+          input.resource.operation === "presence.join" &&
+          actor.kind === "person" &&
+          input.resource.targetId === actor.personId
+        )
       )
         return deny("unsupported_permit_action");
       if (deadline <= now) return deny("permit_expired");
@@ -1302,6 +1373,15 @@ export class Organization extends DurableObject<Env> {
           actor.workspaceId !== outcome.resource.id
         )
           return [];
+      } else if (actor.kind === "integration") {
+        // Exact issued audit fact below is the durable proof after the short receipt expires.
+        if (
+          actor.provider !== "github" ||
+          actor.repository !== outcome.resource.channel ||
+          actor.workspaceId !== outcome.resource.id ||
+          !["github.mirror", "github.code", "github.coordination"].includes(outcome.resource.operation ?? "")
+        )
+          return [];
       } else return [];
       // Correlate to a decision actually issued here. The internal sink cannot mint authority.
       // Pre-export rows used permit id as their key; recover its request id while retained.
@@ -1330,7 +1410,9 @@ export class Organization extends DurableObject<Env> {
       )
         return [];
       const id = outcomeAuditId(outcome);
-      const denied = ["local_restriction_denied", "update_budget_exhausted", "pr_failed"].includes(outcome.outcome);
+      const denied = ["local_restriction_denied", "update_budget_exhausted", "pr_failed", "issue_failed"].includes(
+        outcome.outcome,
+      );
       const record: AdminAuditRecord = {
         id,
         timestamp: outcome.at,
@@ -1347,7 +1429,7 @@ export class Organization extends DurableObject<Env> {
             : denied
               ? "denied"
               : "committed",
-        reason: `channel_outcome:${outcome.outcome}`,
+        reason: `channel_outcome:${outcome.outcome}${outcome.issue === undefined ? "" : `:${outcome.issue}`}`,
       };
       const body = canonical(record);
       const existing = this.ctx.storage.sql
@@ -1412,6 +1494,27 @@ export class Organization extends DurableObject<Env> {
       candidate && typeof candidate.executionId === "string"
         ? this.identityRow<AgentExecution>("executions", candidate.executionId)
         : undefined;
+    const mirrorActor =
+      actor && typeof actor === "object" && "kind" in actor && actor.kind === "integration"
+        ? (actor as Partial<import("./policy-permits").IntegrationActor>)
+        : undefined;
+    const integration: import("./policy-permits").IntegrationActor | undefined =
+      mirrorActor?.provider === "github" &&
+      typeof mirrorActor.repository === "string" &&
+      mirrorActor.repository === resource.channel &&
+      mirrorActor.workspaceId === resource.id &&
+      typeof mirrorActor.generation === "number" &&
+      Number.isSafeInteger(mirrorActor.generation) &&
+      mirrorActor.generation > 0 &&
+      ["github.mirror", "github.code", "github.coordination"].includes(resource.operation ?? "")
+        ? {
+            kind: "integration",
+            provider: "github",
+            repository: mirrorActor.repository,
+            workspaceId: mirrorActor.workspaceId,
+            generation: mirrorActor.generation,
+          }
+        : undefined;
     const safeActor: AdminAuditRecord["actor"] = validPerson(actor)
       ? { kind: "person", personId: actor.personId }
       : execution &&
@@ -1424,7 +1527,7 @@ export class Organization extends DurableObject<Env> {
             principalId: execution.principalId,
             workspaceId: execution.workspaceId,
           }
-        : { kind: "unknown" };
+        : (integration ?? { kind: "unknown" });
     const bucket = allowed
       ? null
       : canonical([safeActor, action.slice(0, 80), resource.id.slice(0, 100), reason, Math.floor(now / 60_000)]);

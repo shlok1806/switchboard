@@ -64,6 +64,7 @@ export type MirrorCall = [name: string, run: () => Promise<unknown>];
 
 /** What the Channel lends this module. */
 export interface ClaimHost {
+  mirror?(target: string, operation: import("./tasks").MirrorOperation): import("./tasks").MirrorPreparation;
   tasks: Tasks;
   agents: AgentRoster;
   status: StatusComments;
@@ -165,7 +166,10 @@ export class Claims {
         "label",
         async () => {
           await gitHub.addLabels(number, [CLAIMED_LABEL]);
-          this.keepLabels(number, (labels) => (labels.includes(CLAIMED_LABEL) ? labels : [...labels, CLAIMED_LABEL]));
+          const pending = this.keepLabels(number, (labels) =>
+            labels.includes(CLAIMED_LABEL) ? labels : [...labels, CLAIMED_LABEL],
+          );
+          if (pending) await pending;
         },
       ],
       this.statusCall(gitHub, number),
@@ -202,9 +206,10 @@ export class Claims {
         async () => {
           await gitHub.removeLabel(number, CLAIMED_LABEL);
           if (task.status === "review") await gitHub.removeLabel(number, REVIEW_LABEL);
-          this.keepLabels(number, (labels) =>
+          const pending = this.keepLabels(number, (labels) =>
             labels.filter((label) => label !== CLAIMED_LABEL && label !== REVIEW_LABEL),
           );
+          if (pending) await pending;
         },
       ],
       this.statusCall(gitHub, number),
@@ -257,7 +262,8 @@ export class Claims {
           if (body === null) throw new Error(`The Issue no longer has Step ${index} "${step.text}".`);
           if (body === issue.body) return;
           await gitHub.setBody(number, body);
-          this.keepBody(number, issue.body, body);
+          const pending = this.keepBody(number, issue.body, body);
+          if (pending) await pending;
         },
       ],
       this.statusCall(gitHub, number),
@@ -315,7 +321,13 @@ export class Claims {
    * webhook that echoes it back records no change. Only when nobody else edited the
    * Issue in between, which the next sync reports as usual.
    */
-  private keepBody(number: TaskNumber, before: string, after: string): void {
+  private keepBody(number: TaskNumber, before: string, after: string): void | Promise<void> {
+    const pending = this.host.mirror?.(String(number), "github.coordination");
+    if (pending) return pending.then((prepared) => prepared.commit(() => this.writeBody(number, before, after)));
+    this.writeBody(number, before, after);
+  }
+
+  private writeBody(number: TaskNumber, before: string, after: string): void {
     const task = this.host.tasks.read(number);
     if (task === null || task.description !== before) return;
     this.host.tasks.write({ ...task, description: after });
@@ -325,7 +337,13 @@ export class Claims {
    * The same for the `status:claimed` label: GitHub owns labels, but this one we
    * just set ourselves, so the Task shows it without waiting for the webhook.
    */
-  keepLabels(number: TaskNumber, change: (labels: string[]) => string[]): void {
+  keepLabels(number: TaskNumber, change: (labels: string[]) => string[]): void | Promise<void> {
+    const pending = this.host.mirror?.(String(number), "github.coordination");
+    if (pending) return pending.then((prepared) => prepared.commit(() => this.writeLabels(number, change)));
+    this.writeLabels(number, change);
+  }
+
+  private writeLabels(number: TaskNumber, change: (labels: string[]) => string[]): void {
     const task = this.host.tasks.read(number);
     if (task === null) return;
     const labels = change(task.labels);
@@ -374,18 +392,25 @@ export class Claims {
     if (gitHub === null) return;
     await this.host.tasks.exclusive(async () => {
       for (const [call, run] of await calls(gitHub)) {
+        const admission = this.host.mirror?.(String(number), "github.coordination");
+        if (admission) (await admission).commit(() => {});
         try {
           await run();
         } catch (error) {
           console.error(`Mirroring ${change} of #${number} to GitHub failed at ${call}`, error);
           const reason = error instanceof Error ? error.message : String(error);
-          this.host.append({
-            type: "mirror.failed",
-            actor: acting.actor,
-            capture: null,
-            task: number,
-            payload: { change, call, reason: reason.slice(0, 500) },
-          });
+          const pending = this.host.mirror?.(String(number), "github.coordination");
+          const prepared = pending ? await pending : undefined;
+          const write = () =>
+            this.host.append({
+              type: "mirror.failed",
+              actor: acting.actor,
+              capture: null,
+              task: number,
+              payload: { change, call, reason: prepared ? "github_mirror_failed" : reason.slice(0, 500) },
+            });
+          if (prepared) prepared.commit(write);
+          else write();
         }
       }
     });

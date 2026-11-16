@@ -116,6 +116,8 @@ import {
   MAX_DIRECTIVE_LENGTH,
   MAX_FINISH_SUMMARY_LENGTH,
   MAX_SPAWN_FAILURE_LENGTH,
+  MAX_TASK_DESCRIPTION_LENGTH,
+  MAX_TASK_TITLE_LENGTH,
   MAX_UPDATE_LENGTH,
   mergePages,
   offlineReason,
@@ -124,6 +126,7 @@ import {
   SUMMARY_MAX_FILES,
   SUMMARY_MAX_NOTES,
   SUMMARY_MAX_UPDATES,
+  SWITCHBOARD_TOOLS,
   TRANSCRIPT_WAIT_MS,
 } from "../../shared/src/index";
 import type { SafeAgent } from "../../shared/src/m1";
@@ -159,7 +162,7 @@ import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from ".
 import { memoryQuery } from "./memory-api";
 import type { ChannelAuthorization } from "./organization";
 import { workspaceParent } from "./policy";
-import { authorityRequest, LocalMutationPermits, type MutationPermit } from "./policy-permits";
+import { authorityRequest, LocalMutationPermits, type MutationPermit, resourceKey } from "./policy-permits";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay, relaySettings } from "./relay/relay";
@@ -635,6 +638,7 @@ export class Channel extends DurableObject<Env> {
       append: (event) => this.append(event),
       broadcast: (message) => this.broadcast(message),
       changed: (task) => this.staleClaims.taskChanged(task),
+      mirror: (target, operation) => (!this.managedClosed() ? undefined : this.#prepareIntegration(target, operation)),
     });
     const goneAfterSeconds = Number(env.PRESENCE_GONE_AFTER_SECONDS);
     this.agents = new AgentRoster({
@@ -678,6 +682,7 @@ export class Channel extends DurableObject<Env> {
       status: this.status,
       gitHub: () => this.gitHub(),
       append: (event) => this.append(event),
+      mirror: (target, operation) => (!this.managedClosed() ? undefined : this.#prepareIntegration(target, operation)),
     });
     this.branches = new Branches({
       tasks: this.tasks,
@@ -823,7 +828,7 @@ export class Channel extends DurableObject<Env> {
           ?.after_id ?? "";
       const rows = sql
         .exec<{ id: string; body: string }>(
-          `SELECT id,body FROM ${table} WHERE id>? AND (?='managed_outcome_outbox' OR json_extract(body, '$.outcome') IN ('pr_created','pr_failed')) ORDER BY id LIMIT ?`,
+          `SELECT id,body FROM ${table} WHERE id>? AND (?='managed_outcome_outbox' OR json_extract(body, '$.outcome') IN ('pr_created','pr_failed','issue_created','issue_failed')) ORDER BY id LIMIT ?`,
           after,
           table,
           OUTCOME_BATCH_SIZE,
@@ -869,6 +874,91 @@ export class Channel extends DurableObject<Env> {
   private gitHub(): GitHub | null {
     const repo = this.access.repo();
     return repo === null ? null : gitHubFor(this.env, repo);
+  }
+
+  /** Exact repository/binding mirror permits; no ambient user authorization. */
+  async #prepareIntegration(targetId: string, operation: "github.mirror" | "github.code" | "github.coordination") {
+    const binding = this.bindingState();
+    const repo = this.access.repo();
+    const organizationId = binding.workspace ? workspaceParent(binding.workspace) : null;
+    if (
+      !repo ||
+      !organizationId ||
+      !binding.workspace ||
+      binding.state !== "linked" ||
+      binding.version !== 1 ||
+      !this.env.CHANNEL.idFromName(repo).equals(this.ctx.id)
+    )
+      throw new ManagedReadFailure(404);
+    const actor: import("./policy-permits").IntegrationActor = {
+      kind: "integration",
+      provider: "github",
+      repository: repo,
+      workspaceId: binding.workspace,
+      generation: binding.generation,
+    };
+    const resource = {
+      kind: "workspace" as const,
+      organizationId,
+      id: binding.workspace,
+      channel: repo,
+      targetId,
+      operation,
+    };
+    const requestId = crypto.randomUUID();
+    const result = await authorityRequest(
+      async () =>
+        await this.env.ORGANIZATION.getByName(organizationId).issueIntegrationPermit({ actor, resource, requestId }),
+    );
+    if (!result.ok) throw new ManagedReadFailure(404);
+    const permit = result.value;
+    const current = () =>
+      this.bindingCurrent(binding.generation, true) &&
+      this.binding.workspace === binding.workspace &&
+      this.binding.operation === binding.operation &&
+      this.access.repo() === repo;
+    if (
+      !current() ||
+      resourceKey(permit.resource) !== resourceKey(resource) ||
+      permit.actor.kind !== "integration" ||
+      JSON.stringify(permit.actor) !== JSON.stringify(actor) ||
+      permit.requestId !== requestId ||
+      permit.action !== "task.update"
+    )
+      throw new ManagedReadFailure(404);
+    const permits = new LocalMutationPermits<import("./policy-permits").IntegrationActor>(this.ctx.storage.sql);
+    permits.observeRevision(binding.workspace, permit.policyRevision);
+    permits.install(permit);
+    return {
+      commit: (write: () => void) => {
+        this.ctx.storage.transactionSync(() => {
+          if (
+            !current() ||
+            !permits.consume(permit.id, {
+              actor,
+              resource,
+              requestId,
+              action: "task.update",
+              generation: binding.generation,
+              policyRevision: permit.policyRevision,
+            })
+          )
+            throw new ManagedReadFailure(404);
+          appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", permit.id, {
+            actor,
+            requestId,
+            action: permit.action,
+            resource,
+            policyRevision: permit.policyRevision,
+            outcome: "committed",
+            at: Date.now(),
+          });
+          write();
+          this.#queueManagedOutcomes();
+        });
+        this.ctx.waitUntil(this.alarms.arm());
+      },
+    };
   }
 
   /** Internal binding snapshot. Unknown schemas and pending bindings deny all admission. */
@@ -1723,6 +1813,146 @@ export class Channel extends DurableObject<Env> {
         },
       );
     };
+    if (input.resource.operation === "presence.join") {
+      if (caller.agent || verified.kind !== "person") return managedError(404, "resource_denied");
+      input = { ...input, resource: { ...input.resource, targetId: verified.personId } };
+      const prepared = await prepare();
+      if (body.timeZone !== undefined && (typeof body.timeZone !== "string" || !isTimeZone(body.timeZone)))
+        return managedError(400, "invalid_presence");
+      const personId = verified.personId;
+      prepared.commit(() => {
+        // Native presence is keyed by immutable identity, never a recycled login.
+        // No raw Person/time-zone frame is broadcast into the shared Channel.
+        this.ctx.storage.sql.exec(
+          "INSERT INTO persons(name,time_zone,joined_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET time_zone=excluded.time_zone",
+          personId,
+          body.timeZone ?? "UTC",
+          new Date().toISOString(),
+        );
+      });
+      const released = await enforcement.check(input);
+      if (!released.ok || !current()) return managedError(404, "resource_denied");
+      return Response.json({ ok: true, person: { personId } }, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "telemetry.append") {
+      if (!caller.agent || verified.kind !== "execution") return managedError(404, "resource_denied");
+      input = { ...input, resource: { ...input.resource, targetId: verified.executionId } };
+      const prepared = await prepare();
+      // Arbitrary tool args/output can contain secrets or private machine data. Store metadata only.
+      if (
+        !SWITCHBOARD_TOOLS.includes(body.tool as never) ||
+        typeof body.ok !== "boolean" ||
+        typeof body.durationMs !== "number" ||
+        !Number.isFinite(body.durationMs) ||
+        body.durationMs < 0 ||
+        body.durationMs > 86400000 ||
+        (body.agent !== undefined && body.agent !== caller.agent) ||
+        (body.executionId !== undefined && body.executionId !== verified.executionId) ||
+        body.task !== undefined
+      )
+        return managedError(400, "invalid_telemetry");
+      prepared.commit(() => {
+        this.append({
+          type: "tool.call",
+          actor: { kind: "agent", agentId: caller.agent as AgentId },
+          capture: "tool",
+          payload: {
+            tool: body.tool as EventPayloads["tool.call"]["tool"],
+            arg: "",
+            ok: body.ok as boolean,
+            durationMs: Math.round(body.durationMs as number),
+          },
+        });
+      });
+      return Response.json({ ok: true }, { status: 201, headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "task.create") {
+      if (caller.agent || verified.kind !== "person") return managedError(404, "resource_denied");
+      const read = await enforcement.check({ ...input, action: "task.read" });
+      if (!read.ok || !current()) return managedError(404, "resource_denied");
+      const title = typeof body.title === "string" ? body.title.trim() : "";
+      const description = body.description ?? "";
+      const labels = body.labels ?? [];
+      if (
+        !title ||
+        title.length > MAX_TASK_TITLE_LENGTH ||
+        typeof description !== "string" ||
+        description.length > MAX_TASK_DESCRIPTION_LENGTH ||
+        !Array.isArray(labels) ||
+        labels.length > 100 ||
+        !labels.every((label) => typeof label === "string" && label.trim().length > 0 && label.length <= 100)
+      )
+        return managedError(400, "invalid_task");
+      const intentResource = {
+        ...input.resource,
+        targetId: `create:${input.requestId}`,
+        operation: "task.create.intent",
+      };
+      input = { ...input, resource: intentResource };
+      const result = await this.tasks.createManaged(
+        caller.person,
+        { title, description, labels: labels.map((label: string) => label.trim()) },
+        {
+          intent: () => prepare(true),
+          external: (number) => {
+            this.ctx.storage.transactionSync(() => {
+              appendManagedOutcome(this.ctx.storage.sql, "managed_external_outcomes", input.requestId, {
+                actor: verified,
+                requestId: input.requestId,
+                action: input.action,
+                resource: intentResource,
+                policyRevision: intentRevision,
+                outcome: number === null ? "issue_failed" : "issue_created",
+                issue: number,
+                at: Date.now(),
+              });
+              this.#queueManagedOutcomes();
+            });
+            this.ctx.waitUntil(this.alarms.arm());
+          },
+          prepare: async (number) => {
+            input = { ...input, resource: { ...input.resource, targetId: String(number), operation: "task.create" } };
+            return prepare();
+          },
+        },
+      );
+      const released = await enforcement.check({ ...input, action: "task.read" });
+      if (!released.ok || !current()) return managedError(404, "resource_denied");
+      return result.ok
+        ? Response.json({ ok: true, task: result.value }, { status: 201, headers: { "Cache-Control": "no-store" } })
+        : managedError(result.status, "managed_external_unavailable");
+    }
+    if (input.resource.operation === "librarian.cursor") {
+      const prepared = await prepare();
+      const ownLibrarian = () => {
+        const fresh = this.#managedCaller(verified, login);
+        return (
+          fresh?.agent === caller.agent &&
+          caller.agent !== undefined &&
+          this.agents.find(caller.agent)?.librarian === true
+        );
+      };
+      if (!ownLibrarian()) return managedError(404, "resource_denied");
+      const { through, quiet } = body;
+      if (
+        typeof through !== "number" ||
+        !Number.isSafeInteger(through) ||
+        through < 0 ||
+        !Array.isArray(quiet) ||
+        quiet.length > 100 ||
+        !quiet.every((task) => typeof task === "number" && Number.isSafeInteger(task) && task > 0)
+      )
+        return managedError(400, "invalid_cursor");
+      let result: ReturnType<typeof moveLibrarianCursor> | undefined;
+      prepared.commit(() => {
+        // Reread enrollment and the local librarian ceiling after the permit await.
+        if (!ownLibrarian() || !caller.agent) throw new ManagedReadFailure(404);
+        result = moveLibrarianCursor(this.ctx.storage.sql, caller.agent, through, quiet as TaskNumber[]);
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result?.ok) return managedError(400, "invalid_cursor");
+      return Response.json({ ok: true, cursor: through }, { headers: { "Cache-Control": "no-store" } });
+    }
     if (input.resource.operation === "brief.write") {
       // Response includes page content: admit and release that read independently of the write permit.
       const readInput = { ...input, action: "channel.update.read" };
@@ -2213,8 +2443,29 @@ export class Channel extends DurableObject<Env> {
 
   /** A verified GitHub `push` or `pull_request` delivery, recorded once per delivery ID. */
   gitHubCodeWebhook(repo: string, delivery: string, change: CodeChange): Promise<CodeEventResult> {
+    if (this.managedClosed()) {
+      if (!this.env.CHANNEL.idFromName(repo).equals(this.ctx.id))
+        return Promise.resolve({ ok: false, status: 503, reason: "resource_denied" });
+      this.access.setRepo(repo);
+      return this.#managedCodeWebhook(delivery, change);
+    }
     this.access.setRepo(repo);
     return this.branches.codeEvent(delivery, change);
+  }
+
+  async #managedCodeWebhook(delivery: string, change: CodeChange): Promise<CodeEventResult> {
+    try {
+      const admitted = await this.#prepareIntegration(`delivery:${delivery}`, "github.code");
+      admitted.commit(() => {});
+      const result = await this.branches.codeEvent(delivery, change, {
+        prepare: () => this.#prepareIntegration(`delivery:${delivery}`, "github.code"),
+      });
+      return result.ok
+        ? { ok: true, event: null }
+        : { ok: false, status: 503, reason: "managed_integration_unavailable" };
+    } catch {
+      return { ok: false, status: 503, reason: "managed_integration_unavailable" };
+    }
   }
 
   /** A Person moving a Stale Claim to themselves or one of their own Agents (ADR 0002). */
@@ -2248,8 +2499,28 @@ export class Channel extends DurableObject<Env> {
 
   /** A verified GitHub webhook delivery, reduced to the Issues it touched. */
   gitHubWebhook(repo: string, change: WebhookChange): Promise<TaskResult<null>> {
+    if (this.managedClosed()) {
+      if (!this.env.CHANNEL.idFromName(repo).equals(this.ctx.id))
+        return Promise.resolve({ ok: false, status: 404, reason: "resource_denied" });
+    }
     this.access.setRepo(repo);
+    if (this.managedClosed()) return this.#managedMirrorWebhook(change);
     return this.tasks.webhook(change);
+  }
+
+  async #managedMirrorWebhook(change: WebhookChange): Promise<TaskResult<null>> {
+    try {
+      const admitted = await this.#prepareIntegration("webhook", "github.mirror");
+      admitted.commit(() => {});
+      const result = await this.tasks.webhook(change);
+      return result.ok ? result : { ok: false, status: 503, reason: "managed_integration_unavailable" };
+    } catch (error) {
+      return {
+        ok: false,
+        status: error instanceof ManagedReadFailure ? 404 : 503,
+        reason: "managed_integration_unavailable",
+      };
+    }
   }
 
   /** Every Agent the Channel has seen, most recently seen first. */

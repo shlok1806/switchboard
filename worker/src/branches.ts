@@ -172,10 +172,11 @@ export class Branches {
         async () => {
           await gh.addLabels(number, [REVIEW_LABEL]);
           await gh.removeLabel(number, CLAIMED_LABEL);
-          claims.keepLabels(number, (labels) => [
+          const pending = claims.keepLabels(number, (labels) => [
             ...labels.filter((l) => l !== CLAIMED_LABEL && l !== REVIEW_LABEL),
             REVIEW_LABEL,
           ]);
+          if (pending) await pending;
         },
       ],
       claims.statusCall(gh, number),
@@ -188,7 +189,7 @@ export class Branches {
    * API and records one Event, under the delivery's ID so a redelivery is not
    * recorded twice. A push that changes nothing (a new branch at main) records none.
    */
-  async codeEvent(delivery: string, change: CodeChange): Promise<CodeEventResult> {
+  async codeEvent(delivery: string, change: CodeChange, mutation?: ClaimMutation): Promise<CodeEventResult> {
     const gitHub = this.host.gitHub();
     if (gitHub === null) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
     let comparison: Awaited<ReturnType<GitHub["compare"]>>;
@@ -202,8 +203,17 @@ export class Branches {
     const task = change.task === null ? {} : { task: change.task };
     const id = `github:${delivery}`;
 
+    const prepared = mutation ? await mutation.prepare() : undefined;
+    const appendOnce: typeof this.host.appendOnce = (key, value) => {
+      if (!prepared) return this.host.appendOnce(key, value);
+      let result: ChannelEvent | null = null;
+      prepared.commit(() => {
+        result = this.host.appendOnce(key, value);
+      });
+      return result;
+    };
     if (change.kind === "merge") {
-      const event = this.host.appendOnce(id, {
+      const event = appendOnce(id, {
         type: "merge",
         actor: { kind: "github" },
         capture: null,
@@ -218,7 +228,7 @@ export class Branches {
       .slice(-MAX_PUSH_COMMITS)
       .map((c) => ({ sha: c.sha, message: firstLine(c.message) }));
     const newest = comparison.commits.at(-1);
-    const event = this.host.appendOnce(id, {
+    const event = appendOnce(id, {
       type: "push",
       actor: { kind: "github" },
       capture: null,

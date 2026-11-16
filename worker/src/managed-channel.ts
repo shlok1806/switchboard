@@ -132,6 +132,8 @@ export async function managedRead<T>(options: {
 
 /** Only implemented mutations are admitted; an unrecognized router path remains denied. */
 function matchWriteRoute(method: string, path: string): ManagedReadRoute | null {
+  if (method === "PUT" && path === "/api/librarian")
+    return { action: "channel.update.write", targetId: "librarian", operation: "librarian.cursor" };
   if (method === "DELETE" || method === "PUT") {
     const read = managedReadRoute("GET", path);
     if (method === "PUT" && read?.operation === "content.read" && read.targetId.startsWith("brief/"))
@@ -145,6 +147,10 @@ function matchWriteRoute(method: string, path: string): ManagedReadRoute | null 
       : null;
   }
   if (method !== "POST") return null;
+  if (path === "/api/join") return { action: "workspace.read", targetId: "presence", operation: "presence.join" };
+  if (path === "/api/tool-calls")
+    return { action: "channel.update.write", targetId: "telemetry", operation: "telemetry.append" };
+  if (path === "/api/tasks") return { action: "task.update", targetId: "tasks", operation: "task.create" };
   if (path === "/api/memory") return { action: "channel.update.write", targetId: "memory", operation: "memory.write" };
   if (path === "/api/directives")
     return { action: "agent.directive.send", targetId: "directives", operation: "directive.send" };
@@ -155,7 +161,7 @@ function matchWriteRoute(method: string, path: string): ManagedReadRoute | null 
     );
   if (!task?.[1] || !task[2]) return null;
   return {
-    action: task[2] === "claim" ? "task.claim" : "task.update",
+    action: task[2] === "claim" || task[2] === "release" ? "task.claim" : "task.update",
     targetId: task[1],
     operation: `task.${task[2]}`,
   };
@@ -163,6 +169,10 @@ function matchWriteRoute(method: string, path: string): ManagedReadRoute | null 
 
 /** Admission metadata for implemented operations only. Unknown operations stay closed. */
 export const MANAGED_OPERATIONS = {
+  "presence.join": { action: "workspace.read", mode: "write" },
+  "telemetry.append": { action: "channel.update.write", mode: "write" },
+  "task.create": { action: "task.update", mode: "write" },
+  "librarian.cursor": { action: "channel.update.write", mode: "write" },
   "skill-files.read": { action: "channel.update.read", mode: "read" },
   "librarian.read": { action: "channel.history.read", mode: "read" },
   "persons.read": { action: "workspace.read", mode: "read" },
@@ -186,7 +196,7 @@ export const MANAGED_OPERATIONS = {
   "directive.send": { action: "agent.directive.send", mode: "write" },
   "update.post": { action: "channel.update.write", mode: "write" },
   "task.claim": { action: "task.claim", mode: "write" },
-  "task.release": { action: "task.update", mode: "write" },
+  "task.release": { action: "task.claim", mode: "write" },
   "task.branch": { action: "task.update", mode: "write" },
   "task.finish": { action: "task.update", mode: "write" },
   "task.takeover": { action: "task.update", mode: "write" },

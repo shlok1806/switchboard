@@ -41,6 +41,8 @@ export interface OwnerConsent {
 }
 
 export interface PolicyContext {
+  /** Set only by the Organization internal integration adapter after binding validation. */
+  integration?: import("./policy-permits").IntegrationActor;
   /** Fresh authoritative verification, never taken from a request body. */
   verifiedExecution?: VerifiedExecution;
   /** Fresh facts from the authority. Required for managed execution decisions. */
@@ -117,6 +119,30 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
       : workspaceParent(resource.id) !== context.organizationId
   )
     return result("deny", "resource_mismatch");
+  if (actor && typeof actor === "object" && "kind" in actor && actor.kind === "integration") {
+    const scope = context.integration;
+    const candidate = actor as import("./policy-permits").IntegrationActor;
+    return scope &&
+      context.workspaceActive &&
+      resource.kind === "workspace" &&
+      Object.keys(candidate).every((key) =>
+        ["kind", "provider", "repository", "workspaceId", "generation"].includes(key),
+      ) &&
+      Number.isSafeInteger(candidate.generation) &&
+      candidate.generation > 0 &&
+      candidate.provider === "github" &&
+      candidate.repository === scope.repository &&
+      candidate.workspaceId === scope.workspaceId &&
+      candidate.generation === scope.generation &&
+      resource.id === scope.workspaceId &&
+      resource.channel === scope.repository &&
+      action === "task.update" &&
+      ["github.mirror", "github.code", "github.coordination"].includes(resource.operation ?? "") &&
+      typeof resource.targetId === "string" &&
+      resource.targetId.length > 0
+      ? result("allow", "integration_mirror_only")
+      : result("deny", "integration_scope_denied");
+  }
   const verified = context.verifiedExecution;
   if (verified && actor && typeof actor === "object" && "kind" in actor && actor.kind === "execution") {
     const a = actor as VerifiedExecution;
