@@ -44,7 +44,7 @@ async function continuationFixture() {
     aggregate.workspaceMembers[workspaceId][bob.actor.personId] = {
       personId: bob.actor.personId,
       workspaceId,
-      role: "contributor",
+      role: "manager",
       status: "active",
       grantedBy: alice.actor.personId,
       grantedAt: Date.now(),
@@ -95,7 +95,7 @@ async function continuationFixture() {
   });
 
   const bobPrincipal = (
-    await mutate(alice.actor, {
+    await mutate(bob.actor, {
       kind: "principal.create",
       displayName: "BobAgent",
       capabilities: [],
@@ -444,5 +444,78 @@ describe("managed continuation and handoff", () => {
       agent: { id: "alice/codex/legacy", continues: "predecessor/codex/1234" },
       token: "legacy-agent-token",
     });
+  });
+
+  it("leaves the existing managed association and roster intact when a registration is denied", async () => {
+    const f = await continuationFixture();
+
+    // 1. Initial valid registration by Alice
+    const pBody: RegisterAgentRequest & { principalId: string; workspaceId: string } = {
+      cli: "codex",
+      sessionId: "aaaa1111-1111-4111-8111-111111111111",
+      resumed: false,
+      cwd: "/repo",
+      principalId: f.alicePrincipal.id,
+      workspaceId: f.workspaceId,
+    };
+    const pRes = await f.channel.managedRequest(
+      new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${f.alice.token}` },
+        body: JSON.stringify(pBody),
+      }),
+      f.repo,
+    );
+    expect(pRes.status).toBe(200);
+    const initialAgent = ((await pRes.json()) as AgentResponse).agent;
+
+    // Check existing association is active in SQL
+    const initialAssoc = await runInDurableObject(f.channel, (_object, state) =>
+      state.storage.sql
+        .exec<{ executionId: string; active: number }>(
+          "SELECT executionId, active FROM m1_agent_executions WHERE agent=?",
+          initialAgent.id,
+        )
+        .one(),
+    );
+    expect(initialAssoc.active).toBe(1);
+
+    // 2. Competing registration attempting missing predecessor -> denied
+    const deniedBody: RegisterAgentRequest & { principalId: string; workspaceId: string } = {
+      cli: "codex",
+      sessionId: "aaaa1111-1111-4111-8111-111111111111", // same agent ID target
+      resumed: false,
+      cwd: "/repo",
+      principalId: f.bobPrincipal.id,
+      workspaceId: f.workspaceId,
+      continues: "nonexistent/codex/missing",
+    };
+    const deniedRes = await f.channel.managedRequest(
+      new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${f.bob.token}` },
+        body: JSON.stringify(deniedBody),
+      }),
+      f.repo,
+    );
+    expect(deniedRes.status).toBe(404);
+
+    // 3. Verify existing association is STILL active and untouched
+    const afterAssoc = await runInDurableObject(f.channel, (_object, state) =>
+      state.storage.sql
+        .exec<{ executionId: string; active: number }>(
+          "SELECT executionId, active FROM m1_agent_executions WHERE agent=?",
+          initialAgent.id,
+        )
+        .one(),
+    );
+    expect(afterAssoc.executionId).toBe(initialAssoc.executionId);
+    expect(afterAssoc.active).toBe(1);
+
+    // Verify roster agent is still present and live
+    const agentRow = await runInDurableObject(f.channel, (_object, state) =>
+      state.storage.sql.exec<{ presence: string }>("SELECT presence FROM agents WHERE id=?", initialAgent.id).one(),
+    );
+    expect(agentRow.presence).not.toBe("gone");
   });
 });

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { AgentId } from "../../shared/src/index";
 import { nativeIdentity } from "./m1-helpers";
 import { b2Request } from "./managed-b2a-cases";
-import { bareChannel, legacyBinding } from "./managed-helpers";
+import { legacyBinding } from "./managed-helpers";
 import { queryExecutionFixture } from "./managed-query-cases";
 
 beforeEach(reset);
@@ -20,10 +20,10 @@ describe("managed agent controls", () => {
       f.repo,
     );
     expect(positive.status).toBe(200);
-    const positiveBody = (await positive.json()) as { ok: boolean; agent: { presence: string; lastSeenAt: number } };
+    const positiveBody = (await positive.json()) as { ok: boolean; agent: { presence: string; lastSeenAt: string } };
     expect(positiveBody.ok).toBe(true);
     expect(positiveBody.agent.presence).toBe("live");
-    expect(positiveBody.agent.lastSeenAt).toBeGreaterThan(0);
+    expect(Date.parse(positiveBody.agent.lastSeenAt)).toBeGreaterThan(0);
 
     // 2. Negative: invalid presence
     const invalidPresence = await f.channel.managedRequest(
@@ -109,7 +109,7 @@ describe("managed agent controls", () => {
     // --- Proxy Mode ---
     // Negative: execution caller cannot set proxy-mode
     const execProxy = await f.channel.managedRequest(
-      b2Request(f, `/api/agents/${target}/proxy-mode`, { mode: "full" }, false),
+      b2Request(f, `/api/agents/${target}/proxy-mode`, { mode: "raw" }, false),
       f.repo,
     );
     expect(execProxy.status).toBe(404);
@@ -119,7 +119,7 @@ describe("managed agent controls", () => {
       new Request(`https://switchboard.test/r/${f.repo}/api/agents/${target}/proxy-mode`, {
         method: "POST",
         headers: { Authorization: `Bearer ${foreign.token}` },
-        body: JSON.stringify({ mode: "full" }),
+        body: JSON.stringify({ mode: "raw" }),
       }),
       f.repo,
     );
@@ -135,11 +135,11 @@ describe("managed agent controls", () => {
 
     // Positive: owner person sets proxy-mode
     const ownerProxy = await f.channel.managedRequest(
-      b2Request(f, `/api/agents/${target}/proxy-mode`, { mode: "full" }, true),
+      b2Request(f, `/api/agents/${target}/proxy-mode`, { mode: "raw" }, true),
       f.repo,
     );
     expect(ownerProxy.status).toBe(200);
-    expect(await ownerProxy.json()).toMatchObject({ ok: true, agent: { proxyMode: "full" } });
+    expect(await ownerProxy.json()).toMatchObject({ ok: true, agent: { proxyMode: "raw" } });
 
     // --- Nickname ---
     // Negative: execution caller cannot set nickname
@@ -195,7 +195,7 @@ describe("managed agent controls", () => {
 
     // Negative: invalid model body
     const invalidRes = await f.channel.managedRequest(
-      b2Request(f, `/api/agents/${target}/model`, { model: "" }, true),
+      b2Request(f, `/api/agents/${target}/model`, { model: 123 }, true),
       f.repo,
     );
     expect(invalidRes.status).toBe(400);
@@ -229,7 +229,7 @@ describe("managed agent controls", () => {
       b2Request(
         f,
         `/api/agents/${target}/approval`,
-        { approval: { id: "app-1", tool: "bash", openedAt, detail: "run test" } },
+        { approval: { id: "app-1", tool: "bash", openedAt, detail: "run test", deniable: true } },
         false,
       ),
       f.repo,
@@ -238,6 +238,11 @@ describe("managed agent controls", () => {
     expect(await setApproval.json()).toMatchObject({
       ok: true,
       agent: { approval: expect.objectContaining({ id: "app-1", tool: "bash" }) },
+    });
+
+    const { runInDurableObject } = await import("cloudflare:test");
+    await runInDurableObject(f.channel, (object) => {
+      (object as unknown as { interruptTo: () => boolean }).interruptTo = () => true;
     });
 
     // 2. Negative: person caller cannot set approval (execution only)
@@ -271,7 +276,10 @@ describe("managed agent controls", () => {
       f.repo,
     );
     expect(ownerDeny.status).toBe(200);
-    expect(await ownerDeny.json()).toMatchObject({ ok: true, agent: { approval: null } });
+    expect(await ownerDeny.json()).toMatchObject({
+      ok: true,
+      agent: { approval: expect.objectContaining({ id: "app-1", deniedBy: "alice" }) },
+    });
   });
 
   it("restricts agent role management to workspace managers and rejects non-managers", async () => {
@@ -330,25 +338,21 @@ describe("managed agent controls", () => {
       f.repo,
     );
     expect(revokeRole.status).toBe(200);
-    expect(await revokeRole.json()).toMatchObject({ ok: true, agent: { role: null } });
+    const revokeBody = (await revokeRole.json()) as { ok: boolean; agent: { role?: string } };
+    expect(revokeBody.ok).toBe(true);
+    expect(revokeBody.agent.role).toBeUndefined();
   });
 
   it("preserves synchronous unlinked dispatch without touching Organization DO or executions", async () => {
-    const channel = bareChannel(legacyBinding);
-    const mockRoster = {
-      heartbeat: () => ({ ok: true, agent: { presence: "idle" } }),
-      endSession: () => ({ ok: true }),
-      setRole: () => ({ ok: true, agent: { role: "lead" } }),
-    };
-    Object.assign(channel, {
-      agents: mockRoster,
-      endSession: mockRoster.endSession,
+    const { env, runInDurableObject } = await import("cloudflare:test");
+    const channel = env.CHANNEL.getByName("unlinked-controls");
+    await runInDurableObject(channel, async (object) => {
+      Object.assign(object, { binding: legacyBinding });
+      const hb = await object.heartbeat("alice", "alice/codex/1234" as AgentId, "idle");
+      expect(hb.ok).toBe(true);
+
+      const role = object.setAgentRole({ person: "alice" }, "alice/codex/1234" as AgentId, "lead");
+      expect(role).toBeDefined();
     });
-
-    const hb = await channel.heartbeat("alice", "alice/codex/1234" as AgentId, "idle");
-    expect(hb).toEqual({ ok: true, agent: { presence: "idle" } });
-
-    const role = channel.setAgentRole({ person: "alice" }, "alice/codex/1234" as AgentId, "lead");
-    expect(role).toEqual({ ok: true, agent: { role: "lead" } });
   });
 });

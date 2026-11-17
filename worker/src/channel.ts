@@ -2858,11 +2858,6 @@ export class Channel extends DurableObject<Env> {
         await cancel();
         return deny(403);
       }
-      await this.endManagedAssociation(id);
-      if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
-        await cancel();
-        return deny(403);
-      }
       const permitResult = await org.issueMutationPermit({
         actor,
         action: "agent.execution.start",
@@ -2913,6 +2908,12 @@ export class Channel extends DurableObject<Env> {
           organizationId,
           execution.id,
         );
+        if (prior && prior.executionId !== execution.id) {
+          this.queueManagedEnd(id, prior);
+        }
+        if (prior && prior.executionId !== execution.id) {
+          await this.deliverManagedEnd(id, prior);
+        }
         const safe = safeAgent(result.agent, {
           principalId: execution.principalId,
           executionId: execution.id,
@@ -2973,6 +2974,10 @@ export class Channel extends DurableObject<Env> {
 
   private queueManagedEnd(id: AgentId, association: { organizationId: string; executionId: string }): void {
     this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS m1_agent_execution_ends (
+          executionId TEXT PRIMARY KEY, organizationId TEXT NOT NULL, agent TEXT NOT NULL)`,
+      );
       this.ctx.storage.sql.exec(
         "UPDATE m1_agent_executions SET active=0 WHERE agent=? AND executionId=?",
         id,

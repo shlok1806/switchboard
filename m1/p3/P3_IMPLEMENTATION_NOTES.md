@@ -1248,3 +1248,78 @@ Quality gate failure diagnosis and remediation for the 19 worker test failures a
 - Dashboard `npm run lint`: **exit 0** (133 files checked, no fixes applied)
 - Runtime tests: **not run** (gate executed by supervisor; sandbox cannot run workerd).
 
+### B2b fix 2
+
+Quality gate failure diagnosis and remediation for the 16 worker test failures observed after slice B2b round 1 (`p3_logs/B2b-fix1/06_worker_test.log`):
+
+#### 1. `test/managed-agent-controls.test.ts > managed agent controls > enforces own-execution heartbeat presence and rejects foreign actors or invalid values`
+- **Failure**: `TypeError: actual value must be number or bigint, received "string"` at `test/managed-agent-controls.test.ts:26`.
+- **Root cause (`worker/test/managed-agent-controls.test.ts:26`)**: `SafeAgent.lastSeenAt` is an ISO timestamp string (`string`), not a numeric timestamp. The test asserted `expect(positiveBody.agent.lastSeenAt).toBeGreaterThan(0)`, which failed with a TypeError.
+- **Fix**: Updated assertion to `expect(Date.parse(positiveBody.agent.lastSeenAt)).toBeGreaterThan(0)`.
+
+#### 2. `test/managed-agent-controls.test.ts > managed agent controls > handles agent session end for own execution or owner person and rejects foreign callers`
+- **Failure**: Expected 200, received 503 at `test/managed-agent-controls.test.ts:91`.
+- **Root cause (`worker/src/channel.ts:2975`)**: In `channel.ts`, `#managedWrite` calls `this.endManagedAssociation(agentId)`, which invokes `queueManagedEnd`. `queueManagedEnd` executes `INSERT OR IGNORE INTO m1_agent_execution_ends VALUES(?,?,?)`. However, table `m1_agent_execution_ends` was only created in `registerManagedAgent`, so for fixtures like `queryExecutionFixture()` that seed `m1_agent_executions` directly in SQL without running `registerManagedAgent`, `m1_agent_execution_ends` did not exist. The uncaught SQLite error was caught by `managedRequest` at `channel.ts:1684` and converted to `503 authority_unavailable`.
+- **Fix**: Added `CREATE TABLE IF NOT EXISTS m1_agent_execution_ends (executionId TEXT PRIMARY KEY, organizationId TEXT NOT NULL, agent TEXT NOT NULL)` inside `queueManagedEnd`'s transaction.
+
+#### 3. `test/managed-agent-controls.test.ts > managed agent controls > restricts proxy-mode and nickname mutation to the owning person`
+- **Failure**: Expected 200, received 400 at `test/managed-agent-controls.test.ts:141`.
+- **Root cause (`worker/test/managed-agent-controls.test.ts:112`, `:122`, `:138`)**: The test passed `{ mode: "full" }` as the payload. However, valid `ProxyMode` values are strictly defined as `["digest", "raw"]` in `shared/src/proxy.ts:17` and validated by `isProxyMode()`. Passing `"full"` triggered `managedError(400, "invalid_proxy_mode")`.
+- **Fix**: Updated test payloads to valid proxy mode `"raw"`, and asserted `proxyMode: "raw"`.
+
+#### 4. `test/managed-agent-controls.test.ts > managed agent controls > admits model updates from own execution or owner person and rejects foreign callers`
+- **Failure**: Expected 400, received 200 at `test/managed-agent-controls.test.ts:201`.
+- **Root cause (`worker/test/managed-agent-controls.test.ts:198`)**: The negative test passed `{ model: "" }`. In `shared/src/agents.ts:87`, `cleanModelField` treats empty strings as `null` (clearing the model field, which is a supported operation). In `channel.ts:2231-2233`, `model === false` indicates an invalid type, whereas `model === null` is admitted.
+- **Fix**: Changed the negative test payload to `{ model: 123 }` (non-string type), which causes `parseModelField` to return `false` and triggers 400 `invalid_model`.
+
+#### 5. `test/managed-agent-controls.test.ts > managed agent controls > manages approvals and requires terminal_control consent for cross-owner deny`
+- **Failure**: Expected 200, received 409 at `test/managed-agent-controls.test.ts:273`.
+- **Root cause (`worker/test/managed-agent-controls.test.ts:232`, `:274`)**: In `agents.ts:549-555`, `denyApproval` requires:
+  (1) `held.deniable === true` (the test omitted `deniable: true` in the setup prompt);
+  (2) `deliver()` to succeed (which calls `interruptTo` to send the deny frame over WebSocket; in headless test environments without an active stream attachment, `interruptTo` returns false and `denyApproval` returns 409);
+  (3) upon denial, `agents.ts:564` records `{ ...held, deniedBy: person }` rather than setting `approval` to `null`.
+- **Fix**: Added `deniable: true` to the fixture approval; configured an `interruptTo` stub on the test channel; updated the assertion to verify `{ approval: expect.objectContaining({ id: "app-1", deniedBy: "alice" }) }`.
+
+#### 6. `test/managed-agent-controls.test.ts > managed agent controls > restricts agent role management to workspace managers and rejects non-managers`
+- **Failure**: AssertionError: expected `{ agent: { role: null } }` at `test/managed-agent-controls.test.ts:333`.
+- **Root cause (`worker/test/managed-agent-controls.test.ts:341`)**: In `agents.ts:199`, `rowToAgent` conditionally spreads `...(row.role != null && isAgentRole(row.role) ? { role: row.role } : {})`. When a role is revoked (set to null in SQLite), the `role` property is omitted from the resulting `Agent` object (i.e. `undefined`).
+- **Fix**: Updated assertion to verify `body.agent.role` is `undefined`.
+
+#### 7. `test/managed-agent-controls.test.ts > managed agent controls > preserves synchronous unlinked dispatch without touching Organization DO or executions`
+- **Failure**: `TypeError: Receiver must be an instance of class Channel` at `Channel.setAgentRole src/channel.ts:3317:10`.
+- **Root cause (`worker/test/managed-agent-controls.test.ts:345`)**: `bareChannel` constructs an object using `Object.create(Channel.prototype)`. Private methods like `#joinPerson` rely on private brand checks, which throw when invoked on objects not instantiated via `new Channel()`.
+- **Fix**: Executed the test using a real Channel instance via `env.CHANNEL.getByName("unlinked-controls")` and `runInDurableObject`.
+
+#### 8-12. `test/managed-consent-control.test.ts` (5 policy decide failures)
+- **Failures**:
+  - `requires terminal_control consent for control effects and rejects read or screen consent`: Expected `"owner_consent_required"`, received `"authority_unavailable_or_actor_invalid"`
+  - `enforces scoped hostId matching on terminal_control consent`: Expected `"owner_consent_required"`, received `"authority_unavailable_or_actor_invalid"`
+  - `strictly denies organization and workspace administrators without target owner consent`: Expected `"owner_consent_required"`, received `"authority_unavailable_or_actor_invalid"`
+  - `enforces expired, revoked, wrong requester, wrong workspace, and wrong target on control consent`: Expected `"owner_consent_required"`, received `"authority_unavailable_or_actor_invalid"`
+  - `enforces scoped Host-owner history consent and denies control or read consent for history`: Expected `"owner_consent_required"`, received `"authority_unavailable_or_actor_invalid"`
+- **Root cause (`worker/test/managed-consent-control.test.ts:44-47`)**: `bobActor` was defined as `{ personId: bobId, githubId: "902" }`, omitting `kind: "person"`. In `policy.ts:80`, `validPerson(actor)` checks `actor.kind === "person"`. Without it, `validPerson` returned `false`, and `decide()` early-exited with `"authority_unavailable_or_actor_invalid"`.
+- **Fix & DD-1/P3-#31/P3-#32 Hardening**:
+  - Fixed `bobActor` in `worker/test/managed-consent-control.test.ts:44` to `{ kind: "person" as const, personId: bobId, githubId: "902" }`.
+  - In `worker/src/policy.ts:252` and `worker/src/organization.ts:1133`: Applied the exact `hostId` rule to ALL scoped host consents (`isControlEffect || isHistoryRead`). `hostMatches` strictly requires `Boolean(consent?.hostId && resource.hostId && consent.hostId === resource.hostId)`. If either side lacks `hostId` or they differ, access is denied with `"owner_consent_required"`.
+  - Added negative tests in `worker/test/managed-consent-control.test.ts` for history-read consent without hostId and history resource without hostId.
+
+#### 13-16. `test/managed-continuation.test.ts` (4 continuation failures)
+- **Failures**: `Error: sponsor_denied` at `continuationFixture` line 71.
+- **Root cause (`worker/test/managed-continuation.test.ts:47`, `:98`)**:
+  (1) In `continuationFixture`, Bob was added to `workspaceMembers` as `"contributor"`. Only `"manager"` can register agents or create principals sponsored by a person.
+  (2) Bob's principal was created via `mutate(alice.actor, { kind: "principal.create", sponsor: { kind: "person", id: bob.actor.personId } })`. In `organization.ts:306`, person sponsors must equal the caller (`c.sponsor.id === actor.personId`), so calling as Alice triggered `"sponsor_denied"`.
+- **Fix**: Updated `workspaceMembers` in `continuationFixture` so Bob is `"manager"`, and created Bob's principal with `mutate(bob.actor, ...)`.
+
+#### 17. Supervisor Note P3-#32: Managed registration ordering and intact existing association
+- **Hardening & Negative Test (`worker/src/channel.ts:2861-2915`, `worker/test/managed-continuation.test.ts:450`)**:
+  - Removed `await this.endManagedAssociation(id)` prior to permit acquisition in `registerManagedAgent`. Authorization via `issueMutationPermit` happens before any side effect or mutation.
+  - Replaced prior execution association is queued (`this.queueManagedEnd(id, prior)`) inside the synchronous commit after `permits.consume()` succeeds, and delivered (`deliverManagedEnd`) post-commit, ensuring competing registrations do not fail permit consumption.
+  - Added negative test in `worker/test/managed-continuation.test.ts` verifying that when a competing registration is denied, the existing active association and roster record remain completely intact.
+
+### Static Verification (B2b fix 2)
+- Worker `npm run typecheck`: **exit 0**
+- Worker `npm run lint`: **exit 0** (230 files checked, no fixes applied)
+- Pre-existing tests (at 0bfb31f): **untouched**
+- Runtime tests: **not run** (gate executed by supervisor; sandbox cannot run workerd).
+
+

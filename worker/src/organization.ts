@@ -1130,21 +1130,36 @@ export class Organization extends DurableObject<Env> {
         : isHistoryRead
           ? "channel.history.read"
           : input.action;
+      const isScopedHostConsent = isControlEffect || isHistoryRead;
       const consentRows = this.ctx.storage.sql
         .exec<{ body: string }>(
-          "SELECT body FROM owner_consents WHERE json_extract(body, '$.ownerPersonId')=? AND json_extract(body, '$.personId')=? AND json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.targetId')=? AND json_extract(body, '$.action')=? AND json_extract(body, '$.expiresAt')>? ORDER BY json_extract(body, '$.expiresAt') DESC LIMIT 1",
-          target.ownerPersonId,
-          actor.personId,
-          input.resource.id,
-          input.resource.targetId,
-          requiredConsentAction,
-          now,
+          isScopedHostConsent && input.resource.hostId
+            ? "SELECT body FROM owner_consents WHERE json_extract(body, '$.ownerPersonId')=? AND json_extract(body, '$.personId')=? AND json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.targetId')=? AND json_extract(body, '$.action')=? AND json_extract(body, '$.hostId')=? AND json_extract(body, '$.expiresAt')>? ORDER BY json_extract(body, '$.expiresAt') DESC LIMIT 1"
+            : "SELECT body FROM owner_consents WHERE json_extract(body, '$.ownerPersonId')=? AND json_extract(body, '$.personId')=? AND json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.targetId')=? AND json_extract(body, '$.action')=? AND json_extract(body, '$.expiresAt')>? ORDER BY json_extract(body, '$.expiresAt') DESC LIMIT 1",
+          ...(isScopedHostConsent && input.resource.hostId
+            ? [
+                target.ownerPersonId,
+                actor.personId,
+                input.resource.id,
+                input.resource.targetId,
+                requiredConsentAction,
+                input.resource.hostId,
+                now,
+              ]
+            : [
+                target.ownerPersonId,
+                actor.personId,
+                input.resource.id,
+                input.resource.targetId,
+                requiredConsentAction,
+                now,
+              ]),
         )
         .toArray();
       const consent = consentRows[0];
       if (consent) {
         const parsed = JSON.parse(consent.body) as OwnerConsent;
-        const hostMatches = isControlEffect
+        const hostMatches = isScopedHostConsent
           ? Boolean(parsed.hostId && input.resource.hostId && parsed.hostId === input.resource.hostId)
           : (!parsed.hostId && !input.resource.hostId) || parsed.hostId === input.resource.hostId;
         if (hostMatches) {

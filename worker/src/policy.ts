@@ -249,7 +249,8 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
         : isHistoryRead
           ? "channel.history.read"
           : action;
-      const hostMatches = isControlEffect
+      const isScopedHostConsent = isControlEffect || isHistoryRead;
+      const hostMatches = isScopedHostConsent
         ? Boolean(consent?.hostId && resource.hostId && consent.hostId === resource.hostId)
         : (!consent?.hostId && !resource.hostId) || consent?.hostId === resource.hostId;
       const authorized =

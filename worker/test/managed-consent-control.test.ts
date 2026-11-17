@@ -42,6 +42,7 @@ describe("managed consent control (DD-1 and history consent)", () => {
     };
 
     const bobActor = {
+      kind: "person" as const,
       personId: bobId,
       githubId: "902",
     };
@@ -304,6 +305,25 @@ describe("managed consent control (DD-1 and history consent)", () => {
         { ...baseContext, consent: validHistoryConsent },
       );
       expect(hostMismatch.decision).toBe("deny");
+      expect(hostMismatch.reason).toBe("owner_consent_required");
+
+      // Consent without hostId on history consent -> deny
+      const consentNoHost = decide(bobActor, "channel.history.read", historyResource, {
+        ...baseContext,
+        consent: { ...validHistoryConsent, hostId: undefined },
+      });
+      expect(consentNoHost.decision).toBe("deny");
+      expect(consentNoHost.reason).toBe("owner_consent_required");
+
+      // Resource without hostId on history consent -> deny
+      const resourceNoHost = decide(
+        bobActor,
+        "channel.history.read",
+        { ...historyResource, hostId: undefined },
+        { ...baseContext, consent: validHistoryConsent },
+      );
+      expect(resourceNoHost.decision).toBe("deny");
+      expect(resourceNoHost.reason).toBe("owner_consent_required");
 
       // 6. Admin without owner consent -> deny
       const adminNoConsent = decide(bobActor, "channel.history.read", historyResource, {
