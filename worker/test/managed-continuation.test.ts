@@ -2,7 +2,7 @@ import { env, reset, runInDurableObject } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AgentResponse, RegisterAgentRequest } from "../../shared/src/index";
 import type { SafeAgent } from "../../shared/src/m1";
-import { CONTRIBUTOR_ACTIONS, MANAGER_ACTIONS } from "../src/principals";
+import { CONTRIBUTOR_ACTIONS } from "../src/principals";
 import { M1_ORIGIN, nativeIdentity } from "./m1-helpers";
 import { bareChannel, legacyBinding } from "./managed-helpers";
 
@@ -72,8 +72,8 @@ async function continuationFixture() {
     return res.value;
   };
 
-  await mutate(alice.actor, { kind: "identity.policy", actions: MANAGER_ACTIONS });
-  await mutate(alice.actor, { kind: "identity.policy", workspaceId, actions: MANAGER_ACTIONS });
+  await mutate(alice.actor, { kind: "identity.policy", actions: CONTRIBUTOR_ACTIONS });
+  await mutate(alice.actor, { kind: "identity.policy", workspaceId, actions: CONTRIBUTOR_ACTIONS });
 
   const alicePrincipal = (
     await mutate(alice.actor, {
@@ -89,7 +89,7 @@ async function continuationFixture() {
     kind: "grant.put",
     principalId: alicePrincipal.id,
     workspaceId,
-    actions: MANAGER_ACTIONS,
+    actions: CONTRIBUTOR_ACTIONS,
     constraints: {},
     expiresAt: Date.now() + 3600000,
   });

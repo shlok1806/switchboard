@@ -2858,6 +2858,11 @@ export class Channel extends DurableObject<Env> {
         await cancel();
         return deny(403);
       }
+      await this.endManagedAssociation(id);
+      if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
+        await cancel();
+        return deny(403);
+      }
       const permitResult = await org.issueMutationPermit({
         actor,
         action: "agent.execution.start",
@@ -2886,11 +2891,6 @@ export class Channel extends DurableObject<Env> {
           await cancel();
           return deny(result.status);
         }
-        if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
-          await cancel();
-          return deny(403);
-        }
-        await this.endManagedAssociation(id);
         if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
           await cancel();
           return deny(403);
@@ -3075,7 +3075,7 @@ export class Channel extends DurableObject<Env> {
         };
       }
     }
-    if (this.binding.workspace !== null)
+    if (!managed && this.binding.workspace !== null)
       await this.endManagedAssociation(agentIdFor(person, request.cli, request.sessionId));
     this.#joinPerson(person);
     // A machine's Host the Channel does not know answers for nothing (ADR 0037).
@@ -3251,9 +3251,9 @@ export class Channel extends DurableObject<Env> {
    */
   private withNextTurn(result: RosterResult): RosterResult {
     if (!result.ok) return result;
-    const lostClaims = this.staleClaims.takeLostClaims(result.agent.id);
-    const deliveries = this.relay.takeDeliveries(result.agent.id);
-    const directives = this.directives.takeDirectives(result.agent.id);
+    const lostClaims = this.staleClaims?.takeLostClaims(result.agent.id) ?? [];
+    const deliveries = this.relay?.takeDeliveries(result.agent.id) ?? [];
+    const directives = this.directives?.takeDirectives(result.agent.id) ?? [];
     return {
       ...result,
       ...(lostClaims.length === 0 ? {} : { lostClaims }),

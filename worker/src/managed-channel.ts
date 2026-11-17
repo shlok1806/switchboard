@@ -136,7 +136,15 @@ function matchWriteRoute(method: string, path: string): ManagedReadRoute | null 
     return { action: "channel.update.write", targetId: "librarian", operation: "librarian.cursor" };
   if (method === "DELETE" || method === "PUT") {
     const roleMatch = /^\/api\/agents\/([^/]+)\/role$/.exec(path);
-    if (roleMatch?.[1]) return { action: "agent.grant.manage", targetId: roleMatch[1], operation: "agent.role" };
+    if (roleMatch?.[1]) {
+      try {
+        const id = decodeURIComponent(roleMatch[1]);
+        if (!/^[^/\s]+\/[^/\s]+\/[^/\s]+$/.test(id)) return null;
+        return { action: "agent.grant.manage", targetId: id, operation: "agent.role" };
+      } catch {
+        return null;
+      }
+    }
     const read = managedReadRoute("GET", path);
     if (method === "PUT" && read?.operation === "content.read" && read.targetId.startsWith("brief/"))
       return { ...read, action: "channel.update.write", operation: "brief.write" };
@@ -151,19 +159,25 @@ function matchWriteRoute(method: string, path: string): ManagedReadRoute | null 
   if (method !== "POST") return null;
   if (path === "/api/agents")
     return { action: "agent.execution.start", targetId: "agents", operation: "agent.register" };
-  const agentMatch = /^\/api\/agents\/([^/]+)\/(heartbeat|end|proxy-mode|nickname|model|approval|approval\/deny)$/.exec(
+  const agentMatch = /^\/api\/agents\/([^/]+)\/(heartbeat|end|proxy-mode|nickname|model|approval\/deny|approval)$/.exec(
     path,
   );
   if (agentMatch?.[1] && agentMatch[2]) {
-    const targetId = agentMatch[1];
-    const kind = agentMatch[2];
-    if (kind === "heartbeat") return { action: "channel.update.write", targetId, operation: "agent.heartbeat" };
-    if (kind === "end") return { action: "channel.update.write", targetId, operation: "agent.end" };
-    if (kind === "proxy-mode") return { action: "channel.update.write", targetId, operation: "agent.proxy-mode" };
-    if (kind === "nickname") return { action: "channel.update.write", targetId, operation: "agent.nickname" };
-    if (kind === "model") return { action: "channel.update.write", targetId, operation: "agent.model" };
-    if (kind === "approval") return { action: "channel.update.write", targetId, operation: "agent.approval" };
-    if (kind === "approval/deny") return { action: "channel.update.write", targetId, operation: "agent.approval.deny" };
+    try {
+      const targetId = decodeURIComponent(agentMatch[1]);
+      if (!/^[^/\s]+\/[^/\s]+\/[^/\s]+$/.test(targetId)) return null;
+      const kind = agentMatch[2];
+      if (kind === "heartbeat") return { action: "channel.update.write", targetId, operation: "agent.heartbeat" };
+      if (kind === "end") return { action: "channel.update.write", targetId, operation: "agent.end" };
+      if (kind === "proxy-mode") return { action: "channel.update.write", targetId, operation: "agent.proxy-mode" };
+      if (kind === "nickname") return { action: "channel.update.write", targetId, operation: "agent.nickname" };
+      if (kind === "model") return { action: "channel.update.write", targetId, operation: "agent.model" };
+      if (kind === "approval") return { action: "channel.update.write", targetId, operation: "agent.approval" };
+      if (kind === "approval/deny")
+        return { action: "channel.update.write", targetId, operation: "agent.approval.deny" };
+    } catch {
+      return null;
+    }
   }
   if (path === "/api/join") return { action: "workspace.read", targetId: "presence", operation: "presence.join" };
   if (path === "/api/tool-calls")

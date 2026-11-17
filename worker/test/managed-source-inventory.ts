@@ -166,6 +166,7 @@ export const SOURCE_INVENTORY = {
   "rpc:webSocketMessage": ["W01", "protocol"],
   "rpc:webSocketClose": ["J04", "protocol"],
   "frame:push": ["W10", "B4"],
+  "frame:session.end": ["W10", "B4"],
   "frame:takeover": ["W10", "B4"],
   "frame:interrupt": ["W10", "B4"],
   "frame:delivery": ["W10", "B4"],

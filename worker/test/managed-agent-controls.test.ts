@@ -345,7 +345,7 @@ describe("managed agent controls", () => {
       endSession: mockRoster.endSession,
     });
 
-    const hb = channel.heartbeat("alice", "alice/codex/1234" as AgentId, "idle");
+    const hb = await channel.heartbeat("alice", "alice/codex/1234" as AgentId, "idle");
     expect(hb).toEqual({ ok: true, agent: { presence: "idle" } });
 
     const role = channel.setAgentRole({ person: "alice" }, "alice/codex/1234" as AgentId, "lead");

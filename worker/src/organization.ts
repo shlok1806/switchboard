@@ -1132,12 +1132,11 @@ export class Organization extends DurableObject<Env> {
           : input.action;
       const consentRows = this.ctx.storage.sql
         .exec<{ body: string }>(
-          "SELECT body FROM owner_consents WHERE json_extract(body, '$.ownerPersonId')=? AND json_extract(body, '$.personId')=? AND json_extract(body, '$.workspaceId')=? AND (json_extract(body, '$.targetId')=? OR json_extract(body, '$.targetId')=?) AND json_extract(body, '$.action')=? AND json_extract(body, '$.expiresAt')>? ORDER BY json_extract(body, '$.expiresAt') DESC LIMIT 1",
+          "SELECT body FROM owner_consents WHERE json_extract(body, '$.ownerPersonId')=? AND json_extract(body, '$.personId')=? AND json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.targetId')=? AND json_extract(body, '$.action')=? AND json_extract(body, '$.expiresAt')>? ORDER BY json_extract(body, '$.expiresAt') DESC LIMIT 1",
           target.ownerPersonId,
           actor.personId,
           input.resource.id,
           input.resource.targetId,
-          target.id,
           requiredConsentAction,
           now,
         )
@@ -1145,7 +1144,10 @@ export class Organization extends DurableObject<Env> {
       const consent = consentRows[0];
       if (consent) {
         const parsed = JSON.parse(consent.body) as OwnerConsent;
-        if (!parsed.hostId || !input.resource.hostId || parsed.hostId === input.resource.hostId) {
+        const hostMatches = isControlEffect
+          ? Boolean(parsed.hostId && input.resource.hostId && parsed.hostId === input.resource.hostId)
+          : (!parsed.hostId && !input.resource.hostId) || parsed.hostId === input.resource.hostId;
+        if (hostMatches) {
           context.consent = parsed;
           deadline = Math.min(deadline, context.consent.expiresAt);
         }

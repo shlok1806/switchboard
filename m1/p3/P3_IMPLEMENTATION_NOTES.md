@@ -1167,3 +1167,84 @@ Quality gate failure diagnosis and remediation for the 8 worker test failures ob
 - Dashboard `npm run lint`: **exit 0** (133 files checked, no fixes applied)
 - Runtime tests: **not run** (supervisor executes runtime test gates; no unexecuted tests claimed as passed).
 
+### B2b fix 1
+
+Quality gate failure diagnosis and remediation for the 19 worker test failures and 1 unhandled rejection observed after slice B2b (`p3_logs/B2b/06_worker_test.log`):
+
+#### 1-6. `test/managed-agent-controls.test.ts` (Agent mutation routes returning 404 instead of 200/400)
+- **Failures**:
+  - `enforces own-execution heartbeat presence and rejects foreign actors or invalid values`: Expected 200, received 404.
+  - `handles agent session end for own execution or owner person and rejects foreign callers`: Expected 200, received 404.
+  - `restricts proxy-mode and nickname mutation to the owning person`: Expected 400, received 404.
+  - `admits model updates from own execution or owner person and rejects foreign callers`: Expected 400, received 404.
+  - `manages approvals and requires terminal_control consent for cross-owner deny`: Expected 200, received 404.
+  - `restricts agent role management to workspace managers and rejects non-managers`: Expected 200, received 404.
+- **Root cause (`worker/src/managed-channel.ts:138`, `worker/src/managed-channel.ts:154`)**:
+  In `matchWriteRoute`, the regular expression matches for `/api/agents/:id/role` and `/api/agents/:id/(heartbeat|end|...)` extracted `roleMatch[1]` and `agentMatch[1]` without calling `decodeURIComponent`. When callers supplied percent-encoded agent IDs (e.g. `alice%2Fcodex%2F1234`), `targetId` remained encoded (`"alice%2Fcodex%2F1234"`). In `worker/src/channel.ts`, `#managedWrite` looked up the agent in `m1_agent_executions` via `this.managedAssociation(agentId)`, which stores raw agent IDs (`"alice/codex/1234"`). The lookup failed to find the active association and returned fail-closed 404 (`resource_denied`) before reaching parameter validation or mutation handling.
+- **Fix**: Wrapped target ID extraction in `decodeURIComponent` with `try/catch` and agent ID format validation (`/^[^/\s]+\/[^/\s]+\/[^/\s]+$/`), and placed `approval\/deny` before `approval` in regex alternation.
+
+#### 7. `test/managed-agent-controls.test.ts > managed agent controls > preserves synchronous unlinked dispatch without touching Organization DO or executions`
+- **Failure**: Expected `{ ok: true, agent: { presence: "idle" } }`, received `Promise {}`.
+- **Root cause (`worker/test/managed-agent-controls.test.ts:348`)**: `Channel.heartbeat` has always been an asynchronous method returning `Promise<RosterResult>`, but the B2b test invocation omitted `await`: `const hb = channel.heartbeat(...)`.
+- **Fix**: Added `await` to the invocation: `const hb = await channel.heartbeat("alice", "alice/codex/1234" as AgentId, "idle");`.
+
+#### Unhandled Rejection: `Channel.withNextTurn this.staleClaims undefined, from Channel.heartbeat`
+- **Failure**: `TypeError: Cannot read properties of undefined (reading 'takeLostClaims') at Channel.withNextTurn (src/channel.ts:3254:41)`.
+- **Root cause (`worker/src/channel.ts:3254`)**: When `Channel.heartbeat` is invoked on an unlinked Channel constructed without full subsystem instances (such as `bareChannel`), `this.staleClaims`, `this.relay`, or `this.directives` may be uninitialized. When `Channel.heartbeat` resolved in the background without `await`, `withNextTurn` attempted to dereference `this.staleClaims.takeLostClaims(...)`, throwing an unhandled rejection.
+- **Fix**: Safely guarded subsystem access in `withNextTurn` using optional chaining and defaulting: `this.staleClaims?.takeLostClaims(result.agent.id) ?? []`, `this.relay?.takeDeliveries(result.agent.id) ?? []`, and `this.directives?.takeDirectives(result.agent.id) ?? []`.
+
+#### 8-12. `test/managed-consent-control.test.ts` (policy decide unit matrix returning `resource_mismatch` instead of `owner_consent_required`)
+- **Failures**:
+  - `requires terminal_control consent for control effects and rejects read or screen consent`: Expected `"owner_consent_required"`, received `"resource_mismatch"`.
+  - `enforces scoped hostId matching on terminal_control consent`: Expected `"owner_consent_required"`, received `"resource_mismatch"`.
+  - `strictly denies organization and workspace administrators without target owner consent`: Expected `"owner_consent_required"`, received `"resource_mismatch"`.
+  - `enforces expired, revoked, wrong requester, wrong workspace, and wrong target on control consent`: Expected `"owner_consent_required"`, received `"resource_mismatch"`.
+  - `enforces scoped Host-owner history consent and denies control or read consent for history`: Expected `"owner_consent_required"`, received `"resource_mismatch"`.
+- **Root cause (`worker/test/managed-consent-control.test.ts:11-14`)**:
+  The fixture initialized non-UUID identifiers: `orgId = "org-1"`, `wsId = "org-1:ws-1"`, `aliceId = "alice-person-id"`, `bobId = "bob-person-id"`. In `worker/src/policy.ts:92`, `workspaceParent(id)` evaluates `WORKSPACE_ID = new RegExp(`^(${UUID}):${UUID}$`)`. Because `"org-1:ws-1"` does not conform to UUID format, `workspaceParent` returned `null`, triggering the early fail-closed check at line 121 (`workspaceParent(resource.id) !== context.organizationId`) and returning `"resource_mismatch"` before evaluating role, consent, or host matching.
+- **Fix & DD-1 Hardening**:
+  - Updated fixture identifiers in `worker/test/managed-consent-control.test.ts` to valid UUID strings.
+  - Implemented supervisor ruling DD-1 in `worker/src/policy.ts:252` and `worker/src/organization.ts:1148`:
+    - Strict fail-closed `hostMatches`: for control effects, consent and resource MUST both specify `hostId` and match exactly: `Boolean(consent?.hostId && resource.hostId && consent.hostId === resource.hostId)`. If either lacks `hostId` or they differ, authorization denies with `"owner_consent_required"`.
+    - Removed `consent.targetId === context.verifiedExecution.executionId` relaxation; `consent.targetId === resource.targetId` is required strictly.
+    - Added supervisor-requested negative tests: consent without hostId, resource without hostId, wrong host, wrong consent owner (non-matching ownerPersonId), and consent for requester's own (or another) execution used against a different target.
+
+#### 13. `test/managed-consent-control.test.ts > managed consent control (DD-1 and history consent) > Organization DO and Channel enforcement integration > handles DD-1 terminal_control consent lifecycle in Organization DO and audit logs`
+- **Failure**: `TypeError: Cannot read properties of undefined (reading '0a9b9c99-0848-41a8-98d5-5b89ef63b916:9a57ddfd-4afd-4d6c-abac-d51fbd3bfea8')`.
+- **Root cause (`worker/test/managed-consent-control.test.ts:309`)**: The integration test queried `aggregate.body` expecting `stored.ownerConsents[f.workspaceId]`, but in `worker/src/organization.ts:939`, owner consents are persisted in the dedicated `owner_consents` SQL table (`CREATE TABLE IF NOT EXISTS owner_consents (id TEXT PRIMARY KEY, body TEXT NOT NULL)`).
+- **Fix**: Updated test inspection to query `SELECT body FROM owner_consents` and verify deletion from `owner_consents` on revocation.
+
+#### 14-17. `test/managed-continuation.test.ts` (`Error: policy_denied` at `mutateIdentity`)
+- **Failures**:
+  - `registers managed agent returning SafeAgent projection and storing no legacy token`
+  - `handles same-owner continuation and rejects self-continuation or missing predecessor`
+  - `requires predecessor-owner consent for cross-owner continuation and rejects unconsented handoff`
+  - `preserves task claim ownership across handoff and continuation`
+- **Root cause (`worker/test/managed-continuation.test.ts:75`, `:76`, `:92`)**:
+  In `continuationFixture`, `mutateIdentity` was invoked with `{ kind: "identity.policy", actions: MANAGER_ACTIONS }` and `{ kind: "grant.put", actions: MANAGER_ACTIONS }`. In `worker/src/organization.ts:315`, `identity.policy` commands strictly check `c.actions.every((a) => DELEGABLE_ACTIONS.includes(a))`. Because `DELEGABLE_ACTIONS` is `CONTRIBUTOR_ACTIONS`, passing `MANAGER_ACTIONS` (which includes management actions like `workspace.manage`, `agent.register`) triggered `refuse("policy_denied")`.
+- **Fix**: Updated `continuationFixture` to pass `CONTRIBUTOR_ACTIONS` in `identity.policy` and `grant.put`.
+
+#### 18. `test/managed-registration.test.ts > managed registration compatibility > serializes competing registrations without reviving the replaced execution`
+- **Failure**: Expected `[200, 200]`, received `[200, 403]`. Pre-existing test at `0bfb31f`.
+- **Root cause (`worker/src/channel.ts:2861-2893`)**:
+  In `registerManagedAgent`, when competing registrations serialized on the same Channel, the first registration completed, inserting its execution into `m1_agent_executions`. When the second registration ran:
+  1. It acquired an `agent.execution.start` mutation permit from Organization DO at current policyRevision `R`.
+  2. Inside `try`, after permit installation and `#registerAgentInternal`, it called `await this.endManagedAssociation(id)` (line 2893) and `#registerAgentInternal` also called `endManagedAssociation` (line 3078).
+  3. `endManagedAssociation` called `org.endRegisteredExecution(...)`, which updated execution status to `"ended"` and incremented `state.organization.policyRevision++` to `R + 1`. In `save(state)`, older permits at revision `R` were invalidated, and Channel policy floor was observed at `R + 1`.
+  4. Subsequent `permits.consume(permit.id, ...)` (line 2898) checked `permit.policyRevision < this.revisionFloor(...)`, found revision `R < R + 1`, and failed with `consumed === false`, returning `deny(403)`.
+- **Fix**: Reordered lifecycle operations in `registerManagedAgent` to comply with Package 3 invariant (c): all awaits and synchronization (including ending prior associations with `await this.endManagedAssociation(id)`) complete BEFORE acquiring the fresh mutation permit. Guarded `#registerAgentInternal` so `managed` callers do not redundantly invoke `endManagedAssociation` after permit issuance. The permit is issued at the post-transition revision and consumes cleanly inside the synchronous commit.
+
+#### 19. `test/managed-source-inventory.test.ts > source-discovered managed entry-point inventory > classifies every actual HTTP matcher, public RPC, MCP tool and frame entry`
+- **Failure**: Discovery discovered `"frame:session.end"` which was not classified in `SOURCE_INVENTORY`.
+- **Root cause (`worker/test/managed-source-inventory.ts`)**: In B2b, `channel.ts:2168` added an Event append for `type: "session.end"`. `discover()` extracts all `type:` string literals across sources, finding `frame:session.end` unmapped.
+- **Fix**: Classified `"frame:session.end": ["W10", "B4"]` in `worker/test/managed-source-inventory.ts` under broadcast projection group W10, and updated the W10 row description in `m1/p3/P3_ROUTE_INVENTORY.md:217` to include `session.end`.
+
+### Static Verification (B2b fix 1)
+- Worker `npm run typecheck`: **exit 0**
+- Worker `npm run lint`: **exit 0** (230 files checked, no fixes applied)
+- CLI `npm run typecheck`: **exit 0**
+- CLI `npm run lint`: **exit 0** (132 files checked, no fixes applied)
+- Dashboard `npm run typecheck`: **exit 0**
+- Dashboard `npm run lint`: **exit 0** (133 files checked, no fixes applied)
+- Runtime tests: **not run** (gate executed by supervisor; sandbox cannot run workerd).
+

@@ -249,7 +249,9 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
         : isHistoryRead
           ? "channel.history.read"
           : action;
-      const hostMatches = !consent?.hostId || !resource.hostId || consent.hostId === resource.hostId;
+      const hostMatches = isControlEffect
+        ? Boolean(consent?.hostId && resource.hostId && consent.hostId === resource.hostId)
+        : (!consent?.hostId && !resource.hostId) || consent?.hostId === resource.hostId;
       const authorized =
         owner &&
         resource.targetId &&
@@ -257,8 +259,7 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
           (consent?.ownerPersonId === owner &&
             consent.personId === actor.personId &&
             consent.workspaceId === resource.id &&
-            (consent.targetId === resource.targetId ||
-              (context.verifiedExecution && consent.targetId === context.verifiedExecution.executionId)) &&
+            consent.targetId === resource.targetId &&
             consent.action === requiredConsentAction &&
             hostMatches &&
             consent.expiresAt > (context.now ?? Date.now())));
