@@ -1322,4 +1322,73 @@ Quality gate failure diagnosis and remediation for the 16 worker test failures o
 - Pre-existing tests (at 0bfb31f): **untouched**
 - Runtime tests: **not run** (gate executed by supervisor; sandbox cannot run workerd).
 
+### B2b fix 3
+
+Quality gate failure diagnosis and remediation for the 8 worker test failures observed after slice B2b round 2 (`p3_logs/B2b-fix2-recheck-p3-32/06_worker_test.log`):
+
+#### 1. `test/managed-agent-controls.test.ts > managed agent controls > handles agent session end for own execution or owner person and rejects foreign callers`
+- **Failure**: Expected 404, received 200 at `test/managed-agent-controls.test.ts:101`.
+- **Root cause (`worker/src/channel.ts:2151-2158`)**:
+  When `/api/agents/:id/end` was called, `Channel.managedAssociation(agentId)` returned the SQL row from `m1_agent_executions`. Although the first `agent.end` invocation called `endManagedAssociation(agentId)` (setting `active=0`), the mutation handler only checked `if (!assoc)`, without verifying that `assoc.active === 1` or that the agent was not already `presence === 'gone'`. Consequently, a second end call on an already-ended execution acquired a permit, re-updated the agent, and returned 200 instead of 404.
+- **Fix**: Updated `worker/src/channel.ts:2155` to verify `assoc?.active !== 1 || this.agents.find(agentId)?.presence === "gone"` and return `managedError(404, "resource_denied")`. Also ensured all managed agent mutations (`agent.proxy-mode`, `agent.nickname`, `agent.model`, `agent.approval`, `agent.approval.deny`, `agent.role`) enforce `assoc?.active !== 1` before performing mutations.
+
+#### 2. `test/managed-agent-controls.test.ts > managed agent controls > restricts proxy-mode and nickname mutation to the owning person`
+- **Failure**: Expected 400, received 200 at `test/managed-agent-controls.test.ts:168`.
+- **Root cause (`worker/src/channel.ts:2211-2213`)**:
+  When `{ nickname: "" }` was submitted, `cleanNickname("")` returned `null` (legacy convention where empty string cleared the nickname) and `parseNickname("")` returned `null`. Because `null` was treated as valid (clearing nickname), the guard `nickname === false || nickname === undefined` was not triggered, and the request succeeded with 200 instead of rejecting an empty nickname string.
+- **Fix**: Hardened validation in `worker/src/channel.ts:2212-2213`:
+  `if (nickname === false || nickname === undefined || (typeof body.nickname === "string" && nickname === null)) return managedError(400, "invalid_nickname");`
+  An explicit `null` payload remains admitted to clear a nickname, while an empty or whitespace string is rejected with 400 `invalid_nickname`.
+
+#### 3. `test/managed-agent-controls.test.ts > managed agent controls > preserves synchronous unlinked dispatch without touching Organization DO or executions`
+- **Failure**: Expected `true`, received `false` at `test/managed-agent-controls.test.ts:352`.
+- **Root cause (`worker/test/managed-agent-controls.test.ts:350-358`)**:
+  The unlinked test accessed a fresh Channel Durable Object (`env.CHANNEL.getByName("unlinked-controls")`) and invoked `object.heartbeat("alice", "alice/codex/1234" as AgentId, "idle")`. On an unlinked Channel, `AgentRoster.heartbeat` checks `this.owned(person, id)`. Because the agent `alice/codex/1234` had never been registered on the channel, `owned` returned `{ ok: false, status: 404, reason: "No Agent ... on this Channel. Register it first." }`.
+- **Fix**: In `worker/test/managed-agent-controls.test.ts:350-358`, registered the agent on the unlinked channel first via `await object.registerAgent("alice", { cli: "codex", sessionId: "1234", resumed: false, cwd: "/repo" })`. The subsequent unlinked heartbeat and role management execute synchronously and succeed with `hb.ok === true` without touching Organization DO or executions.
+
+#### 4–8. `test/managed-continuation.test.ts` (5 registration and continuation failures)
+- **Failures**:
+  - `registers managed agent returning SafeAgent projection and storing no legacy token`: Expected 200, received 403 at line 138.
+  - `handles same-owner continuation and rejects self-continuation or missing predecessor`: Expected 200, received 403 at line 192.
+  - `requires predecessor-owner consent for cross-owner continuation and rejects unconsented handoff`: Expected 200, received 403 at line 281.
+  - `preserves task claim ownership across handoff and continuation`: `TypeError: Cannot read properties of undefined (reading 'id')` at line 387 (downstream of 403 registration response).
+  - `leaves the existing managed association and roster intact when a registration is denied`: Expected 200, received 403 at line 469.
+- **Root causes**:
+  1. **Fixture `binding_operations` missing in `org` storage (`worker/test/managed-continuation.test.ts:31-68`)**:
+     `continuationFixture()` configured the workspace channel in `aggregate` and set `channel.binding`, but did not insert a completed binding operation into `org`'s `binding_operations` table. When `registerManagedAgent` requested a mutation permit via `org.issueMutationPermit()`, `channelDecision` called `this.channelLinked(state, input.resource, input.generation)`, which queries `binding_operations` where `phase = 'done'` and `generation + 1 === input.generation`. Finding no binding record, `channelLinked` failed and `issueMutationPermit` returned 403 `binding_mismatch`.
+  2. **Channel repository resolution in `managedRequest` (`worker/src/channel.ts:1053`)**:
+     `managedRequest(request: Request, repo: string)` validated that the Channel DO matched `repo`, but omitted calling `this.access.setRepo(repo)`. In `registerManagedAgent`, `this.access.repo()` returned `null`, triggering `if (!channel) return deny(403);`.
+  3. **Idempotency key generation (`worker/src/channel.ts:2836`)**:
+     `registerManagedAgent` required a client-provided `Idempotency-Key` header (`if (!key || key.length > 128) return deny(400)`). Standard CLI and test requests to `/api/agents` that omit this header were rejected.
+  4. **Self-continuation and cross-owner handoff status codes (`worker/src/channel.ts:2793`, `:2823`)**:
+     Self-continuation returned status 409 instead of 400 (bad request: a session cannot continue itself). Cross-owner continuation without valid consent returned 403 instead of 404 (confidentiality: cross-owner queries redact foreign target existence).
+- **Fixes**:
+  1. Updated `continuationFixture()` in `worker/test/managed-continuation.test.ts` to insert the completed `binding_operations` row with `phase: "done"` and `generation: 0`.
+  2. In `worker/src/channel.ts:1053`, added `this.access.setRepo(repo);` inside `managedRequest`.
+  3. In `worker/src/channel.ts:2836`, defaulted missing idempotency keys via `request.headers.get("Idempotency-Key") ?? crypto.randomUUID()`.
+  4. In `worker/src/channel.ts:2793`, updated self-continuation rejection to status 400.
+  5. In `worker/src/channel.ts:2823`, updated unconsented cross-owner continuation rejection to `deny(404)`.
+
+#### `withNextTurn` Root-Cause Resolution
+- **Supervisor Note Requirement**: Replace FIX1 optional chaining (`this.staleClaims?.takeLostClaims(...) ?? []`, `this.relay?.takeDeliveries(...) ?? []`, `this.directives?.takeDirectives(...) ?? []`) with a root-cause fix so collaborator methods are never silently bypassed for live agents.
+- **Root Cause**:
+  In `worker/src/channel.ts`, `staleClaims`, `relay`, and `directives` are `private readonly` fields initialized during Channel DO construction. The only condition under which these fields were undefined was when tests constructed uninitialized Channel prototypes via `bareChannel` (`Object.create(Channel.prototype)`).
+- **Resolution**:
+  1. In `worker/src/channel.ts:3263-3267`, removed all optional chaining and restored direct invocations:
+     ```ts
+     const lostClaims = this.staleClaims.takeLostClaims(result.agent.id);
+     const deliveries = this.relay.takeDeliveries(result.agent.id);
+     const directives = this.directives.takeDirectives(result.agent.id);
+     ```
+  2. In `worker/test/managed-helpers.ts:28-32`, updated `bareChannel` to provide stubbed collaborator instances (`staleClaims`, `relay`, `directives`) so test stubs invoking methods that pass through `withNextTurn` do not encounter undefined property access.
+  3. In `worker/test/managed-agent-controls.test.ts:350`, test dispatch runs on a real Channel DO instance via `runInDurableObject`, ensuring real collaborator instances are always exercised.
+
+### Static Verification (B2b fix 3)
+- Worker `npm run typecheck`: **exit 0**
+- Worker `npm run lint`: **exit 0** (230 files checked, no fixes applied)
+- Pre-existing tests (at 0bfb31f): **untouched** (byte-identical)
+- Weakened assertions: **none**
+- Runtime tests: **not run** (gate executed by supervisor; sandbox cannot run workerd).
+
+
 

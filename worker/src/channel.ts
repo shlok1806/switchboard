@@ -1050,6 +1050,7 @@ export class Channel extends DurableObject<Env> {
     // Bind the HTTP route to the actual named DO, even for direct internal invocations.
     if (!this.env.CHANNEL.idFromName(repo).equals(this.ctx.id) || !url.pathname.startsWith(`/r/${repo}/api/`))
       return managedError(404, "resource_denied");
+    this.access.setRepo(repo);
     const path = url.pathname.slice(`/r/${repo}`.length);
     const prepared = preparation ? MANAGED_PREPARATIONS[preparation.id] : undefined;
     const route =
@@ -2151,7 +2152,8 @@ export class Channel extends DurableObject<Env> {
     if (input.resource.operation === "agent.end") {
       const agentId = input.resource.targetId as AgentId;
       const assoc = this.managedAssociation(agentId);
-      if (!assoc) return managedError(404, "resource_denied");
+      if (assoc?.active !== 1 || this.agents.find(agentId)?.presence === "gone")
+        return managedError(404, "resource_denied");
       const isOwnExecution = verified.kind === "execution" && assoc.executionId === verified.executionId;
       const isOwnerPerson =
         verified.kind === "person" && (await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId));
@@ -2182,7 +2184,7 @@ export class Channel extends DurableObject<Env> {
       if (verified.kind !== "person") return managedError(404, "resource_denied");
       const agentId = input.resource.targetId as AgentId;
       const assoc = this.managedAssociation(agentId);
-      if (!assoc) return managedError(404, "resource_denied");
+      if (assoc?.active !== 1) return managedError(404, "resource_denied");
       const owned = await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId);
       if (!owned) return managedError(404, "resource_denied");
       if (!isProxyMode(body.mode)) return managedError(400, "invalid_proxy_mode");
@@ -2203,11 +2205,12 @@ export class Channel extends DurableObject<Env> {
       if (verified.kind !== "person") return managedError(404, "resource_denied");
       const agentId = input.resource.targetId as AgentId;
       const assoc = this.managedAssociation(agentId);
-      if (!assoc) return managedError(404, "resource_denied");
+      if (assoc?.active !== 1) return managedError(404, "resource_denied");
       const owned = await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId);
       if (!owned) return managedError(404, "resource_denied");
       const nickname = parseNickname(body.nickname);
-      if (nickname === false || nickname === undefined) return managedError(400, "invalid_nickname");
+      if (nickname === false || nickname === undefined || (typeof body.nickname === "string" && nickname === null))
+        return managedError(400, "invalid_nickname");
       const prepared = await prepare();
       let result: RosterResult | undefined;
       prepared.commit(() => {
@@ -2223,7 +2226,7 @@ export class Channel extends DurableObject<Env> {
     if (input.resource.operation === "agent.model") {
       const agentId = input.resource.targetId as AgentId;
       const assoc = this.managedAssociation(agentId);
-      if (!assoc) return managedError(404, "resource_denied");
+      if (assoc?.active !== 1) return managedError(404, "resource_denied");
       const isOwnExecution = verified.kind === "execution" && assoc.executionId === verified.executionId;
       const isOwnerPerson =
         verified.kind === "person" && (await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId));
@@ -2246,7 +2249,8 @@ export class Channel extends DurableObject<Env> {
       if (verified.kind !== "execution") return managedError(404, "resource_denied");
       const agentId = input.resource.targetId as AgentId;
       const assoc = this.managedAssociation(agentId);
-      if (!assoc || assoc.executionId !== verified.executionId) return managedError(404, "resource_denied");
+      if (assoc?.active !== 1 || assoc.executionId !== verified.executionId)
+        return managedError(404, "resource_denied");
       const approval = cleanApproval(body.approval);
       if (approval === undefined) return managedError(400, "invalid_approval");
       const prepared = await prepare();
@@ -2262,7 +2266,7 @@ export class Channel extends DurableObject<Env> {
       if (verified.kind !== "person") return managedError(404, "resource_denied");
       const agentId = input.resource.targetId as AgentId;
       const assoc = this.managedAssociation(agentId);
-      if (!assoc) return managedError(404, "resource_denied");
+      if (assoc?.active !== 1) return managedError(404, "resource_denied");
       const deny = cleanDeny(body);
       if (deny === undefined) return managedError(400, "invalid_deny");
       const owned = await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId);
@@ -2299,6 +2303,8 @@ export class Channel extends DurableObject<Env> {
     if (input.resource.operation === "agent.role") {
       if (verified.kind !== "person") return managedError(404, "resource_denied");
       const agentId = input.resource.targetId as AgentId;
+      const assoc = this.managedAssociation(agentId);
+      if (assoc?.active !== 1) return managedError(404, "resource_denied");
       const role = request.method === "DELETE" ? null : body.role;
       if (request.method === "PUT" && !isAgentRole(role)) return managedError(400, "invalid_role");
       const prepared = await prepare();
@@ -2784,8 +2790,8 @@ export class Channel extends DurableObject<Env> {
       if (registration.continues) {
         if (registration.continues === agentIdFor(person, registration.cli, registration.sessionId)) {
           return Response.json(
-            { ok: false, status: 409, reason: "A session cannot continue its own Agent." },
-            { status: 409, headers: { "Cache-Control": "no-store" } },
+            { ok: false, status: 400, reason: "A session cannot continue its own Agent." },
+            { status: 400, headers: { "Cache-Control": "no-store" } },
           );
         }
         const predecessor = this.agents.find(registration.continues);
@@ -2814,7 +2820,7 @@ export class Channel extends DurableObject<Env> {
                 operation: "agent.handoff",
               },
             });
-            if (!consentCheck.ok) return deny(403);
+            if (!consentCheck.ok) return deny(404);
           }
         }
       }
@@ -2827,8 +2833,8 @@ export class Channel extends DurableObject<Env> {
         ))
       )
         return deny(403);
-      const key = request.headers.get("Idempotency-Key");
-      if (!key || key.length > 128) return deny(400);
+      const key = request.headers.get("Idempotency-Key") ?? crypto.randomUUID();
+      if (key.length > 128) return deny(400);
       const issued = await org.mutateIdentity({
         actor,
         key,
@@ -3256,9 +3262,9 @@ export class Channel extends DurableObject<Env> {
    */
   private withNextTurn(result: RosterResult): RosterResult {
     if (!result.ok) return result;
-    const lostClaims = this.staleClaims?.takeLostClaims(result.agent.id) ?? [];
-    const deliveries = this.relay?.takeDeliveries(result.agent.id) ?? [];
-    const directives = this.directives?.takeDirectives(result.agent.id) ?? [];
+    const lostClaims = this.staleClaims.takeLostClaims(result.agent.id);
+    const deliveries = this.relay.takeDeliveries(result.agent.id);
+    const directives = this.directives.takeDirectives(result.agent.id);
     return {
       ...result,
       ...(lostClaims.length === 0 ? {} : { lostClaims }),

@@ -50,6 +50,21 @@ async function continuationFixture() {
       grantedAt: Date.now(),
     };
     state.storage.sql.exec("UPDATE aggregate SET body=? WHERE id=1", JSON.stringify(aggregate));
+    state.storage.sql.exec(
+      "INSERT INTO binding_operations VALUES(?,?,?)",
+      "binding",
+      "binding",
+      JSON.stringify({
+        id: "binding",
+        actor: alice.actor,
+        workspaceId,
+        repo,
+        mode: "bind",
+        phase: "done",
+        generation: 0,
+        key: "binding",
+      }),
+    );
   });
 
   await runInDurableObject(channel, (object) => {

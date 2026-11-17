@@ -25,7 +25,12 @@ export function bareChannel(
     state: string;
   } = linkedBinding,
 ): Channel {
-  return Object.assign(Object.create(Channel.prototype) as Channel, { binding });
+  return Object.assign(Object.create(Channel.prototype) as Channel, {
+    binding,
+    staleClaims: { takeLostClaims: () => [] },
+    relay: { takeDeliveries: () => [] },
+    directives: { takeDirectives: () => [] },
+  });
 }
 export function invoke(channel: Channel, name: string, ...args: unknown[]): unknown {
   const method = (channel as unknown as Record<string, (...args: unknown[]) => unknown>)[name];

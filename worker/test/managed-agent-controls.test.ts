@@ -348,6 +348,12 @@ describe("managed agent controls", () => {
     const channel = env.CHANNEL.getByName("unlinked-controls");
     await runInDurableObject(channel, async (object) => {
       Object.assign(object, { binding: legacyBinding });
+      await object.registerAgent("alice", {
+        cli: "codex",
+        sessionId: "1234",
+        resumed: false,
+        cwd: "/repo",
+      });
       const hb = await object.heartbeat("alice", "alice/codex/1234" as AgentId, "idle");
       expect(hb.ok).toBe(true);
 
