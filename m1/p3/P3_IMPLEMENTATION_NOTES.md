@@ -1037,3 +1037,58 @@ Only deliberately opened B2a families change Package-3-added expectations:
 - **Remaining B2a implementation: none.** Runtime gating and independent security review remain with the manager/reviewer. B2b/B3/B4 obligations remain in their planned batches, not M2. Pending DD-1/DD-2 implementation in later batches: H23 accounts/field consent; terminal keyboard and approval control; delegated private-agent actions; Langfuse credentials/settings migration and MCP costs. All remain closed here. START remains manager-only. No git write, push, merge, deploy, network call or credential-file read performed.
 
 Final observed verification after the integration commit scheduling refinement: Node 22 Worker typecheck **exit 0**, lint **exit 0** (227 files, no fixes/warnings), `git diff --check` **exit 0**. Alarm arming begins after the synchronous integration transaction, matching the ordinary facade closure (`worker/src/channel.ts:958`). The baseline byte comparison remains 138 files / zero changes; runtime tests remain **not run**.
+
+
+### B2a fix 1
+
+### B2a-FIX — harness cross-DO I/O
+
+Quality gate failure diagnosis and remediation for the 8 worker test failures observed after slice B2a (`p3_logs/B2a/06_worker_test.log`):
+
+#### 1. `test/managed-join.test.ts > managed native presence handler > withholds native presence after membership is revoked before response release`
+- **Failure**: Expected 404 (`resource_denied`), received 503 (`authority_unavailable`).
+- **Root cause (`worker/test/managed-join.test.ts:60`)**: Inside `runInDurableObject(f.channel, ...)`, the test's `authorizeChannelRead` wrapper invoked `await runInDurableObject(f.org, ...)`. `workerd` isolates prohibit cross-Durable-Object test runner I/O operations from within an active DO execution context ("Cannot perform I/O on behalf of a different Durable Object"). The thrown runner error was caught by `authorityRequest` in `worker/src/policy-permits.ts:138` and converted to fail-closed 503 instead of allowing `authorizeChannelRead` to query the Organization DO and return the designed 404 `resource_denied`.
+- **Fix**: Replaced the test-runner cross-DO invocation with native DO RPC using the in-context `org` stub (`(channel.env).ORGANIZATION.getByName(f.organizationId)`), calling `await org.mutate({ actor: f.actor, command: { kind: "workspace.member", workspaceId: f.workspaceId, personId: f.actor.personId, role: "manager", status: "revoked", reason: "membership revoked" }, ... })`.
+- **Equivalence & Strictness**: Equivalent/stricter; the mutation performs a real audited state change in the Organization DO. Status expectation (404), response payload (`{ ok: false, reason: "resource_denied" }`), and committed local effect (`persons` SQL table verification) remain strictly unchanged.
+
+#### 2. `test/managed-release-policy.test.ts > managed release uses claim authority > rechecks release after Task synchronization changes revoked`
+- **Failure**: Expected 404 (`resource_denied`), received 503 (`authority_unavailable`).
+- **Root cause (`worker/test/managed-release-policy.test.ts:125`)**: Inside `runInDurableObject(f.channel, ...)`, the `tasks.ensureSynced` hook called `await runInDurableObject(f.org, ...)`. The resulting cross-DO test-runner I/O exception was swallowed into 503 by `authorityRequest`.
+- **Fix**: Updated `tasks.ensureSynced` hook to call `await org.mutateIdentity({ actor: f.actor, command: { kind: "execution.revoke", executionId: f.executionId }, ... })` over the in-context Organization DO stub `(object.env).ORGANIZATION.getByName(f.organizationId)`.
+- **Equivalence & Strictness**: All assertions preserved strictly: 404 status, response body does not contain "Held task", stored task data remains claimed with the holder intact, and zero `claim.release` events are written.
+
+#### 3. `test/managed-release-policy.test.ts > managed release uses claim authority > rechecks release after Task synchronization changes scope`
+- **Failure**: Expected 404 (`resource_denied`), received 503 (`authority_unavailable`).
+- **Root cause (`worker/test/managed-release-policy.test.ts:123` via `:64`)**: The `narrowGrant` helper invoked `runInDurableObject(f.org, ...)` inside `tasks.ensureSynced`. This failed with cross-DO I/O and surfaced as 503.
+- **Fix**: Refactored `narrowGrant(f, actions, orgStub?)` to execute real `grant.put` via `org.mutateIdentity(...)`. In `tasks.ensureSynced`, the in-context `org` stub is passed so that no test-runner I/O crosses DO contexts.
+- **Equivalence & Strictness**: All assertions preserved strictly: 404 status, no leakage of task data, task remains claimed, and zero `claim.release` events recorded.
+
+#### 4. `test/managed-release-policy.test.ts > managed release uses claim authority > withholds the Task result if authority is revoked during post-commit mirroring`
+- **Failure**: Expected 404 (`resource_denied`), received 503 (`authority_unavailable`).
+- **Root cause (`worker/test/managed-release-policy.test.ts:155`)**: Inside `claims.mirror`, the hook invoked `await runInDurableObject(f.org, ...)`, causing cross-DO runner I/O error mapped to 503.
+- **Fix**: Changed `claims.mirror` to call `await org.mutateIdentity({ actor: f.actor, command: { kind: "execution.revoke", executionId: f.executionId }, ... })` on the in-context Organization DO stub.
+- **Equivalence & Strictness**: All assertions preserved strictly: 404 status with `{ ok: false, reason: "resource_denied" }`, the previously committed local effect remains intact (task status is "open", claim is undefined, exactly 1 `claim.release` event committed in SQL).
+
+#### 5. `test/managed-task-create.test.ts > managed human Task creation > records exact request intent before Issue creation and consumes a fresh resulting-Task permit after mirror preparation`
+- **Failure**: Expected 201, received 502 (`managed_external_unavailable`).
+- **Root cause (`worker/test/managed-task-create.test.ts:23`)**: Inside the `f.github.createIssue` hook, the test called `await runInDurableObject(f.channel, ...)` to inspect `managed_external_outcomes`. Calling `runInDurableObject` on `f.channel` from within an active request inside that same DO triggered workerd's cross-context I/O check (`OutgoingFactory`). The error was caught in `worker/src/tasks.ts:216` as an external failure and mapped to 502.
+- **Fix**: Wrapped the test execution block in `runInDurableObject(f.channel, async (channel, state) => ...)`. Inside `f.github.createIssue`, `state.storage.sql` is accessed synchronously without test-runner wrapper I/O.
+- **Equivalence & Strictness**: Exactly preserved: 201 status, response body task verification, verification of 2 consumed permits (`task.create.intent` and `task.create`), and verification of `managed_external_outcomes` recording `issue_created` with issue 1.
+
+#### 6. `test/managed-task-create.test.ts > managed human Task creation > fences creation at external and retains external outcome`
+- **Failure**: Expected 404, received 502 (`managed_external_unavailable`).
+- **Root cause (`worker/test/managed-task-create.test.ts:205` via `:166`)**: `revoke()` called `runInDurableObject(f.org, ...)` inside `createIssue`, throwing cross-DO runner I/O error caught at `tasks.ts:216` → 502.
+- **Fix**: Replaced `runInDurableObject(f.org, ...)` in `revoke()` with `org.mutate(...)` on the in-context Organization stub (`original.ORGANIZATION.getByName(f.organizationId)`), setting `workspace.member` status to `"revoked"`.
+- **Equivalence & Strictness**: Preserved strictly: 404 status, response body contains no task title, local `tasks` table has 0 rows, and `managed_external_outcomes` retains `issue_created` with issue 1.
+
+#### 7. `test/managed-task-create.test.ts > managed human Task creation > fences creation at final_permit and retains external outcome`
+- **Failure**: Expected 404, received 503 (`authority_unavailable`).
+- **Root cause (`worker/test/managed-task-create.test.ts:181` via `:166`)**: `revoke()` called `runInDurableObject(f.org, ...)` inside `issueMutationPermit`, throwing cross-DO runner I/O error caught by `authorityRequest` → 503.
+- **Fix**: Same as item 6: `revoke()` calls `org.mutate(...)` on the in-context Organization stub.
+- **Equivalence & Strictness**: Preserved strictly: 404 status, no title leak, `tasks` table has 0 rows, external outcome `issue_created` retained.
+
+#### 8. `test/managed-task-create.test.ts > managed human Task creation > fences creation at release and retains external outcome`
+- **Failure**: Expected 404, received 503 (`authority_unavailable`).
+- **Root cause (`worker/test/managed-task-create.test.ts:194` via `:166`)**: `revoke()` called `runInDurableObject(f.org, ...)` during release read check (`++reads === 2`), throwing cross-DO runner I/O error caught by `authorityRequest` → 503.
+- **Fix**: Same as item 6: `revoke()` calls `org.mutate(...)` on the in-context Organization stub.
+- **Equivalence & Strictness**: Preserved strictly: 404 status, no title leak, local `tasks` table has 1 row (committed before release check), and external outcome `issue_created` retained.

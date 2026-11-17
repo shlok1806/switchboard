@@ -18,9 +18,9 @@ async function fixture() {
 describe("managed human Task creation", () => {
   it("records exact request intent before Issue creation and consumes a fresh resulting-Task permit after mirror preparation", async () => {
     const f = await fixture();
-    const create = f.github.createIssue.bind(f.github);
-    f.github.createIssue = async (input) => {
-      await runInDurableObject(f.channel, (_object, state) => {
+    await runInDurableObject(f.channel, async (channel, state) => {
+      const create = f.github.createIssue.bind(f.github);
+      f.github.createIssue = async (input) => {
         const rows = state.storage.sql.exec<{ body: string }>("SELECT body FROM managed_external_outcomes").toArray();
         expect(rows.map((r) => JSON.parse(r.body))).toContainEqual(
           expect.objectContaining({
@@ -31,13 +31,11 @@ describe("managed human Task creation", () => {
             }),
           }),
         );
-      });
-      return create(input);
-    };
-    const response = await f.channel.managedRequest(b2Request(f, "/api/tasks", body, true), f.repo);
-    expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({ ok: true, task: { number: 1, title: body.title } });
-    await runInDurableObject(f.channel, (_object, state) => {
+        return create(input);
+      };
+      const response = await channel.managedRequest(b2Request(f, "/api/tasks", body, true), f.repo);
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ ok: true, task: { number: 1, title: body.title } });
       const receipts = state.storage.sql
         .exec<{ body: string }>("SELECT body FROM managed_permits")
         .toArray()
@@ -163,14 +161,24 @@ describe("managed human Task creation", () => {
       await runInDurableObject(f.channel, async (channel, state) => {
         const original = (channel as unknown as { env: Env }).env;
         const org = original.ORGANIZATION.getByName(f.organizationId);
-        const revoke = async () =>
-          runInDurableObject(f.org, (_object, orgState) => {
-            const aggregate = JSON.parse(
-              orgState.storage.sql.exec<{ body: string }>("SELECT body FROM aggregate WHERE id=1").one().body,
-            );
-            delete aggregate.workspaceMembers[f.workspaceId][f.actor.personId];
-            orgState.storage.sql.exec("UPDATE aggregate SET body=? WHERE id=1", JSON.stringify(aggregate));
+        const revoke = async () => {
+          const meta = await org.metadata(f.actor);
+          const res = await org.mutate({
+            actor: f.actor,
+            command: {
+              kind: "workspace.member",
+              workspaceId: f.workspaceId,
+              personId: f.actor.personId,
+              role: "manager",
+              status: "revoked",
+              reason: "membership revoked",
+            },
+            key: `revoke-${phase}-${Date.now()}-${Math.random()}`,
+            requestId: `revoke-req-${phase}-${Date.now()}-${Math.random()}`,
+            expectedRevision: meta?.policyRevision,
           });
+          if (!res.ok) throw new Error(`revoke failed: ${res.reason}`);
+        };
         let reads = 0;
         Object.assign(channel, {
           env: {

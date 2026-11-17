@@ -60,14 +60,28 @@ async function task(f: Fixture) {
     (_object, state) => state.storage.sql.exec<{ data: string }>("SELECT data FROM tasks WHERE number=1").one().data,
   );
 }
-async function narrowGrant(f: Fixture, actions: string[]) {
-  await runInDurableObject(f.org, (_object, state) => {
-    state.storage.sql.exec(
-      "UPDATE grants SET body=json_set(body,'$.actions',json(?)) WHERE json_extract(body,'$.principalId')=?",
-      JSON.stringify(actions),
-      f.principalId,
-    );
+async function narrowGrant(
+  f: Fixture,
+  actions: string[],
+  orgStub?: DurableObjectStub<import("../src/organization").Organization>,
+) {
+  const org = orgStub ?? f.org;
+  const meta = await org.metadata(f.actor);
+  const result = await org.mutateIdentity({
+    actor: f.actor,
+    command: {
+      kind: "grant.put",
+      principalId: f.principalId,
+      workspaceId: f.workspaceId,
+      actions,
+      constraints: {},
+      expiresAt: Date.now() + 600000,
+    },
+    key: `narrow-${Date.now()}-${Math.random()}`,
+    requestId: `narrow-${Date.now()}-${Math.random()}`,
+    expectedRevision: meta?.policyRevision,
   });
+  if (!result.ok) throw new Error(`narrowGrant failed: ${result.reason}`);
 }
 
 describe("managed release uses claim authority", () => {
@@ -110,6 +124,7 @@ describe("managed release uses claim authority", () => {
     it(`rechecks release after Task synchronization changes ${change}`, async () => {
       const f = await fixture();
       await runInDurableObject(f.channel, async (object, state) => {
+        const org = (object as unknown as { env: Env }).env.ORGANIZATION.getByName(f.organizationId);
         const tasks = (object as unknown as { tasks: { ensureSynced(): Promise<unknown> } }).tasks;
         const sync = tasks.ensureSynced.bind(tasks);
         tasks.ensureSynced = async () => {
@@ -120,14 +135,21 @@ describe("managed release uses claim authority", () => {
               "UPDATE tasks SET data=json_set(data,'$.claim.holder',json(?)) WHERE number=1",
               JSON.stringify({ kind: "person", person: "bob" }),
             );
-          if (change === "scope") await narrowGrant(f, ["task.read", "task.update"]);
-          if (change === "revoked")
-            await runInDurableObject(f.org, (_authority, authorityState) => {
-              authorityState.storage.sql.exec(
-                "UPDATE executions SET body=json_set(body,'$.status','revoked') WHERE id=?",
-                f.executionId,
-              );
+          if (change === "scope") await narrowGrant(f, ["task.read", "task.update"], org);
+          if (change === "revoked") {
+            const meta = await org.metadata(f.actor);
+            const res = await org.mutateIdentity({
+              actor: f.actor,
+              command: {
+                kind: "execution.revoke",
+                executionId: f.executionId,
+              },
+              key: `revoke-sync-${Date.now()}-${Math.random()}`,
+              requestId: `revoke-sync-req-${Date.now()}-${Math.random()}`,
+              expectedRevision: meta?.policyRevision,
             });
+            if (!res.ok) throw new Error(`revoke failed: ${res.reason}`);
+          }
           return result;
         };
         const response = await object.managedRequest(request(f), f.repo);
@@ -150,14 +172,21 @@ describe("managed release uses claim authority", () => {
   it("withholds the Task result if authority is revoked during post-commit mirroring", async () => {
     const f = await fixture();
     await runInDurableObject(f.channel, async (object, state) => {
+      const org = (object as unknown as { env: Env }).env.ORGANIZATION.getByName(f.organizationId);
       const claims = (object as unknown as { claims: { mirror(): Promise<void> } }).claims;
       claims.mirror = async () => {
-        await runInDurableObject(f.org, (_authority, authorityState) => {
-          authorityState.storage.sql.exec(
-            "UPDATE executions SET body=json_set(body,'$.status','revoked') WHERE id=?",
-            f.executionId,
-          );
+        const meta = await org.metadata(f.actor);
+        const res = await org.mutateIdentity({
+          actor: f.actor,
+          command: {
+            kind: "execution.revoke",
+            executionId: f.executionId,
+          },
+          key: `revoke-mirror-${Date.now()}-${Math.random()}`,
+          requestId: `revoke-mirror-req-${Date.now()}-${Math.random()}`,
+          expectedRevision: meta?.policyRevision,
         });
+        if (!res.ok) throw new Error(`revoke failed: ${res.reason}`);
       };
       const response = await object.managedRequest(request(f), f.repo);
       expect(response.status).toBe(404);

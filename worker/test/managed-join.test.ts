@@ -57,13 +57,22 @@ describe("managed native presence handler", () => {
             getByName: () => ({
               issueMutationPermit: (input: ChannelAuthorization) => org.issueMutationPermit(input),
               authorizeChannelRead: async (input: ChannelAuthorization) => {
-                await runInDurableObject(f.org, (_object, orgState) => {
-                  const aggregate = JSON.parse(
-                    orgState.storage.sql.exec<{ body: string }>("SELECT body FROM aggregate WHERE id=1").one().body,
-                  );
-                  delete aggregate.workspaceMembers[f.workspaceId][f.actor.personId];
-                  orgState.storage.sql.exec("UPDATE aggregate SET body=? WHERE id=1", JSON.stringify(aggregate));
+                const meta = await org.metadata(f.actor);
+                const res = await org.mutate({
+                  actor: f.actor,
+                  command: {
+                    kind: "workspace.member",
+                    workspaceId: f.workspaceId,
+                    personId: f.actor.personId,
+                    role: "manager",
+                    status: "revoked",
+                    reason: "membership revoked",
+                  },
+                  key: `revoke-mid-join-${Date.now()}-${Math.random()}`,
+                  requestId: `revoke-req-join-${Date.now()}-${Math.random()}`,
+                  expectedRevision: meta?.policyRevision,
                 });
+                if (!res.ok) throw new Error(`revoke failed: ${res.reason}`);
                 return org.authorizeChannelRead(input);
               },
             }),
