@@ -38,6 +38,15 @@ describe("managed facade migration", () => {
         "POST",
         `/api/tasks/1/${suffix}`,
       ]),
+      ["POST", "/api/agents"],
+      ["POST", "/api/agents/alice%2Fcodex%2Fs/heartbeat"],
+      ["POST", "/api/agents/alice%2Fcodex%2Fs/end"],
+      ["POST", "/api/agents/alice%2Fcodex%2Fs/proxy-mode"],
+      ["POST", "/api/agents/alice%2Fcodex%2Fs/nickname"],
+      ["POST", "/api/agents/alice%2Fcodex%2Fs/model"],
+      ["POST", "/api/agents/alice%2Fcodex%2Fs/approval"],
+      ["POST", "/api/agents/alice%2Fcodex%2Fs/approval/deny"],
+      ["PUT", "/api/agents/alice%2Fcodex%2Fs/role"],
     ];
     const resolved = examples.map(([method, path]) => managedOperationRoute(method, path));
     expect(resolved.every(Boolean)).toBe(true);
@@ -73,7 +82,7 @@ describe("managed facade migration", () => {
     });
     for (const path of ["/api/accounts", "/api/stream", "/api/settings/langfuse"])
       expect(managedReadRoute("GET", path)).toBeNull();
-    expect(managedWriteRoute("POST", "/api/agents")).toBeNull();
+    expect(managedWriteRoute("POST", "/api/agents")?.action).toBe("agent.execution.start");
     expect(Object.hasOwn(MANAGED_OPERATIONS, "constructor")).toBe(false);
   });
 

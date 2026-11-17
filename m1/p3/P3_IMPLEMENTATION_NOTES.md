@@ -1092,3 +1092,78 @@ Quality gate failure diagnosis and remediation for the 8 worker test failures ob
 - **Root cause (`worker/test/managed-task-create.test.ts:194` via `:166`)**: `revoke()` called `runInDurableObject(f.org, ...)` during release read check (`++reads === 2`), throwing cross-DO runner I/O error caught by `authorityRequest` → 503.
 - **Fix**: Same as item 6: `revoke()` calls `org.mutate(...)` on the in-context Organization stub.
 - **Equivalence & Strictness**: Preserved strictly: 404 status, no title leak, local `tasks` table has 1 row (committed before release check), and external outcome `issue_created` retained.
+
+## B2b
+
+### Status / implemented subset
+
+**Complete: B2b managed registration, continuation/handoff, agent lifecycle and controls, DD-1 terminal_control consent, and scoped history read consent implemented and statically verified.**
+
+### Production changes (files, line citations, symbols)
+1. `shared/src/m1.ts:37`: Added optional `hostId?: string;` to `PolicyResource` to support scoped Host-level authorization and consent matching.
+2. `worker/src/policy.ts:51`, `:109`, `:214`, `:221`, `:247`, `:252`:
+   - Added optional `hostId?: string;` to `OwnerConsent`.
+   - Updated `decide()` resource validation to allow `hostId` property and bound its length.
+   - Enforced `requiresTargetOwnerConsent` for private actions, control effects (`terminal.input`, `agent.approval.deny`, `approval.control`), and cross-owner history reads (`action === "channel.history.read"` when `resource.ownerPersonId && resource.ownerPersonId !== actor.personId`).
+   - Blocked Organization and Workspace administrators from bypassing owner consent on private, control, or history-read actions.
+   - Enforced DD-1 `terminal_control` consent: control effects strictly require `consent.action === "terminal_control"`; screen-read or transcript-read consents are rejected.
+   - Enforced scoped history consent: cross-owner history reads strictly require `consent.action === "channel.history.read"`.
+   - Enforced exact `hostId` matching when consent specifies a scoped host.
+   - Enforced host-local ceiling: `context.restrictionsSatisfied === false` immediately denies with `execution_restriction` before evaluating grants or consents.
+3. `worker/src/organization.ts:683`, `:829`, `:1128`, `:1304`:
+   - Updated `consentTarget` to allow target resolution by either `legacyAgentId` or `executionId`.
+   - In `mutateConsent`: allowed `"terminal_control"` and `"channel.history.read"` consent actions, validated optional `hostId`, and verified caller owns the target execution.
+   - In `channelDecision`: added detection for control effects and cross-owner history reads, querying scoped `terminal_control` or `channel.history.read` consent matching target and `hostId`.
+   - In `issueMutationPermit`: allowed `"agent.execution.start"`, `"agent.grant.manage"`, and `"workspace.manage"` actions.
+4. `worker/src/agents-api.ts:25`, `:35`, `:60`, `:142`: Exported `isProxyMode`, `parseModelField`, `parseNickname`, and `parseRegister` for reuse in managed write handling.
+5. `worker/src/managed-channel.ts:167`, `:197`:
+   - Added 9 operations to `MANAGED_OPERATIONS`: `agent.register` (`agent.execution.start`), `agent.heartbeat` (`channel.update.write`), `agent.end` (`channel.update.write`), `agent.proxy-mode` (`channel.update.write`), `agent.nickname` (`channel.update.write`), `agent.model` (`channel.update.write`), `agent.approval` (`channel.update.write`), `agent.approval.deny` (`channel.update.write`), `agent.role` (`agent.grant.manage`).
+   - Extended `matchWriteRoute` to match `POST /api/agents`, `POST /api/agents/:id/(heartbeat|end|proxy-mode|nickname|model|approval|approval\/deny)`, and `PUT|DELETE /api/agents/:id/role`.
+6. `worker/src/channel.ts:1820`, `:2116`, `:2795`:
+   - Refactored `#registerAgentInternal(person, request, managed = false)`: when `managed = true`, skips `issueAgentToken` so no legacy token is created or stored.
+   - Refactored `registerManagedAgent`: consumes `agent.execution.start` mutation permit inside synchronous local commit, validates predecessor exists, rejects self-continuation, checks predecessor ownership, requires predecessor-owner `agent.handoff.cross_owner` consent for cross-owner continuation, records `agent.handoff` event, and returns allowlisted `SafeAgent` projection without raw Agent spreading or secret leakage.
+   - Implemented `#managedWrite` dispatch for all 9 B2b operations:
+     - `agent.register`: verifies person actor, parses registration, delegates to `registerManagedAgent`.
+     - `agent.heartbeat`: execution caller only, verifies active association, updates presence/last_seen_at synchronously in SQL under `channel.update.write` permit, touches Organization registration outside transaction.
+     - `agent.end`: own execution or owning Person, sets presence to 'gone', appends `session.end` event under `channel.update.write` permit, ends managed association.
+     - `agent.proxy-mode`: owner Person only, validates mode, consumes permit.
+     - `agent.nickname`: owner Person only, validates nickname, consumes permit.
+     - `agent.model`: own execution or owner Person, consumes permit.
+     - `agent.approval`: own execution only, validates approval, consumes permit.
+     - `agent.approval.deny`: owner Person or caller with verified `terminal_control` consent, consumes permit.
+     - `agent.role`: workspace Manager only (`agent.grant.manage`), sets or revokes role under mutation permit.
+
+### Test updates and new test suites
+- `worker/test/managed-route-inventory.test.ts:108`, `:193`: Updated D5 inventory assertions to verify newly admitted actions for `agent.execution.start`, `channel.update.write`, and `agent.grant.manage`.
+- `worker/test/managed-facade.test.ts:37`, `:85`: Added all 9 B2b operations to descriptors coverage and updated `POST /api/agents` admission assertion under D5.
+- `worker/test/managed-agent-controls.test.ts` (NEW):
+  - `enforces own-execution heartbeat presence and rejects foreign actors or invalid values`
+  - `handles agent session end for own execution or owner person and rejects foreign callers`
+  - `restricts proxy-mode and nickname mutation to the owning person`
+  - `admits model updates from own execution or owner person and rejects foreign callers`
+  - `manages approvals and requires terminal_control consent for cross-owner deny`
+  - `restricts agent role management to workspace managers and rejects non-managers`
+  - `preserves synchronous unlinked dispatch without touching Organization DO or executions`
+- `worker/test/managed-continuation.test.ts` (NEW):
+  - `registers managed agent returning SafeAgent projection and storing no legacy token`
+  - `handles same-owner continuation and rejects self-continuation or missing predecessor`
+  - `requires predecessor-owner consent for cross-owner continuation and rejects unconsented handoff`
+  - `preserves task claim ownership across handoff and continuation`
+  - `leaves unlinked legacy registration and continuation unaffected`
+- `worker/test/managed-consent-control.test.ts` (NEW):
+  - `requires terminal_control consent for control effects and rejects read or screen consent`
+  - `enforces scoped hostId matching on terminal_control consent`
+  - `strictly denies control effect when host-local ceiling restrictions are not satisfied`
+  - `strictly denies organization and workspace administrators without target owner consent`
+  - `enforces expired, revoked, wrong requester, wrong workspace, and wrong target on control consent`
+  - `enforces scoped Host-owner history consent and denies control or read consent for history`
+  - `handles DD-1 terminal_control consent lifecycle in Organization DO and audit logs`
+  - `preserves unlinked channel dispatch without touching consent boundary`
+
+### Static Verification
+- Worker `npm run typecheck`: **exit 0**
+- Worker `npm run lint`: **exit 0** (230 files checked, no fixes applied)
+- CLI `npm run lint`: **exit 0** (132 files checked, no fixes applied)
+- Dashboard `npm run lint`: **exit 0** (133 files checked, no fixes applied)
+- Runtime tests: **not run** (supervisor executes runtime test gates; no unexecuted tests claimed as passed).
+

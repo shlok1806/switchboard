@@ -92,7 +92,7 @@ const METHODS: Record<string, readonly string[]> = {
   role: ["PUT", "DELETE"],
 };
 
-function isProxyMode(value: unknown): value is ProxyMode {
+export function isProxyMode(value: unknown): value is ProxyMode {
   return PROXY_MODES.includes(value as ProxyMode);
 }
 
@@ -102,13 +102,13 @@ const NICKNAME_REASON = `"nickname" must be text of at most ${MAX_NICKNAME_LENGT
 const MODEL_REASON = '"model" must be a model ID, or null; "effort" text or null.';
 
 /** A model ID or effort from a request: clean, null for unknown, undefined when absent. False when it is not one. */
-function parseModelField(value: unknown, max: number): string | null | undefined | false {
+export function parseModelField(value: unknown, max: number): string | null | undefined | false {
   if (value === null || value === undefined) return value;
   return typeof value === "string" ? cleanModelField(value, max) : false;
 }
 
 /** A Nickname from a request: clean, null to clear it, undefined to leave it. False when it is not one. */
-function parseNickname(nickname: unknown): string | null | undefined | false {
+export function parseNickname(nickname: unknown): string | null | undefined | false {
   if (nickname === null || nickname === undefined) return nickname;
   if (typeof nickname !== "string") return false;
   const clean = cleanNickname(nickname);
@@ -139,7 +139,7 @@ export function matchAgentRoute(method: string, pathname: string): AgentRoute | 
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
-function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentRequest> {
+export function parseRegister(body: Record<string, unknown>): Parsed<RegisterAgentRequest> {
   const {
     cli,
     sessionId,

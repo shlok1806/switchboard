@@ -68,6 +68,7 @@ export interface PolicyResource {
   targetId?: string;
   ownerPersonId?: string;
   operation?: string;
+  hostId?: string;
 }
 export interface SafeAgent {
   id: Agent["id"];

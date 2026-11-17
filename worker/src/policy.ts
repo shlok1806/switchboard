@@ -38,6 +38,7 @@ export interface OwnerConsent {
   targetId: string;
   action: string;
   expiresAt: number;
+  hostId?: string;
 }
 
 export interface PolicyContext {
@@ -104,9 +105,10 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
     !resource ||
     typeof resource.id !== "string" ||
     Object.keys(resource).some(
-      (key) => !["kind", "id", "organizationId", "channel", "targetId", "ownerPersonId", "operation"].includes(key),
+      (key) =>
+        !["kind", "id", "organizationId", "channel", "targetId", "ownerPersonId", "operation", "hostId"].includes(key),
     ) ||
-    [resource.channel, resource.targetId, resource.ownerPersonId, resource.operation].some(
+    [resource.channel, resource.targetId, resource.ownerPersonId, resource.operation, resource.hostId].some(
       (value) => value !== undefined && (typeof value !== "string" || value.length === 0 || value.length > 500),
     ) ||
     resource.organizationId !== context.organizationId ||
@@ -209,8 +211,19 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
       : result("deny", "action_denied");
   }
   if (!context.workspaceActive) return result("deny", "workspace_inactive");
+  const isControlEffect =
+    resource.operation === "terminal.input" ||
+    resource.operation === "agent.approval.deny" ||
+    resource.operation === "approval.control";
+  const isHistoryRead =
+    action === "channel.history.read" && Boolean(resource.ownerPersonId && resource.ownerPersonId !== actor.personId);
+  const requiresTargetOwnerConsent =
+    (PRIVATE_ACTIONS.includes(action) || isControlEffect || isHistoryRead) &&
+    Boolean(resource.ownerPersonId && resource.ownerPersonId !== actor.personId);
+
   if (
     admin &&
+    !requiresTargetOwnerConsent &&
     (["workspace.manage", "workspace.member.manage"].includes(action) ||
       (context.identityPolicy && ["agent.register", "agent.grant.manage", "agent.execution.revoke"].includes(action)) ||
       (action === "workspace.read" && context.metadataOnly))
@@ -226,11 +239,17 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
   )
     return result("deny", "workspace_membership_required");
   if (context.managedPolicy) {
-    if (PRIVATE_ACTIONS.includes(action)) {
+    if (PRIVATE_ACTIONS.includes(action) || isControlEffect || isHistoryRead) {
       if (member.role === "viewer" && ["agent.directive.send", "agent.handoff.cross_owner"].includes(action))
         return result("deny", "viewer_read_only");
       const owner = resource.ownerPersonId;
       const consent = context.consent;
+      const requiredConsentAction = isControlEffect
+        ? "terminal_control"
+        : isHistoryRead
+          ? "channel.history.read"
+          : action;
+      const hostMatches = !consent?.hostId || !resource.hostId || consent.hostId === resource.hostId;
       const authorized =
         owner &&
         resource.targetId &&
@@ -238,10 +257,13 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
           (consent?.ownerPersonId === owner &&
             consent.personId === actor.personId &&
             consent.workspaceId === resource.id &&
-            consent.targetId === resource.targetId &&
-            consent.action === action &&
+            (consent.targetId === resource.targetId ||
+              (context.verifiedExecution && consent.targetId === context.verifiedExecution.executionId)) &&
+            consent.action === requiredConsentAction &&
+            hostMatches &&
             consent.expiresAt > (context.now ?? Date.now())));
-      return authorized ? result("allow", "owner_or_consent") : result("deny", "owner_consent_required");
+      if (!authorized) return result("deny", "owner_consent_required");
+      return result("allow", "owner_or_consent");
     }
     const actions =
       member.role === "manager"

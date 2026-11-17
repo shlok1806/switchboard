@@ -105,13 +105,20 @@ describe("managed RPC bypass closure", () => {
       ],
       agents: [
         ["GET", "/api/agents", "agent.view"],
-        ["POST", "/api/agents", null],
-        ["POST", `${target}/heartbeat`, null],
-        ["POST", `${target}/end`, null],
+        ["POST", "/api/agents", "agent.execution.start"],
+        ["POST", `${target}/heartbeat`, "channel.update.write"],
+        ["POST", `${target}/end`, "channel.update.write"],
         ["GET", `${target}/summary`, "agent.view"],
         ["GET", `${target}/transcript`, "agent.private_transcript.read"],
         ["GET", `${target}/terminal`, "agent.private_screen.read"],
         ["GET", `${target}/touched-files`, "agent.private_transcript.read"],
+        ["POST", `${target}/proxy-mode`, "channel.update.write"],
+        ["POST", `${target}/nickname`, "channel.update.write"],
+        ["POST", `${target}/model`, "channel.update.write"],
+        ["POST", `${target}/approval`, "channel.update.write"],
+        ["POST", `${target}/approval/deny`, "channel.update.write"],
+        ["PUT", `${target}/role`, "agent.grant.manage"],
+        ["DELETE", `${target}/role`, "agent.grant.manage"],
       ],
       claims: [
         ["POST", "/api/tasks/1/claim", "task.claim"],
@@ -190,8 +197,8 @@ describe("managed RPC bypass closure", () => {
     }
     for (const example of fixed) assertAdmission(example);
     // D1 is an internal DO lifecycle exception, never actor-free HTTP admission.
-    expect(managedWriteRoute("POST", "/api/agents/alice%2Fcodex%2Fs/heartbeat")).toBeNull();
-    expect(managedWriteRoute("POST", "/api/agents/alice%2Fcodex%2Fs/end")).toBeNull();
+    expect(managedWriteRoute("POST", "/api/agents/alice%2Fcodex%2Fs/heartbeat")?.action).toBe("channel.update.write");
+    expect(managedWriteRoute("POST", "/api/agents/alice%2Fcodex%2Fs/end")?.action).toBe("channel.update.write");
   });
   it("admits implemented reads only on linked bindings and leaves unopened families denied", async () => {
     const f = await managedAuthorityFixture();

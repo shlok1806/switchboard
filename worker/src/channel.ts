@@ -96,6 +96,8 @@ import type {
 } from "../../shared/src/index";
 import {
   agentIdFor,
+  cleanApproval,
+  cleanDeny,
   cleanHistoryPage,
   cleanNote,
   cleanTerminalText,
@@ -109,12 +111,15 @@ import {
   describeActivity,
   HISTORY_WAIT_MS,
   hostIdFor,
+  isAgentRole,
   isLocalEvent,
   LIVE_PING,
   LIVE_PONG,
   MAX_ADDRESSEES,
   MAX_DIRECTIVE_LENGTH,
+  MAX_EFFORT_LENGTH,
   MAX_FINISH_SUMMARY_LENGTH,
+  MAX_MODEL_LENGTH,
   MAX_SPAWN_FAILURE_LENGTH,
   MAX_TASK_DESCRIPTION_LENGTH,
   MAX_TASK_TITLE_LENGTH,
@@ -132,6 +137,7 @@ import {
 import type { SafeAgent } from "../../shared/src/m1";
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
 import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
+import { isProxyMode, parseModelField, parseNickname, parseRegister } from "./agents-api";
 import { Alarms } from "./alarms";
 import { ARTIFACTS_SCHEMA, type ArtifactResult, Artifacts } from "./artifacts";
 import { askChannel, type ChannelAnswer, type ChannelQuestion, DEFAULT_QUIET_CLAIM_HOURS } from "./ask";
@@ -2107,6 +2113,207 @@ export class Channel extends DurableObject<Env> {
         headers: { "Cache-Control": "no-store" },
       });
     }
+    if (input.resource.operation === "agent.register") {
+      if (caller.agent || verified.kind !== "person") return managedError(404, "resource_denied");
+      const intent = body.managed ?? { principalId: body.principalId, workspaceId: body.workspaceId };
+      const parsed = parseRegister(body);
+      if (!parsed.ok) return managedError(400, "invalid_registration");
+      return this.registerManagedAgent(request, parsed.value, intent);
+    }
+    if (input.resource.operation === "agent.heartbeat") {
+      if (verified.kind !== "execution") return managedError(404, "resource_denied");
+      const agentId = input.resource.targetId as AgentId;
+      const assoc = this.managedAssociation(agentId);
+      if (assoc?.active !== 1 || assoc.executionId !== verified.executionId)
+        return managedError(404, "resource_denied");
+      const { presence } = body;
+      if (presence !== "live" && presence !== "idle") return managedError(400, "invalid_presence");
+      const prepared = await prepare();
+      let heartbeatResult: RosterResult | undefined;
+      prepared.commit(() => {
+        this.ctx.storage.sql.exec(
+          "UPDATE agents SET presence = ?, last_seen_at = ? WHERE id = ?",
+          presence,
+          Date.now(),
+          agentId,
+        );
+        const agent = this.agents.find(agentId);
+        if (!agent) throw new ManagedReadFailure(404);
+        heartbeatResult = { ok: true, agent };
+      });
+      await this.env.ORGANIZATION.getByName(input.resource.organizationId).touchRegisteredExecution(
+        assoc.executionId,
+        agentId,
+      );
+      if (!heartbeatResult?.ok) return managedError(400, "resource_denied");
+      return Response.json(heartbeatResult, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "agent.end") {
+      const agentId = input.resource.targetId as AgentId;
+      const assoc = this.managedAssociation(agentId);
+      if (!assoc) return managedError(404, "resource_denied");
+      const isOwnExecution = verified.kind === "execution" && assoc.executionId === verified.executionId;
+      const isOwnerPerson =
+        verified.kind === "person" && (await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId));
+      if (!isOwnExecution && !isOwnerPerson) return managedError(404, "resource_denied");
+      const prepared = await prepare();
+      let endResult: RosterResult | undefined;
+      prepared.commit(() => {
+        this.ctx.storage.sql.exec(
+          "UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?",
+          Date.now(),
+          agentId,
+        );
+        this.append({
+          type: "session.end",
+          actor: { kind: "agent", agentId },
+          capture: null,
+          payload: { reason: "exit", ...(typeof body.detail === "string" ? { detail: body.detail.slice(0, 40) } : {}) },
+        });
+        const agent = this.agents.find(agentId);
+        if (!agent) throw new ManagedReadFailure(404);
+        endResult = { ok: true, agent };
+      });
+      await this.endManagedAssociation(agentId);
+      if (!endResult?.ok) return managedError(400, "resource_denied");
+      return Response.json(endResult, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "agent.proxy-mode") {
+      if (verified.kind !== "person") return managedError(404, "resource_denied");
+      const agentId = input.resource.targetId as AgentId;
+      const assoc = this.managedAssociation(agentId);
+      if (!assoc) return managedError(404, "resource_denied");
+      const owned = await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId);
+      if (!owned) return managedError(404, "resource_denied");
+      if (!isProxyMode(body.mode)) return managedError(400, "invalid_proxy_mode");
+      const prepared = await prepare();
+      let result: RosterResult | undefined;
+      prepared.commit(() => {
+        result = this.agents.setProxyMode(
+          caller.person,
+          agentId,
+          body.mode as import("../../shared/src/domain").ProxyMode,
+        );
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result?.ok) return managedError(result?.status ?? 400, "resource_denied");
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "agent.nickname") {
+      if (verified.kind !== "person") return managedError(404, "resource_denied");
+      const agentId = input.resource.targetId as AgentId;
+      const assoc = this.managedAssociation(agentId);
+      if (!assoc) return managedError(404, "resource_denied");
+      const owned = await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId);
+      if (!owned) return managedError(404, "resource_denied");
+      const nickname = parseNickname(body.nickname);
+      if (nickname === false || nickname === undefined) return managedError(400, "invalid_nickname");
+      const prepared = await prepare();
+      let result: RosterResult | undefined;
+      prepared.commit(() => {
+        result = this.agents.rename(agentId, nickname, {
+          actor: { kind: "person", person: caller.person },
+          capture: null,
+        });
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result?.ok) return managedError(result?.status ?? 400, "resource_denied");
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "agent.model") {
+      const agentId = input.resource.targetId as AgentId;
+      const assoc = this.managedAssociation(agentId);
+      if (!assoc) return managedError(404, "resource_denied");
+      const isOwnExecution = verified.kind === "execution" && assoc.executionId === verified.executionId;
+      const isOwnerPerson =
+        verified.kind === "person" && (await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId));
+      if (!isOwnExecution && !isOwnerPerson) return managedError(404, "resource_denied");
+      const model = parseModelField(body.model, MAX_MODEL_LENGTH);
+      const effort = parseModelField(body.effort, MAX_EFFORT_LENGTH);
+      if (model === false || model === undefined || effort === false) return managedError(400, "invalid_model");
+      const via = body.via === "proxy" ? "proxy" : null;
+      const cleanEffort = effort === undefined ? null : effort;
+      const prepared = await prepare();
+      let result: RosterResult | undefined;
+      prepared.commit(() => {
+        result = this.agents.setModel(caller.person, agentId, model, cleanEffort, via);
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result?.ok) return managedError(result?.status ?? 400, "resource_denied");
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "agent.approval") {
+      if (verified.kind !== "execution") return managedError(404, "resource_denied");
+      const agentId = input.resource.targetId as AgentId;
+      const assoc = this.managedAssociation(agentId);
+      if (!assoc || assoc.executionId !== verified.executionId) return managedError(404, "resource_denied");
+      const approval = cleanApproval(body.approval);
+      if (approval === undefined) return managedError(400, "invalid_approval");
+      const prepared = await prepare();
+      let result: RosterResult | undefined;
+      prepared.commit(() => {
+        result = this.agents.setApproval(caller.person, agentId, approval);
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result?.ok) return managedError(result?.status ?? 400, "resource_denied");
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "agent.approval.deny") {
+      if (verified.kind !== "person") return managedError(404, "resource_denied");
+      const agentId = input.resource.targetId as AgentId;
+      const assoc = this.managedAssociation(agentId);
+      if (!assoc) return managedError(404, "resource_denied");
+      const deny = cleanDeny(body);
+      if (deny === undefined) return managedError(400, "invalid_deny");
+      const owned = await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId);
+      if (!owned) {
+        const consentCheck = await enforcement.check({
+          ...input,
+          action: "channel.update.write",
+          targetExecutionId: assoc.executionId,
+          resource: {
+            ...input.resource,
+            targetId: agentId,
+            operation: "agent.approval.deny",
+          },
+        });
+        if (!consentCheck.ok) return managedError(404, "resource_denied");
+      }
+      const prepared = await prepare();
+      let result: RosterResult | undefined;
+      prepared.commit(() => {
+        result = this.agents.denyApproval(caller.person, agentId, deny, () =>
+          this.interruptTo(agentId, {
+            type: "approval.deny",
+            agent: agentId,
+            id: deny.id,
+            person: caller.person,
+            ...(deny.message === undefined ? {} : { message: deny.message }),
+          }),
+        );
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result?.ok) return managedError(result?.status ?? 400, "resource_denied");
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (input.resource.operation === "agent.role") {
+      if (verified.kind !== "person") return managedError(404, "resource_denied");
+      const agentId = input.resource.targetId as AgentId;
+      const role = request.method === "DELETE" ? null : body.role;
+      if (request.method === "PUT" && !isAgentRole(role)) return managedError(400, "invalid_role");
+      const prepared = await prepare();
+      let result: RosterResult | undefined;
+      prepared.commit(() => {
+        result = this.agents.setRole(
+          caller.person,
+          agentId,
+          role as import("../../shared/src/domain").AgentRole | null,
+        );
+        if (!result.ok) outcome = "local_restriction_denied";
+      });
+      if (!result?.ok) return managedError(result?.status ?? 400, "resource_denied");
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
     const admitted = await enforcement.check({ ...input, action: "task.read" });
     if (!admitted.ok || !current()) return managedError(404, "resource_denied");
 
@@ -2574,7 +2781,43 @@ export class Channel extends DurableObject<Env> {
       const person = await this.nativeLogin(request);
       if (!person) return deny(401);
       const id = agentIdFor(person, registration.cli, registration.sessionId);
-      if (registration.continues) return deny(403);
+      if (registration.continues) {
+        if (registration.continues === agentIdFor(person, registration.cli, registration.sessionId)) {
+          return Response.json(
+            { ok: false, status: 409, reason: "A session cannot continue its own Agent." },
+            { status: 409, headers: { "Cache-Control": "no-store" } },
+          );
+        }
+        const predecessor = this.agents.find(registration.continues);
+        if (!predecessor) {
+          return Response.json(
+            { ok: false, status: 404, reason: `No Agent ${registration.continues} on this Channel to continue.` },
+            { status: 404, headers: { "Cache-Control": "no-store" } },
+          );
+        }
+        const predecessorAssoc = this.managedAssociation(registration.continues);
+        if (predecessorAssoc) {
+          const owned = await org.registeredExecutionOwnedBy(predecessorAssoc.executionId, actor.personId);
+          if (!owned) {
+            const consentCheck = await org.authorizeChannelRead({
+              actor,
+              action: "agent.handoff.cross_owner",
+              generation,
+              requestId: crypto.randomUUID(),
+              targetExecutionId: predecessorAssoc.executionId,
+              resource: {
+                kind: "workspace",
+                organizationId,
+                id: fields.workspaceId,
+                channel,
+                targetId: registration.continues,
+                operation: "agent.handoff",
+              },
+            });
+            if (!consentCheck.ok) return deny(403);
+          }
+        }
+      }
       const prior = this.managedAssociation(id);
       if (
         prior &&
@@ -2615,8 +2858,30 @@ export class Channel extends DurableObject<Env> {
         await cancel();
         return deny(403);
       }
+      const permitResult = await org.issueMutationPermit({
+        actor,
+        action: "agent.execution.start",
+        generation,
+        requestId: crypto.randomUUID(),
+        resource: {
+          kind: "workspace",
+          organizationId,
+          id: fields.workspaceId,
+          channel,
+          targetId: id,
+          operation: "agent.register",
+        },
+      });
+      if (!permitResult.ok) {
+        await cancel();
+        return deny(permitResult.status);
+      }
+      const permit = permitResult.value;
+      const permits = new LocalMutationPermits(this.ctx.storage.sql);
+      permits.observeRevision(fields.workspaceId, permit.policyRevision);
+      permits.install(permit);
       try {
-        const result = await this.#registerAgentInternal(person, registration);
+        const result = await this.#registerAgentInternal(person, registration, true);
         if (!result.ok) {
           await cancel();
           return deny(result.status);
@@ -2630,14 +2895,31 @@ export class Channel extends DurableObject<Env> {
           await cancel();
           return deny(403);
         }
+        const consumed = permits.consume(permit.id, {
+          actor,
+          action: "agent.execution.start",
+          resource: permit.resource,
+          requestId: permit.requestId,
+          generation,
+          policyRevision: permit.policyRevision,
+        });
+        if (!consumed) {
+          await cancel();
+          return deny(403);
+        }
         this.ctx.storage.sql.exec(
           "INSERT OR REPLACE INTO m1_agent_executions VALUES(?,?,?,1)",
           id,
           organizationId,
           execution.id,
         );
+        const safe = safeAgent(result.agent, {
+          principalId: execution.principalId,
+          executionId: execution.id,
+          ownerPersonId: actor.personId,
+        });
         return Response.json(
-          { ok: true, agent: result.agent, execution, token: issued.value.secret },
+          { ok: true, agent: safe, execution, token: issued.value.secret },
           { headers: { "Cache-Control": "no-store" } },
         );
       } catch {
@@ -2765,7 +3047,11 @@ export class Channel extends DurableObject<Env> {
     return this.#registerAgentInternal(person, request);
   }
 
-  async #registerAgentInternal(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
+  async #registerAgentInternal(
+    person: PersonName,
+    request: RegisterAgentRequest,
+    managed = false,
+  ): Promise<RosterResult> {
     if (request.host !== undefined && this.hosts.find(person, request.host) === null) {
       return { ok: false, status: 409, reason: `You have no Host named ${request.host} on this Channel.` };
     }
@@ -2807,6 +3093,7 @@ export class Channel extends DurableObject<Env> {
     if (request.host !== undefined && request.spawn !== undefined) {
       this.hosts.spawned(person, request.host, request.spawn, agent);
     }
+    if (managed) return { ...result, agent };
     return { ...result, agent, token: await this.access.issueAgentToken(agent.id, person, agent.librarian === true) };
   }
 

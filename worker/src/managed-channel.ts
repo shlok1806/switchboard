@@ -135,6 +135,8 @@ function matchWriteRoute(method: string, path: string): ManagedReadRoute | null 
   if (method === "PUT" && path === "/api/librarian")
     return { action: "channel.update.write", targetId: "librarian", operation: "librarian.cursor" };
   if (method === "DELETE" || method === "PUT") {
+    const roleMatch = /^\/api\/agents\/([^/]+)\/role$/.exec(path);
+    if (roleMatch?.[1]) return { action: "agent.grant.manage", targetId: roleMatch[1], operation: "agent.role" };
     const read = managedReadRoute("GET", path);
     if (method === "PUT" && read?.operation === "content.read" && read.targetId.startsWith("brief/"))
       return { ...read, action: "channel.update.write", operation: "brief.write" };
@@ -147,6 +149,22 @@ function matchWriteRoute(method: string, path: string): ManagedReadRoute | null 
       : null;
   }
   if (method !== "POST") return null;
+  if (path === "/api/agents")
+    return { action: "agent.execution.start", targetId: "agents", operation: "agent.register" };
+  const agentMatch = /^\/api\/agents\/([^/]+)\/(heartbeat|end|proxy-mode|nickname|model|approval|approval\/deny)$/.exec(
+    path,
+  );
+  if (agentMatch?.[1] && agentMatch[2]) {
+    const targetId = agentMatch[1];
+    const kind = agentMatch[2];
+    if (kind === "heartbeat") return { action: "channel.update.write", targetId, operation: "agent.heartbeat" };
+    if (kind === "end") return { action: "channel.update.write", targetId, operation: "agent.end" };
+    if (kind === "proxy-mode") return { action: "channel.update.write", targetId, operation: "agent.proxy-mode" };
+    if (kind === "nickname") return { action: "channel.update.write", targetId, operation: "agent.nickname" };
+    if (kind === "model") return { action: "channel.update.write", targetId, operation: "agent.model" };
+    if (kind === "approval") return { action: "channel.update.write", targetId, operation: "agent.approval" };
+    if (kind === "approval/deny") return { action: "channel.update.write", targetId, operation: "agent.approval.deny" };
+  }
   if (path === "/api/join") return { action: "workspace.read", targetId: "presence", operation: "presence.join" };
   if (path === "/api/tool-calls")
     return { action: "channel.update.write", targetId: "telemetry", operation: "telemetry.append" };
@@ -201,6 +219,15 @@ export const MANAGED_OPERATIONS = {
   "task.finish": { action: "task.update", mode: "write" },
   "task.takeover": { action: "task.update", mode: "write" },
   "task.step.complete": { action: "task.update", mode: "write" },
+  "agent.register": { action: "agent.execution.start", mode: "write" },
+  "agent.heartbeat": { action: "channel.update.write", mode: "write" },
+  "agent.end": { action: "channel.update.write", mode: "write" },
+  "agent.proxy-mode": { action: "channel.update.write", mode: "write" },
+  "agent.nickname": { action: "channel.update.write", mode: "write" },
+  "agent.model": { action: "channel.update.write", mode: "write" },
+  "agent.approval": { action: "channel.update.write", mode: "write" },
+  "agent.approval.deny": { action: "channel.update.write", mode: "write" },
+  "agent.role": { action: "agent.grant.manage", mode: "write" },
 } as const;
 
 export interface ManagedOperation extends ManagedReadRoute {

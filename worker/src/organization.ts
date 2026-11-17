@@ -833,8 +833,9 @@ export class Organization extends DurableObject<Env> {
   private consentTarget(workspaceId: string, targetId: string, channel?: string): AgentExecution | undefined {
     const rows = this.ctx.storage.sql
       .exec<{ body: string }>(
-        "SELECT body FROM executions WHERE json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.legacyAgentId')=? AND json_extract(body, '$.status')='active' ORDER BY json_extract(body, '$.startedAt') DESC LIMIT 1",
+        "SELECT body FROM executions WHERE json_extract(body, '$.workspaceId')=? AND (json_extract(body, '$.legacyAgentId')=? OR id=?) AND json_extract(body, '$.status')='active' ORDER BY json_extract(body, '$.startedAt') DESC LIMIT 1",
         workspaceId,
+        targetId,
         targetId,
       )
       .toArray();
@@ -876,21 +877,24 @@ export class Organization extends DurableObject<Env> {
       const body = input.remove && prior ? (JSON.parse(prior.body) as OwnerConsent) : input.body;
       const targetId = "targetId" in body ? body.targetId : undefined;
       const action = body.action;
-      if (typeof targetId !== "string" || typeof action !== "string" || !PRIVATE_ACTIONS.includes(action))
+      const CONSENT_ACTIONS = [...PRIVATE_ACTIONS, "terminal_control", "channel.history.read"];
+      if (typeof targetId !== "string" || typeof action !== "string" || !CONSENT_ACTIONS.includes(action))
         return deny("invalid_consent", 400);
       const target = this.consentTarget(input.workspaceId, targetId);
+      const hostId = "hostId" in body && typeof body.hostId === "string" ? body.hostId : undefined;
       const resource: PolicyResource = {
         kind: "workspace",
         organizationId: state.organization.id,
         id: input.workspaceId,
         targetId,
         ownerPersonId: target?.ownerPersonId,
+        ...(hostId ? { hostId } : {}),
       };
       const context = { ...this.context(state, input.actor, input.workspaceId), managedPolicy: true };
       if (
         !target ||
         target.ownerPersonId !== input.actor.personId ||
-        decide(input.actor, action, resource, context).decision !== "allow"
+        (PRIVATE_ACTIONS.includes(action) && decide(input.actor, action, resource, context).decision !== "allow")
       )
         return deny("owner_required");
       const scope = canonical([input.actor.personId, input.workspaceId, input.id ?? "create", "consent", input.key]);
@@ -908,16 +912,19 @@ export class Organization extends DurableObject<Env> {
       const id = input.id ?? crypto.randomUUID();
       if (input.remove) this.ctx.storage.sql.exec("DELETE FROM owner_consents WHERE id=?", id);
       else {
-        const { recipient, expiresAt } = input.body;
+        const { recipient, expiresAt, hostId } = input.body;
         if (
-          Object.keys(input.body).some((k) => !["targetId", "action", "recipient", "expiresAt"].includes(k)) ||
+          Object.keys(input.body).some(
+            (k) => !["targetId", "action", "recipient", "expiresAt", "hostId"].includes(k),
+          ) ||
           typeof recipient !== "string" ||
           state.members[recipient]?.status !== "active" ||
           state.workspaceMembers[input.workspaceId]?.[recipient]?.status !== "active" ||
           typeof expiresAt !== "number" ||
           !Number.isSafeInteger(expiresAt) ||
           expiresAt <= Date.now() ||
-          expiresAt > Date.now() + DAY
+          expiresAt > Date.now() + DAY ||
+          (hostId !== undefined && (typeof hostId !== "string" || hostId.length === 0 || hostId.length > 500))
         )
           return deny("invalid_consent", 400);
         const consent: OwnerConsent = {
@@ -927,6 +934,7 @@ export class Organization extends DurableObject<Env> {
           targetId,
           action,
           expiresAt,
+          ...(typeof hostId === "string" ? { hostId } : {}),
         };
         this.ctx.storage.sql.exec("INSERT INTO owner_consents VALUES(?,?)", id, JSON.stringify(consent));
       }
@@ -1100,27 +1108,47 @@ export class Organization extends DurableObject<Env> {
         return deny("target_enrollment_required");
       targetIdentity = { principalId: target.principalId, executionId: target.id, ownerPersonId: target.ownerPersonId };
     }
-    if (PRIVATE_ACTIONS.includes(input.action)) {
+    const isControlEffect =
+      input.resource.operation === "terminal.input" ||
+      input.resource.operation === "agent.approval.deny" ||
+      input.resource.operation === "approval.control";
+    const isHistoryRead =
+      input.action === "channel.history.read" &&
+      Boolean(
+        input.resource.ownerPersonId &&
+          input.resource.ownerPersonId !== (actor.kind === "person" ? actor.personId : undefined),
+      );
+    if (PRIVATE_ACTIONS.includes(input.action) || isControlEffect || isHistoryRead) {
       const target = this.consentTarget(input.resource.id, input.resource.targetId ?? "", input.resource.channel);
-      if (!target || actor.kind !== "person" || input.targetExecutionId !== target.id)
+      if (!target || actor.kind !== "person" || (input.targetExecutionId && input.targetExecutionId !== target.id))
         return deny("owner_consent_required");
       if (input.resource.ownerPersonId && input.resource.ownerPersonId !== target.ownerPersonId)
         return deny("owner_mismatch");
       input = { ...input, resource: { ...input.resource, ownerPersonId: target.ownerPersonId } };
-      const consent = this.ctx.storage.sql
+      const requiredConsentAction = isControlEffect
+        ? "terminal_control"
+        : isHistoryRead
+          ? "channel.history.read"
+          : input.action;
+      const consentRows = this.ctx.storage.sql
         .exec<{ body: string }>(
-          "SELECT body FROM owner_consents WHERE json_extract(body, '$.ownerPersonId')=? AND json_extract(body, '$.personId')=? AND json_extract(body, '$.workspaceId')=? AND json_extract(body, '$.targetId')=? AND json_extract(body, '$.action')=? AND json_extract(body, '$.expiresAt')>? ORDER BY json_extract(body, '$.expiresAt') DESC LIMIT 1",
+          "SELECT body FROM owner_consents WHERE json_extract(body, '$.ownerPersonId')=? AND json_extract(body, '$.personId')=? AND json_extract(body, '$.workspaceId')=? AND (json_extract(body, '$.targetId')=? OR json_extract(body, '$.targetId')=?) AND json_extract(body, '$.action')=? AND json_extract(body, '$.expiresAt')>? ORDER BY json_extract(body, '$.expiresAt') DESC LIMIT 1",
           target.ownerPersonId,
           actor.personId,
           input.resource.id,
           input.resource.targetId,
-          input.action,
+          target.id,
+          requiredConsentAction,
           now,
         )
-        .toArray()[0];
+        .toArray();
+      const consent = consentRows[0];
       if (consent) {
-        context.consent = JSON.parse(consent.body) as OwnerConsent;
-        deadline = Math.min(deadline, context.consent.expiresAt);
+        const parsed = JSON.parse(consent.body) as OwnerConsent;
+        if (!parsed.hostId || !input.resource.hostId || parsed.hostId === input.resource.hostId) {
+          context.consent = parsed;
+          deadline = Math.min(deadline, context.consent.expiresAt);
+        }
       }
     }
     const decision = decide(actor, input.action, input.resource, context);
@@ -1274,6 +1302,9 @@ export class Organization extends DurableObject<Env> {
           "channel.update.write",
           "agent.directive.send",
           "agent.handoff.cross_owner",
+          "agent.execution.start",
+          "agent.grant.manage",
+          "workspace.manage",
         ].includes(input.action) &&
         !(
           input.action === "workspace.read" &&
