@@ -1050,7 +1050,6 @@ export class Channel extends DurableObject<Env> {
     // Bind the HTTP route to the actual named DO, even for direct internal invocations.
     if (!this.env.CHANNEL.idFromName(repo).equals(this.ctx.id) || !url.pathname.startsWith(`/r/${repo}/api/`))
       return managedError(404, "resource_denied");
-    this.access.setRepo(repo);
     const path = url.pathname.slice(`/r/${repo}`.length);
     const prepared = preparation ? MANAGED_PREPARATIONS[preparation.id] : undefined;
     const route =
@@ -2119,6 +2118,8 @@ export class Channel extends DurableObject<Env> {
       const intent = body.managed ?? { principalId: body.principalId, workspaceId: body.workspaceId };
       const parsed = parseRegister(body);
       if (!parsed.ok) return managedError(400, "invalid_registration");
+      if (!input.resource.channel) return managedError(404, "resource_denied");
+      this.access.setRepo(input.resource.channel);
       return this.registerManagedAgent(request, parsed.value, intent);
     }
     if (input.resource.operation === "agent.heartbeat") {
@@ -2790,8 +2791,8 @@ export class Channel extends DurableObject<Env> {
       if (registration.continues) {
         if (registration.continues === agentIdFor(person, registration.cli, registration.sessionId)) {
           return Response.json(
-            { ok: false, status: 400, reason: "A session cannot continue its own Agent." },
-            { status: 400, headers: { "Cache-Control": "no-store" } },
+            { ok: false, status: 409, reason: "A session cannot continue its own Agent." },
+            { status: 409, headers: { "Cache-Control": "no-store" } },
           );
         }
         const predecessor = this.agents.find(registration.continues);
@@ -2833,8 +2834,8 @@ export class Channel extends DurableObject<Env> {
         ))
       )
         return deny(403);
-      const key = request.headers.get("Idempotency-Key") ?? crypto.randomUUID();
-      if (key.length > 128) return deny(400);
+      const key = request.headers.get("Idempotency-Key");
+      if (!key || key.length > 128) return deny(400);
       const issued = await org.mutateIdentity({
         actor,
         key,

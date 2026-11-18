@@ -143,9 +143,19 @@ describe("managed continuation and handoff", () => {
       workspaceId: f.workspaceId,
     };
 
+    const missingKey = await f.channel.managedRequest(
+      new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${f.alice.token}` },
+        body: JSON.stringify(regBody),
+      }),
+      f.repo,
+    );
+    expect(missingKey.status).toBe(400);
+
     const req = new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${f.alice.token}` },
+      headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify(regBody),
     });
 
@@ -160,7 +170,7 @@ describe("managed continuation and handoff", () => {
     expect(answer.agent).toHaveProperty("executionId");
     expect(answer.agent).toHaveProperty("ownerPersonId", f.alice.actor.personId);
     expect(answer.agent).toHaveProperty("cli", "codex");
-    expect(answer.agent).toHaveProperty("presence", "idle");
+    expect(answer.agent).toHaveProperty("presence", "live");
     expect(answer.agent).toHaveProperty("startedAt");
     expect(answer.agent).toHaveProperty("lastSeenAt");
 
@@ -199,7 +209,7 @@ describe("managed continuation and handoff", () => {
     const pRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.alice.token}` },
+        headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(pBody),
       }),
       f.repo,
@@ -213,12 +223,12 @@ describe("managed continuation and handoff", () => {
     const selfRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.alice.token}` },
+        headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(selfBody),
       }),
       f.repo,
     );
-    expect(selfRes.status).toBe(400);
+    expect(selfRes.status).toBe(409);
 
     // 3. Reject missing predecessor
     const missingBody: RegisterAgentRequest & { principalId: string; workspaceId: string } = {
@@ -233,7 +243,7 @@ describe("managed continuation and handoff", () => {
     const missingRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.alice.token}` },
+        headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(missingBody),
       }),
       f.repo,
@@ -253,7 +263,7 @@ describe("managed continuation and handoff", () => {
     const succRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.alice.token}` },
+        headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(succBody),
       }),
       f.repo,
@@ -264,13 +274,15 @@ describe("managed continuation and handoff", () => {
 
     // Verify handoff event recorded in Channel
     const events = await runInDurableObject(f.channel, (_object, state) =>
-      state.storage.sql.exec<{ body: string }>("SELECT body FROM events WHERE type='agent.handoff'").toArray(),
+      state.storage.sql
+        .exec<{ payload: string; actor: string }>("SELECT payload,actor FROM events WHERE type='agent.handoff'")
+        .toArray(),
     );
     expect(events.length).toBeGreaterThan(0);
     const firstEvent = events[0];
     if (!firstEvent) throw new Error("missing handoff event");
-    const parsedEvent = JSON.parse(firstEvent.body);
-    expect(parsedEvent.payload).toMatchObject({ from: predecessorId, to: succAns.agent.id });
+    expect(JSON.parse(firstEvent.payload)).toMatchObject({ from: predecessorId });
+    expect(JSON.parse(firstEvent.actor)).toMatchObject({ kind: "agent", agentId: succAns.agent.id });
   });
 
   it("requires predecessor-owner consent for cross-owner continuation and rejects unconsented handoff", async () => {
@@ -288,7 +300,7 @@ describe("managed continuation and handoff", () => {
     const pRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.alice.token}` },
+        headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(pBody),
       }),
       f.repo,
@@ -309,7 +321,7 @@ describe("managed continuation and handoff", () => {
     const deniedRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.bob.token}` },
+        headers: { Authorization: `Bearer ${f.bob.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(bobBody),
       }),
       f.repo,
@@ -336,7 +348,7 @@ describe("managed continuation and handoff", () => {
     const allowedRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.bob.token}` },
+        headers: { Authorization: `Bearer ${f.bob.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(bobBody),
       }),
       f.repo,
@@ -362,7 +374,7 @@ describe("managed continuation and handoff", () => {
     const expiredRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.bob.token}` },
+        headers: { Authorization: `Bearer ${f.bob.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           ...bobBody,
           sessionId: "77777777-7777-4777-8777-777777777777",
@@ -388,7 +400,7 @@ describe("managed continuation and handoff", () => {
     const pRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.alice.token}` },
+        headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(pBody),
       }),
       f.repo,
@@ -398,8 +410,9 @@ describe("managed continuation and handoff", () => {
     // 2. Predecessor holds claim on Task 1 in Channel
     await runInDurableObject(f.channel, (_object, state) => {
       state.storage.sql.exec(
-        "INSERT INTO tasks VALUES(1, 'Task 1', 'desc', 'open', '[]', '[]', '[]', 0, 0, ?)",
-        JSON.stringify({ holder: { kind: "agent", agent: predecessor.id } }),
+        "INSERT INTO tasks (number,data,holder_agent) VALUES(1,?,?)",
+        JSON.stringify({ number: 1, claim: { holder: { kind: "agent", agentId: predecessor.id } } }),
+        predecessor.id,
       );
     });
 
@@ -416,7 +429,7 @@ describe("managed continuation and handoff", () => {
     const succRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.alice.token}` },
+        headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(succBody),
       }),
       f.repo,
@@ -426,11 +439,11 @@ describe("managed continuation and handoff", () => {
 
     // 4. Verify Task 1 claim is STILL held by predecessor, NOT successor
     const taskClaim = await runInDurableObject(f.channel, (_object, state) => {
-      const row = state.storage.sql.exec<{ claim: string }>("SELECT claim FROM tasks WHERE number=1").one();
-      return JSON.parse(row.claim);
+      const row = state.storage.sql.exec<{ data: string }>("SELECT data FROM tasks WHERE number=1").one();
+      return JSON.parse(row.data).claim;
     });
-    expect(taskClaim.holder).toEqual({ kind: "agent", agent: predecessor.id });
-    expect(taskClaim.holder.agent).not.toBe(successor.id);
+    expect(taskClaim.holder).toEqual({ kind: "agent", agentId: predecessor.id });
+    expect(taskClaim.holder.agentId).not.toBe(successor.id);
   });
 
   it("leaves unlinked legacy registration and continuation unaffected", async () => {
@@ -476,7 +489,7 @@ describe("managed continuation and handoff", () => {
     const pRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.alice.token}` },
+        headers: { Authorization: `Bearer ${f.alice.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(pBody),
       }),
       f.repo,
@@ -508,7 +521,7 @@ describe("managed continuation and handoff", () => {
     const deniedRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${f.bob.token}` },
+        headers: { Authorization: `Bearer ${f.bob.token}`, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(deniedBody),
       }),
       f.repo,
