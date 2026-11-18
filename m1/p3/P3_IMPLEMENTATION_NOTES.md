@@ -1,5 +1,12 @@
 # Package 3 implementation notes
 
+### XFIX1 fix 1
+
+- `managed-agent-controls.test.ts:278` expects an execution owner to deny an approval. The Organization now denies every control effect while Host authority is unavailable (`worker/src/organization.ts:1115`), so the route returns 404 instead of 200. The effect uses an Agent interrupt rather than a Host-local control check (`worker/src/channel.ts:2289`; `cli/src/host/check.ts:72`). No safe fix was made: restoring the former authorization would reopen the reviewed trust-boundary finding.
+- `managed-consent-control.test.ts:374` expects terminal-control consent issuance. Issuance now denies because the supplied Host ID does not prove Host ownership (`worker/src/organization.ts:883`, `worker/src/organization.ts:903`). No safe fix was made: the approved design requires verified Host ownership and local enforcement (`m1/p3/P3_BATCH_PLAN.md:90`, `m1/p3/P3_BATCH_PLAN.md:94`), neither established by this test's supplied Host ID (`worker/test/managed-consent-control.test.ts:357`).
+- Escalation: both failures remain unresolved pending the Host authority design decision recorded below. Existing tests were not changed; accepting either expectation without the missing proof and enforcement would violate the fail-closed requirement.
+- Verification: the manager's XFIX1 worker gate reported these two failures, with 82 files passed and two skipped. A targeted run of both files was attempted here but failed before test collection: Vite could not write its config bundle to the shared read-only `worker/node_modules/.vite-temp` (EROFS). No tests passed in this run.
+
 ## XFIX1
 
 ### Codex cross-review fix 1
