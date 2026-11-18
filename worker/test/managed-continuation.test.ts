@@ -357,19 +357,14 @@ describe("managed continuation and handoff", () => {
     const bobAgent = ((await allowedRes.json()) as AgentResponse).agent as unknown as SafeAgent;
     expect(bobAgent.ownerPersonId).toBe(f.bob.actor.personId);
 
-    // 5. With expired consent -> denied
-    await f.org.mutateConsent({
-      actor: f.alice.actor,
-      workspaceId: f.workspaceId,
-      key: "expired-consent",
-      requestId: "consent-2",
-      remove: false,
-      body: {
-        targetId: predecessorId,
-        action: "agent.handoff.cross_owner",
-        recipient: f.bob.actor.personId,
-        expiresAt: Date.now() - 1000, // expired
-      },
+    // 5. Expire the granted consent; creating an already-expired consent is rejected.
+    if (!consent.ok) throw new Error("consent failed");
+    await runInDurableObject(f.org, (_object, state) => {
+      state.storage.sql.exec(
+        "UPDATE owner_consents SET body=json_set(body, '$.expiresAt', ?) WHERE id=?",
+        Date.now() - 1000,
+        consent.value.id,
+      );
     });
     const expiredRes = await f.channel.managedRequest(
       new Request(`${M1_ORIGIN}/r/${f.repo}/api/agents`, {

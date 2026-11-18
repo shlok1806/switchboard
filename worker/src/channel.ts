@@ -2788,6 +2788,7 @@ export class Channel extends DurableObject<Env> {
       const person = await this.nativeLogin(request);
       if (!person) return deny(401);
       const id = agentIdFor(person, registration.cli, registration.sessionId);
+      let handoffTargetExecutionId: string | undefined;
       if (registration.continues) {
         if (registration.continues === agentIdFor(person, registration.cli, registration.sessionId)) {
           return Response.json(
@@ -2806,7 +2807,7 @@ export class Channel extends DurableObject<Env> {
         if (predecessorAssoc) {
           const owned = await org.registeredExecutionOwnedBy(predecessorAssoc.executionId, actor.personId);
           if (!owned) {
-            const consentCheck = await org.authorizeChannelRead({
+            const consentCheck = await org.issueMutationPermit({
               actor,
               action: "agent.handoff.cross_owner",
               generation,
@@ -2822,6 +2823,7 @@ export class Channel extends DurableObject<Env> {
               },
             });
             if (!consentCheck.ok) return deny(404);
+            handoffTargetExecutionId = predecessorAssoc.executionId;
           }
         }
       }
@@ -2883,12 +2885,58 @@ export class Channel extends DurableObject<Env> {
         await cancel();
         return deny(permitResult.status);
       }
+      const handoffPermit =
+        handoffTargetExecutionId && registration.continues
+          ? await org.issueMutationPermit({
+              actor,
+              action: "agent.handoff.cross_owner",
+              generation,
+              requestId: crypto.randomUUID(),
+              targetExecutionId: handoffTargetExecutionId,
+              resource: {
+                kind: "workspace",
+                organizationId,
+                id: fields.workspaceId,
+                channel,
+                targetId: registration.continues,
+                operation: "agent.handoff",
+              },
+            })
+          : undefined;
+      if (
+        (handoffPermit && !handoffPermit.ok) ||
+        this.binding.generation !== generation ||
+        this.binding.workspace !== fields.workspaceId
+      ) {
+        await cancel();
+        return deny(404);
+      }
       const permit = permitResult.value;
       const permits = new LocalMutationPermits(this.ctx.storage.sql);
+      if (handoffPermit?.ok) {
+        permits.observeRevision(fields.workspaceId, handoffPermit.value.policyRevision);
+        permits.install(handoffPermit.value);
+      }
+      const consumeHandoff = () => {
+        if (!handoffPermit?.ok) return true;
+        const handoff = handoffPermit.value;
+        return (
+          this.binding.generation === generation &&
+          this.binding.workspace === fields.workspaceId &&
+          permits.consume(handoff.id, {
+            actor,
+            action: handoff.action,
+            resource: handoff.resource,
+            requestId: handoff.requestId,
+            generation,
+            policyRevision: handoff.policyRevision,
+          })
+        );
+      };
       permits.observeRevision(fields.workspaceId, permit.policyRevision);
       permits.install(permit);
       try {
-        const result = await this.#registerAgentInternal(person, registration, true);
+        const result = await this.#registerAgentInternal(person, registration, true, consumeHandoff);
         if (!result.ok) {
           await cancel();
           return deny(result.status);
@@ -3063,6 +3111,7 @@ export class Channel extends DurableObject<Env> {
     person: PersonName,
     request: RegisterAgentRequest,
     managed = false,
+    consumeHandoff?: () => boolean,
   ): Promise<RosterResult> {
     if (request.host !== undefined && this.hosts.find(person, request.host) === null) {
       return { ok: false, status: 409, reason: `You have no Host named ${request.host} on this Channel.` };
@@ -3097,6 +3146,8 @@ export class Channel extends DurableObject<Env> {
     }
     const result = this.withNextTurn(await this.agents.register(person, request));
     if (!result.ok) return result;
+    if (managed && request.continues && consumeHandoff && !consumeHandoff())
+      return { ok: false, status: 403, reason: "Managed handoff denied." };
     const agent =
       request.continues !== undefined && this.handOff(result.agent.id, request.continues)
         ? (this.agents.find(result.agent.id) ?? result.agent)
