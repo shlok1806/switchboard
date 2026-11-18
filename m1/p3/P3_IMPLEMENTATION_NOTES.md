@@ -1,5 +1,25 @@
 # Package 3 implementation notes
 
+## XFIX1
+
+### Codex cross-review fix 1
+
+- Finding 2 (inactive issuer): `mutateConsent` previously called `decide` only for private actions; it now requires `workspace.read` through `decide` for all consent mutations (`worker/src/organization.ts:893`). The test `rejects terminal control consent from an inactive execution owner` checks denial and no stored consent (`worker/test/managed-consent-membership.test.ts:6`).
+- Findings 2 and 3 (Host authority): an execution owner and caller-supplied Host ID do not establish Host ownership (`worker/src/organization.ts:883`); Channel Host rows are advisory (`m1/p3/P3_BATCH_PLAN.md:82`), and the approval effect dispatches directly to an Agent interrupt (`worker/src/channel.ts:2289`). Until a verified Host proof and local control ceiling are available, new terminal-control consents and control-effect authorization fail closed (`worker/src/organization.ts:901`, `worker/src/organization.ts:1115`); revocation remains available subject to membership. This is a containment measure, not completion of either finding.
+- Finding 1 remains open: registration and resume mutations occur before permit consumption (`worker/src/channel.ts:2939`, `worker/src/channel.ts:3131`); Agent registration broadcasts before its asynchronous watch (`worker/src/agents.ts:373`). No registration fix or race tests are claimed.
+
+### DESIGN DECISION NEEDED
+
+The approved Host authority requires verified native Host ownership and a machine-local check at effect time (`m1/p3/P3_BATCH_PLAN.md:90`, `m1/p3/P3_BATCH_PLAN.md:94`), but the current consent API has only a supplied Host ID and execution owner, and the approval interrupt does not pass through the Host's `checkControl` (`cli/src/host/check.ts:72`). Options: (1) introduce a verified Host-owner registration/attestation and a locally checked approval-control protocol, with revision and target binding; (2) retain the fail-closed control boundary until such a protocol is specified. Selecting proof provenance and the local enforcement protocol is a trust-boundary design decision; deriving authority from the advisory Host row or login would violate the approved design.
+
+### Remaining
+
+Resolve the Host authority design above and finish findings 2 and 3 including positive and negative real-route tests; implement finding 1 and its no-effect permit races. The existing `handles DD-1 terminal_control consent lifecycle in Organization DO and audit logs` test (`worker/test/managed-consent-control.test.ts:357`) expects issuance to succeed and will conflict with the temporary fail-closed boundary; it was not changed. No DONE file was written.
+
+### Commands run
+
+Worker `npm run typecheck`: exit 0. Worker `npm run lint`: exit 0, 231 files checked. Targeted Biome formatting of the new test: exit 0. Vitest and runtime suites: not run, explicitly prohibited for this task; manager runs runtime gates. `git diff --check`: exit 0 before these notes.
+
 ## Changes (file:line)
 
 ## Tests added

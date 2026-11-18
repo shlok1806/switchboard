@@ -894,9 +894,13 @@ export class Organization extends DurableObject<Env> {
       if (
         !target ||
         target.ownerPersonId !== input.actor.personId ||
+        decide(input.actor, "workspace.read", resource, context).decision !== "allow" ||
         (PRIVATE_ACTIONS.includes(action) && decide(input.actor, action, resource, context).decision !== "allow")
       )
         return deny("owner_required");
+      // Host ownership is not established by an execution or a caller-supplied Host ID.
+      // Keep existing consent revocation available while trusted Host proof is unavailable.
+      if (action === "terminal_control" && !input.remove) return deny("host_authority_unavailable");
       const scope = canonical([input.actor.personId, input.workspaceId, input.id ?? "create", "consent", input.key]);
       const replay = this.ctx.storage.sql
         .exec<{ fingerprint: string; result: string; expires: number }>(
@@ -1112,6 +1116,8 @@ export class Organization extends DurableObject<Env> {
       input.resource.operation === "terminal.input" ||
       input.resource.operation === "agent.approval.deny" ||
       input.resource.operation === "approval.control";
+    // Previously issued control consents lack verified Host ownership and cannot authorize effects.
+    if (isControlEffect) return deny("host_authority_unavailable");
     const isHistoryRead =
       input.action === "channel.history.read" &&
       Boolean(
