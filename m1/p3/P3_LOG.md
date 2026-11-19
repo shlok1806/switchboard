@@ -434,3 +434,6 @@
 - 8:17 AM ET: [P3-#39] START (Thu Nov 19): Pranay answered t101s787 at 8:14 AM ET — 'Redesign the permit-before-effects and Host-bound consent path, with agy design review before rebuilding'. No chain/agy/codex procs running. HEADs feature 87b8813 (2 fails), last green 0392395 (1689/0/2), bulletin 0bfb31f, main fe39268. Plan: Codex design doc (M1-P3-PCDESIGN, docs only) → fresh agy (Gemini default) design review GO/REVISE/BLOCKER (≤2 Codex revisions) → on GO Codex implements M1-P3-PCFIX (+≤2 gate-fix rounds) → quick gate → relaunch chain_p3.sh in Codex mode (XREVIEW-2 → B2 review items 15–27 → B3a/B3b). Driver p3_39_redesign_driver.sh. Note: chain_p3.sh hl() still labels times 'CT' but box clock is now ET (times are ET).
 - 8:20 AM ET: [P3] [P3-#39] M1-P3-PCDESIGN run attempt 1 started
 - 8:22 AM ET: [P3] [P3-#39] M1-P3-PCDESIGN done
+- 8:22 AM ET: [P3] [P3-#39] design committed 492e0a2: Produced the permit and consent redesign and ADR 0058 draft for independent review. REBUILD_BASE: 87b8813 DESIGN DECISION NEEDED: Approve the B3b enrollment and machine-local enforcement dependency and post-commit activation reconciliation before rebuilding. Tests: not run, as instructed. 
+- 8:22 AM ET: [P3] [P3-#39] M1-P3-PCREVIEW run attempt 1 started
+- 8:36 AM ET: [P3] [P3-#39] M1-P3-PCREVIEW done
