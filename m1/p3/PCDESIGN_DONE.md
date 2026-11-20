@@ -1,4 +1,4 @@
-Produced the permit and consent redesign and ADR 0058 draft for independent review.
+Revised the permit and consent design, ADR draft, and round 1 resolution for independent review.
 REBUILD_BASE: 87b8813
-DESIGN DECISION NEEDED: Approve the B3b enrollment and machine-local enforcement dependency and post-commit activation reconciliation before rebuilding.
+No disproportionate architectural problem
 Tests: not run, as instructed.
