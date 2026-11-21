@@ -7,7 +7,7 @@ afterEach(() => vi.restoreAllMocks());
 
 async function fixture() {
   const f = await queryExecutionFixture();
-  await runInDurableObject(f.channel, (_object, state) => {
+  await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
     state.storage.sql.exec("INSERT OR REPLACE INTO task_sync VALUES('syncedAt',?)", new Date().toISOString());
   });
   const register = () =>
@@ -16,14 +16,14 @@ async function fixture() {
         method: "POST",
         headers: { Authorization: `Bearer ${f.token}`, "Idempotency-Key": "execution-storage" },
       }),
-      { cli: "codex", sessionId: "storage-session", resumed: false, cwd: "/repo" },
+      { cli: "codex", sessionId: "storage-0002", resumed: false, cwd: "/repo" },
       { principalId: f.principalId, workspaceId: f.workspaceId },
     );
   return { ...f, register };
 }
 
 async function reservedExecution(f: Awaited<ReturnType<typeof fixture>>) {
-  return runInDurableObject(f.org, (_object, state) => {
+  return runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
     const row = state.storage.sql
       .exec<{ body: string; constraints_body: string }>(
         `SELECT e.body,e.constraints_body FROM executions e JOIN registration_reservations r
@@ -37,18 +37,20 @@ async function reservedExecution(f: Awaited<ReturnType<typeof fixture>>) {
 describe("prepared registration execution row updates", () => {
   it("completes registration without replacing or dropping execution constraints", async () => {
     const f = await fixture();
-    await runInDurableObject(f.org, async (object, state) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object, state) => {
       const activate = object.activateRegistration.bind(object);
-      const spy = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-        const result = await activate(ack);
-        expect(result.ok).toBe(true);
-        state.storage.sql.exec(
-          "UPDATE executions SET constraints_body=? WHERE id=?",
-          JSON.stringify({ actions: ["workspace.read"] }),
-          ack.executionId,
-        );
-        return result;
-      });
+      const spy = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async (ack) => {
+          const result = await activate(ack);
+          expect(result.ok).toBe(true);
+          state.storage.sql.exec(
+            "UPDATE executions SET constraints_body=? WHERE id=?",
+            JSON.stringify({ actions: ["workspace.read"] }),
+            ack.executionId,
+          );
+          return result;
+        });
       try {
         expect((await f.register()).status).toBe(200);
       } finally {
@@ -63,17 +65,19 @@ describe("prepared registration execution row updates", () => {
 
   it("cancels an activated execution after a lost response while preserving constraints", async () => {
     const f = await fixture();
-    await runInDurableObject(f.org, async (object, state) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object, state) => {
       const activate = object.activateRegistration.bind(object);
-      const spy = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-        expect((await activate(ack)).ok).toBe(true);
-        state.storage.sql.exec(
-          "UPDATE executions SET constraints_body=? WHERE id=?",
-          JSON.stringify({ actions: ["workspace.read"] }),
-          ack.executionId,
-        );
-        throw new Error("lost activation response");
-      });
+      const spy = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async (ack) => {
+          expect((await activate(ack)).ok).toBe(true);
+          state.storage.sql.exec(
+            "UPDATE executions SET constraints_body=? WHERE id=?",
+            JSON.stringify({ actions: ["workspace.read"] }),
+            ack.executionId,
+          );
+          throw new Error("lost activation response");
+        });
       try {
         expect((await f.register()).status).toBe(503);
       } finally {

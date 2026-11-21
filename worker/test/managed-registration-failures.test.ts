@@ -10,7 +10,7 @@ afterEach(() => vi.restoreAllMocks());
 
 async function fixture() {
   const f = await queryExecutionFixture();
-  await runInDurableObject(f.channel, (_object, state) => {
+  await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
     state.storage.sql.exec("INSERT OR REPLACE INTO task_sync VALUES('syncedAt',?)", new Date().toISOString());
   });
   const register = (key = "failure-registration", extra: Partial<RegisterAgentRequest> = {}) =>
@@ -19,11 +19,11 @@ async function fixture() {
         method: "POST",
         headers: { Authorization: `Bearer ${f.token}`, "Idempotency-Key": key },
       }),
-      { cli: "codex", sessionId: "failure-session", resumed: false, cwd: "/repo", ...extra },
+      { cli: "codex", sessionId: "failure-0001", resumed: false, cwd: "/repo", ...extra },
       { principalId: f.principalId, workspaceId: f.workspaceId },
     );
   const snapshot = () =>
-    runInDurableObject(f.channel, (_object, state) => {
+    runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
       const names = state.storage.sql
         .exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .toArray()
@@ -44,20 +44,22 @@ describe("prepared registration real-handler failure boundaries", () => {
       it(`rejects ${action} ${fault} before any shared registration effect`, async () => {
         const f = await fixture();
         const before = await f.snapshot();
-        await runInDurableObject(f.org, async (object) => {
+        await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
           const original = object.prepareRegistration.bind(object);
-          const spy = vi.spyOn(object, "prepareRegistration").mockImplementation((input) => {
-            const result = original(input);
-            if (!result.ok) return result;
-            const permit = result.value.permits.find((receipt) => receipt.action === action);
-            if (!permit) throw new Error("receipt missing");
-            if (fault === "expired") permit.expiresAt = Date.now() - 1;
-            if (fault === "wrong-host") permit.resource = { ...permit.resource, hostId: "foreign/host" };
-            if (fault === "wrong-generation") permit.generation++;
-            if (fault === "wrong-revision") permit.policyRevision++;
-            if (fault === "wrong-actor") permit.actor = { kind: "person", personId: "foreign", githubId: "999" };
-            return result;
-          });
+          const spy = vi
+            .spyOn(Object.getPrototypeOf(object) as typeof object, "prepareRegistration")
+            .mockImplementation((input) => {
+              const result = original(input);
+              if (!result.ok) return result;
+              const permit = result.value.permits.find((receipt) => receipt.action === action);
+              if (!permit) throw new Error("receipt missing");
+              if (fault === "expired") permit.expiresAt = Date.now() - 1;
+              if (fault === "wrong-host") permit.resource = { ...permit.resource, hostId: "foreign/host" };
+              if (fault === "wrong-generation") permit.generation++;
+              if (fault === "wrong-revision") permit.policyRevision++;
+              if (fault === "wrong-actor") permit.actor = { kind: "person", personId: "foreign", githubId: "999" };
+              return result;
+            });
           try {
             expect((await f.register()).status).toBe(503);
           } finally {
@@ -65,7 +67,7 @@ describe("prepared registration real-handler failure boundaries", () => {
           }
         });
         expect(await f.snapshot()).toEqual(before);
-        await runInDurableObject(f.channel, (_object, state) => {
+        await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
           expect(state.storage.sql.exec("SELECT * FROM registration_intents").toArray()).toEqual([]);
           const installed = state.storage.sql
             .exec("SELECT name FROM sqlite_master WHERE name='managed_permits'")
@@ -80,12 +82,14 @@ describe("prepared registration real-handler failure boundaries", () => {
     it(`keeps TXN-1 invisible and cancels after activation ${fault}`, async () => {
       const f = await fixture();
       const before = await f.snapshot();
-      await runInDurableObject(f.org, async (object) => {
-        const spy = vi.spyOn(object, "activateRegistration").mockImplementation(async () => {
-          expect(await f.snapshot()).toEqual(before);
-          if (fault === "unavailable") throw new Error("authority unavailable");
-          return { ok: false, status: 404, reason: "registration_denied", policyRevision: 0 };
-        });
+      await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
+        const spy = vi
+          .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+          .mockImplementation(async () => {
+            expect(await f.snapshot()).toEqual(before);
+            if (fault === "unavailable") throw new Error("authority unavailable");
+            return { ok: false, status: 404, reason: "registration_denied", policyRevision: 0 };
+          });
         try {
           expect((await f.register()).status).toBe(fault === "denied" ? 404 : 503);
           expect((await f.register()).status).toBe(409);
@@ -94,7 +98,7 @@ describe("prepared registration real-handler failure boundaries", () => {
         }
       });
       expect(await f.snapshot()).toEqual(before);
-      await runInDurableObject(f.channel, (_object, state) => {
+      await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
         expect(state.storage.sql.exec<{ state: string }>("SELECT state FROM registration_intents").one().state).toBe(
           "cancelled",
         );
@@ -104,13 +108,15 @@ describe("prepared registration real-handler failure boundaries", () => {
 
   it("recovers lost completion without repeating registration or returning the lost credential", async () => {
     const f = await fixture();
-    await runInDurableObject(f.org, async (object) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
       const original = object.completeRegistration.bind(object);
-      const spy = vi.spyOn(object, "completeRegistration").mockImplementation(async (ack) => {
-        const result = await original(ack);
-        expect(result.ok).toBe(true);
-        throw new Error("completion response lost");
-      });
+      const spy = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "completeRegistration")
+        .mockImplementation(async (ack) => {
+          const result = await original(ack);
+          expect(result.ok).toBe(true);
+          throw new Error("completion response lost");
+        });
       try {
         expect((await f.register()).status).toBe(503);
       } finally {
@@ -130,15 +136,17 @@ describe("prepared registration real-handler failure boundaries", () => {
   it("cancels an activated identity after a lost activation response and never revives it", async () => {
     const f = await fixture();
     const before = await f.snapshot();
-    await runInDurableObject(f.org, async (object, state) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object, state) => {
       const original = object.activateRegistration.bind(object);
       let acknowledgement: Parameters<typeof object.activateRegistration>[0] | undefined;
-      const spy = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-        acknowledgement = ack;
-        expect((await original(ack)).ok).toBe(true);
-        expect(await f.snapshot()).toEqual(before);
-        throw new Error("activation response lost");
-      });
+      const spy = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async (ack) => {
+          acknowledgement = ack;
+          expect((await original(ack)).ok).toBe(true);
+          expect(await f.snapshot()).toEqual(before);
+          throw new Error("activation response lost");
+        });
       try {
         expect((await f.register()).status).toBe(503);
       } finally {
@@ -162,18 +170,20 @@ describe("prepared registration real-handler failure boundaries", () => {
     it(`rejects fresh apply ${fault} without registration effects or a credential`, async () => {
       const f = await fixture();
       const before = await f.snapshot();
-      await runInDurableObject(f.org, async (object) => {
+      await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
         const original = object.activateRegistration.bind(object);
-        const spy = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-          const result = await original(ack);
-          if (!result.ok) throw new Error("activation denied unexpectedly");
-          if (fault === "expired") result.value.expiresAt = Date.now() - 1;
-          if (fault === "wrong-host") result.value.resource.hostId = "foreign/host";
-          if (fault === "wrong-generation") result.value.generation++;
-          if (fault === "wrong-actor") result.value.actor = { kind: "person", personId: "foreign", githubId: "999" };
-          if (fault === "original-receipt") result.value.id = ack.startPermitId;
-          return result;
-        });
+        const spy = vi
+          .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+          .mockImplementation(async (ack) => {
+            const result = await original(ack);
+            if (!result.ok) throw new Error("activation denied unexpectedly");
+            if (fault === "expired") result.value.expiresAt = Date.now() - 1;
+            if (fault === "wrong-host") result.value.resource.hostId = "foreign/host";
+            if (fault === "wrong-generation") result.value.generation++;
+            if (fault === "wrong-actor") result.value.actor = { kind: "person", personId: "foreign", githubId: "999" };
+            if (fault === "original-receipt") result.value.id = ack.startPermitId;
+            return result;
+          });
         try {
           const response = await f.register();
           expect(response.status).toBe(503);
@@ -183,7 +193,7 @@ describe("prepared registration real-handler failure boundaries", () => {
         }
       });
       expect(await f.snapshot()).toEqual(before);
-      await runInDurableObject(f.channel, (_object, state) => {
+      await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
         expect(state.storage.sql.exec<{ state: string }>("SELECT state FROM registration_intents").one().state).toBe(
           "cancelled",
         );
@@ -194,16 +204,20 @@ describe("prepared registration real-handler failure boundaries", () => {
   it("reconciles unavailable cancellation without applying or acquiring replacement permits", async () => {
     const f = await fixture();
     const before = await f.snapshot();
-    await runInDurableObject(f.org, async (object) => {
-      const activation = vi.spyOn(object, "activateRegistration").mockImplementation(async () => {
-        throw new Error("activation unavailable");
-      });
-      const cancellation = vi.spyOn(object, "cancelRegistration").mockImplementation(async () => {
-        throw new Error("cancellation unavailable");
-      });
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
+      const activation = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async () => {
+          throw new Error("activation unavailable");
+        });
+      const cancellation = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "cancelRegistration")
+        .mockImplementation(async () => {
+          throw new Error("cancellation unavailable");
+        });
       try {
         expect((await f.register()).status).toBe(503);
-        await runInDurableObject(f.channel, (_object, state) => {
+        await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
           expect(state.storage.sql.exec<{ state: string }>("SELECT state FROM registration_intents").one().state).toBe(
             "cancelling",
           );
@@ -212,7 +226,7 @@ describe("prepared registration real-handler failure boundaries", () => {
         activation.mockRestore();
         cancellation.mockRestore();
       }
-      const prepare = vi.spyOn(object, "prepareRegistration");
+      const prepare = vi.spyOn(Object.getPrototypeOf(object) as typeof object, "prepareRegistration");
       try {
         expect((await f.register()).status).toBe(409);
         expect(prepare).not.toHaveBeenCalled();
@@ -221,7 +235,7 @@ describe("prepared registration real-handler failure boundaries", () => {
       }
     });
     expect(await f.snapshot()).toEqual(before);
-    await runInDurableObject(f.channel, (_object, state) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
       expect(state.storage.sql.exec<{ state: string }>("SELECT state FROM registration_intents").one().state).toBe(
         "cancelled",
       );
@@ -238,41 +252,43 @@ describe("prepared registration real-handler failure boundaries", () => {
     it(`fences ${fault} after activation and before the synchronous apply`, async () => {
       const f = await fixture();
       const before = await f.snapshot();
-      await runInDurableObject(f.org, async (object, orgState) => {
+      await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object, orgState) => {
         const original = object.activateRegistration.bind(object);
-        const spy = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-          if (fault === "authority-revoked")
-            orgState.storage.sql.exec(
-              "UPDATE principals SET body=json_set(body,'$.status','revoked') WHERE id=?",
-              f.principalId,
-            );
-          const result = await original(ack);
-          if (fault !== "authority-revoked") {
-            expect(result.ok).toBe(true);
-            await runInDurableObject(f.channel, (channel, state) => {
-              if (fault === "missing-consumption")
-                state.storage.sql.exec("DELETE FROM managed_permits WHERE id=?", ack.handoffPermitId);
-              if (fault === "other-intent")
-                state.storage.sql.exec(
-                  "UPDATE managed_permits SET body=json_set(body,'$.consumedByIntentId','another-intent') WHERE id=?",
-                  ack.startPermitId,
-                );
-              if (fault === "revision-change" && result.ok)
-                state.storage.sql.exec("UPDATE managed_policy_floor SET revision=?", result.value.policyRevision + 1);
-              if (fault === "binding-change")
-                Object.assign(channel, {
-                  binding: {
-                    version: 1,
-                    generation: 2,
-                    workspace: f.workspaceId,
-                    operation: "binding",
-                    state: "linked",
-                  },
-                });
-            });
-          }
-          return result;
-        });
+        const spy = vi
+          .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+          .mockImplementation(async (ack) => {
+            if (fault === "authority-revoked")
+              orgState.storage.sql.exec(
+                "UPDATE principals SET body=json_set(body,'$.status','revoked') WHERE id=?",
+                f.principalId,
+              );
+            const result = await original(ack);
+            if (fault !== "authority-revoked") {
+              expect(result.ok).toBe(true);
+              await runInDurableObject(env.CHANNEL.getByName(f.repo), (channel, state) => {
+                if (fault === "missing-consumption")
+                  state.storage.sql.exec("DELETE FROM managed_permits WHERE id=?", ack.handoffPermitId);
+                if (fault === "other-intent")
+                  state.storage.sql.exec(
+                    "UPDATE managed_permits SET body=json_set(body,'$.consumedByIntentId','another-intent') WHERE id=?",
+                    ack.startPermitId,
+                  );
+                if (fault === "revision-change" && result.ok)
+                  state.storage.sql.exec("UPDATE managed_policy_floor SET revision=?", result.value.policyRevision + 1);
+                if (fault === "binding-change")
+                  Object.assign(channel, {
+                    binding: {
+                      version: 1,
+                      generation: 2,
+                      workspace: f.workspaceId,
+                      operation: "binding",
+                      state: "linked",
+                    },
+                  });
+              });
+            }
+            return result;
+          });
         try {
           expect((await f.register()).status).toBe(
             fault === "binding-change" || fault === "authority-revoked" ? 404 : 503,
@@ -291,8 +307,8 @@ describe("prepared registration real-handler failure boundaries", () => {
 
   it("uses live Tasks and queue rows changed during activation without restoring or double draining", async () => {
     const f = await fixture();
-    const agent = "alice/codex/failure-session";
-    await runInDurableObject(f.channel, (_object, state) => {
+    const agent = "alice/codex/0001";
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
       for (const table of ["lost_claims", "deliveries", "directive_deliveries"]) {
         state.storage.sql.exec(`INSERT INTO ${table} VALUES(?,?,?,?)`, "already-acknowledged", agent, 1, "{}");
       }
@@ -302,27 +318,29 @@ describe("prepared registration real-handler failure boundaries", () => {
         JSON.stringify({ number: 9001, title: "before", status: "open", updatedAt: new Date().toISOString() }),
       );
     });
-    await runInDurableObject(f.org, async (object) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
       const original = object.activateRegistration.bind(object);
-      const spy = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-        await runInDurableObject(f.channel, (_channel, state) => {
-          for (const table of ["lost_claims", "deliveries", "directive_deliveries"]) {
-            state.storage.sql.exec(`DELETE FROM ${table}`);
-            state.storage.sql.exec(`INSERT INTO ${table} VALUES(?,?,?,?)`, "newly-queued", agent, 2, "{}");
-          }
-          state.storage.sql.exec(
-            "UPDATE tasks SET data=json_set(data,'$.title','changed-during-activation') WHERE number=9001",
-          );
+      const spy = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async (ack) => {
+          await runInDurableObject(env.CHANNEL.getByName(f.repo), (_channel, state) => {
+            for (const table of ["lost_claims", "deliveries", "directive_deliveries"]) {
+              state.storage.sql.exec(`DELETE FROM ${table}`);
+              state.storage.sql.exec(`INSERT INTO ${table} VALUES(?,?,?,?)`, "newly-queued", agent, 2, "{}");
+            }
+            state.storage.sql.exec(
+              "UPDATE tasks SET data=json_set(data,'$.title','changed-during-activation') WHERE number=9001",
+            );
+          });
+          return original(ack);
         });
-        return original(ack);
-      });
       try {
         expect((await f.register()).status).toBe(200);
       } finally {
         spy.mockRestore();
       }
     });
-    await runInDurableObject(f.channel, (_object, state) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
       for (const table of ["lost_claims", "deliveries", "directive_deliveries"])
         expect(state.storage.sql.exec(`SELECT * FROM ${table} WHERE agent=?`, agent).toArray()).toEqual([]);
       expect(
@@ -338,7 +356,7 @@ describe("prepared registration real-handler failure boundaries", () => {
   it("rolls back a late apply failure including live queue drains, spawn SQL and Host waiter notification", async () => {
     const f = await fixture();
     const notify = vi.fn();
-    await runInDurableObject(f.channel, (object, state) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), (object, state) => {
       const hosts = (
         object as unknown as {
           hosts: {
@@ -357,25 +375,21 @@ describe("prepared registration real-handler failure boundaries", () => {
         Date.now(),
       );
       for (const table of ["lost_claims", "deliveries", "directive_deliveries"])
-        state.storage.sql.exec(
-          `INSERT INTO ${table} VALUES(?,?,?,?)`,
-          "rollback-queue",
-          "alice/codex/failure-session",
-          1,
-          "{}",
-        );
+        state.storage.sql.exec(`INSERT INTO ${table} VALUES(?,?,?,?)`, "rollback-queue", "alice/codex/0001", 1, "{}");
     });
     const before = await f.snapshot();
-    await runInDurableObject(f.org, async (object) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
       const original = object.activateRegistration.bind(object);
-      const spy = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-        const result = await original(ack);
-        await runInDurableObject(f.channel, (_channel, state) => {
-          state.storage.sql.exec(`CREATE TRIGGER abort_after_registration BEFORE UPDATE ON registration_intents
+      const spy = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async (ack) => {
+          const result = await original(ack);
+          await runInDurableObject(env.CHANNEL.getByName(f.repo), (_channel, state) => {
+            state.storage.sql.exec(`CREATE TRIGGER abort_after_registration BEFORE UPDATE ON registration_intents
             WHEN NEW.state='applied' BEGIN SELECT RAISE(ABORT, 'late registration rollback'); END`);
+          });
+          return result;
         });
-        return result;
-      });
       try {
         expect((await f.register("late-rollback", { host: "rollback-host", spawn: "rollback-spawn" })).status).toBe(
           503,
@@ -390,9 +404,9 @@ describe("prepared registration real-handler failure boundaries", () => {
 
   it("records terminal applied failure after completion denial without undoing or repeating committed registration", async () => {
     const f = await fixture();
-    await runInDurableObject(f.org, async (object) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
       const complete = vi
-        .spyOn(object, "completeRegistration")
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "completeRegistration")
         .mockResolvedValue({ ok: false, status: 404, reason: "registration_denied", policyRevision: 1 });
       try {
         expect((await f.register()).status).toBe(404);
@@ -403,16 +417,13 @@ describe("prepared registration real-handler failure boundaries", () => {
     const applied = await f.snapshot();
     expect((await f.register()).status).toBe(409);
     expect(await f.snapshot()).toEqual(applied);
-    await runInDurableObject(f.channel, (_object, state) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
       expect(state.storage.sql.exec<{ state: string }>("SELECT state FROM registration_intents").one().state).toBe(
         "applied-failed",
       );
       expect(
         state.storage.sql
-          .exec<{ active: number }>(
-            "SELECT active FROM m1_agent_executions WHERE agent=?",
-            "alice/codex/failure-session",
-          )
+          .exec<{ active: number }>("SELECT active FROM m1_agent_executions WHERE agent=?", "alice/codex/0001")
           .one().active,
       ).toBe(0);
     });
@@ -422,7 +433,7 @@ describe("prepared registration real-handler failure boundaries", () => {
     it(`rolls back BOTH receipts when ${action} was already consumed at TXN-1`, async () => {
       const f = await fixture();
       const before = await f.snapshot();
-      await runInDurableObject(f.channel, async (_object, state) => {
+      await runInDurableObject(env.CHANNEL.getByName(f.repo), async (_object, state) => {
         const original = LocalMutationPermits.prototype.install;
         const install = vi.spyOn(LocalMutationPermits.prototype, "install").mockImplementation(function (
           this: LocalMutationPermits,
@@ -451,16 +462,18 @@ describe("prepared registration real-handler failure boundaries", () => {
   it("refuses apply when the immutable intent TTL expires after activation", async () => {
     const f = await fixture();
     const before = await f.snapshot();
-    await runInDurableObject(f.org, async (object) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
       const original = object.activateRegistration.bind(object);
       let clock: ReturnType<typeof vi.spyOn> | undefined;
-      const activate = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-        const result = await original(ack);
-        expect(result.ok).toBe(true);
-        const expired = Date.now() + 31_000;
-        clock = vi.spyOn(Date, "now").mockReturnValue(expired);
-        return result;
-      });
+      const activate = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async (ack) => {
+          const result = await original(ack);
+          expect(result.ok).toBe(true);
+          const expired = Date.now() + 31_000;
+          clock = vi.spyOn(Date, "now").mockReturnValue(expired);
+          return result;
+        });
       try {
         expect((await f.register()).status).toBe(503);
       } finally {
@@ -475,13 +488,17 @@ describe("prepared registration real-handler failure boundaries", () => {
   it("recovers cancellation from the real alarm without reapplying registration", async () => {
     const f = await fixture();
     const before = await f.snapshot();
-    await runInDurableObject(f.org, async (object) => {
-      const activation = vi.spyOn(object, "activateRegistration").mockImplementation(async () => {
-        throw new Error("activation unavailable");
-      });
-      const cancellation = vi.spyOn(object, "cancelRegistration").mockImplementation(async () => {
-        throw new Error("cancel unavailable");
-      });
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
+      const activation = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async () => {
+          throw new Error("activation unavailable");
+        });
+      const cancellation = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "cancelRegistration")
+        .mockImplementation(async () => {
+          throw new Error("cancel unavailable");
+        });
       try {
         expect((await f.register()).status).toBe(503);
       } finally {
@@ -489,7 +506,7 @@ describe("prepared registration real-handler failure boundaries", () => {
         cancellation.mockRestore();
       }
     });
-    await runInDurableObject(f.channel, async (object, state) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object, state) => {
       state.storage.sql.exec("DELETE FROM alarm_deadlines");
       state.storage.sql.exec("INSERT INTO alarm_deadlines VALUES('registration-intents',?)", Date.now() - 1);
       await object.alarm();
@@ -502,29 +519,31 @@ describe("prepared registration real-handler failure boundaries", () => {
 
   it("cannot rotate an activated but unapplied identity into a usable credential", async () => {
     const f = await fixture();
-    await runInDurableObject(f.org, async (object, state) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object, state) => {
       const original = object.activateRegistration.bind(object);
-      const activate = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-        const result = await original(ack);
-        expect(result.ok).toBe(true);
-        const metadata = await object.metadata(f.actor);
-        const rotated = await object.mutateIdentity({
-          actor: f.actor,
-          key: "rotate-before-complete",
-          requestId: "rotate-before-complete",
-          expectedRevision: metadata?.policyRevision,
-          command: { kind: "execution.rotate", executionId: ack.executionId, expectedGeneration: 0 },
+      const activate = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async (ack) => {
+          const result = await original(ack);
+          expect(result.ok).toBe(true);
+          const metadata = await object.metadata(f.actor);
+          const rotated = await object.mutateIdentity({
+            actor: f.actor,
+            key: "rotate-before-complete",
+            requestId: "rotate-before-complete",
+            expectedRevision: metadata?.policyRevision,
+            command: { kind: "execution.rotate", executionId: ack.executionId, expectedGeneration: 0 },
+          });
+          expect(rotated.ok).toBe(false);
+          if (!rotated.ok) expect(rotated.status).toBe(409);
+          expect(rotated).not.toHaveProperty("value.secret");
+          expect(
+            state.storage.sql
+              .exec("SELECT id FROM execution_credentials WHERE json_extract(body,'$.executionId')=?", ack.executionId)
+              .toArray(),
+          ).toEqual([]);
+          return result;
         });
-        expect(rotated.ok).toBe(false);
-        if (!rotated.ok) expect(rotated.status).toBe(409);
-        expect(rotated).not.toHaveProperty("value.secret");
-        expect(
-          state.storage.sql
-            .exec("SELECT id FROM execution_credentials WHERE json_extract(body,'$.executionId')=?", ack.executionId)
-            .toArray(),
-        ).toEqual([]);
-        return result;
-      });
       try {
         expect((await f.register()).status).toBe(200);
       } finally {
@@ -535,7 +554,7 @@ describe("prepared registration real-handler failure boundaries", () => {
 
   it("preserves a prior execution when its live Resume ticket disappears during activation", async () => {
     const f = await fixture();
-    await runInDurableObject(f.channel, (object, state) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), (object, state) => {
       const hosts = (
         object as unknown as {
           hosts: { register(person: string, request: { name: string; roots: string[] }): unknown };
@@ -546,17 +565,19 @@ describe("prepared registration real-handler failure boundaries", () => {
       state.storage.sql.exec("INSERT INTO host_resumes VALUES(?,?)", f.targetId, Date.now());
     });
     let afterLiveChange: Awaited<ReturnType<typeof f.snapshot>> | undefined;
-    await runInDurableObject(f.org, async (object, state) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object, state) => {
       const original = object.activateRegistration.bind(object);
-      const activate = vi.spyOn(object, "activateRegistration").mockImplementation(async (ack) => {
-        const result = await original(ack);
-        expect(result.ok).toBe(true);
-        await runInDurableObject(f.channel, (_channel, channelState) => {
-          channelState.storage.sql.exec("DELETE FROM host_resumes WHERE agent=?", f.targetId);
+      const activate = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async (ack) => {
+          const result = await original(ack);
+          expect(result.ok).toBe(true);
+          await runInDurableObject(env.CHANNEL.getByName(f.repo), (_channel, channelState) => {
+            channelState.storage.sql.exec("DELETE FROM host_resumes WHERE agent=?", f.targetId);
+          });
+          afterLiveChange = await f.snapshot();
+          return result;
         });
-        afterLiveChange = await f.snapshot();
-        return result;
-      });
       try {
         expect(
           (await f.register("resume-race", { sessionId: "session", resumed: true, host: "resume-host" })).status,
@@ -578,14 +599,14 @@ describe("prepared registration real-handler failure boundaries", () => {
     it(`recovers a crashed ${phase} intent by cancellation only at its durable alarm`, async () => {
       const f = await fixture();
       const before = await f.snapshot();
-      const request = JSON.stringify({ cli: "codex", sessionId: "failure-session", resumed: false, cwd: "/repo" });
+      const request = JSON.stringify({ cli: "codex", sessionId: "failure-0001", resumed: false, cwd: "/repo" });
       const prepared = await f.org.prepareRegistration({
         actor: f.actor,
         principalId: f.principalId,
         workspaceId: f.workspaceId,
         channelId: f.repo,
         generation: 1,
-        agentId: "alice/codex/failure-session",
+        agentId: "alice/codex/0001",
         hostId: null,
         requestId: "crash-intent",
         request,
@@ -603,7 +624,7 @@ describe("prepared registration real-handler failure boundaries", () => {
         channelId: p.channelId,
         generation: p.generation,
       };
-      await runInDurableObject(f.channel, (_object, state) => {
+      await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
         state.storage.sql.exec("INSERT OR REPLACE INTO alarm_deadlines VALUES('registration-intents',?)", p.expiresAt);
         state.storage.transactionSync(() =>
           new RegistrationIntents(state.storage.sql).prepare(
@@ -657,12 +678,12 @@ describe("prepared registration real-handler failure boundaries", () => {
       expect(await f.snapshot()).toEqual(before);
       if (phase !== "prepared") {
         expect((await f.org.activateRegistration(ack)).ok).toBe(true);
-        await runInDurableObject(f.channel, (_object, state) => {
+        await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
           new RegistrationIntents(state.storage.sql).transition(p.intentId, "prepared", "activated");
           if (phase === "receipt-invalidated") state.storage.sql.exec("DELETE FROM managed_permits");
         });
       }
-      await runInDurableObject(f.channel, async (object, state) => {
+      await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object, state) => {
         state.storage.sql.exec("DELETE FROM alarm_deadlines WHERE job != 'registration-intents'");
         const clock = vi.spyOn(Date, "now").mockReturnValue(p.expiresAt + 1);
         try {
@@ -691,11 +712,11 @@ describe("prepared registration real-handler failure boundaries", () => {
     const applied = await f.snapshot();
     expect((await f.register("failure-registration", { cwd: "/changed" })).status).toBe(409);
     expect(await f.snapshot()).toEqual(applied);
-    await runInDurableObject(f.channel, (_object, state) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => {
       expect(state.storage.sql.exec("SELECT intentId FROM registration_intents").toArray()).toHaveLength(1);
       expect(
         state.storage.sql
-          .exec("SELECT id FROM events WHERE type='session.start' AND actor_id=?", "alice/codex/failure-session")
+          .exec("SELECT id FROM events WHERE type='session.start' AND actor_id=?", "alice/codex/0001")
           .toArray(),
       ).toHaveLength(1);
     });
@@ -704,16 +725,18 @@ describe("prepared registration real-handler failure boundaries", () => {
   it("times out pending activation with 503 and refuses its delayed response after cancellation", async () => {
     const f = await fixture();
     const before = await f.snapshot();
-    await runInDurableObject(f.org, async (object) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
       const original = object.activateRegistration.bind(object);
       let release: (() => void) | undefined;
       let delayed: ReturnType<typeof original> | undefined;
-      const activate = vi.spyOn(object, "activateRegistration").mockImplementation((ack) => {
-        delayed = new Promise<void>((resolve) => {
-          release = resolve;
-        }).then(() => original(ack));
-        return delayed;
-      });
+      const activate = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation((ack) => {
+          delayed = new Promise<void>((resolve) => {
+            release = resolve;
+          }).then(() => original(ack));
+          return delayed;
+        });
       try {
         expect((await f.register()).status).toBe(503);
       } finally {
@@ -729,13 +752,17 @@ describe("prepared registration real-handler failure boundaries", () => {
   it("preserves the earliest durable recovery deadline across overlapping intents and reconciles both", async () => {
     const f = await fixture();
     const before = await f.snapshot();
-    await runInDurableObject(f.org, async (object) => {
-      const activate = vi.spyOn(object, "activateRegistration").mockImplementation(async () => {
-        throw new Error("activation unavailable");
-      });
-      const cancel = vi.spyOn(object, "cancelRegistration").mockImplementation(async () => {
-        throw new Error("cancel unavailable");
-      });
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
+      const activate = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "activateRegistration")
+        .mockImplementation(async () => {
+          throw new Error("activation unavailable");
+        });
+      const cancel = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "cancelRegistration")
+        .mockImplementation(async () => {
+          throw new Error("cancel unavailable");
+        });
       try {
         expect((await f.register("first-overlap")).status).toBe(503);
         expect((await f.register("second-overlap", { sessionId: "overlap-session" })).status).toBe(503);
@@ -744,7 +771,7 @@ describe("prepared registration real-handler failure boundaries", () => {
         cancel.mockRestore();
       }
     });
-    await runInDurableObject(f.channel, async (object, state) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object, state) => {
       const rows = state.storage.sql.exec<{ payload: string }>("SELECT payload FROM registration_intents").toArray();
       expect(rows).toHaveLength(2);
       const deadline = state.storage.sql

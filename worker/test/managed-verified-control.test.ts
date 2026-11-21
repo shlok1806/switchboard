@@ -11,7 +11,7 @@ afterEach(() => vi.restoreAllMocks());
 async function fixture() {
   const f = await verifiedRegistrationFixture();
   const bob = await nativeIdentity(String(Math.floor(Math.random() * 1e12) + 1000), "bob");
-  await runInDurableObject(f.org, (_object, state) => {
+  await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
     const aggregate = JSON.parse(
       state.storage.sql.exec<{ body: string }>("SELECT body FROM aggregate WHERE id=1").one().body,
     );
@@ -68,7 +68,7 @@ async function fixture() {
 }
 
 async function approvalSnapshot(f: Awaited<ReturnType<typeof fixture>>) {
-  return runInDurableObject(f.channel, (_object, state) => ({
+  return runInDurableObject(env.CHANNEL.getByName(f.repo), (_object, state) => ({
     agents: state.storage.sql.exec("SELECT * FROM agents ORDER BY id").toArray(),
     events: state.storage.sql.exec("SELECT * FROM events ORDER BY seq").toArray(),
   }));
@@ -78,7 +78,7 @@ describe("verified Host consent and real approval control handlers", () => {
   it("dispatches cross-owner denial only with the enrolled owner's exact terminal_control consent", async () => {
     const f = await fixture();
     expect((await f.consent()).ok).toBe(true);
-    await runInDurableObject(f.channel, async (object) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object) => {
       const dispatch = vi
         .spyOn(object as unknown as { interruptTo(...args: unknown[]): boolean }, "interruptTo")
         .mockReturnValue(true);
@@ -140,7 +140,7 @@ describe("verified Host consent and real approval control handlers", () => {
             ).ok,
           ).toBe(true);
         }
-        await runInDurableObject(f.org, (_object, state) => {
+        await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
           if (fault === "revoked-consent") return;
           const row = state.storage.sql
             .exec<{ body: string }>("SELECT body FROM owner_consents WHERE id=?", created.value.id)
@@ -158,7 +158,7 @@ describe("verified Host consent and real approval control handlers", () => {
       if (fault === "ended-enrollment")
         expect(await f.org.endRegisteredExecution(f.executionId, f.targetId)).toBe(true);
       if (["admin-without-consent", "viewer", "nonmember"].includes(fault)) {
-        await runInDurableObject(f.org, (_object, state) => {
+        await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
           const aggregate = JSON.parse(
             state.storage.sql.exec<{ body: string }>("SELECT body FROM aggregate WHERE id=1").one().body,
           );
@@ -169,13 +169,13 @@ describe("verified Host consent and real approval control handlers", () => {
         });
       }
       if (fault === "wrong-generation")
-        await runInDurableObject(f.channel, (object) => {
+        await runInDurableObject(env.CHANNEL.getByName(f.repo), (object) => {
           Object.assign(object, {
             binding: { version: 1, generation: 2, workspace: f.workspaceId, operation: "binding", state: "linked" },
           });
         });
       const before = await approvalSnapshot(f);
-      await runInDurableObject(f.channel, async (object) => {
+      await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object) => {
         const dispatch = vi
           .spyOn(object as unknown as { interruptTo(...args: unknown[]): boolean }, "interruptTo")
           .mockReturnValue(true);
@@ -201,7 +201,7 @@ describe("verified Host consent and real approval control handlers", () => {
     it(`refuses consent issuance for ${fault} without storing consent`, async () => {
       const f = await fixture();
       if (fault === "inactive-issuer")
-        await runInDurableObject(f.org, (_object, state) => {
+        await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
           const aggregate = JSON.parse(
             state.storage.sql.exec<{ body: string }>("SELECT body FROM aggregate WHERE id=1").one().body,
           );
@@ -220,7 +220,7 @@ describe("verified Host consent and real approval control handlers", () => {
         fault === "foreign-workspace" ? `${crypto.randomUUID()}:${crypto.randomUUID()}` : f.workspaceId,
       );
       expect(result.ok).toBe(false);
-      await runInDurableObject(f.org, (_object, state) => {
+      await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
         expect(state.storage.sql.exec("SELECT * FROM owner_consents").toArray()).toEqual([]);
       });
     });
@@ -229,9 +229,9 @@ describe("verified Host consent and real approval control handlers", () => {
   it("preserves 503 on unavailable approval authority without dispatch or mutation", async () => {
     const f = await fixture();
     const before = await approvalSnapshot(f);
-    await runInDurableObject(f.org, async (object) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), async (object) => {
       const authority = vi
-        .spyOn(object, "authorizeChannelRead")
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "authorizeChannelRead")
         .mockResolvedValue({ ok: false, status: 503, reason: "authority_unavailable", policyRevision: 0 });
       try {
         expect((await f.deny(f.token)).status).toBe(503);
@@ -245,7 +245,7 @@ describe("verified Host consent and real approval control handlers", () => {
   it("preserves local recipient refusal without recording an approval denial", async () => {
     const f = await fixture();
     const before = await approvalSnapshot(f);
-    await runInDurableObject(f.channel, async (object) => {
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object) => {
       const dispatch = vi
         .spyOn(object as unknown as { interruptTo(...args: unknown[]): boolean }, "interruptTo")
         .mockReturnValue(false);
@@ -299,7 +299,7 @@ describe("verified Host consent and real approval control handlers", () => {
     expect(
       (await f.org.authorizeChannelRead({ ...input, resource: { ...input.resource, hostId: "alice/foreign" } })).ok,
     ).toBe(false);
-    await runInDurableObject(f.org, (_object, state) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
       state.storage.sql.exec(
         "UPDATE owner_consents SET body=json_remove(body,'$.enrollmentIntentId','$.targetExecutionId') WHERE id=?",
         created.value.id,
@@ -327,7 +327,7 @@ describe("verified Host consent and real approval control handlers", () => {
         ).toBe(true);
       }
       expect((await f.consent()).ok).toBe(false);
-      await runInDurableObject(f.org, (_object, state) => {
+      await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
         const row = state.storage.sql
           .exec<{ revokedAt: number | null }>(
             "SELECT revokedAt FROM host_enrollments WHERE executionId=?",
@@ -341,11 +341,13 @@ describe("verified Host consent and real approval control handlers", () => {
 
   it("invalidates verified enrollment at unbind reservation before a failed Channel transition", async () => {
     const f = await fixture();
-    await runInDurableObject(f.channel, async (object) => {
-      const owner = vi.spyOn(object, "bindingOwner").mockResolvedValue(true);
-      const transition = vi.spyOn(object, "transitionBinding").mockImplementation(() => {
-        throw new Error("binding transition unavailable");
-      });
+    await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object) => {
+      const owner = vi.spyOn(Object.getPrototypeOf(object) as typeof object, "bindingOwner").mockResolvedValue(true);
+      const transition = vi
+        .spyOn(Object.getPrototypeOf(object) as typeof object, "transitionBinding")
+        .mockImplementation(() => {
+          throw new Error("binding transition unavailable");
+        });
       try {
         const metadata = await env.ORGANIZATION.getByName(f.organizationId).metadata(f.actor);
         const result = await env.ORGANIZATION.getByName(f.organizationId).coordinateBinding({
@@ -367,7 +369,7 @@ describe("verified Host consent and real approval control handlers", () => {
       }
     });
     expect((await f.consent()).ok).toBe(false);
-    await runInDurableObject(f.org, (_object, state) => {
+    await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
       expect(
         state.storage.sql
           .exec<{ revokedAt: number | null }>(
@@ -390,7 +392,7 @@ describe("verified Host consent and real approval control handlers", () => {
     it(`denies consent issuance and consented control after ${fault}`, async () => {
       const f = await fixture();
       expect((await f.consent()).ok).toBe(true);
-      await runInDurableObject(f.org, (_object, state) => {
+      await runInDurableObject(env.ORGANIZATION.getByName(f.organizationId), (_object, state) => {
         if (fault === "revoked-execution")
           state.storage.sql.exec(
             "UPDATE executions SET body=json_set(body,'$.status','revoked') WHERE id=?",
@@ -410,11 +412,11 @@ describe("verified Host consent and real approval control handlers", () => {
             : f.workspaceId;
       expect((await f.consent({}, f.actor, workspaceId)).ok).toBe(false);
       if (fault === "foreign-organization" || fault === "foreign-workspace")
-        await runInDurableObject(f.channel, (object) => {
+        await runInDurableObject(env.CHANNEL.getByName(f.repo), (object) => {
           Object.assign(object, { binding: { ...object.bindingState(), workspace: workspaceId } });
         });
       const before = await approvalSnapshot(f);
-      await runInDurableObject(f.channel, async (object) => {
+      await runInDurableObject(env.CHANNEL.getByName(f.repo), async (object) => {
         const dispatch = vi
           .spyOn(object as unknown as { interruptTo(...args: unknown[]): boolean }, "interruptTo")
           .mockReturnValue(true);

@@ -572,3 +572,7 @@
 - 1:57 PM CT: [P3] [P3-#44] M1-P3-PCFIX-FIX1 run attempt 3 started
 - 1:58 PM CT: [P3-#47] START. Box was apparently suspended: p3_43_driver.sh (1944656) never died; it sat in its 2nd 20m deferral sleep (log last line 11:15) and woke 1:57 PM CT. p3_46_quota_resume correctly did NOT relaunch (driver alive). I ran 'manager quota refresh' (read-only) at 1:45 PM CT (Codex 5h now 'unavailable', est 0/3 jobs; weekly 81% left; agy 100%). M1-P3-PCFIX-FIX1 attempt 3 STARTED 1:57:30 PM CT, NOT deferred; Codex rollout rollout-2026-11-21T13-57-33-01a1ffaf. Pin-watch (1957513) alive, last ok 3adacdf, no P3_STOP. HEAD 3adacdf. No code authored.
 - 2:06 PM CT: [P3] [P3-#44] M1-P3-PCFIX-FIX1 done
+- 2:06 PM CT: [P3] [P3-#44] tests pcfix41-fix1 (quick) started at HEAD 1609ac1
+- 2:07 PM CT: [P3] [P3-#44] tests pcfix41-fix1: == totals (pcfix41-fix1, quick, HEAD 1609ac1) == 06_worker_test:  Test Files 4 failed | 94 passed | 2 skipped (100) | Tests 21 failed | 1809 passed | 2 skipped (1832)  | strict: FAIL  06_worker_test=1; | eval(T=0): cli failures: [] FAIL 06_worker_test exit=1; worker totals (21, 1809, 1832)  | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=1 07_cli_typecheck=0 11_dashboard_typecheck=0 
+- 2:07 PM CT: [P3] [P3-#44] M1-P3-PCFIX-FIX2 run attempt 1 started
+- 2:09 PM CT: [P3] [P3-#44] M1-P3-PCFIX-FIX2 done
