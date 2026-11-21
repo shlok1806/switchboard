@@ -448,3 +448,52 @@
 - 8:54 AM ET: [P3] [P3-#40] M1-P3-PCDESIGN-REVISE1 done
 - 8:54 AM ET: [P3] [P3-#40] M1-P3-PCRECHECK-1 run attempt 1 started
 - 9:00 AM ET: [P3] [P3-#40] M1-P3-PCRECHECK-1 done
+- 9:00 AM ET: [P3] [P3-#40] agy permit/consent design review round 1 verdict: GO (m1/p3/reviews/PC_DESIGN_RECHECK_1.md)
+- 9:00 AM ET: [P3] [P3-#40] DESIGN GO — proceeding to Codex implementation (PCFIX)
+- 9:00 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:02 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:02 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (1)
+- 9:02 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:02 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:02 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (2)
+- 9:02 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:03 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:03 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (3)
+- 9:03 AM ET: [P3] [P3-#40] REDESIGN DRIVER STOP: PCFIX incomplete (no PCFIX_DONE.md)
+- 9:09 AM ET: [P3-#40] Design: Codex REVISE1 addd4c5 (8:53–8:54) → fresh agy Gemini PCRECHECK-1 110d7c3 (8:54–9:00) VERDICT: GO (claude/gpt usage unchanged). PCFIX attempts 9:00–9:03 ET: Codex stopped 3× in ~1–2 min with no PCFIX_DONE and no named blocker (only resourceKey hostId + 1 serialization test, uncommitted in worktree) → driver STOP. Root cause found: provider default Codex model changed gpt-6.1-sol → gpt-6.1-terra since Nov 18 (every M1 run through Nov 15 was sol; all terra runs short — also explains XFIX1's <2-min rounds). Fix: per-run model pin wrapper projects/switchboard-m1/bin/codex-sol via manager's EM_CODEX_BIN env (no ~/.codex/config.toml or manager code change; keeps 'codex exec' cmdline for watchdog). PCFIX requeued and p3_40_driver.sh relaunched with EM_CODEX_BIN (chain relaunch inherits it).
+- 9:09 AM ET: [P3] [P3-#40] agy permit/consent design review round 0 verdict: BLOCKER (m1/p3/reviews/PC_DESIGN_REVIEW.md)
+- 9:09 AM ET: [P3] [P3-#40] round 0 BLOCKER resolved by Pranay's ruling t102u (Option 1) — treated as REVISE
+- 9:09 AM ET: [P3] [P3-#40] agy permit/consent design review round 1 verdict: GO (m1/p3/reviews/PC_DESIGN_RECHECK_1.md)
+- 9:09 AM ET: [P3] [P3-#40] DESIGN GO — proceeding to Codex implementation (PCFIX)
+- 9:09 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:13 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:13 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (1)
+- 9:13 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:23 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:23 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (2)
+- 9:23 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (3)
+- 9:24 AM ET: [P3] [P3-#40] REDESIGN DRIVER STOP: PCFIX incomplete (no PCFIX_DONE.md)
+- 9:24 AM ET: [P3] [P3-#40] PCFIX continuation pass 2 (diff progressed: sig 95716da1d4a5,  4 files changed, 107 insertions(+), 1 deletion(-); untracked 3)
+- 9:24 AM ET: [P3] [P3-#40] agy permit/consent design review round 0 verdict: BLOCKER (m1/p3/reviews/PC_DESIGN_REVIEW.md)
+- 9:24 AM ET: [P3] [P3-#40] round 0 BLOCKER resolved by Pranay's ruling t102u (Option 1) — treated as REVISE
+- 9:24 AM ET: [P3] [P3-#40] agy permit/consent design review round 1 verdict: GO (m1/p3/reviews/PC_DESIGN_RECHECK_1.md)
+- 9:24 AM ET: [P3] [P3-#40] DESIGN GO — proceeding to Codex implementation (PCFIX)
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (1)
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (2)
+- 9:24 AM ET: [P3] [P3-#40] M1-P3-PCFIX run attempt 1 started
+- 9:25 AM ET: [P3] [P3-#40] M1-P3-PCFIX done
+- 9:25 AM ET: [P3] [P3-#40] M1-P3-PCFIX done but /home/box/engineering-workspace/worktrees/switchboard-m1-p3/m1/p3/PCFIX_DONE.md missing — requeue (3)
+- 9:25 AM ET: [P3] [P3-#40] REDESIGN DRIVER STOP: PCFIX incomplete (no PCFIX_DONE.md)
+- 9:25 AM ET: [P3] [P3-#40] loop STOP: PCFIX made no progress in pass 2 — supervisor must inspect
+- 9:26 AM ET: [P3-#40] OUTCOME: design GO (REVISE1 addd4c5, agy Gemini RECHECK-1 110d7c3 GO; claude/gpt usage unchanged). PCFIX on pinned gpt-6.1-sol (9:09–9:25 ET, 6 runs; pass-1 runs 3.5–11 min with real progress, pass-2 runs ~20 s with no progress → loop stopped correctly) ended on a NAMED rule-8 blocker: 'DESIGN DECISION NEEDED — durable staging of registration's shared mutations' (m1/p3/P3_IMPLEMENTATION_NOTES.md:1480). Registration's existing algorithm mutates shared state beyond the Agent row (withNextTurn channel.ts:3315 drains lost Claims/Relay deliveries/Directives via stale-claims.ts:208, relay.ts:267, directives.ts:170; presenceChanged → StaleClaims stale-claims.ts:73 updates Tasks+Events; hosts.spawned hosts.ts:533/564–567 sends host.spawned + resolves in-memory waiter; Relay after each Event channel.ts:4807), so the approved 'commit locally, invisible until activation' cannot be met by a pending flag + buffered broadcasts. Options: (1, Codex-recommended) prepared durable intent: consume permits + commit only an immutable registration intent, apply the existing algorithm in a 2nd sync txn after Org activation (changes approved step-3 order; must define which queue/Task snapshot wins); (2) durable staged write set: shadow/versioned rows for roster/Person/Task/queue/resume/handoff/event/spawn + notification journal (keeps order, widens storage/read boundary). Uncommitted partial subset in worktree (NOT committed, NOT gated): policy-permits.ts resourceKey hostId + LocalMutationPermits.consumeSet; agents.ts registerLocal sync extraction; 3 new test files (managed-permit-host-binding, managed-permit-set, managed-registration-local); notes + route inventory. Codex reports typecheck+lint exit 0; baseline tests untouched; :278 200 and consent true assertions untouched. Cross-review findings 1–3 NOT closed; XFIX1 denials organization.ts:903/:1120 still in place.
+- 9:26 AM ET: [P3-#40] RETURNING. STATE: nothing running (no driver/loop/chain/codex/agy). Chain NOT relaunched (gated on PCFIX). HEADs: feature 110d7c3 pushed (code = 87b8813 + docs), worktree dirty with the PCFIX partial above; bulletin 0bfb31f, main fe39268 untouched; no PR/deploy/force-push/merge; no .dev.vars read. Task M1-P3-PCFIX status queued. Quota ~9:00 ET: Codex weekly ~97%; agy Gemini weekly 98%, claude/gpt 100% (unused). Files: prompts/p3/PC_OWNER_DECISION.txt (R1–R9, .bak-p3-40), p3_40_driver.sh (+.out/.run1.out), p3_40_loop.sh, p3_40_launch.sh, bin/codex-sol (EM_CODEX_BIN pin; Codex default switched sol→terra on Nov 18 with short no-progress runs). Resume after Pranay picks staging option: append it to PC_OWNER_DECISION.txt, have Codex revise the design (PCDESIGN-REVISE2 — driver's loop has one revision slot left, but round-1 GO short-circuits it; supervisor must delete/rename PC_DESIGN_RECHECK_1 handling or add a p3_41 step) → fresh agy Gemini recheck → PCFIX (run with EM_CODEX_BIN=bin/codex-sol) → gate → chain. Note: chain_p3.sh hl() labels times 'CT' but box clock is ET; chain lines are ET.
+- 8:17 AM CT: [P3] [P3-#41] pre-ruling PCFIX WIP saved (wip/p3_41_pcfix_wip.patch + _untracked.tgz + _notes.md) and stashed (p3-41-pcfix-wip) for the docs-only REVISE2
+- 8:17 AM CT: [P3] [P3-#41] M1-P3-PCDESIGN-REVISE2 run attempt 1 started
+- 8:17 AM CT: [P3-#41] Pranay ruled PREPARED INTENT (t102s800, 8:13 AM CT) → appended R10–R15 to prompts/p3/PC_OWNER_DECISION.txt (.bak-p3-41). New p3_41_driver.sh (p3_40 copy kept; .bak-p3-41): forced Codex REVISE2 → fresh agy Gemini RECHECK-2 (≤2 revise loops), WIP saved to wip/p3_41_pcfix_wip.* + stashed for docs-only rounds and restored before PCFIX2 (new task; old M1-P3-PCFIX superseded), bounded continuation ≤4 passes, gate pcfix41, then chain relaunch (Codex mode, EM_CODEX_BIN=bin/codex-sol, TZ=America/Chicago). Driver launched 8:17 AM CT. Note: box clock was actually ET (date showed EST); driver/chain now run with TZ=America/Chicago.
+- 8:20 AM CT: [P3] [P3-#41] M1-P3-PCDESIGN-REVISE2 done
