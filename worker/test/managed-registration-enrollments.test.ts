@@ -22,7 +22,7 @@ function fixture(now: number): RegistrationReservation {
     hostId: "host",
     ownerPersonId: "owner",
     requestId: "key",
-    request: '{"cli":"claude","sessionId":"session"}',
+    request: '{"cli":"claude-code","sessionId":"session"}',
     startPermitId: "start",
     handoffPermitId: "hand",
     policyRevision: 1,

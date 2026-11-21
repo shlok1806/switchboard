@@ -21,7 +21,7 @@ function fixture(now: number): RegistrationReservation {
     hostId: "host",
     ownerPersonId: "owner",
     requestId: "key",
-    request: '{"cli":"claude","sessionId":"session"}',
+    request: '{"cli":"claude-code","sessionId":"session"}',
     startPermitId: "start",
     handoffPermitId: "hand",
     policyRevision: 1,
@@ -70,7 +70,7 @@ describe("Organization registration reservation storage (not handler admission)"
       expect(() => reservations.complete(payload, now + 2)).toThrow(AuthorityUnavailable);
       expect(reservations.reserve(payload, now + 2)).toEqual(cancelled);
       expect(() =>
-        reservations.reserve({ ...payload, request: '{"cli":"claude","sessionId":"changed"}' }, now + 2),
+        reservations.reserve({ ...payload, request: '{"cli":"claude-code","sessionId":"changed"}' }, now + 2),
       ).toThrow(IntentConflict);
     });
   });

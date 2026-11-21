@@ -1,4 +1,4 @@
-import { reset, runInDurableObject } from "cloudflare:test";
+import { env, reset, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RegisterAgentRequest } from "../../shared/src/index";
 import { LocalMutationPermits } from "../src/policy-permits";
@@ -14,7 +14,7 @@ async function fixture() {
     state.storage.sql.exec("INSERT OR REPLACE INTO task_sync VALUES('syncedAt',?)", new Date().toISOString());
   });
   const register = (key = "failure-registration", extra: Partial<RegisterAgentRequest> = {}) =>
-    f.channel.registerManagedAgent(
+    env.CHANNEL.getByName(f.repo).registerManagedAgent(
       new Request(`https://switchboard.test/r/${f.repo}/api/agents`, {
         method: "POST",
         headers: { Authorization: `Bearer ${f.token}`, "Idempotency-Key": key },

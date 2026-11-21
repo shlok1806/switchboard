@@ -1,4 +1,4 @@
-import { reset, runInDurableObject } from "cloudflare:test";
+import { env, reset, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nativeIdentity } from "./m1-helpers";
 import { b2Request, denyB2 } from "./managed-b2a-cases";
@@ -26,7 +26,7 @@ async function fixture() {
     state.storage.sql.exec("UPDATE aggregate SET body=? WHERE id=1", JSON.stringify(aggregate));
   });
   const invoke = (operation: string, token: string, body: unknown) =>
-    f.channel.managedRequest(
+    env.CHANNEL.getByName(f.repo).managedRequest(
       new Request(`https://switchboard.test/r/${f.repo}/api/agents/${encodeURIComponent(f.targetId)}/${operation}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -48,7 +48,7 @@ async function fixture() {
     ).status,
   ).toBe(200);
   const consent = (body: Record<string, unknown> = {}, actor = f.actor, workspaceId = f.workspaceId) =>
-    f.org.mutateConsent({
+    env.ORGANIZATION.getByName(f.organizationId).mutateConsent({
       actor,
       workspaceId,
       key: crypto.randomUUID(),
@@ -127,7 +127,7 @@ describe("verified Host consent and real approval control handlers", () => {
         if (fault === "revoked-consent") {
           expect(
             (
-              await f.org.mutateConsent({
+              await env.ORGANIZATION.getByName(f.organizationId).mutateConsent({
                 actor: f.actor,
                 workspaceId: f.workspaceId,
                 key: "revoke-control",
@@ -264,7 +264,7 @@ describe("verified Host consent and real approval control handlers", () => {
       const f = await fixture();
       await denyB2(f, denial);
       const before = await approvalSnapshot(f);
-      const response = await f.channel.managedRequest(
+      const response = await env.CHANNEL.getByName(f.repo).managedRequest(
         b2Request(f, `/api/agents/${encodeURIComponent(f.targetId)}/approval`, { approval: null }),
         f.repo,
       );
@@ -313,7 +313,7 @@ describe("verified Host consent and real approval control handlers", () => {
       const f = await fixture();
       if (end === "end") expect(await f.org.endRegisteredExecution(f.executionId, f.targetId)).toBe(true);
       else {
-        const metadata = await f.org.metadata(f.actor);
+        const metadata = await env.ORGANIZATION.getByName(f.organizationId).metadata(f.actor);
         expect(
           (
             await f.org.mutateIdentity({
@@ -347,8 +347,8 @@ describe("verified Host consent and real approval control handlers", () => {
         throw new Error("binding transition unavailable");
       });
       try {
-        const metadata = await f.org.metadata(f.actor);
-        const result = await f.org.coordinateBinding({
+        const metadata = await env.ORGANIZATION.getByName(f.organizationId).metadata(f.actor);
+        const result = await env.ORGANIZATION.getByName(f.organizationId).coordinateBinding({
           actor: f.actor,
           login: "alice",
           workspaceId: f.workspaceId,

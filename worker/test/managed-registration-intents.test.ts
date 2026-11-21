@@ -34,7 +34,7 @@ function fixture(now: number) {
     verifiedOwnerHandoff: true,
     createdAt: now,
     expiresAt: now + 30_000,
-    request: registrationIntentRequest({ cli: "claude", sessionId: "session", resumed: false, cwd: "/work" }),
+    request: registrationIntentRequest({ cli: "claude-code", sessionId: "session", resumed: false, cwd: "/work" }),
   };
   const entries = ["agent.execution.start", "agent.handoff.cross_owner"].map((action, index) => {
     const permit: MutationPermit = {
@@ -182,7 +182,7 @@ describe("managed prepared intent storage (not handler admission)", () => {
   });
   it("allowlists request fields and rejects oversized identity and path inputs", () => {
     const request = {
-      cli: "claude",
+      cli: "claude-code",
       sessionId: "session",
       cwd: "/work",
       credential: "must-not-persist",

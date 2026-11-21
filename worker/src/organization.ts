@@ -1852,7 +1852,7 @@ export class Organization extends DurableObject<Env> {
       if (execution) {
         execution.status = "ended";
         execution.endedAt = Date.now();
-        this.identityWrite("executions", execution.id, execution);
+        this.ctx.storage.sql.exec("UPDATE executions SET body=? WHERE id=?", JSON.stringify(execution), execution.id);
         this.invalidateHostEnrollment(execution.id);
       }
       return true;
@@ -1888,7 +1888,7 @@ export class Organization extends DurableObject<Env> {
         const completed = reservations.complete(ack);
         new RegistrationEnrollments(this.ctx.storage.sql).complete(completed);
         execution.credentialGeneration++;
-        this.identityWrite("executions", execution.id, execution);
+        this.ctx.storage.sql.exec("UPDATE executions SET body=? WHERE id=?", JSON.stringify(execution), execution.id);
         const credential: StoredCredential = {
           id: prepared.id,
           executionId: execution.id,

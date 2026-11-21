@@ -81,6 +81,7 @@ export async function queryExecutionFixture() {
   const credential = started.value.secret;
   const channel = env.CHANNEL.getByName(f.repo);
   await runInDurableObject(channel, async (object, state) => {
+    state.storage.sql.exec("INSERT OR REPLACE INTO channel_meta VALUES('repo',?)", f.repo);
     const registered = await object.registerAgent("alice", {
       cli: "codex",
       sessionId: "session",

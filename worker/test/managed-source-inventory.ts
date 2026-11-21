@@ -39,6 +39,7 @@ export const SOURCE_INVENTORY = {
   "rpc:invalidateManagedPolicy": ["C21", "protocol"],
   "rpc:bindingCurrent": ["C01", "protocol"],
   "rpc:managedRequest": ["C04", "protocol"],
+  "rpc:preparedRegistrationProof": ["C23", "protocol"],
   "rpc:prepareManagedQuery": ["C22", "query"],
   "rpc:bindingOwner": ["C02", "protocol"],
   "rpc:transitionBinding": ["C02", "protocol"],
