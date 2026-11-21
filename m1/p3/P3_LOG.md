@@ -497,3 +497,6 @@
 - 8:17 AM CT: [P3] [P3-#41] M1-P3-PCDESIGN-REVISE2 run attempt 1 started
 - 8:17 AM CT: [P3-#41] Pranay ruled PREPARED INTENT (t102s800, 8:13 AM CT) → appended R10–R15 to prompts/p3/PC_OWNER_DECISION.txt (.bak-p3-41). New p3_41_driver.sh (p3_40 copy kept; .bak-p3-41): forced Codex REVISE2 → fresh agy Gemini RECHECK-2 (≤2 revise loops), WIP saved to wip/p3_41_pcfix_wip.* + stashed for docs-only rounds and restored before PCFIX2 (new task; old M1-P3-PCFIX superseded), bounded continuation ≤4 passes, gate pcfix41, then chain relaunch (Codex mode, EM_CODEX_BIN=bin/codex-sol, TZ=America/Chicago). Driver launched 8:17 AM CT. Note: box clock was actually ET (date showed EST); driver/chain now run with TZ=America/Chicago.
 - 8:20 AM CT: [P3] [P3-#41] M1-P3-PCDESIGN-REVISE2 done
+- 8:20 AM CT: [P3] [P3-#41] REVISE2 committed 2e7bac9: Revised design and ADR for R10–R15: intent-only TXN-1, fresh-authorized live-state TXN-2, failure/recovery states and enrollment completion. Round 2 resolution addresses every RECHECK-1 finding and the PCFIX staging blocker; includes tests and WIP reuse/discard plan. REBUILD_BASE: 87b8813 No dispr
+- 8:20 AM CT: [P3] [P3-#41] M1-P3-PCRECHECK-2 run attempt 1 started
+- 8:26 AM CT: [P3] [P3-#41] M1-P3-PCRECHECK-2 done
