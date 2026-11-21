@@ -192,6 +192,8 @@ export interface HostsDeps {
   /** How many Agents one lead's subtree may have that are not Gone, with its spawns still starting. */
   leadCap: number;
   spawnWaitMs: number;
+  /** Managed registration defers only external notifications until its SQL commit. */
+  afterCommit?(effect: () => void): void;
 }
 
 export type HostRefusal = { ok: false; status: 403 | 404 | 409 | 502; reason: string };
@@ -564,7 +566,9 @@ export class Hosts {
     const answered: HostSpawnedMessage = { type: "host.spawned", spawn, agent: agent.id };
     this.deps.sendTo(hostIdFor(person, name), answered);
     const found = this.deps.findAgent(agent.id);
-    this.waiting.get(spawn)?.({ agent: found ?? agent });
+    const notify = () => this.waiting.get(spawn)?.({ agent: found ?? agent });
+    if (this.deps.afterCommit) this.deps.afterCommit(notify);
+    else notify();
   }
 
   /** `person`'s Host `name` says it could not start spawn `spawn`. Ignored unless that spawn is its, and pending. */
@@ -840,7 +844,9 @@ export class Hosts {
       capture: null,
       payload: { spawn, host: hostIdFor(row.person, row.host), reason },
     });
-    this.waiting.get(spawn)?.({ reason });
+    const notify = () => this.waiting.get(spawn)?.({ reason });
+    if (this.deps.afterCommit) this.deps.afterCommit(notify);
+    else notify();
   }
 
   /** Moves spawn `spawn` from pending to `state`. False when it was not pending on that Host. */

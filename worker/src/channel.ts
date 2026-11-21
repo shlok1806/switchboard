@@ -18,6 +18,10 @@ import {
 import { appendManagedOutcome, MANAGED_OUTCOME_TTL_MS } from "./managed-retention";
 import { managedSummary } from "./managed-summary";
 import { parseSince } from "./mcp/since";
+import { commitRegistration, RegistrationEffects, RegistrationRefused } from "./registration-commit";
+import { IntentConflict, InvalidIntent, RegistrationIntents, registrationIntentRequest } from "./registration-intents";
+import type { RegistrationProof } from "./registration-protocol";
+import type { RegistrationAcknowledgement } from "./registration-reservations";
 // One Durable Object per Channel (ADR 0004), and one Channel per GitHub repo,
 // named by `owner/repo` (ADR 0007). It owns the Channel's Persons, who may join
 // (write access to the repo, and the Agent tokens), its append-only Event stream
@@ -497,6 +501,8 @@ export class Channel extends DurableObject<Env> {
   /** Directives from Persons to Agents, delivered without the Relay (ADR 0005). */
   private readonly directives: Directives;
   private readonly hosts: Hosts;
+  /** Set only during the synchronous managed registration apply transaction. */
+  private registrationEffects?: RegistrationEffects;
   private managedHistoryAdapter?: ManagedLocalHistory;
   private managedHistoryCursors?: HistoryCursors;
   /** Records the wrappers' idle wakes. */
@@ -749,6 +755,14 @@ export class Channel extends DurableObject<Env> {
       append: (event) => this.append(event),
       attached: (id) => this.hostSocket(id) !== null,
       sendTo: (id, message) => {
+        if (this.binding.workspace !== null && this.registrationEffects) {
+          // Registration uses this for spawn completion/failed-librarian stop only.
+          this.registrationEffects.defer(() => {
+            const ws = this.hostSocket(id);
+            if (ws !== null) send(ws, message);
+          });
+          return true;
+        }
         const ws = this.hostSocket(id);
         return ws !== null && send(ws, message);
       },
@@ -772,6 +786,10 @@ export class Channel extends DurableObject<Env> {
       cap: this.hostCap(),
       leadCap: this.leadCap(),
       spawnWaitMs: wait > 0 ? wait * 1000 : DEFAULT_SPAWN_WAIT_MS,
+      afterCommit: (effect) => {
+        if (this.binding.workspace !== null && this.registrationEffects) this.registrationEffects.defer(effect);
+        else effect();
+      },
     });
   }
 
@@ -783,6 +801,7 @@ export class Channel extends DurableObject<Env> {
     const due = this.alarms.takeDue();
     try {
       if (this.binding.state === "linked" && due.has("managed-outcomes")) await this.#exportManagedOutcomes();
+      if (this.binding.generation > 0 && due.has("registration-intents")) await this.#retryRegistrationIntents();
       if (due.has("tasks")) await this.tasks.alarm();
       if (due.has("presence")) await this.agents.expireSilent();
       if (due.has("executions")) await this.retryManagedEnds();
@@ -2270,31 +2289,47 @@ export class Channel extends DurableObject<Env> {
       if (assoc?.active !== 1) return managedError(404, "resource_denied");
       const deny = cleanDeny(body);
       if (deny === undefined) return managedError(400, "invalid_deny");
-      const owned = await org.registeredExecutionOwnedBy(assoc.executionId, verified.personId);
-      if (!owned) {
-        const consentCheck = await enforcement.check({
-          ...input,
-          action: "channel.update.write",
-          targetExecutionId: assoc.executionId,
-          resource: {
-            ...input.resource,
-            targetId: agentId,
-            operation: "agent.approval.deny",
-          },
-        });
-        if (!consentCheck.ok) return managedError(404, "resource_denied");
-      }
+      const agent = this.agents.find(agentId);
+      if (!agent?.host) return managedError(404, "resource_denied");
+      // Only a lookup hint: Organization resolves the trusted enrollment.
+      // Rebind the OUTER input captured by prepare(), not a preliminary copy.
+      const targetHost = agent.host;
+      input = {
+        ...input,
+        targetExecutionId: assoc.executionId,
+        resource: { ...input.resource, hostId: targetHost },
+      };
+      const target = await authorityRequest(
+        async () => await org.authorizeChannelRead({ ...input, action: "agent.view" }),
+      );
+      if (!target.ok) return managedError(target.status === 503 ? 503 : 404, "resource_denied");
+      if (target.value.target?.executionId !== assoc.executionId || !current())
+        return managedError(404, "resource_denied");
+      input = { ...input, resource: { ...input.resource, ownerPersonId: target.value.target.ownerPersonId } };
       const prepared = await prepare();
       let result: RosterResult | undefined;
       prepared.commit(() => {
-        result = this.agents.denyApproval(caller.person, agentId, deny, () =>
-          this.interruptTo(agentId, {
-            type: "approval.deny",
-            agent: agentId,
-            id: deny.id,
-            person: caller.person,
-            ...(deny.message === undefined ? {} : { message: deny.message }),
-          }),
+        const live = this.managedAssociation(agentId);
+        if (
+          live?.active !== 1 ||
+          live.executionId !== assoc.executionId ||
+          this.agents.find(agentId)?.host !== targetHost ||
+          this.agents.find(agentId)?.person !== agent.person
+        )
+          throw new ManagedReadFailure(404);
+        result = this.agents.denyApproval(
+          caller.person,
+          agentId,
+          deny,
+          () =>
+            this.interruptTo(agentId, {
+              type: "approval.deny",
+              agent: agentId,
+              id: deny.id,
+              person: caller.person,
+              ...(deny.message === undefined ? {} : { message: deny.message }),
+            }),
+          agent.person,
         );
         if (!result.ok) outcome = "local_restriction_denied";
       });
@@ -2782,13 +2817,12 @@ export class Channel extends DurableObject<Env> {
       )
         return deny(403);
       const org = this.env.ORGANIZATION.getByName(organizationId);
-      const workspace = await org.workspace(actor, fields.workspaceId);
+      const workspace = await authorityRequest(async () => await org.workspace(actor, fields.workspaceId as string));
       if (!workspace || workspace.channel !== channel) return deny(403);
       // Login is read only from the same signed native session just authenticated above.
       const person = await this.nativeLogin(request);
       if (!person) return deny(401);
       const id = agentIdFor(person, registration.cli, registration.sessionId);
-      let handoffTargetExecutionId: string | undefined;
       if (registration.continues) {
         if (registration.continues === agentIdFor(person, registration.cli, registration.sessionId)) {
           return Response.json(
@@ -2805,188 +2839,473 @@ export class Channel extends DurableObject<Env> {
         }
         const predecessorAssoc = this.managedAssociation(registration.continues);
         if (predecessorAssoc) {
-          const owned = await org.registeredExecutionOwnedBy(predecessorAssoc.executionId, actor.personId);
+          const owned = await authorityRequest(
+            async () => await org.registeredExecutionOwnedBy(predecessorAssoc.executionId, actor.personId),
+          );
           if (!owned) {
-            const consentCheck = await org.issueMutationPermit({
-              actor,
-              action: "agent.handoff.cross_owner",
-              generation,
-              requestId: crypto.randomUUID(),
-              targetExecutionId: predecessorAssoc.executionId,
-              resource: {
-                kind: "workspace",
-                organizationId,
-                id: fields.workspaceId,
-                channel,
-                targetId: registration.continues,
-                operation: "agent.handoff",
-              },
-            });
-            if (!consentCheck.ok) return deny(404);
-            handoffTargetExecutionId = predecessorAssoc.executionId;
+            const consentCheck = await authorityRequest(
+              async () =>
+                await org.issueMutationPermit({
+                  actor,
+                  action: "agent.handoff.cross_owner",
+                  generation,
+                  requestId: crypto.randomUUID(),
+                  targetExecutionId: predecessorAssoc.executionId,
+                  resource: {
+                    kind: "workspace",
+                    organizationId,
+                    id: fields.workspaceId as string,
+                    channel,
+                    targetId: registration.continues,
+                    operation: "agent.handoff",
+                  },
+                }),
+            );
+            if (!consentCheck.ok) return deny(consentCheck.status === 503 ? 503 : 404);
           }
         }
       }
+      const expectedPredecessor = registration.continues
+        ? this.managedAssociation(registration.continues)?.executionId
+        : undefined;
       const prior = this.managedAssociation(id);
       if (
         prior &&
-        !(await this.env.ORGANIZATION.getByName(prior.organizationId).registeredExecutionOwnedBy(
-          prior.executionId,
-          actor.personId,
+        !(await authorityRequest(
+          async () =>
+            await this.env.ORGANIZATION.getByName(prior.organizationId).registeredExecutionOwnedBy(
+              prior.executionId,
+              actor.personId,
+            ),
         ))
       )
         return deny(403);
       const key = request.headers.get("Idempotency-Key");
       if (!key || key.length > 128) return deny(400);
-      const issued = await org.mutateIdentity({
-        actor,
-        key,
-        requestId: crypto.randomUUID(),
-        command: {
-          kind: "execution.start",
-          principalId: fields.principalId,
-          workspaceId: fields.workspaceId,
-          cli: registration.cli,
-          registration: { agentId: id, sessionId: registration.sessionId, channel },
-        },
-      });
-      if (!issued.ok) return deny(issued.status);
-      const execution = issued.value.execution;
-      // An idempotent retry cannot recover the secret or re-register the session.
-      if (!execution || !issued.value.secret) return deny(409);
-      this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS m1_agent_executions (
-        agent TEXT PRIMARY KEY, organizationId TEXT NOT NULL, executionId TEXT NOT NULL, active INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS m1_agent_execution_ends (
-          executionId TEXT PRIMARY KEY, organizationId TEXT NOT NULL, agent TEXT NOT NULL)`);
-      const cancel = () => {
-        const association = { organizationId, executionId: execution.id };
-        this.queueManagedEnd(id, association);
-        return this.deliverManagedEnd(id, association);
+      const canonicalRequest = registrationIntentRequest(registration as unknown as Record<string, unknown>);
+      registration = JSON.parse(canonicalRequest) as RegisterAgentRequest;
+      const secret = sessionSecret(this.env, devMode(this.env, new URL(request.url)));
+      const token = request.headers.get("Authorization")?.slice(7).trim() ?? readCookie(request, SESSION_COOKIE);
+      const native = secret && token ? await verifyPayload(secret, token) : null;
+      if (!native || typeof native.exp !== "number") return deny(401);
+      if (registration.host !== undefined && !this.hosts.find(person, registration.host)) return deny(409);
+      const hostId = registration.host === undefined ? null : hostIdFor(person, registration.host);
+      const intents = new RegistrationIntents(this.ctx.storage.sql);
+      const existing = intents.find(fields.workspaceId, generation, actor.personId, key);
+      if (existing) {
+        if (existing.payload.request !== canonicalRequest || existing.payload.principalId !== fields.principalId)
+          return deny(409);
+        await this.#reconcileRegistration(existing.payload.intentId);
+        const recovered = intents.get(existing.payload.intentId);
+        if (recovered?.state !== "completed") return deny(recovered?.state === "applied" ? 503 : 409);
+        const completion = await authorityRequest(
+          async () =>
+            await org.completeRegistration({
+              reservationId: recovered.payload.reservationId,
+              intentId: recovered.payload.intentId,
+              startPermitId: recovered.payload.startPermitId,
+              handoffPermitId: recovered.payload.handoffPermitId,
+              executionId: recovered.payload.reservedExecutionId,
+              workspaceId: recovered.payload.workspaceId,
+              channelId: recovered.payload.channelId,
+              generation: recovered.payload.bindingGeneration,
+            }),
+        );
+        if (!completion.ok || this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId)
+          return deny(completion.ok ? 404 : completion.status);
+        const recorded = this.agents.find(id);
+        if (!recorded) return deny(404);
+        return Response.json(
+          {
+            ok: true,
+            agent: safeAgent(recorded, {
+              principalId: recovered.payload.principalId,
+              executionId: recovered.payload.reservedExecutionId,
+              ownerPersonId: actor.personId,
+            }),
+            execution: completion.value.execution,
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      }
+      const synced = await this.tasks.ensureSynced();
+      if (!synced.ok) return deny(503);
+      const prepared = await authorityRequest(
+        async () =>
+          await org.prepareRegistration({
+            actor,
+            principalId: fields.principalId as string,
+            workspaceId: fields.workspaceId as string,
+            channelId: channel,
+            generation,
+            agentId: id,
+            hostId,
+            requestId: key,
+            request: canonicalRequest,
+            credentialExpiresAt: (native.exp as number) * 1000,
+          }),
+      );
+      if (!prepared.ok) return deny(prepared.status);
+      const { reservation: r, permits: receipts } = prepared.value;
+      const startReceipt = receipts.find((p) => p.id === r.startPermitId);
+      const handReceipt = receipts.find((p) => p.id === r.handoffPermitId);
+      if (!startReceipt || !handReceipt) return deny(503);
+      const current = () =>
+        this.binding.state === "linked" &&
+        this.binding.generation === generation &&
+        this.binding.workspace === fields.workspaceId &&
+        this.access.repo() === channel &&
+        (!registration.continues ||
+          this.managedAssociation(registration.continues)?.executionId === expectedPredecessor) &&
+        (registration.host === undefined || this.hosts.find(person, registration.host) !== null);
+      const resource = {
+        kind: "workspace" as const,
+        organizationId,
+        id: fields.workspaceId,
+        channel,
+        targetId: id,
+        ownerPersonId: actor.personId,
+        hostId: hostId ?? undefined,
+        operation: `agent.register.prepare:${r.intentId}`,
       };
-      if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
-        await cancel();
-        return deny(403);
-      }
-      const permitResult = await org.issueMutationPermit({
-        actor,
-        action: "agent.execution.start",
-        generation,
-        requestId: crypto.randomUUID(),
-        resource: {
-          kind: "workspace",
-          organizationId,
-          id: fields.workspaceId,
-          channel,
-          targetId: id,
-          operation: "agent.register",
-        },
-      });
-      if (!permitResult.ok) {
-        await cancel();
-        return deny(permitResult.status);
-      }
-      const handoffPermit =
-        handoffTargetExecutionId && registration.continues
-          ? await org.issueMutationPermit({
+      const payload = {
+        intentId: r.intentId,
+        organizationId,
+        workspaceId: fields.workspaceId,
+        channelId: channel,
+        bindingGeneration: generation,
+        actorPersonId: actor.personId,
+        actorGithubId: actor.githubId,
+        principalId: fields.principalId,
+        reservedExecutionId: r.executionId,
+        agentId: id,
+        hostId,
+        ownerPersonId: actor.personId,
+        predecessorExecutionId: registration.continues
+          ? (this.managedAssociation(registration.continues)?.executionId ?? null)
+          : null,
+        predecessorAgentId: registration.continues ?? null,
+        requestId: key,
+        reservationId: r.reservationId,
+        startPermitId: r.startPermitId,
+        handoffPermitId: r.handoffPermitId,
+        policyRevision: r.policyRevision,
+        verifiedOwnerHandoff: true as const,
+        createdAt: r.createdAt,
+        expiresAt: r.expiresAt,
+        request: canonicalRequest,
+      };
+      // Arm recovery before committing the intent, so a crash immediately after
+      // TXN-1 cannot strand prepared authority without a durable wakeup.
+      await this.#scheduleRegistrationRecovery(r.expiresAt);
+      // TXN-1: only immutable intent and receipt bookkeeping. No roster algorithm.
+      this.ctx.storage.transactionSync(() => {
+        if (!current() || this.managedAssociation(id)?.executionId !== prior?.executionId) throw new IntentConflict();
+        const local = new LocalMutationPermits(this.ctx.storage.sql);
+        local.observeRevision(fields.workspaceId as string, r.policyRevision);
+        intents.prepare(payload, [
+          {
+            permit: startReceipt,
+            binding: {
+              actor,
+              action: "agent.execution.start",
+              resource,
+              requestId: key,
+              generation,
+              policyRevision: r.policyRevision,
+            },
+          },
+          {
+            permit: handReceipt,
+            binding: {
               actor,
               action: "agent.handoff.cross_owner",
+              resource,
+              requestId: key,
               generation,
-              requestId: crypto.randomUUID(),
-              targetExecutionId: handoffTargetExecutionId,
-              resource: {
-                kind: "workspace",
-                organizationId,
-                id: fields.workspaceId,
-                channel,
-                targetId: registration.continues,
-                operation: "agent.handoff",
-              },
-            })
-          : undefined;
-      if (
-        (handoffPermit && !handoffPermit.ok) ||
-        this.binding.generation !== generation ||
-        this.binding.workspace !== fields.workspaceId
-      ) {
-        await cancel();
-        return deny(404);
-      }
-      const permit = permitResult.value;
-      const permits = new LocalMutationPermits(this.ctx.storage.sql);
-      if (handoffPermit?.ok) {
-        permits.observeRevision(fields.workspaceId, handoffPermit.value.policyRevision);
-        permits.install(handoffPermit.value);
-      }
-      const consumeHandoff = () => {
-        if (!handoffPermit?.ok) return true;
-        const handoff = handoffPermit.value;
-        return (
-          this.binding.generation === generation &&
-          this.binding.workspace === fields.workspaceId &&
-          permits.consume(handoff.id, {
-            actor,
-            action: handoff.action,
-            resource: handoff.resource,
-            requestId: handoff.requestId,
-            generation,
-            policyRevision: handoff.policyRevision,
-          })
-        );
+              policyRevision: r.policyRevision,
+            },
+          },
+        ]);
+      });
+      const ack = {
+        reservationId: r.reservationId,
+        intentId: r.intentId,
+        startPermitId: r.startPermitId,
+        handoffPermitId: r.handoffPermitId,
+        executionId: r.executionId,
+        workspaceId: r.workspaceId,
+        channelId: channel,
+        generation,
       };
-      permits.observeRevision(fields.workspaceId, permit.policyRevision);
-      permits.install(permit);
+      const cancel = async () => {
+        const record = intents.get(r.intentId);
+        if (record && (record.state === "prepared" || record.state === "activated"))
+          this.ctx.storage.transactionSync(() => intents.transition(r.intentId, record.state, "cancelling"));
+        try {
+          if (await authorityRequest(async () => await org.cancelRegistration(ack))) {
+            const pending = intents.get(r.intentId);
+            if (pending?.state === "cancelling") intents.transition(r.intentId, "cancelling", "cancelled");
+          }
+        } catch {
+          /* Durable cancelling intent remains non-applicable. */
+        }
+      };
+      let applied = false;
       try {
-        const result = await this.#registerAgentInternal(person, registration, true, consumeHandoff);
-        if (!result.ok) {
+        // Activation issues the fresh apply receipt. Finish external Task work
+        // before requesting it; TXN-2 still reads live local Tasks and queues.
+        const applySync = await this.tasks.ensureSynced();
+        if (!applySync.ok) {
           await cancel();
-          return deny(result.status);
+          return deny(503);
         }
-        if (this.binding.generation !== generation || this.binding.workspace !== fields.workspaceId) {
+        const activation = await authorityRequest(async () => await org.activateRegistration(ack));
+        if (!activation.ok) {
           await cancel();
-          return deny(403);
+          return deny(activation.status);
         }
-        const consumed = permits.consume(permit.id, {
-          actor,
-          action: "agent.execution.start",
-          resource: permit.resource,
-          requestId: permit.requestId,
-          generation,
-          policyRevision: permit.policyRevision,
+        if (!current()) {
+          await cancel();
+          return deny(404);
+        }
+        this.ctx.storage.transactionSync(() => intents.transition(r.intentId, "prepared", "activated"));
+        const applyPermit = activation.value;
+        const localPermits = new LocalMutationPermits(this.ctx.storage.sql);
+        const committed = commitRegistration({
+          storage: this.ctx.storage,
+          intentId: r.intentId,
+          permit: applyPermit,
+          binding: {
+            actor,
+            action: "agent.execution.start",
+            resource: { ...resource, operation: `agent.register.apply:${r.intentId}` },
+            requestId: key,
+            generation,
+            policyRevision: applyPermit.policyRevision,
+          },
+          current: () => current() && this.managedAssociation(id)?.executionId === prior?.executionId,
+          checkpoint: () => ({ lastSeq: this.lastSeq, recentLocal: new Map(this.recentLocal) }),
+          restore: (snapshot) => {
+            this.lastSeq = snapshot.lastSeq;
+            this.recentLocal.clear();
+            for (const [eventId, event] of snapshot.recentLocal) this.recentLocal.set(eventId, event);
+          },
+          register: (_intent, effects) => {
+            this.registrationEffects = effects;
+            try {
+              appendManagedOutcome(this.ctx.storage.sql, "managed_outcome_outbox", applyPermit.id, {
+                requestId: key,
+                actor,
+                action: "agent.execution.start",
+                resource: { ...resource, operation: `agent.register.apply:${r.intentId}` },
+                policyRevision: applyPermit.policyRevision,
+                outcome: "committed",
+                at: Date.now(),
+              });
+              const result = this.#registerManagedLocal(person, registration);
+              if (!result.ok) throw new RegistrationRefused(result);
+              this.#queueManagedOutcomes();
+              this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS m1_agent_executions (
+                agent TEXT PRIMARY KEY, organizationId TEXT NOT NULL, executionId TEXT NOT NULL, active INTEGER NOT NULL)`);
+              this.ctx.storage.sql.exec(
+                "INSERT OR REPLACE INTO m1_agent_executions VALUES(?,?,?,0)",
+                id,
+                organizationId,
+                r.executionId,
+              );
+              return result;
+            } finally {
+              this.registrationEffects = undefined;
+            }
+          },
         });
-        if (!consumed) {
-          await cancel();
-          return deny(403);
-        }
-        this.ctx.storage.sql.exec(
-          "INSERT OR REPLACE INTO m1_agent_executions VALUES(?,?,?,1)",
-          id,
-          organizationId,
-          execution.id,
+        applied = true;
+        committed.effects.release(
+          () => current() && localPermits.revisionFloor(r.workspaceId) === applyPermit.policyRevision,
         );
-        if (prior && prior.executionId !== execution.id) {
+        if (prior && prior.executionId !== r.executionId) {
           this.queueManagedEnd(id, prior);
         }
-        if (prior && prior.executionId !== execution.id) {
-          await this.deliverManagedEnd(id, prior);
+        const completed = await authorityRequest(async () => await org.completeRegistration(ack));
+        if (!completed.ok) {
+          if (completed.status !== 503) await this.#reconcileRegistration(r.intentId);
+          else await this.#scheduleRegistrationRecovery(Date.now() + 1000);
+          return deny(completed.status);
         }
-        const safe = safeAgent(result.agent, {
-          principalId: execution.principalId,
-          executionId: execution.id,
+        if (!current() || localPermits.revisionFloor(r.workspaceId) > completed.policyRevision) return deny(404);
+        localPermits.observeRevision(r.workspaceId, completed.policyRevision);
+        if (prior && prior.executionId !== r.executionId) this.ctx.waitUntil(this.deliverManagedEnd(id, prior));
+        intents.transition(r.intentId, "applied", "completed");
+        this.ctx.storage.sql.exec(
+          "UPDATE m1_agent_executions SET active=1 WHERE agent=? AND executionId=?",
+          id,
+          r.executionId,
+        );
+        const execution = completed.value.execution;
+        if (!execution) return deny(503);
+        const safe = safeAgent(committed.value.agent, {
+          principalId: r.principalId,
+          executionId: r.executionId,
           ownerPersonId: actor.personId,
         });
         return Response.json(
-          { ok: true, agent: safe, execution, token: issued.value.secret },
+          { ok: true, agent: safe, execution, token: completed.value.secret },
           { headers: { "Cache-Control": "no-store" } },
         );
-      } catch {
-        await cancel();
+      } catch (error) {
+        if (!applied) await cancel();
+        if (error instanceof RegistrationRefused) return deny(error.result.status);
         return deny(503);
       }
-    } catch {
-      return deny(503);
+    } catch (error) {
+      return deny(error instanceof IntentConflict ? 409 : error instanceof InvalidIntent ? 400 : 503);
     } finally {
       release();
     }
+  }
+
+  /** Recovery never runs registration. Ambiguous pre-apply attempts only cancel;
+   * applied attempts finish enrollment or terminate authority from durable proof.
+   */
+  async #reconcileRegistration(intentId: string): Promise<void> {
+    if (this.binding.generation === 0) return;
+    const intents = new RegistrationIntents(this.ctx.storage.sql);
+    let record = intents.get(intentId);
+    if (!record || ["cancelled", "expired", "failed", "applied-failed", "completed"].includes(record.state)) return;
+    const p = record.payload;
+    const ack = {
+      reservationId: p.reservationId,
+      intentId: p.intentId,
+      startPermitId: p.startPermitId,
+      handoffPermitId: p.handoffPermitId,
+      executionId: p.reservedExecutionId,
+      workspaceId: p.workspaceId,
+      channelId: p.channelId,
+      generation: p.bindingGeneration,
+    };
+    const org = this.env.ORGANIZATION.getByName(p.organizationId);
+    try {
+      if (record.state === "applied") {
+        const result = await authorityRequest(async () => await org.completeRegistration(ack));
+        if (
+          result.ok &&
+          this.binding.generation === p.bindingGeneration &&
+          this.binding.workspace === p.workspaceId &&
+          new LocalMutationPermits(this.ctx.storage.sql).revisionFloor(p.workspaceId) <= result.policyRevision
+        ) {
+          this.ctx.storage.transactionSync(() => {
+            intents.transition(p.intentId, "applied", "completed");
+            this.ctx.storage.sql.exec(
+              "UPDATE m1_agent_executions SET active=1 WHERE agent=? AND executionId=?",
+              p.agentId,
+              p.reservedExecutionId,
+            );
+          });
+          return;
+        }
+        if (!result.ok && result.status === 503) throw new Error("completion_unavailable");
+        if (await authorityRequest(async () => await org.cancelRegistration(ack))) {
+          intents.transition(p.intentId, "applied", "applied-failed");
+          return;
+        }
+        throw new Error("cancellation_unavailable");
+      }
+      if (record.state === "prepared" || record.state === "activated") {
+        record = intents.transition(p.intentId, record.state, "cancelling");
+      }
+      if (record.state === "cancelling" && (await authorityRequest(async () => await org.cancelRegistration(ack)))) {
+        intents.transition(p.intentId, "cancelling", Date.now() >= p.expiresAt ? "expired" : "cancelled");
+        return;
+      }
+      throw new Error("cancellation_unavailable");
+    } catch {
+      await this.#scheduleRegistrationRecovery(Date.now() + 1000);
+    }
+  }
+
+  async #scheduleRegistrationRecovery(at: number): Promise<void> {
+    const existing = this.alarms.deadline("registration-intents");
+    await this.alarms.set("registration-intents", existing === null ? at : Math.min(existing, at));
+  }
+
+  async #retryRegistrationIntents(): Promise<void> {
+    if (this.binding.generation === 0) return;
+    const intents = new RegistrationIntents(this.ctx.storage.sql);
+    intents.prune();
+    const rows = this.ctx.storage.sql
+      .exec<{ intentId: string }>(
+        "SELECT intentId FROM registration_intents WHERE state IN ('cancelling','applied') LIMIT 32",
+      )
+      .toArray();
+    for (const row of rows) await this.#reconcileRegistration(row.intentId);
+    const pending = this.ctx.storage.sql
+      .exec<{ next: number | null }>(
+        `SELECT MIN(CASE WHEN state IN ('cancelling','applied') THEN ?
+          ELSE json_extract(payload,'$.expiresAt') END) AS next
+         FROM registration_intents WHERE state IN ('prepared','activated','cancelling','applied')`,
+        Date.now() + 1000,
+      )
+      .one().next;
+    if (pending !== null) await this.#scheduleRegistrationRecovery(pending);
+  }
+
+  /** Internal Organization RPC. IDs only select a durable proof; they grant no
+   * content access or right to apply. No schema initialization on legacy paths.
+   */
+  preparedRegistrationProof(ack: RegistrationAcknowledgement, cancellation = false): RegistrationProof | null {
+    if (this.binding.generation === 0 && this.binding.workspace === null) return null;
+    if (
+      !this.ctx.storage.sql
+        .exec("SELECT name FROM sqlite_master WHERE type='table' AND name='registration_intents'")
+        .toArray().length
+    )
+      return null;
+    const record = new RegistrationIntents(this.ctx.storage.sql).get(ack.intentId);
+    if (!record) return null;
+    const p = record.payload;
+    if (
+      p.reservationId !== ack.reservationId ||
+      p.reservedExecutionId !== ack.executionId ||
+      p.workspaceId !== ack.workspaceId ||
+      p.channelId !== ack.channelId ||
+      p.bindingGeneration !== ack.generation ||
+      p.startPermitId !== ack.startPermitId ||
+      p.handoffPermitId !== ack.handoffPermitId ||
+      !p.verifiedOwnerHandoff
+    )
+      return null;
+    // Cancellation proof is non-authorizing and must survive unlink/rebind or
+    // receipt invalidation so the old authority can be ended. It cannot activate,
+    // apply, complete, enroll a Host or release a credential.
+    if (cancellation && ["cancelling", "applied", "applied-failed"].includes(record.state))
+      return { payload: p, state: record.state };
+    if (
+      this.binding.state !== "linked" ||
+      this.binding.generation !== ack.generation ||
+      this.binding.workspace !== ack.workspaceId ||
+      this.access.repo() !== ack.channelId
+    )
+      return null;
+    if (record.state === "applied" || record.state === "completed") {
+      const association = this.managedAssociation(p.agentId as AgentId);
+      const agent = this.agents.find(p.agentId as AgentId);
+      if (
+        !association ||
+        association.executionId !== p.reservedExecutionId ||
+        !agent ||
+        (agent.host ?? null) !== p.hostId
+      )
+        return null;
+    }
+    const permits = new LocalMutationPermits(this.ctx.storage.sql);
+    // Historical correlation can complete/cancel after TTL; it never authorizes
+    // apply, whose commit checks expiry independently at the actual current time.
+    if (
+      !permits.consumedByIntent([p.startPermitId, p.handoffPermitId], p.intentId, Math.min(Date.now(), p.expiresAt - 1))
+    )
+      return null;
+    return { payload: p, state: record.state };
   }
 
   private async nativeLogin(request: Request): Promise<string | null> {
@@ -3113,6 +3432,9 @@ export class Channel extends DurableObject<Env> {
     managed = false,
     consumeHandoff?: () => boolean,
   ): Promise<RosterResult> {
+    // Managed apply is synchronous. The prepared-intent protocol will call the
+    // same body from commitRegistration after activation and its fresh permit.
+    if (managed) return this.#registerManagedTransaction(person, request, consumeHandoff);
     if (request.host !== undefined && this.hosts.find(person, request.host) === null) {
       return { ok: false, status: 409, reason: `You have no Host named ${request.host} on this Channel.` };
     }
@@ -3146,8 +3468,6 @@ export class Channel extends DurableObject<Env> {
     }
     const result = this.withNextTurn(await this.agents.register(person, request));
     if (!result.ok) return result;
-    if (managed && request.continues && consumeHandoff && !consumeHandoff())
-      return { ok: false, status: 403, reason: "Managed handoff denied." };
     const agent =
       request.continues !== undefined && this.handOff(result.agent.id, request.continues)
         ? (this.agents.find(result.agent.id) ?? result.agent)
@@ -3156,8 +3476,107 @@ export class Channel extends DurableObject<Env> {
     if (request.host !== undefined && request.spawn !== undefined) {
       this.hosts.spawned(person, request.host, request.spawn, agent);
     }
-    if (managed) return { ...result, agent };
     return { ...result, agent, token: await this.access.issueAgentToken(agent.id, person, agent.librarian === true) };
+  }
+
+  /** Local atomicity/effect boundary. This does not replace preparation,
+   * activation or the fresh apply permit required by the managed protocol. */
+  #registerManagedTransaction(
+    person: PersonName,
+    request: RegisterAgentRequest,
+    consumeHandoff?: () => boolean,
+  ): RosterResult {
+    if (this.binding.state !== "linked" || this.registrationEffects)
+      throw new Error("managed_registration_transaction_required");
+    const generation = this.binding.generation;
+    const workspace = this.binding.workspace;
+    if (!workspace) throw new Error("managed_registration_transaction_required");
+    const permits = new LocalMutationPermits(this.ctx.storage.sql);
+    const revision = permits.revisionFloor(workspace);
+    const effects = new RegistrationEffects();
+    const lastSeq = this.lastSeq;
+    const recentLocal = new Map(this.recentLocal);
+    let result: RosterResult;
+    this.registrationEffects = effects;
+    try {
+      result = this.ctx.storage.transactionSync(() => {
+        if (consumeHandoff && !consumeHandoff())
+          throw new RegistrationRefused({ ok: false, status: 403, reason: "Managed handoff denied." });
+        const registered = this.#registerManagedLocal(person, request);
+        if (!registered.ok) throw new RegistrationRefused(registered);
+        return registered;
+      });
+    } catch (error) {
+      effects.discard();
+      this.lastSeq = lastSeq;
+      this.recentLocal.clear();
+      for (const [id, event] of recentLocal) this.recentLocal.set(id, event);
+      if (error instanceof RegistrationRefused) {
+        const { status, reason } = error.result;
+        if (status === 403 || status === 404 || status === 409) return { ok: false, status, reason };
+      }
+      throw error;
+    } finally {
+      this.registrationEffects = undefined;
+    }
+    // No await between checking the local fence and each notification. SQL is
+    // already committed: notification loss must never replay registration.
+    effects.release(
+      () =>
+        this.binding.state === "linked" &&
+        this.binding.workspace === workspace &&
+        this.binding.generation === generation &&
+        permits.revisionFloor(workspace) === revision,
+    );
+    return result;
+  }
+
+  /** TXN-2 only: same registration order, live SQL, no await or credential issue.
+   * Caller MUST own transactionSync and install a request-local effect collector. */
+  #registerManagedLocal(person: PersonName, request: RegisterAgentRequest): RosterResult {
+    const effects = this.registrationEffects;
+    if (this.binding.state !== "linked" || !effects) throw new Error("managed_registration_transaction_required");
+    if (request.host !== undefined && this.hosts.find(person, request.host) === null) {
+      return { ok: false, status: 409, reason: `You have no Host named ${request.host} on this Channel.` };
+    }
+    if (request.continues !== undefined) {
+      if (request.continues === agentIdFor(person, request.cli, request.sessionId)) {
+        return { ok: false, status: 409, reason: "A session cannot continue its own Agent." };
+      }
+      if (!this.agents.has(request.continues)) {
+        return { ok: false, status: 404, reason: `No Agent ${request.continues} on this Channel to continue.` };
+      }
+    }
+    // A Paused Agent (ADR 0028) comes back only for a Resume its Host was asked for, from that Host.
+    const paused = this.agents.find(agentIdFor(person, request.cli, request.sessionId));
+    if (paused?.presence === "paused") {
+      const from = request.host === undefined ? null : hostIdFor(person, request.host);
+      if (from !== paused.host || !this.hosts.takeResume(paused.id)) {
+        return {
+          ok: false,
+          status: 409,
+          reason: `Agent ${paused.id} is Paused on ${paused.host ?? "a Host"}. Resume it from the Dashboard or with \`switchboard resume\`.`,
+        };
+      }
+    }
+    this.#joinPerson(person);
+    // A machine's Host the Channel does not know answers for nothing (ADR 0037).
+    if (request.historyHost !== undefined && this.hosts.find(person, request.historyHost) === null) {
+      const { historyHost: _, ...rest } = request;
+      request = rest;
+    }
+    const result = this.withNextTurn(this.agents.registerLocal(person, request));
+    if (!result.ok) return result;
+    const agent =
+      request.continues !== undefined && this.handOff(result.agent.id, request.continues)
+        ? (this.agents.find(result.agent.id) ?? result.agent)
+        : result.agent;
+    if (request.usage !== undefined) this.recordUsage(request.usage);
+    if (request.host !== undefined && request.spawn !== undefined) {
+      this.hosts.spawned(person, request.host, request.spawn, agent);
+    }
+    effects.defer(() => this.ctx.waitUntil(this.agents.watchRegistration()));
+    return { ...result, agent };
   }
 
   /**
@@ -4804,7 +5223,10 @@ export class Channel extends DurableObject<Env> {
     }
     this.broadcast({ type: "event", event: recorded });
     // The Relay decides who hears about it, after this request.
-    this.relay.consider(recorded);
+    if (this.binding.workspace !== null && this.registrationEffects) {
+      const event = recorded;
+      this.registrationEffects.defer(() => this.relay.consider(event));
+    } else this.relay.consider(recorded);
     return recorded;
   }
 
@@ -4829,6 +5251,10 @@ export class Channel extends DurableObject<Env> {
   }
 
   private broadcast(message: StreamMessage): void {
+    if (this.binding.workspace !== null && this.registrationEffects) {
+      this.registrationEffects.defer(() => this.broadcast(message));
+      return;
+    }
     for (const ws of this.ctx.getWebSockets()) {
       const tags = this.ctx.getTags(ws);
       if ((tags.find((tag) => tag.startsWith("binding:")) ?? "binding:0") !== `binding:${this.binding.generation}`)

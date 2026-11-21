@@ -250,6 +250,20 @@ export class AgentRoster {
    * It is Live afterwards. Records `session.start`, and `presence` when it changed.
    */
   async register(person: PersonName, request: RegisterAgentRequest): Promise<RosterResult> {
+    const result = this.registerLocal(person, request);
+    if (!result.ok) return result;
+    await this.watch();
+    return result;
+  }
+
+  /**
+   * The existing registration algorithm, without asynchronous watch scheduling.
+   * Managed callers must keep append and presenceChanged SQL inside their transaction
+   * and defer only external notifications/scheduling until commit. Host callbacks
+   * are not isolated by this extraction.
+   * This method alone does not provide staging or transaction isolation.
+   */
+  registerLocal(person: PersonName, request: RegisterAgentRequest): RosterResult {
     const id = agentIdFor(person, request.cli, request.sessionId);
     const now = Date.now();
     const existing = this.row(id);
@@ -372,7 +386,6 @@ export class AgentRoster {
     }
     if (existing?.presence !== "live") this.changed(id, "live");
     this.host.broadcast({ type: "agent", agent });
-    await this.watch();
     return { ok: true, agent, ...(nicknameRefused === undefined ? {} : { nicknameRefused }) };
   }
 
@@ -539,8 +552,16 @@ export class AgentRoster {
    * The Agent's own Person denies its open prompt `request.id` from the Channel (ADR 0014):
    * only a deniable one, only once, and only while `deliver` reaches the Agent's wrapper.
    */
-  denyApproval(person: PersonName, id: AgentId, request: DenyApprovalRequest, deliver: () => boolean): RosterResult {
-    const found = this.owned(person, id);
+  denyApproval(
+    person: PersonName,
+    id: AgentId,
+    request: DenyApprovalRequest,
+    deliver: () => boolean,
+    // Managed callers supply the live target owner ONLY inside the exact
+    // Host-bound permit commit. Legacy callers retain the own-Agent predicate.
+    targetOwner: PersonName = person,
+  ): RosterResult {
+    const found = this.owned(targetOwner, id);
     if (!found.ok) return found;
     const held = found.row.approval == null ? null : (JSON.parse(found.row.approval) as PendingApproval);
     if (held === null || held.id !== request.id) {
@@ -792,6 +813,11 @@ export class AgentRoster {
     this.record(id, "session.end", { reason: "exit", detail: "stopped while paused" });
     this.changed(id, "gone");
     this.host.broadcast({ type: "agent", agent: this.agent(id) });
+  }
+
+  /** Managed transaction callers schedule the existing watch only after commit. */
+  watchRegistration(): Promise<void> {
+    return this.watch();
   }
 
   /** Schedules the silence check for when the quietest Agent that is not Gone would go Gone. */

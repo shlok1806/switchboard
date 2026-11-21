@@ -33,6 +33,7 @@ import {
   validConstraints,
 } from "./executions";
 import { managedOutcome, OUTCOME_BATCH_SIZE, outcomeAuditId } from "./managed-outcomes";
+import { MANAGED_RECORD_CAP } from "./managed-retention";
 import {
   decide,
   type OwnerConsent,
@@ -44,6 +45,14 @@ import {
 } from "./policy";
 import { authorityRequest, type MutationPermit, resourceKey } from "./policy-permits";
 import { administrator, DELEGABLE_ACTIONS, effectiveActions, humanActions, managesPrincipal } from "./principals";
+import { type HostEnrollment, RegistrationEnrollments } from "./registration-enrollments";
+import { IntentConflict, InvalidIntent, registrationIntentRequest } from "./registration-intents";
+import type { PreparedRegistration, RegistrationPreparation, RegistrationProof } from "./registration-protocol";
+import {
+  type RegistrationAcknowledgement,
+  type RegistrationReservation,
+  RegistrationReservations,
+} from "./registration-reservations";
 
 const DAY = 86_400_000;
 export interface ChannelAuthorization {
@@ -448,6 +457,21 @@ export class Organization extends DurableObject<Env> {
         )
           return refuse("grant_or_lifetime_denied", 400);
         if (c.kind === "execution.start" && !text(c.cli, 80)) return refuse("invalid_cli", 400);
+        // Activated prepared identities cannot obtain credentials through the
+        // ordinary rotate/redeem path before registration completion. IDs and
+        // lifecycle activation alone are not usable registration authority.
+        if (
+          execution &&
+          this.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='registration_reservations'").toArray()
+            .length &&
+          this.ctx.storage.sql
+            .exec(
+              "SELECT id FROM registration_reservations WHERE json_extract(payload,'$.executionId')=? AND state!='completed' LIMIT 1",
+              execution.id,
+            )
+            .toArray().length
+        )
+          return refuse("registration_incomplete", 409);
         if (
           execution &&
           (execution.status !== "active" ||
@@ -523,6 +547,7 @@ export class Organization extends DurableObject<Env> {
         if (!code) value.credential = metadata;
         if (!code) value.secret = prepared.token;
       } else if (c.kind === "execution.revoke" && execution) {
+        this.invalidateHostEnrollment(execution.id);
         execution.status = "revoked";
         execution.endedAt = now;
         this.ctx.storage.sql.exec("UPDATE executions SET body=? WHERE id=?", JSON.stringify(execution), execution.id);
@@ -709,6 +734,7 @@ export class Organization extends DurableObject<Env> {
           execution.status !== "active"
         )
           return;
+        this.invalidateHostEnrollment(executionId);
         execution.status = "ended";
         execution.endedAt = Date.now();
         execution.credentialGeneration++;
@@ -882,6 +908,9 @@ export class Organization extends DurableObject<Env> {
         return deny("invalid_consent", 400);
       const target = this.consentTarget(input.workspaceId, targetId);
       const hostId = "hostId" in body && typeof body.hostId === "string" ? body.hostId : undefined;
+      const hostScoped =
+        action === "terminal_control" ||
+        Boolean(hostId && (PRIVATE_ACTIONS.includes(action) || action === "channel.history.read"));
       const resource: PolicyResource = {
         kind: "workspace",
         organizationId: state.organization.id,
@@ -889,18 +918,32 @@ export class Organization extends DurableObject<Env> {
         targetId,
         ownerPersonId: target?.ownerPersonId,
         ...(hostId ? { hostId } : {}),
+        ...(hostScoped && !input.remove ? { operation: "consent.issue" } : {}),
       };
-      const context = { ...this.context(state, input.actor, input.workspaceId), managedPolicy: true };
+      const context: PolicyContext = { ...this.context(state, input.actor, input.workspaceId), managedPolicy: true };
+      const enrollment =
+        hostScoped && target && hostId
+          ? this.activeHostEnrollment(state, input.workspaceId, hostId, target.id)
+          : undefined;
+      if (hostScoped && !input.remove && target && hostId) {
+        if (enrollment)
+          context.consentIssuance = {
+            kind: action,
+            hostId,
+            hostOwnerPersonId: enrollment.ownerPersonId,
+            targetId,
+            targetOwnerPersonId: target.ownerPersonId,
+          };
+      }
       if (
         !target ||
-        target.ownerPersonId !== input.actor.personId ||
+        ((!hostScoped || input.remove) &&
+          (input.remove ? (body as OwnerConsent).ownerPersonId : target.ownerPersonId) !== input.actor.personId) ||
         decide(input.actor, "workspace.read", resource, context).decision !== "allow" ||
-        (PRIVATE_ACTIONS.includes(action) && decide(input.actor, action, resource, context).decision !== "allow")
+        (PRIVATE_ACTIONS.includes(action) &&
+          decide(input.actor, action, { ...resource, operation: undefined }, context).decision !== "allow")
       )
         return deny("owner_required");
-      // Host ownership is not established by an execution or a caller-supplied Host ID.
-      // Keep existing consent revocation available while trusted Host proof is unavailable.
-      if (action === "terminal_control" && !input.remove) return deny("host_authority_unavailable");
       const scope = canonical([input.actor.personId, input.workspaceId, input.id ?? "create", "consent", input.key]);
       const replay = this.ctx.storage.sql
         .exec<{ fingerprint: string; result: string; expires: number }>(
@@ -931,6 +974,12 @@ export class Organization extends DurableObject<Env> {
           (hostId !== undefined && (typeof hostId !== "string" || hostId.length === 0 || hostId.length > 500))
         )
           return deny("invalid_consent", 400);
+        this.ctx.storage.sql.exec("DELETE FROM owner_consents WHERE json_extract(body, '$.expiresAt')<=?", Date.now());
+        if (
+          this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM owner_consents").one().n >=
+          MANAGED_RECORD_CAP
+        )
+          return { ok: false, status: 503, reason: "consent_capacity", policyRevision: revision };
         const consent: OwnerConsent = {
           ownerPersonId: input.actor.personId,
           personId: recipient,
@@ -939,6 +988,13 @@ export class Organization extends DurableObject<Env> {
           action,
           expiresAt,
           ...(typeof hostId === "string" ? { hostId } : {}),
+          ...(hostScoped && enrollment
+            ? {
+                targetOwnerPersonId: target.ownerPersonId,
+                enrollmentIntentId: enrollment.intentId,
+                targetExecutionId: target.id,
+              }
+            : {}),
         };
         this.ctx.storage.sql.exec("INSERT INTO owner_consents VALUES(?,?)", id, JSON.stringify(consent));
       }
@@ -996,6 +1052,101 @@ export class Organization extends DurableObject<Env> {
 
     if (!linked || !Number.isSafeInteger(generation) || generation <= 0) return false;
     return true;
+  }
+
+  /** Lifecycle invalidation never creates managed tables for legacy identities. */
+  private invalidateHostEnrollment(executionId: string): void {
+    if (
+      !this.ctx.storage.sql
+        .exec("SELECT name FROM sqlite_master WHERE type='table' AND name='host_enrollments'")
+        .toArray().length
+    )
+      return;
+    new RegistrationEnrollments(this.ctx.storage.sql).revokeExecution(executionId);
+  }
+
+  /** Read trusted completion provenance only. Advisory Channel Host rows never
+   * establish ownership; absence of the lazy completion table is a denial.
+   */
+  private activeHostEnrollment(
+    state: State,
+    workspaceId: string,
+    hostId: string,
+    executionId: string,
+  ): HostEnrollment | undefined {
+    if (
+      this.ctx.storage.sql
+        .exec(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('host_enrollments','registration_reservations')",
+        )
+        .toArray().length !== 2
+    )
+      return undefined;
+    const row = this.ctx.storage.sql
+      .exec<HostEnrollment>(
+        "SELECT * FROM host_enrollments WHERE organizationId=? AND workspaceId=? AND hostId=? AND revokedAt IS NULL",
+        state.organization.id,
+        workspaceId,
+        hostId,
+      )
+      .toArray()[0];
+    if (!row || row.executionId !== executionId) return undefined;
+    const execution = this.identityRow<AgentExecution>("executions", executionId);
+    if (
+      execution?.status !== "active" ||
+      execution.workspaceId !== workspaceId ||
+      execution.ownerPersonId !== row.ownerPersonId ||
+      !execution.legacyChannel ||
+      state.workspaces[workspaceId]?.channel !== execution.legacyChannel ||
+      state.members[row.ownerPersonId]?.status !== "active" ||
+      state.workspaceMembers[workspaceId]?.[row.ownerPersonId]?.status !== "active"
+    )
+      return undefined;
+    const completed = this.ctx.storage.sql
+      .exec<{ payload: string }>(
+        "SELECT payload FROM registration_reservations WHERE json_extract(payload, '$.intentId')=? AND state='completed' LIMIT 1",
+        row.intentId,
+      )
+      .toArray()[0];
+    if (!completed) return undefined;
+    const proof = JSON.parse(completed.payload) as RegistrationReservation;
+    if (
+      proof.organizationId !== row.organizationId ||
+      proof.workspaceId !== workspaceId ||
+      proof.hostId !== hostId ||
+      proof.executionId !== executionId ||
+      proof.ownerPersonId !== row.ownerPersonId ||
+      proof.actorPersonId !== row.ownerPersonId ||
+      proof.startPermitId === proof.handoffPermitId ||
+      !this.channelLinked(
+        state,
+        {
+          kind: "workspace",
+          id: workspaceId,
+          organizationId: row.organizationId,
+          channel: proof.channelId,
+        },
+        proof.generation,
+      )
+    )
+      return undefined;
+    const principal = this.identityRow<AgentPrincipal>("principals", execution.principalId);
+    const grant = this.grantFor(execution.principalId, workspaceId);
+    if (
+      !principal ||
+      !grant ||
+      effectiveActions(
+        state,
+        principal,
+        grant,
+        this.identityCeiling(row.organizationId),
+        this.identityCeiling(workspaceId),
+        Date.now(),
+        execution,
+      ).length === 0
+    )
+      return undefined;
+    return row;
   }
 
   /** Current facts and exact finalized binding, shared by read decisions and permit issuance. */
@@ -1116,14 +1267,29 @@ export class Organization extends DurableObject<Env> {
       input.resource.operation === "terminal.input" ||
       input.resource.operation === "agent.approval.deny" ||
       input.resource.operation === "approval.control";
-    // Previously issued control consents lack verified Host ownership and cannot authorize effects.
-    if (isControlEffect) return deny("host_authority_unavailable");
+    let controlEnrollment: HostEnrollment | undefined;
+    if (isControlEffect) {
+      const target = this.consentTarget(input.resource.id, input.resource.targetId ?? "", input.resource.channel);
+      if (!target || actor.kind !== "person" || !input.resource.hostId || target.id !== input.targetExecutionId)
+        return deny("host_authority_unavailable");
+      controlEnrollment = this.activeHostEnrollment(state, input.resource.id, input.resource.hostId, target.id);
+      if (!controlEnrollment || controlEnrollment.ownerPersonId !== target.ownerPersonId)
+        return deny("host_authority_unavailable");
+    }
     const isHistoryRead =
       input.action === "channel.history.read" &&
       Boolean(
         input.resource.ownerPersonId &&
           input.resource.ownerPersonId !== (actor.kind === "person" ? actor.personId : undefined),
       );
+    const isHostLocalRead = Boolean(input.resource.hostId) && (PRIVATE_ACTIONS.includes(input.action) || isHistoryRead);
+    if (isHostLocalRead && !controlEnrollment) {
+      const target = this.consentTarget(input.resource.id, input.resource.targetId ?? "", input.resource.channel);
+      if (!target || !input.resource.hostId) return deny("host_authority_unavailable");
+      controlEnrollment = this.activeHostEnrollment(state, input.resource.id, input.resource.hostId, target.id);
+      if (!controlEnrollment || controlEnrollment.ownerPersonId !== target.ownerPersonId)
+        return deny("host_authority_unavailable");
+    }
     if (PRIVATE_ACTIONS.includes(input.action) || isControlEffect || isHistoryRead) {
       const target = this.consentTarget(input.resource.id, input.resource.targetId ?? "", input.resource.channel);
       if (!target || actor.kind !== "person" || (input.targetExecutionId && input.targetExecutionId !== target.id))
@@ -1168,7 +1334,14 @@ export class Organization extends DurableObject<Env> {
         const hostMatches = isScopedHostConsent
           ? Boolean(parsed.hostId && input.resource.hostId && parsed.hostId === input.resource.hostId)
           : (!parsed.hostId && !input.resource.hostId) || parsed.hostId === input.resource.hostId;
-        if (hostMatches) {
+        const verifiedControl =
+          (!isControlEffect && !isHostLocalRead) ||
+          (controlEnrollment &&
+            parsed.enrollmentIntentId === controlEnrollment.intentId &&
+            parsed.ownerPersonId === controlEnrollment.ownerPersonId &&
+            parsed.targetOwnerPersonId === target.ownerPersonId &&
+            parsed.targetExecutionId === target.id);
+        if (hostMatches && verifiedControl) {
           context.consent = parsed;
           deadline = Math.min(deadline, context.consent.expiresAt);
         }
@@ -1300,6 +1473,447 @@ export class Organization extends DurableObject<Env> {
       .map((member) => ({ personId: member.personId }))
       .sort((a, b) => a.personId.localeCompare(b.personId));
     return { ok: true, value: { persons }, policyRevision: current.policyRevision };
+  }
+
+  /** Trusted Worker/Channel RPC: actor comes from the verified native session.
+   * Reservation is deliberately non-authorizing and creates no execution/credential.
+   */
+  prepareRegistration(input: RegistrationPreparation): NativeResult<PreparedRegistration> {
+    try {
+      return this.ctx.storage.transactionSync(() => {
+        const state = this.load();
+        const revision = state?.organization.policyRevision ?? 0;
+        const denied = (): NativeResult<PreparedRegistration> => ({
+          ok: false,
+          status: 404,
+          reason: "registration_denied",
+          policyRevision: revision,
+        });
+        if (
+          !state ||
+          !validPerson(input.actor) ||
+          !text(input.requestId, 128) ||
+          !text(input.agentId, 256) ||
+          !text(input.principalId, 256) ||
+          (input.hostId !== null && !text(input.hostId, 256)) ||
+          !Number.isFinite(input.credentialExpiresAt)
+        )
+          return denied();
+        const body: unknown = JSON.parse(input.request);
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new InvalidIntent();
+        const request = registrationIntentRequest(body as Record<string, unknown>);
+        const resource: PolicyResource = {
+          kind: "workspace",
+          organizationId: state.organization.id,
+          id: input.workspaceId,
+          channel: input.channelId,
+          targetId: input.agentId,
+          ownerPersonId: input.actor.personId,
+          hostId: input.hostId ?? undefined,
+          operation: "agent.register.prepare",
+        };
+        if (!this.channelLinked(state, resource, input.generation)) return denied();
+        const context = { ...this.context(state, input.actor, input.workspaceId, false, true), managedPolicy: true };
+        // START remains manager-only; HAND independently attests the verified owner session.
+        if (
+          ["agent.execution.start", "agent.handoff.cross_owner"].some(
+            (action) => decide(input.actor, action, resource, context).decision !== "allow",
+          )
+        )
+          return denied();
+        const principal = this.identityRow<AgentPrincipal>("principals", input.principalId);
+        const grant = this.grantFor(input.principalId, input.workspaceId);
+        const now = Date.now();
+        if (
+          !principal ||
+          !grant ||
+          !managesPrincipal(state, input.actor.personId, principal) ||
+          !effectiveActions(
+            state,
+            principal,
+            grant,
+            this.identityCeiling(state.organization.id),
+            this.identityCeiling(input.workspaceId),
+            now,
+          ).length
+        )
+          return denied();
+        const expiresAt = Math.min(now + 30_000, grant.expiresAt, input.credentialExpiresAt);
+        if (expiresAt <= now) return denied();
+        const reservations = new RegistrationReservations(this.ctx.storage.sql);
+        const existing = this.ctx.storage.sql
+          .exec<{ id: string }>(
+            "SELECT id FROM registration_reservations WHERE workspace=? AND generation=? AND actor=? AND request_id=?",
+            input.workspaceId,
+            input.generation,
+            input.actor.personId,
+            input.requestId,
+          )
+          .toArray()[0];
+        if (existing) {
+          const previous = reservations.get(existing.id);
+          if (
+            !previous ||
+            previous.payload.request !== request ||
+            previous.payload.principalId !== input.principalId ||
+            previous.payload.agentId !== input.agentId ||
+            previous.payload.hostId !== input.hostId
+          )
+            throw new IntentConflict();
+          // Observing an old key must never mint fresh receipts or resurrect a handoff.
+          throw new IntentConflict();
+        }
+        const reservation: RegistrationReservation = {
+          reservationId: crypto.randomUUID(),
+          intentId: crypto.randomUUID(),
+          organizationId: state.organization.id,
+          workspaceId: input.workspaceId,
+          channelId: input.channelId,
+          generation: input.generation,
+          actorPersonId: input.actor.personId,
+          actorGithubId: input.actor.githubId,
+          principalId: input.principalId,
+          executionId: `${state.organization.id}:${crypto.randomUUID()}`,
+          agentId: input.agentId,
+          hostId: input.hostId,
+          ownerPersonId: input.actor.personId,
+          requestId: input.requestId,
+          request,
+          startPermitId: crypto.randomUUID(),
+          handoffPermitId: crypto.randomUUID(),
+          policyRevision: revision,
+          createdAt: now,
+          expiresAt,
+        };
+        const permits = ["agent.execution.start", "agent.handoff.cross_owner"].map(
+          (action, index): MutationPermit => ({
+            id: index === 0 ? reservation.startPermitId : reservation.handoffPermitId,
+            actor: input.actor,
+            action,
+            resource: { ...resource, operation: `agent.register.prepare:${reservation.intentId}` },
+            requestId: input.requestId,
+            generation: input.generation,
+            policyRevision: revision,
+            issuedAt: now,
+            expiresAt: Math.min(now + 2000, expiresAt),
+          }),
+        ) as [MutationPermit, MutationPermit];
+        reservations.reserve(reservation, now);
+        this.ctx.storage.sql.exec("DELETE FROM mutation_permits WHERE expires<=?", now);
+        if (
+          this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM mutation_permits").one().n + 2 >
+          MANAGED_RECORD_CAP
+        )
+          throw new Error("registration_capacity");
+        for (const permit of permits)
+          this.ctx.storage.sql.exec(
+            "INSERT INTO mutation_permits VALUES(?,?,?,?)",
+            permit.id,
+            revision,
+            permit.expiresAt,
+            JSON.stringify(permit),
+          );
+        return { ok: true, value: { reservation, permits }, policyRevision: revision };
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        status:
+          error instanceof IntentConflict
+            ? 409
+            : error instanceof InvalidIntent || error instanceof SyntaxError
+              ? 400
+              : 503,
+        reason: "registration_unavailable",
+        policyRevision: this.load()?.organization.policyRevision ?? 0,
+      };
+    }
+  }
+
+  /** Fresh central decision plus lifecycle narrowing. Never a positive authorization cache. */
+  private registrationCurrent(reservation: RegistrationReservation): boolean {
+    const state = this.load();
+    if (!state || state.organization.policyRevision < reservation.policyRevision) return false;
+    const actor: PersonActor = {
+      kind: "person",
+      personId: reservation.actorPersonId,
+      githubId: reservation.actorGithubId,
+    };
+    const resource: PolicyResource = {
+      kind: "workspace",
+      organizationId: reservation.organizationId,
+      id: reservation.workspaceId,
+      channel: reservation.channelId,
+      targetId: reservation.agentId,
+      ownerPersonId: reservation.ownerPersonId,
+      hostId: reservation.hostId ?? undefined,
+      operation: `agent.register.apply:${reservation.intentId}`,
+    };
+    if (!this.channelLinked(state, resource, reservation.generation)) return false;
+    const context = { ...this.context(state, actor, reservation.workspaceId, false, true), managedPolicy: true };
+    if (
+      ["agent.execution.start", "agent.handoff.cross_owner"].some(
+        (action) => decide(actor, action, resource, context).decision !== "allow",
+      )
+    )
+      return false;
+    const request = JSON.parse(reservation.request) as { continues?: string };
+    if (request.continues) {
+      const target = this.consentTarget(reservation.workspaceId, request.continues, reservation.channelId);
+      if (
+        !target ||
+        !this.channelDecision({
+          actor,
+          action: "agent.handoff.cross_owner",
+          generation: reservation.generation,
+          requestId: reservation.requestId,
+          targetExecutionId: target.id,
+          resource: {
+            ...resource,
+            targetId: request.continues,
+            ownerPersonId: target.ownerPersonId,
+            operation: "agent.handoff",
+          },
+        }).ok
+      )
+        return false;
+    }
+    const principal = this.identityRow<AgentPrincipal>("principals", reservation.principalId);
+    const grant = this.grantFor(reservation.principalId, reservation.workspaceId);
+    return Boolean(
+      principal &&
+        grant &&
+        managesPrincipal(state, actor.personId, principal) &&
+        effectiveActions(
+          state,
+          principal,
+          grant,
+          this.identityCeiling(state.organization.id),
+          this.identityCeiling(reservation.workspaceId),
+          Date.now(),
+        ).length,
+    );
+  }
+
+  private async registrationProof(
+    ack: RegistrationAcknowledgement,
+    cancellation = false,
+  ): Promise<RegistrationProof | null> {
+    const stored = new RegistrationReservations(this.ctx.storage.sql).get(ack.reservationId);
+    if (
+      !stored ||
+      !Object.keys(ack).every(
+        (key) => stored.payload[key as keyof RegistrationReservation] === ack[key as keyof RegistrationAcknowledgement],
+      )
+    )
+      return null;
+    const proof = await authorityRequest(
+      async () =>
+        await this.env.CHANNEL.getByName(stored.payload.channelId).preparedRegistrationProof(ack, cancellation),
+    );
+    if (!proof) return null;
+    const p = stored.payload;
+    const local = proof.payload;
+    if (
+      local.organizationId !== p.organizationId ||
+      local.actorPersonId !== p.actorPersonId ||
+      local.actorGithubId !== p.actorGithubId ||
+      local.principalId !== p.principalId ||
+      local.agentId !== p.agentId ||
+      local.hostId !== p.hostId ||
+      local.ownerPersonId !== p.ownerPersonId ||
+      local.requestId !== p.requestId ||
+      local.request !== p.request ||
+      local.policyRevision !== p.policyRevision ||
+      local.createdAt !== p.createdAt ||
+      local.expiresAt !== p.expiresAt
+    )
+      return null;
+    return proof;
+  }
+
+  /** Activation is unusable until Channel apply AND completion acknowledgement. */
+  async activateRegistration(ack: RegistrationAcknowledgement): Promise<NativeResult<MutationPermit>> {
+    try {
+      const proof = await this.registrationProof(ack);
+      return this.ctx.storage.transactionSync(() => {
+        const reservations = new RegistrationReservations(this.ctx.storage.sql);
+        const record = reservations.get(ack.reservationId);
+        if (proof?.state !== "prepared" || !record || !this.registrationCurrent(record.payload))
+          return {
+            ok: false,
+            status: 404,
+            reason: "registration_denied",
+            policyRevision: this.load()?.organization.policyRevision ?? 0,
+          };
+        const activated = reservations.activate(ack);
+        const p = activated.payload;
+        if (!this.registrationCurrent(p)) throw new Error("registration_denied");
+        const request = JSON.parse(p.request) as { cli: string; sessionId: string };
+        const execution: AgentExecution = {
+          id: p.executionId,
+          principalId: p.principalId,
+          workspaceId: p.workspaceId,
+          ownerPersonId: p.ownerPersonId,
+          cli: request.cli,
+          startedAt: Date.now(),
+          lastSeen: Date.now(),
+          status: "active",
+          credentialGeneration: 0,
+          legacyAgentId: p.agentId,
+          sessionReference: request.sessionId,
+          legacyChannel: p.channelId,
+        };
+        // A retry may observe the same activation; never revive an ended execution.
+        const previous = this.identityRow<AgentExecution>("executions", p.executionId);
+        if (previous && previous.status !== "active") throw new Error("registration_denied");
+        if (!previous) {
+          if (
+            this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM executions").one().n >=
+            MANAGED_RECORD_CAP
+          )
+            throw new Error("registration_capacity");
+          this.ctx.storage.sql.exec(
+            "INSERT INTO executions VALUES(?,?,?)",
+            p.executionId,
+            JSON.stringify(execution),
+            "{}",
+          );
+        }
+        const now = Date.now();
+        this.ctx.storage.sql.exec("DELETE FROM mutation_permits WHERE expires<=?", now);
+        if (
+          this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM mutation_permits").one().n >=
+          MANAGED_RECORD_CAP
+        )
+          throw new Error("registration_capacity");
+        const permit: MutationPermit = {
+          id: crypto.randomUUID(),
+          actor: { kind: "person", personId: p.actorPersonId, githubId: p.actorGithubId },
+          action: "agent.execution.start",
+          resource: {
+            kind: "workspace",
+            organizationId: p.organizationId,
+            id: p.workspaceId,
+            channel: p.channelId,
+            targetId: p.agentId,
+            ownerPersonId: p.ownerPersonId,
+            hostId: p.hostId ?? undefined,
+            operation: `agent.register.apply:${p.intentId}`,
+          },
+          requestId: p.requestId,
+          generation: p.generation,
+          policyRevision: this.load()?.organization.policyRevision ?? 0,
+          issuedAt: now,
+          expiresAt: Math.min(now + 2000, p.expiresAt),
+        };
+        this.ctx.storage.sql.exec(
+          "INSERT INTO mutation_permits VALUES(?,?,?,?)",
+          permit.id,
+          permit.policyRevision,
+          permit.expiresAt,
+          JSON.stringify(permit),
+        );
+        this.audit(
+          permit.actor,
+          permit.action,
+          permit.resource,
+          true,
+          "permit_issued",
+          permit.policyRevision,
+          permit.requestId,
+          undefined,
+          undefined,
+          permit.id,
+        );
+        return { ok: true, value: permit, policyRevision: permit.policyRevision };
+      });
+    } catch {
+      return {
+        ok: false,
+        status: 503,
+        reason: "registration_activation_unavailable",
+        policyRevision: this.load()?.organization.policyRevision ?? 0,
+      };
+    }
+  }
+
+  /** Cancellation is a bound-Channel lifecycle operation, never an ID-only API. */
+  async cancelRegistration(ack: RegistrationAcknowledgement): Promise<boolean> {
+    const proof = await this.registrationProof(ack, true);
+    if (!proof || !["cancelling", "applied", "applied-failed"].includes(proof.state)) return false;
+    return this.ctx.storage.transactionSync(() => {
+      const reservations = new RegistrationReservations(this.ctx.storage.sql);
+      const record = reservations.get(ack.reservationId);
+      if (!record) return false;
+      const applied = proof.state === "applied" || proof.state === "applied-failed";
+      reservations.cancel(ack, applied);
+      const execution = this.identityRow<AgentExecution>("executions", ack.executionId);
+      if (execution) {
+        execution.status = "ended";
+        execution.endedAt = Date.now();
+        this.identityWrite("executions", execution.id, execution);
+        this.invalidateHostEnrollment(execution.id);
+      }
+      return true;
+    });
+  }
+
+  /** Sole enrollment writer. Channel applied proof and current authority are
+   * checked after credential preparation; both local SQL commits are synchronous.
+   */
+  async completeRegistration(ack: RegistrationAcknowledgement): Promise<NativeResult<IdentityValue>> {
+    try {
+      const record = new RegistrationReservations(this.ctx.storage.sql).get(ack.reservationId);
+      if (!record) return { ok: false, status: 404, reason: "registration_denied", policyRevision: 0 };
+      const prepared = await prepareCredential(record.payload.organizationId);
+      const proof = await this.registrationProof(ack);
+      return this.ctx.storage.transactionSync(() => {
+        const reservations = new RegistrationReservations(this.ctx.storage.sql);
+        const current = reservations.get(ack.reservationId);
+        const revision = this.load()?.organization.policyRevision ?? 0;
+        const execution = this.identityRow<AgentExecution>("executions", ack.executionId);
+        if (
+          !current ||
+          !proof ||
+          !["applied", "completed"].includes(proof.state) ||
+          !this.registrationCurrent(current.payload) ||
+          execution?.status !== "active"
+        )
+          return { ok: false, status: 404, reason: "registration_denied", policyRevision: revision };
+        if (current.state === "completed") return { ok: true, value: { execution }, policyRevision: revision };
+        const grant = this.grantFor(execution.principalId, execution.workspaceId);
+        const expiresAt = grant && credentialExpiry(Date.now(), undefined, grant.expiresAt);
+        if (!expiresAt) throw new Error("registration_expired");
+        const completed = reservations.complete(ack);
+        new RegistrationEnrollments(this.ctx.storage.sql).complete(completed);
+        execution.credentialGeneration++;
+        this.identityWrite("executions", execution.id, execution);
+        const credential: StoredCredential = {
+          id: prepared.id,
+          executionId: execution.id,
+          principalId: execution.principalId,
+          workspaceId: execution.workspaceId,
+          generation: execution.credentialGeneration,
+          expiresAt,
+          digest: prepared.digest,
+        };
+        this.identityWrite("execution_credentials", credential.id, credential);
+        const { digest: _digest, ...metadata } = credential;
+        return {
+          ok: true,
+          value: { execution, credential: metadata, secret: prepared.token },
+          policyRevision: revision,
+        };
+      });
+    } catch {
+      return {
+        ok: false,
+        status: 503,
+        reason: "registration_completion_unavailable",
+        policyRevision: this.load()?.organization.policyRevision ?? 0,
+      };
+    }
   }
 
   /** Internal authority RPC; HTTP adapters must resolve the Person, never accept body actors. */
@@ -2070,6 +2684,14 @@ export class Organization extends DurableObject<Env> {
         ...(mode === "unbind" ? { warning: "Unbinding restores legacy repository access." } : {}),
       };
       this.ctx.storage.sql.exec("INSERT INTO binding_reservations VALUES(?,?,?)", workspaceId, repo, operation.id);
+      // A new binding transition permanently invalidates old completion provenance.
+      // Do not create managed enrollment storage on pre-protocol organizations.
+      if (
+        this.ctx.storage.sql
+          .exec("SELECT name FROM sqlite_master WHERE type='table' AND name='host_enrollments'")
+          .toArray().length
+      )
+        new RegistrationEnrollments(this.ctx.storage.sql).revokeWorkspace(current.organization.id, workspaceId);
       this.ctx.storage.sql.exec(
         "INSERT INTO binding_operations VALUES(?,?,?)",
         operation.id,

@@ -39,9 +39,21 @@ export interface OwnerConsent {
   action: string;
   expiresAt: number;
   hostId?: string;
+  /** Host-local consent provenance, resolved only by verified completion. */
+  targetOwnerPersonId?: string;
+  enrollmentIntentId?: string;
+  targetExecutionId?: string;
 }
 
 export interface PolicyContext {
+  /** Authority-resolved enrollment and target facts, never caller assertions. */
+  consentIssuance?: {
+    kind: string;
+    hostId: string;
+    hostOwnerPersonId: string;
+    targetId: string;
+    targetOwnerPersonId: string;
+  };
   /** Set only by the Organization internal integration adapter after binding validation. */
   integration?: import("./policy-permits").IntegrationActor;
   /** Fresh authoritative verification, never taken from a request body. */
@@ -101,6 +113,7 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
   if (!POLICY_ACTIONS.includes(action)) return result("deny", "unknown_action");
   if (context.restrictionsSatisfied === false) return result("deny", "execution_restriction");
   if (!context.available) return result("deny", "authority_unavailable_or_actor_invalid");
+  if (resource?.operation === "consent.issue" && !validPerson(actor)) return result("deny", "host_owner_required");
   if (
     !resource ||
     typeof resource.id !== "string" ||
@@ -223,6 +236,7 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
 
   if (
     admin &&
+    resource.operation !== "consent.issue" &&
     !requiresTargetOwnerConsent &&
     (["workspace.manage", "workspace.member.manage"].includes(action) ||
       (context.identityPolicy && ["agent.register", "agent.grant.manage", "agent.execution.revoke"].includes(action)) ||
@@ -239,8 +253,24 @@ export function decide(actor: unknown, action: string, resource: PolicyResource,
   )
     return result("deny", "workspace_membership_required");
   if (context.managedPolicy) {
+    if (resource.operation === "consent.issue") {
+      const issuance = context.consentIssuance;
+      return action === "workspace.read" &&
+        issuance &&
+        ["terminal_control", "channel.history.read", ...PRIVATE_ACTIONS].includes(issuance.kind) &&
+        issuance.hostOwnerPersonId === actor.personId &&
+        issuance.targetId === resource.targetId &&
+        issuance.targetOwnerPersonId === resource.ownerPersonId &&
+        issuance.hostId &&
+        issuance.hostId === resource.hostId
+        ? result("allow", "enrolled_host_owner_consent")
+        : result("deny", "host_owner_required");
+    }
     if (PRIVATE_ACTIONS.includes(action) || isControlEffect || isHistoryRead) {
-      if (member.role === "viewer" && ["agent.directive.send", "agent.handoff.cross_owner"].includes(action))
+      if (
+        member.role === "viewer" &&
+        (isControlEffect || ["agent.directive.send", "agent.handoff.cross_owner"].includes(action))
+      )
         return result("deny", "viewer_read_only");
       const owner = resource.ownerPersonId;
       const consent = context.consent;

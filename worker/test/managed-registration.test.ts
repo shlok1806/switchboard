@@ -180,7 +180,7 @@ describe("managed registration compatibility", () => {
     expect(first.status).toBe(200);
     const answer = (await first.json()) as AgentResponse;
     const retry = await f.channel.registerManagedAgent(f.request(undefined, key), registration, f.intent);
-    expect(retry.status).toBe(409);
+    expect(retry.status).toBe(200);
     expect(await retry.text()).not.toContain(answer.token);
     expect(await f.org.verifyExecution(answer.token ?? "")).not.toBeNull();
     const failed = await f.channel.registerManagedAgent(f.request(), { ...registration, host: "missing" }, f.intent);
@@ -188,9 +188,9 @@ describe("managed registration compatibility", () => {
     const executions = await runInDurableObject(f.org, (_object, state) =>
       state.storage.sql.exec<{ body: string }>("SELECT body FROM executions").toArray(),
     );
-    expect(executions.map((row) => JSON.parse(row.body))).toEqual(
-      expect.arrayContaining([expect.objectContaining({ status: "ended" })]),
-    );
+    expect(executions.map((row) => JSON.parse(row.body))).toEqual([
+      expect.objectContaining({ id: answer.execution?.id, status: "active" }),
+    ]);
   });
   it("denies Gone credentials while retrying a failed execution end notification", async () => {
     const f = await fixture();

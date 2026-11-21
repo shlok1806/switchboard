@@ -1,5 +1,5 @@
 import type { IntegrationActor, PersonActor, PolicyResource, VerifiedExecution } from "../../shared/src/m1";
-import { MANAGED_RECORD_CAP } from "./managed-retention";
+import { MANAGED_OUTCOME_TTL_MS, MANAGED_RECORD_CAP } from "./managed-retention";
 
 export type { IntegrationActor } from "../../shared/src/m1";
 
@@ -39,6 +39,7 @@ export function resourceKey(resource: PolicyResource): string {
     resource.targetId ?? null,
     resource.ownerPersonId ?? null,
     resource.operation ?? null,
+    resource.hostId ?? null,
   ]);
 }
 /** Instantiate only for managed Channels. Receipt must come directly from Organization RPC. */
@@ -60,7 +61,7 @@ export class LocalMutationPermits<A extends PermitActor = PersonActor | Verified
       revision,
     );
     this.sql.exec(
-      "DELETE FROM managed_permits WHERE json_extract(body,'$.permit.resource.id')=? AND json_extract(body,'$.permit.policyRevision') < ?",
+      "DELETE FROM managed_permits WHERE json_extract(body,'$.permit.resource.id')=? AND json_extract(body,'$.permit.policyRevision') < ? AND json_extract(body,'$.consumedByIntentId') IS NULL",
       workspace,
       this.revisionFloor(workspace),
     );
@@ -76,7 +77,10 @@ export class LocalMutationPermits<A extends PermitActor = PersonActor | Verified
     const existing = this.sql.exec("SELECT id FROM managed_permits WHERE id=?", permit.id).toArray();
     if (existing.length) return;
     const now = Date.now();
-    this.sql.exec("DELETE FROM managed_permits WHERE COALESCE(json_extract(body, '$.permit.expiresAt'), 0) <= ?", now);
+    this.sql.exec(
+      "DELETE FROM managed_permits WHERE COALESCE(json_extract(body, '$.retainUntil'), json_extract(body, '$.permit.expiresAt'), 0) <= ?",
+      now,
+    );
     const count = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM managed_permits").one().n;
     if (count >= MANAGED_RECORD_CAP) throw new AuthorityUnavailable();
     // Never replace a consumed permit on delayed/replayed receipt.
@@ -111,6 +115,92 @@ export class LocalMutationPermits<A extends PermitActor = PersonActor | Verified
       return false;
     this.sql.exec("UPDATE managed_permits SET body=? WHERE id=?", JSON.stringify({ permit, used: true }), permitId);
     return true;
+  }
+  /**
+   * Install and consume a correlated receipt set in the caller's transactionSync.
+   * Throws on any refusal so an earlier consumption and receipt installation roll
+   * back together with the local mutation. Bindings must be built from reread
+   * local state, never copied from the receipts being checked.
+   */
+  consumeSet(
+    entries: readonly { permit: MutationPermit<A>; binding: PermitBinding<A> }[],
+    now = Date.now(),
+    intent?: { id: string; expiresAt: number },
+  ): void {
+    if (entries.length !== 2) throw new AuthorityUnavailable();
+    if (
+      intent &&
+      (!intent.id ||
+        intent.id.length > 256 ||
+        !Number.isFinite(intent.expiresAt) ||
+        intent.expiresAt <= now ||
+        intent.expiresAt > now + 30_000)
+    )
+      throw new AuthorityUnavailable();
+    const actions = new Set(entries.map(({ binding }) => binding.action));
+    if (!actions.has("agent.execution.start") || !actions.has("agent.handoff.cross_owner"))
+      throw new AuthorityUnavailable();
+    const first = entries[0];
+    if (!first) throw new AuthorityUnavailable();
+    if (
+      new Set(entries.map(({ permit }) => permit.id)).size !== entries.length ||
+      entries.some(
+        ({ permit, binding }) =>
+          permit.resource.id !== first.binding.resource.id ||
+          permit.resource.organizationId !== first.binding.resource.organizationId ||
+          actorKey(permit.actor) !== actorKey(first.binding.actor) ||
+          permit.policyRevision !== first.binding.policyRevision ||
+          permit.generation !== first.binding.generation ||
+          permit.requestId !== first.binding.requestId ||
+          permit.expiresAt !== first.permit.expiresAt ||
+          binding.policyRevision !== first.binding.policyRevision ||
+          binding.generation !== first.binding.generation,
+      )
+    )
+      throw new AuthorityUnavailable();
+    for (const { permit } of entries) this.install(permit);
+    for (const { permit, binding } of entries) {
+      if (!this.consume(permit.id, binding, now)) throw new AuthorityUnavailable();
+      if (intent) {
+        // Correlation survives the receipt deadline, but conveys no authority.
+        this.sql.exec(
+          "UPDATE managed_permits SET body=? WHERE id=?",
+          JSON.stringify({
+            permit,
+            used: true,
+            consumedByIntentId: intent.id,
+            consumptionExpiresAt: intent.expiresAt,
+            retainUntil: intent.expiresAt + MANAGED_OUTCOME_TTL_MS,
+          }),
+          permit.id,
+        );
+      }
+    }
+  }
+  /** Evidence only: TXN-2 must ALSO consume a fresh authority-issued apply permit. */
+  consumedByIntent(ids: readonly string[], intentId: string, now = Date.now()): boolean {
+    if (ids.length !== 2 || new Set(ids).size !== 2 || !Number.isFinite(now)) return false;
+    const actions = new Set<string>();
+    for (const id of ids) {
+      const row = this.sql.exec<{ body: string }>("SELECT body FROM managed_permits WHERE id=?", id).toArray()[0];
+      if (!row) return false;
+      const body = JSON.parse(row.body) as {
+        permit: MutationPermit<A>;
+        used: boolean;
+        consumedByIntentId?: string;
+        retainUntil?: number;
+        consumptionExpiresAt?: number;
+      };
+      if (
+        !body.used ||
+        body.consumedByIntentId !== intentId ||
+        !Number.isFinite(body.retainUntil) ||
+        now >= (body.consumptionExpiresAt ?? body.retainUntil ?? 0)
+      )
+        return false;
+      actions.add(body.permit.action);
+    }
+    return actions.has("agent.execution.start") && actions.has("agent.handoff.cross_owner");
   }
   invalidate() {
     this.sql.exec("DELETE FROM managed_permits");

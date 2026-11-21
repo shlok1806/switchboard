@@ -2,7 +2,8 @@ import { reset, runInDurableObject } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PolicyResource } from "../../shared/src/m1";
 import { decide, type OwnerConsent, type PolicyContext } from "../src/policy";
-import { bareChannel, legacyBinding, managedAuthorityFixture } from "./managed-helpers";
+import { bareChannel, legacyBinding } from "./managed-helpers";
+import { verifiedRegistrationFixture } from "./managed-verified-registration";
 
 beforeEach(reset);
 
@@ -353,8 +354,8 @@ describe("managed consent control (DD-1 and history consent)", () => {
 
   describe("Organization DO and Channel enforcement integration", () => {
     it("handles DD-1 terminal_control consent lifecycle in Organization DO and audit logs", async () => {
-      const f = await managedAuthorityFixture();
-      const hostId = "test-host-1";
+      const f = await verifiedRegistrationFixture();
+      const hostId = f.hostId;
 
       // Mutate consent with terminal_control and hostId
       const created = await f.org.mutateConsent({

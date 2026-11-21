@@ -5,6 +5,7 @@ import { nativeIdentity } from "./m1-helpers";
 import { b2Request } from "./managed-b2a-cases";
 import { legacyBinding } from "./managed-helpers";
 import { queryExecutionFixture } from "./managed-query-cases";
+import { verifiedRegistrationFixture } from "./managed-verified-registration";
 
 beforeEach(reset);
 
@@ -219,7 +220,7 @@ describe("managed agent controls", () => {
   });
 
   it("manages approvals and requires terminal_control consent for cross-owner deny", async () => {
-    const f = await queryExecutionFixture();
+    const f = await verifiedRegistrationFixture();
     const foreign = await nativeIdentity(String(Math.floor(Math.random() * 1e12) + 1000), "foreign");
     const target = encodeURIComponent(f.targetId);
 

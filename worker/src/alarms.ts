@@ -7,7 +7,15 @@
 // and the one real alarm is always set to the earliest of them.
 
 /** The parts of the Channel that wake up on a timer. */
-export type AlarmJob = "tasks" | "presence" | "members" | "hosts" | "directives" | "executions" | "managed-outcomes";
+export type AlarmJob =
+  | "tasks"
+  | "presence"
+  | "members"
+  | "hosts"
+  | "directives"
+  | "executions"
+  | "managed-outcomes"
+  | "registration-intents";
 
 type DeadlineRow = { job: string; at: number };
 

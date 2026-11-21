@@ -1447,3 +1447,409 @@ Cross-owner continuation remains blocked. `registerManagedAgent` calls `authoriz
 - `managed-agent-controls.test.ts:278`: the expected owner approval denial returns 404 because Organization rejects every control effect while verified Host authority is unavailable (`worker/src/organization.ts:1111`). The effect sends an Agent interrupt (`worker/src/channel.ts:2289`), not a Host-local control check. Restoring the old allow would violate the verified ownership and local enforcement requirements (`m1/p3/P3_BATCH_PLAN.md:90`, `m1/p3/P3_BATCH_PLAN.md:94`). No safe code fix was made.
 - `managed-consent-control.test.ts:374`: creation returns `host_authority_unavailable` because the caller-supplied Host ID and execution ownership do not prove Host ownership (`worker/src/organization.ts:883`, `worker/src/organization.ts:901`). Allowing issuance would reopen the reviewed trust boundary. No safe code fix was made.
 - Escalations: both gate failures remain unresolved. The Host registration proof and locally enforced control protocol need a trust-boundary design decision; the existing tests were not changed. Targeted `npx vitest run test/managed-agent-controls.test.ts test/managed-consent-control.test.ts` did not start: Vite could not write its temporary config in the read-only shared `worker/node_modules/.vite-temp` (EROFS). The manager's full worker gate reported the two failures above; no tests passed in this attempt.
+
+## PCFIX
+
+### Correlated receipt primitive continuation
+
+- `worker/src/policy-permits.ts:122`, `LocalMutationPermits.consumeSet`: adds the receipt-set primitive for a caller-owned synchronous transaction. It rejects empty/oversized sets, duplicate IDs, different authority scopes, actors, revisions, generations or deadlines; samples one consumption time; and throws on an individual refusal so the enclosing transaction rolls back installation and prior consumption. Callers must independently construct expected bindings from reread state. This is **not integrated into registration yet** and does not close finding 1.
+- `worker/test/managed-permit-set.test.ts:9`: added `it("rolls back both receipts and local writes on ${failure}")` cases for expiry, revision, generation, Host mismatch, used receipt, duplicate receipt and a write exception, using actual DO SQLite `transactionSync`. `worker/test/managed-permit-set.test.ts:63`: added `it("consumes both receipts with the local write once and rejects replay")`. These are primitive tests, **not** the required registration/consent/approval handler matrix. Runtime tests not run: coordinator prohibits vitest in this sandbox.
+- Retained the earlier exact Host serialization change (`worker/src/policy-permits.ts:33`) and its test (`worker/test/managed-permit-host-binding.test.ts:6`); corrected that new test's import ordering only, with no assertion changes.
+- Commands actually executed in this continuation: Worker `npm run typecheck` exit 0; initial `npm run lint` exit 1 (format/import-order errors in the partial/new files), then corrected and reran Worker `npm run typecheck` exit 0 and `npm run lint` exit 0 (233 files checked); `git diff --check` exit 0. Read-only `git diff --diff-filter=M --name-only 0bfb31f -- worker/test` returned no paths. No baseline test, config, dependency or binding changed. No runtime test result is claimed.
+- No route class changed or operation opened; no caller uses `consumeSet` yet. No `PCFIX_DONE.md` is written. All handler/protocol items in **Remaining** below still require implementation; no new design blocker is asserted.
+
+- Partial implementation: `worker/src/policy-permits.ts:33` (`resourceKey`) now includes `hostId`, so a permit for one Host cannot match another or an absent Host.
+- Added `worker/test/managed-permit-host-binding.test.ts:6`, `it("binds an exact Host, including its absence, into the resource key")`. This is a serialization test only; it does not substitute for the required real-handler matrix.
+- Commands: `npm run typecheck` in `worker/` initially failed due to an incorrect type import; after correcting it, it passed. Runtime tests not run: coordinator explicitly prohibits vitest in this sandbox.
+- Package-3-added test expectation changes: none. Existing baseline tests were not edited.
+- Continuation verification: worker `npm run typecheck` passed; `git diff --check` passed; `git diff --diff-filter=M 0bfb31f -- worker/test` produced no output. Vitest was not run, per the coordinator's instruction.
+
+### Remaining
+
+PCFIX is incomplete: reservation and synchronous dual-permit registration, invisible staging and activation reconciliation, trusted Host enrollment and lifecycle, policy-backed Host-owner consent, approval dispatch, fixtures and required handler/race tests remain. Existing registration invokes `#registerAgentInternal` before consuming START (`worker/src/channel.ts:2939`, `worker/src/channel.ts:2948`); the temporary control denials remain (`worker/src/organization.ts:903`, `worker/src/organization.ts:1120`). No completion marker was written.
+
+- Continuation: re-inspected the registration, consent and approval handlers; the required registration and enrollment protocol remains unimplemented. No authorization path was opened. Worker `npm run typecheck` and `git diff --check` both passed. Runtime tests were not run: the coordinator prohibits vitest in this sandbox. No test expectations were changed in this continuation.
+
+### Synchronous roster extraction (this continuation)
+
+- `worker/src/agents.ts:252`, `AgentRoster.register`, delegates the unchanged local algorithm to `registerLocal`, then awaits the existing presence watch only on success. `worker/src/agents.ts:265`, `registerLocal`, is synchronous and does not schedule that watch. Its host callbacks are deliberately **not** claimed to be transaction safe: a future managed caller must buffer them. The existing Channel managed registration is not switched to this primitive. No route is opened and no Host enrollment is fabricated.
+- Added `worker/test/managed-registration-local.test.ts:39`, `it("applies registration synchronously without scheduling the asynchronous presence watch")`; `:53`, `it("keeps legacy registration watch scheduling after successful local application")`; `:63`, `it("rolls back the Agent row when the caller aborts its synchronous transaction")`; `:80`, `it("refuses a second librarian without writes, notifications or asynchronous watches")`. Tests use real Channel SQLite and a collecting roster host, **not** real HTTP registration/consent/approval handlers. They do not establish completion of the PCFIX handler test matrix.
+- Package-3-added expectation changes: none. Baseline tests are untouched. The owner approval's 200 and consent creation's true assertions remain untouched.
+- Commands actually run: the first typecheck invocation from the repository root failed with ENOENT (no package.json); Worker `npm run typecheck` then exited 0; Worker `npm run lint` exited 0 (234 files). Runtime tests **not run**: coordinator expressly prohibits vitest/npm test in this sandbox. No runtime passing result is claimed.
+
+### RESOLVED by R10–R15 — durable staging of registration's shared mutations
+
+**Historical escalation, resolved by the Nov 21 owner ruling R10–R15 and RECHECK-2 GO. Prepared durable intent replaces staged shared writes; the historical text below is retained for evidence, not an outstanding decision.**
+
+The former blocker was the representation and publication of the staged registration write set in `m1/p3/P3_PERMIT_CONSENT_REDESIGN.md:18`–`:20`, **not** Host ownership or the resolved approval owner ruling. The approved design requires the existing algorithm's local changes to commit before activation but requires every such change to remain invisible until activation, including crash recovery. The current algorithm does not mutate only a new Agent row:
+
+- `worker/src/channel.ts:3147`, `#registerAgentInternal`, invokes `withNextTurn`; `worker/src/channel.ts:3315`, `withNextTurn`, consumes lost Claims, Relay deliveries and Directives. Their storage operations delete shared rows (`worker/src/stale-claims.ts:208`, `takeLostClaims`; `worker/src/relay/relay.ts:267`, `takeDeliveries`; `worker/src/directives.ts:170`, `takeDirectives`). An inactive association or hidden roster row does not hide these deletions from concurrent managed readers/operations.
+- `worker/src/channel.ts:658`, the roster `presenceChanged` callback, invokes `StaleClaims.presenceChanged`; `worker/src/stale-claims.ts:73` updates shared Tasks and appends claim recovery Events. Marking just the registering Agent pending would still expose changed Tasks.
+- `worker/src/channel.ts:3157`, registration's `hosts.spawned` call, reaches `worker/src/hosts.ts:533`, which changes spawn/parent records, sends `host.spawned` and resolves an in-memory waiter (`worker/src/hosts.ts:564`–`:567`). `worker/src/channel.ts:4807` also invokes Relay after each inserted Event. SQL rollback alone cannot undo sends, resolved waiters or Relay work.
+
+A synchronous roster extraction and a buffered broadcast list are therefore insufficient to implement the approved invisibility guarantee. In particular, committing those live-table writes and later marking an Agent gone is not safe cleanup of pre-existing shared state. I have not installed that shortcut or opened controls on advisory Host state.
+
+Concrete options requiring design selection before integrating registration:
+
+1. **Prepared durable intent, apply on activation:** consume the correlated permits and commit only a validated immutable registration intent/non-authorizing association first; keep live roster, Task, delivery, resume and spawn tables unchanged. After authoritative activation, revalidate and apply the existing local algorithm once in a second synchronous transaction, buffering external notifications; if finalization predicates changed, authoritatively revoke before terminal cleanup. This is narrower, but changes the approved step-3 commit ordering and requires specifying which queue/Task snapshot wins between preparation and activation.
+2. **Durable staged write set:** retain the approved step-3 ordering using shadow/versioned rows for all touched roster, Person, Task, queue, resume, handoff, event and spawn state, and make readers/writers resolve the active version until publication. A durable notification journal must cover Host waiter/send and Relay callbacks. This preserves the prescribed ordering but expands the storage/read boundary beyond the stated narrow registration refactor. A pending flag on the Agent alone is expressly insufficient.
+
+No change to DD-1/DD-2, manager-only START, trusted enrollment provenance or the two required positive assertions is proposed. This is the specific staging architecture choice; the amount of remaining work or inability to run vitest is not the blocker. Under the instruction to stop on a disproportionate architectural problem instead of accumulating patches, this continuation leaves a coherent primitive/extraction subset for review and does **not** write `PCFIX_DONE.md`.
+
+### Remaining (current)
+
+Blocked on the staging choice above: reservation/activation integration, atomic registration call-site integration, durable activation reconciliation, trusted enrollment and lifecycle, policy-backed consent, Host-bound approval admission/dispatch and real-handler/race tests. Cross-review findings 1–3 are **not closed**. The known existing pre-permit registration effects remain at `worker/src/channel.ts:2939`–`:2948`; this extraction does not fix them. No production admission boundary or route class changed. No B3 work started.
+
+### PCFIX continuation: staging blocker revalidated
+
+- **Historical staging decision, now resolved by R10–R15.** At that earlier continuation the task included GO for the permit/consent design, but no selection between the two staging options recorded above. Reinspection confirms `worker/src/channel.ts:3147` calls `withNextTurn`, whose `:3317`–`:3319` drain three shared delivery sources; `worker/src/channel.ts:657` invokes shared claim recovery on presence changes; `worker/src/hosts.ts:564`–`:567` sends the spawn notification and resolves its waiter. SQL rollback and an Agent visibility flag cannot isolate these effects across a committed pending activation.
+- Required choice: approve durable intent followed by revalidated apply after activation (changing the prescribed pre-activation write ordering), or approve durable staged versions of the shared write set and a notification journal (expanding the read/write boundary). Neither is silently selected here. This is separate from the already resolved Host-owner and approval rulings; their success assertions remain unchanged.
+- No additional production or test changes in this continuation. Retained all earlier partial work. No DONE marker: registration, enrollment, consent and approval integration remain blocked as listed above.
+- Executed read-only verification: `git diff --check` exit 0; `git diff --diff-filter=M --name-only 0bfb31f -- worker/test` exit 0, no paths. Runtime tests and typecheck/lint not run in this continuation; vitest is prohibited by the coordinator. No claim that the partial implementation passes runtime gates.
+
+- Final read-only checks in this continuation: `git diff --check` exit 0; `git diff --diff-filter=M --name-only 0bfb31f -- worker/test` exit 0 with no paths (no baseline test modifications).
+
+## PCFIX2
+
+### Owner ruling and WIP disposition
+
+R10–R15 and RECHECK-2 GO resolve the prior durable-staging escalation. There is **no outstanding owner design decision** for prepared intent. The historical PCFIX escalation above is marked resolved; its older continuation entries describe history only. TXN-1 must contain no shared registration writes, and TXN-2 must read live queue/Task state. No staged/shared shadow rows or notification journal were introduced.
+
+Retained the WIP exact Host serialization (`worker/src/policy-permits.ts:33`), receipt-set primitive (`:125`), synchronous roster extraction (`worker/src/agents.ts:265`) and their three new test files. Strengthened the receipt set rather than replacing it. Corrected the extraction's comment (`worker/src/agents.ts:259`): SQL append/presence recovery must remain inside TXN-2, while only external notifications/scheduling are deferred. No pending-Agent visibility shortcut was retained or introduced.
+
+### Implemented storage foundation (not handler integration)
+
+- `worker/src/policy-permits.ts:125`, `LocalMutationPermits.consumeSet`: requires exactly two distinct START/HAND receipts, common request, actor, revision, generation and deadline. Optional intent correlation is stored with each used receipt, retained until intent expiry (`:168`); registration storage always supplies it. `consumedByIntent` (`:175`) checks both actions, exact intent, used state and retention deadline. The evidence is not an authorization decision or permit extension. `observeRevision` (`:64`) preserves correlated used evidence while advancing the revision floor; `invalidate` still removes all receipts. `install` (`:80`) prunes by retention deadline for correlated evidence and receipt expiry otherwise, preserving the existing hard cap. The caller still owns transactionSync and must independently reconstruct bindings.
+- `worker/src/registration-intents.ts:62`, `registrationIntentRequest`: explicit registration-input allowlist through the existing parser (`worker/src/agents-api.ts:142`), identity/path/nickname byte bounds and bounded usage validation; arbitrary authentication properties are discarded. Malformed request inputs use a 400 error type. Fixed payload total is limited to 16 KiB before receipt consumption (`worker/src/registration-intents.ts:224`).
+- `worker/src/registration-intents.ts:122`, `RegistrationIntents`: lazy standalone storage helper, with no constructor/Channel hot-path call site. Fixed payload fields include only bounded correlation references and allowlisted request JSON. SQLite trigger forbids payload mutation. Unique request key plus live Agent/Host indexes prevent replacing competing attempts. `prepare` (`:159`) consumes the dual receipts and inserts only intent/receipt bookkeeping inside the caller-owned transaction; equal-key identical replay observes the recorded state, changed payload conflicts. `transition` (`:283`) restricts lifecycle edges and rejects expiry before activation/apply. `prune` (`:310`) moves expired pre-apply attempts to cancelling, retains cancellation tombstones until acknowledgement, prunes terminal outcomes after 24h and enforces the hard row cap on preparation. Caller still must cap TTL by actual handoff/grant/credential expiry and validate authority/registration prerequisites.
+- `m1/p3/P3_ROUTE_INVENTORY.md:152`, C05: corrected IMPLEMENTED → PARTIAL to reflect the still-unfixed handler ordering, rather than claiming the unused helper closes it. No new admission, policy action, RPC, service binding, schema initialization on unlinked paths or B3 work.
+
+### Tests added (not executed)
+
+`worker/test/managed-registration-intents.test.ts` adds these storage/SQLite tests, **not** the required real-handler admission matrix:
+
+- `:64`, `it("commits only the intent and correlated receipts, retaining proof past permit expiry")`.
+- `:88`, `it("rolls back receipt installation, consumption and intent together on a second receipt refusal")`.
+- `:105`, `it("never activates or applies an expired or cancelled intent and never refunds its receipts")`.
+- `:120`, `it("rejects competing live Agent and Host intents without replacing the first")`.
+- `:135`, `it("requires exactly START and HAND even when the single receipt is valid")`.
+- `:149`, `it("keeps correlation through receipt pruning and revision changes without authorizing reuse")`.
+- `:168`, `it("retains cancelling tombstones but prunes acknowledged terminal outcomes after 24 hours")`.
+- `:183`, `it("allowlists request fields and rejects oversized identity and path inputs")`.
+
+Package-3-added test expectation changes: **none** (new file only). The prior WIP test files remain retained. Baseline tests at 0bfb31f remain unmodified; read-only `git diff --diff-filter=M --name-only 0bfb31f -- worker/test` returned no paths. The required existing 200/true assertions and their fixtures are not changed in this continuation.
+
+### Commands actually run
+
+Worker `npm run typecheck`: exit 0 after the additions. Worker `npm run lint`: final exit 0, 236 files checked, no warnings. Targeted Biome formatting was run on the new/changed source and new test file. Earlier formatting attempts from the wrong directory failed (nested-config error and missing executable); rerunning from worker succeeded without configuration changes. One initial file-write attempt used an incorrect relative path and created no file; the file was then written successfully inside this worktree. `git diff --check`: exit 0. Runtime tests **not run**: coordinator explicitly prohibits vitest/npm test in this sandbox. No runtime passing result is claimed.
+
+### Remaining
+
+PCFIX2 is **incomplete**, with no new owner conflict and no DONE marker. The storage primitives are deliberately not wired into the current managed registration handler. The existing pre-permit effect defect at `worker/src/channel.ts:2939` / `:2948` is **not closed**. Continue from this worktree, without restarting:
+
+1. Organization bounded non-authorizing reservation protocol, dual correlated issuance and terminal activation/cancel fencing; never expose an eager usable credential/execution.
+2. Real managed preparation, Task sync, independently reconstructed TXN-1 bindings, expiry caps, canonical request-key retry and intent-only commit; no Person/Agent/queue/resume/spawn effects.
+3. Confirmed activation followed by fresh decide/apply permit and synchronous TXN-2 existing algorithm against live state, with SQL rollback, lastSeq/cache rollback and request-local external callback deferral (including nested Host waiters/Relay/watch).
+4. Authenticated completion/applied proof and idempotent reconciliation; bounded trusted Host enrollments written only on verified registration completion, current execution/binding checks and lifecycle invalidation. Credential release remains outside Channel storage.
+5. Replace temporary consent/control denials only with policy-backed enrolled Host-owner checks (`worker/src/organization.ts:903`, `:1120`); populate outer approval input Host/owner/target before prepare (`worker/src/channel.ts:2275`); use-time fences and exact Host permits.
+6. Required successful owner-handoff enrollment fixtures preserving 200/true assertions, plus the full real-handler positive/negative/race/crash/live-state/rollback matrix in the approved design. Storage-helper tests above do not substitute for those gates.
+
+Cross-review findings 1–3 and the protocol-level REQUIRED-IN-PCFIX items remain open until that integration and its gates are complete. No production control path is opened on advisory Host identity.
+
+### Continuation: Organization reservation lifecycle storage
+
+Retained all prior PCFIX2 work. Added `worker/src/registration-reservations.ts:70`, `RegistrationReservations`, as an **unused storage primitive**, not an Organization RPC or policy boundary. No production call site invokes it. Future callers must authenticate the bound Channel, run decide/current authority checks and own transactionSync; correlation IDs never authorize completion.
+
+- `worker/src/registration-reservations.ts:97`, reserve: immutable field allowlist, canonical bounded registration JSON, total 16 KiB bound, TTL <=30 seconds, distinct receipt IDs, owner/actor check, unique idempotency key, one live Agent/Host intent, hard MANAGED_RECORD_CAP admission. Equal-key equal-payload replay observes state; changed payload conflicts. No execution/credential/enrollment writes.
+- `worker/src/registration-reservations.ts:202`, activate: exact intent/reservation/dual-receipt/execution/Workspace/Channel/generation correlation, deadline and terminality checks; retry never extends TTL. `:222`, complete: only activated records complete; future caller must validate current authority and durable applied proof. Post-apply completion may recover after intent TTL, distinct from forbidden late activation.
+- `worker/src/registration-reservations.ts:238`, cancel: idempotent terminality fences delayed activation; applied failure is explicit, completed work cannot be represented as zero-effect cancellation. `:253`, prune: expires unactivated reservations, prunes terminal records after 24h, retains unresolved activations for explicit reconciliation. Retained rows count toward the hard cap; exhaustion fails closed. No permit refund, shadow shared rows or notification journal.
+
+New storage tests (NOT handler admission) in `worker/test/managed-registration-reservations.test.ts`:
+- `:33`, it("keeps reservations non-authorizing and binds activation to the exact dual receipt acknowledgement").
+- `:60`, it("never revives a cancelled reservation through delayed activation or same-key replay").
+- `:77`, it("rejects simultaneous agent and Host reservations and permits only idempotent completion recovery").
+- `:100`, it("expires unactivated records, retains unresolved activation and prunes terminal outcomes").
+- `:119`, it("rolls back lifecycle changes with caller transactions and keeps the immutable payload fixed").
+
+Commands: worker npm run typecheck exit 0; worker npm run lint initially failed formatting/import order, then targeted Biome --write and final lint exit 0 (238 files). Runtime tests not run: coordinator prohibits vitest/npm test in this sandbox; manager owns runtime gates. Read-only byte comparison of all 109 worker/test and cli/test baseline 0bfb31f files found zero changes; git diff --check exit 0. No existing Package-3-added expectations changed; new test file only; required 200/true assertions remain untouched. An initial notes append used the worker-relative path and failed without writing; rerun from repository root succeeded.
+
+Remaining: all six protocol/handler integration items above remain. Item 1 has reservation storage/state transitions, but no Organization prepare/activate/complete/cancel RPC, dual issuance or execution/credential gating integration. Existing pre-permit registration defect remains (`worker/src/channel.ts:2939`, `:2948`). No new owner conflict; PCFIX2 is incomplete; no PCFIX_DONE.md. Continue from this worktree.
+
+### PCFIX2 continuation — synchronous TXN-2 commit component (incomplete)
+
+Retained all earlier intent/reservation/receipt/roster work. R10–R15 still resolve the historical durable-staging decision; there is no new owner-level conflict. This continuation adds a local component, **not production handler integration or a closure of findings 1–3**.
+
+- `worker/src/registration-commit.ts:79`, `commitRegistration`: synchronous SQLite TXN-2 component requiring an activated, unexpired immutable intent, a fresh independently bound apply receipt, original START/HAND consumption by this intent and a caller-provided synchronous live-state fence. It checks exact actor, Workspace/Organization/Channel, Agent, Host/owner, request, generation and revision; receipt install/consume, caller registration SQL and applied transition share the transaction. `operation=agent.register.apply:<intentId>` binds the fresh receipt to one immutable intent using the existing operation field/resourceKey, without adding an action. This operation is not yet issued by Organization or admitted by Channel.
+- `worker/src/registration-commit.ts:8`, `RegistrationEffects`: request-local external callback collection, discard on rollback, single release and a synchronous fence before every effect. Fence/notification errors are separate from committed SQL; callbacks are never replayed by repeating registration. SQL/presence/Claim callbacks must remain synchronous inside registration, not enter this collector. This helper does **not** yet intercept real Channel nested append/Relay/Host/watch callbacks.
+- `worker/src/registration-commit.ts:69`, `RegistrationRefused`: preserve an existing returned business refusal only after rolling back preceding SQL/receipt changes. The caller supplies checkpoint/restore for lastSeq and other transaction-local caches; exception/refusal drops captured callbacks and restores that checkpoint. The Channel checkpoint/callback wiring remains outstanding; no claim of complete Channel callback isolation.
+- `worker/src/registration-intents.ts:263`, `RegistrationIntents.prepare`: additionally require each independently reconstructed TXN-1 receipt binding's targetId to equal the immutable intent's Agent. A receipt for another Agent cannot install or consume as part of that intent.
+
+New component tests only, `worker/test/managed-registration-commit.test.ts`:
+- `:75`, it("refuses a dual receipt set bound to another Agent before installing receipts or intent").
+- `:104`, it("reads live state and commits roster plus applied proof before releasing ordered effects"). Uses real AgentRoster.registerLocal and Channel SQLite, with test-collected callbacks; this is **not** the real HTTP/Channel registration handler or its complete Task/queue algorithm.
+- `:175`, it("rolls back SQL, fresh permit, outcome, counters and nested callbacks on a business exception").
+- `:214`, it("preserves a business refusal while rolling back earlier resume and queue consumption").
+- `:245`, it("rejects stale generation, wrong Host, expired apply, missing consumption and cancelled intent before effects").
+- `:281`, it("drops remaining effects on invalidation and reports delivery errors separately from SQL commit").
+
+Executed verification:
+- Worker `npm run typecheck`: initially failed the new append fixture's generic ChannelEvent return type; corrected its explicit test-only ChannelEvent assertion. Final runs exit 0.
+- Worker `npm run lint`: final exit 0, 240 files checked. Targeted Biome --write touched only the two new component files. Initial Biome invocation from repository root failed nested-root configuration discovery; reran from worker without changing any configuration.
+- Read-only comparison of **all 109** baseline `worker/test` and `cli/test` files against `0bfb31f`: zero changed. No pre-existing Package-3-added assertion changed in this continuation; new test file only. Required 200/true assertions remain untouched.
+- `git diff --check`: exit 0 before this documentation append; final result recorded below.
+- Runtime tests **not run**: coordinator explicitly prohibits vitest/npm test in this sandbox; manager owns those gates. The new component tests are typechecked, not claimed passing.
+
+Remaining: Organization prepare/dual issuance/activate/complete/cancel handlers and credential gating; Channel TXN-1/activation/TXN-2/recovery integration with full existing live registration algorithm and nested effect interception; enrollment completion-only writer and lifecycle invalidation; decide-backed Host-owner consent; Host-bound approval outer-input and dispatch fences; real-handler admission/race/recovery matrix and the two positive fixture upgrades. Existing pre-permit mutation call sites remain `worker/src/channel.ts:2939` and `:2948`. No new public RPC/HTTP route, managed schema initialization on unlinked paths, Host control admission or B3 work. No PCFIX_DONE.md; PCFIX2 remains incomplete and must continue from these files.
+
+Final continuation check: `git diff --check` after the documentation/inventory append exited 0. No DONE marker written.
+
+### PCFIX2 continuation — bounded Organization enrollment storage (incomplete)
+
+Retained the previous intent, reservation, receipt-set and TXN-2 components. Added an **unused storage component**, `RegistrationEnrollments` (`worker/src/registration-enrollments.ts:21`); this is not a registration-completion handler or policy boundary, and does not establish R4 provenance on its own. No existing production call site constructs it, so no schema initialization or work is added to unlinked paths. The actual handler still needs authenticated bound-Channel applied-proof verification and current decide/execution/binding checks, in the same Organization completion transaction, before calling this helper (`worker/src/registration-enrollments.ts:16`).
+
+Changes:
+- Minimal Organization-local Host enrollment schema and exact org/Workspace/Host lookup (`worker/src/registration-enrollments.ts:23`, `:30`), with no credential/digest fields.
+- Completion-only storage operation rejects reserved/activated outcomes, binds enrollment to owner/intent/execution, rejects conflicting ownership/references and revoked-row replay, and returns an identical completed record idempotently (`worker/src/registration-enrollments.ts:45`). It must never be exposed as a generic enrollment RPC. Reservation state alone is NOT applied proof.
+- Insert-time MANAGED_RECORD_CAP check includes retained revoked rows; prune only revoked records after 24-hour retention (`worker/src/registration-enrollments.ts:61`, `:97`). Execution and Workspace invalidation operations preserve the first revocation timestamp (`:80`, `:88`); lifecycle call-site integration is still outstanding.
+
+New storage-component test titles (NOT real handler admission or R4 proof):
+- `rejects reservation and activation alone and idempotently records completion` (`worker/test/managed-registration-enrollments.test.ts:33`).
+- `does not resurrect revoked enrollment and prunes only after bounded retention` (`worker/test/managed-registration-enrollments.test.ts:67`).
+- `rolls back enrollment with its caller completion transaction` (`worker/test/managed-registration-enrollments.test.ts:91`).
+
+Commands/results in this continuation:
+- `npm run typecheck --prefix worker`: initial failure (HostEnrollment interface lacked SqlStorage index constraint); changed to a type alias; final execution passed, exit 0.
+- `npm run lint --prefix worker`: initial formatting failures; scoped Biome formatting from repository root failed due nested-root configuration. Ran the scoped formatter from worker/ without config changes; final `npm run lint` in worker/ passed, exit 0 (242 files).
+- `git diff --check`: passed, exit 0.
+- Read-only Python/git blob comparison of all baseline worker/test and cli/test files: 109 checked, zero changed.
+- Runtime tests: **not run**, per coordinator prohibition; manager must run them. No existing test expectation was changed; D5 old → new: none.
+
+Remaining: Organization prepare/dual issuance/activate/complete/cancel handlers and credential gating; Channel TXN-1/activation/TXN-2/recovery integration with full live registration algorithm and nested effect interception; authenticated completion-only enrollment writer and lifecycle invalidation call sites; decide-backed Host-owner consent; Host-bound approval outer-input and dispatch fences; real-handler admission/race/recovery matrix and both positive fixture upgrades. Existing pre-permit mutation remains at `worker/src/channel.ts:2939` / `:2948`. No new owner conflict or design decision is asserted. PCFIX2 is incomplete; no PCFIX_DONE.md is written. Continue from the current files.
+
+### PCFIX2 continuation — consent issuance decision boundary (incomplete)
+
+Retained all prior partial work. No new owner-level conflict; R10–R15 remain resolved. No DONE marker.
+
+- `worker/src/policy.ts:46`, `PolicyContext.consentIssuance`: authority-only exact Host owner/target facts. `decide` at `:112`, `:235`, `:252` rejects non-Person issuance, prevents metadata-admin bypass, requires active Organization AND Workspace membership and evaluates `workspace.read` with exact `operation=consent.issue`. A general read permission cannot issue terminal-control consent. No new action vocabulary.
+- `worker/src/organization.ts:894`, `mutateConsent`: terminal_control creation now uses that decision boundary; the hardcoded creation denial is replaced by current enrollment/target resolution. Legacy owner-only removal retains its former predicate so an old consent can still be removed without grandfathering its use. Other consent kinds retain their existing decision path. This does not open approval effects (`worker/src/organization.ts:1215` still denies control).
+- `worker/src/organization.ts:1015`, `activeHostEnrollment`: no table creation; absence denies. Requires matching non-revoked enrollment, exact current target execution/owner/Workspace, active owner memberships, completed correlated reservation, current binding generation and effective principal/grant authority. IDs/Channel advisory Host values are never ownership proof. There is still NO production completion writer, so positive Host enrollment admission remains unavailable. This is not claimed to close cross-review findings 1–3.
+- The lookup currently also requires retained completed-reservation correlation. Integration must align completed reservation retention with active enrollment lifetime (or retain equivalent trusted generation/completion evidence in the enrollment) before the positive path is complete. Missing correlation denies; it never guesses activation/completion. This is an implementation item, not an owner design conflict.
+- N09 route inventory is now marked PARTIAL for terminal_control; C05/H20 and H24 control remain incomplete/closed. No unlinked Channel code or baseline test was changed.
+
+New tests, `worker/test/managed-consent-issuance-policy.test.ts` (not run):
+- `:47`, it("admits only the exact authority-resolved Host owner and target").
+- `:53`, it("does not turn ordinary read authority into consent issuance authority").
+- `:62`, it("requires current Organization and Workspace membership even for metadata administrators").
+- `:74`, it("denies foreign Workspaces, unavailable authority and non-Person issuers").
+- `:93`, it("denies an execution owner's advisory Host and creates no enrollment or consent") — real Organization handler; verifies no lazy enrollment table is created.
+- `:117`, it("denies a different Person and a foreign Workspace without writing a consent") — real Organization handler.
+The positive test is policy-only; the required positive registration/completion/consent/approval handler matrix is NOT complete. D5 expectation changes: none; both required positive assertions remain untouched.
+
+Commands and actual results:
+- Worker `npm run typecheck`: passed, exit 0 (before and after formatting).
+- Worker `npm run lint`: initial failure for import ordering (plus style diagnostics); scoped Biome fixes and explicit optional-chain correction applied. Final `npm run lint --prefix worker`: passed, exit 0, 243 files.
+- `git diff --check`: passed, exit 0.
+- Read-only Python/git blob comparison: all 109 baseline worker/test and cli/test files byte-identical to 0bfb31f.
+- Runtime tests: not run, per coordinator prohibition. No vitest/npm test invocation.
+
+Remaining: Organization reservation/dual issuance/activate/complete/cancel handlers and credential gating; Channel TXN-1/activation/TXN-2/recovery integration and nested effect isolation; authenticated completion-only enrollment writer and lifecycle invalidation; complete consent provenance/expiry/use validation and positive handler fixtures; Host-bound approval outer-input and dispatch fences; full handler/race/recovery matrix. Existing registration pre-permit mutation remains `worker/src/channel.ts:2939`. No B3 work. Continue from these files; PCFIX2 is incomplete.
+
+### PCFIX2 continuation — enrollment-bound control preparation (incomplete)
+
+Retained the existing partial implementation and all storage/commit helpers; no discarded WIP, history restore, or git mutation. The R10–R15 staging decision remains resolved. This continuation does not claim the registration protocol is integrated.
+
+Changes:
+- `worker/src/channel.ts:2266`, `#managedWrite` approval denial: require the current Agent's nonempty Host lookup hint; set the outer input's Host and target execution before authority calls. Resolve target owner through the existing bounded `authorizeChannelRead(agent.view)` path, then set outer owner before `prepare`. Removed the execution-owner Boolean shortcut and the preliminary write-action call to the read-only authorization RPC. The actual control decision is made by Organization permit issuance. Inside the synchronous commit, reread association/activity/execution and Host before `denyApproval`/interrupt. The existing exact receipt/current-generation commit guard remains (`worker/src/channel.ts:1771`). No unlinked handler changes.
+- `worker/src/organization.ts:1245`, `channelDecision`: replace unconditional control refusal with active trusted enrollment lookup matching target execution/Host/owner. Missing or mismatched provenance still denies. `worker/src/organization.ts:1304` requires cross-owner terminal_control rows to carry the exact enrollment intent, target execution and target owner before supplying consent to decide. Existing unverified rows cannot authorize control. `worker/src/policy.ts:42`, OwnerConsent, adds these non-secret provenance references; `worker/src/policy.ts:269`, decide, denies viewer control even when the viewer owns the target. No new action vocabulary.
+- `worker/src/organization.ts:902`, `mutateConsent`: retain the resolved enrollment for the issuance row; store target owner separately from issuer plus enrollment/target references (`:966`). Revocation compares the stored issuer (`:918`), not an assumed execution owner. Expired consent pruning and MANAGED_RECORD_CAP capacity refusal precede insertion (`:950`); capacity returns 503. Existing decide and active issuer/recipient membership checks remain.
+- `worker/src/organization.ts:1033`, `invalidateHostEnrollment`: execution revoke (`:529`) and end (`:716`) invalidate matching rows in their synchronous lifecycle transaction. A new binding transition invalidates Workspace enrollment provenance (`:2213`). Each checks table existence, never initializes enrollment schema for pre-protocol identities. This adds no Channel constructor or unlinked Channel work. Current enrollment queries already independently require finalized binding and live enrolling execution (`worker/src/organization.ts:1046`).
+
+Tests added (not executed):
+- `worker/test/managed-control-enrollment.test.ts:7`, `it("denies owner and administrator control of an advisory Host without issuing a permit")`: real Organization permit handler, three control operations and generations 0/1/2; asserts zero permit rows and no enrollment schema creation.
+- `worker/test/managed-control-enrollment.test.ts:39`, `it("does not create an enrollment table when ending a pre-protocol execution")`: real execution-end handler, ended status and absent lazy schema.
+- `worker/test/managed-consent-issuance-policy.test.ts:53`, `it("does not let viewer ownership authorize approval control")`: contributor-owner allow, viewer-owner denial at decide. Pure policy coverage, not a positive registration/approval handler gate.
+
+Package-3-added expectation changes: **none**; only new cases/files. Required 200/true assertions and their fixtures are untouched. Read-only byte comparison of every baseline file from `git ls-tree -r 0bfb31f -- worker/test cli/test` against its baseline blob checked **109 files**, all identical. No incompatible existing expectation changes.
+
+Commands actually run: worker typecheck passed (exit 0); worker lint passed (exit 0, 244 files); `git diff --check` passed. Initial typecheck after the target lookup failed on RPC promise-union inference; an async/await callback corrected it and the final checks above passed. Initial lint found import ordering; targeted Biome organization corrected it. One initial edit command used worker-relative paths from worker cwd and failed before writing; rerun from repo root succeeded. Runtime tests **not run**, per the coordinator's explicit prohibition of vitest/npm test. No runtime success is claimed.
+
+Remaining: PCFIX2 is **incomplete**. C05/H20 still use the old eager execution/registration path (`worker/src/channel.ts:2850`, `:2948`); the new intent/reservation/commit helpers have no handler call sites. Organization reservation/dual issuance/activation/completion/cancellation RPCs and credential gating; real Channel TXN-1/TXN-2/recovery/callback integration; completion-only enrollment writer; required successful owner-handoff fixtures and full handler/race/recovery/live-state/rollback matrix remain. H24 now has enrollment-bound preparation, but no legitimate enrollment can be created until completion is wired, so the required successful real-handler assertions are **not claimed fixed**. Host-local reads/consent provenance and consent revocation propagation also need final design verification. No new owner-level conflict; no B3 work or DONE marker. Continue from this worktree.
+
+### PCFIX2 continuation — real Channel local transaction and external-effect boundary (incomplete)
+
+Retained the preceding partial implementation. No WIP was discarded; no git mutation, baseline test edit, new binding/config/dependency, enrollment writer or B3 operation was introduced. R10–R15 resolve the former durable-staging escalation; this continuation asserts no new owner-level conflict.
+
+Changes and evidence:
+
+- `worker/src/channel.ts:3142`, `#registerAgentInternal`: managed registration now selects a synchronous local transaction; the legacy branch retains its existing asynchronous roster/watch/token path. This is an intermediate local-atomicity improvement, NOT the complete prepared-intent protocol.
+- `worker/src/channel.ts:3189`, `#registerManagedTransaction`: wraps the managed local algorithm in one `transactionSync`; failed handoff consumption and business refusals throw inside the transaction. Rollback discards request-local external effects and restores `lastSeq` and the complete `recentLocal` cache (`:3213`). The collector is cleared before post-commit callbacks (`:3225`); each callback release is synchronously fenced by linked state, Workspace, binding generation and current local policy revision (`:3229`). No await occurs in the transaction.
+- `worker/src/channel.ts:3241`, `#registerManagedLocal`: preserves local registration order: Host/continuation predicates, paused resume consumption, Person join, history-Host normalization, synchronous roster application, live next-turn queue drain, handoff, usage, spawn and successful result. `withNextTurn` still drains live SQL queues, rather than staging snapshots (`worker/src/channel.ts:3439`, symbol `withNextTurn`; line may shift in subsequent integration). Its business refusal is rolled back by the caller. The request-local collector is mandatory; this is not an actor-free RPC.
+- `worker/src/channel.ts:755`, Host send callback; `:786`, Host completion callback; `:4931`, nested append Relay callback; `:4959`, broadcast: defer only external effects during managed synchronous registration. Person/Agent/Task/Event writes and synchronous presence/claim recovery still execute inside the SQL transaction. Unlinked paths check the already-loaded binding first; no added awaits, RPCs, storage reads or JSON parsing there, and no managed constructor schema initialization.
+- `worker/src/hosts.ts:196`, optional `HostsDeps.afterCommit`; `:570` and `:848`, spawn success/failure waiter callbacks: defer waiter resolution with the registration's request-local effect list. SQL spawn/parent/event changes stay synchronous. Legacy callers without a collector resolve immediately.
+- `worker/src/agents.ts:811`, `watchRegistration`: exposes the existing presence-watch scheduling for post-commit use; managed local apply queues it (`worker/src/channel.ts:3283`) instead of awaiting it within the transaction. Legacy `register` still awaits the original watch after roster success (`worker/src/agents.ts:252`).
+
+New tests (not executed):
+
+- `worker/test/managed-registration-effects.test.ts:52`, `it("rolls back shared SQL and event caches and discards Relay notifications on a late SQL failure")`: real `Channel.registerManagedAgent` with actual authority/SQLite and an injected late presence-event SQL failure; compares all shared tables (excluding managed protocol/bookkeeping tables), event counter/cache and Relay calls, and checks collector cleanup.
+- `worker/test/managed-registration-effects.test.ts:80`, `it("delivers Relay notifications only after successful SQL commit and clears the request-local collector")`: real successful handler; every observed Relay callback requires the Agent/event SQL rows and no installed collector. This proves local notification ordering only, not original START-before-effects or TXN-1/activation authorization.
+- Package-3-added expectation changes: **none**. Required existing HTTP 200 and consent true assertions remain untouched. No incompatible baseline expectation change in this continuation.
+
+Commands actually run:
+
+- Worker `npm run typecheck`: initial failure on the intermediate unused method / refusal status type; corrected; final execution exit 0.
+- Worker `npm run lint`: initial failures on import ordering/formatting/non-null assertion; corrected; final execution exit 0 (245 files checked).
+- `git diff --check`: exit 0.
+- Read-only `git ls-tree`/`git show` byte comparison against `0bfb31f` across worker/cli/dashboard/shared test directories: **138 files checked, zero changes**.
+- Runtime tests: **not run**, explicitly prohibited in this sandbox by the coordinator. No runtime pass is claimed.
+
+#### Remaining
+
+PCFIX2 remains **incomplete**. C05/H20 still eagerly create an Organization execution (`worker/src/channel.ts:2865`, symbol `registerManagedAgent`) and consume START after the local registration call (`worker/src/channel.ts:2972`, same symbol). The local transaction above must be incorporated into `commitRegistration` and must NOT be mistaken for R10/R11: there is still no intent-only TXN-1, confirmed activation/fresh apply authority, or authenticated completion enrollment writer in the real registration handler. Original START denial can still follow local effects; findings 1–3 are NOT claimed closed. Organization prepare/dual issuance/activate/complete/cancel and credential gating, Channel intent/recovery integration, prior-association termination scheduling, positive verified-handoff enrollment fixtures, full permit-race/state-machine/live-state/Host-waiter/control matrix and completion-only enrollment remain required. In particular the existing two positive control/consent assertions are not claimed fixed. Do not write PCFIX_DONE.md until all those gates are implemented. Continue from this worktree; no new owner decision is needed.
+
+### PCFIX2 continuation — prepared-intent handler integration (incomplete; baseline conflict)
+
+Retained the earlier WIP helpers and their tests. Replaced C05's eager `mutateIdentity(execution.start)` / registration-before-START sequence with the prepared-intent protocol; no restore/restart, git mutation, dependency/config change or B3 implementation. The former durable-staging decision remains resolved by R10–R15; this continuation identifies a **different** baseline-expectation conflict below.
+
+Changes (implementation evidence, NOT runtime verification):
+
+- `worker/src/registration-protocol.ts:6`, `RegistrationPreparation`: internal protocol types carry native actor facts, bounded canonical request and correlation references, without credentials. `worker/src/organization.ts:1454`, `prepareRegistration`: synchronous Organization reservation and correlated START/HAND issuance, using both `decide` calls plus existing principal/sponsor/effective-grant predicates. Checks finalized Channel binding, native expiry, request bounds and capacity; creates no execution or credential. Original one-time key cannot mint replacement receipts. `registrationCurrent` (`:1607`) repeats central policy and current grant checks, including live predecessor consent when continuing.
+- `worker/src/channel.ts:2870`, `registerManagedAgent`: canonicalizes the immutable request and uses that allowlist at apply; completes Task synchronization before reservation/receipt acquisition. TXN-1 (`:2983`) independently reconstructs both receipt bindings, rereads generation/association and inserts only the intent and local receipt bookkeeping. No roster algorithm runs in TXN-1. Existing prechecks of predecessor and previous association are retained; final generation/Host/predecessor/association predicates narrow apply.
+- `worker/src/channel.ts:3209`, `preparedRegistrationProof`: internal Organization-only protocol proof, requiring exact binding and correlated receipt consumption. For an applied/completed proof, checks current local Agent/association/Host. This does not expose Channel content through HTTP/WS/MCP; IDs alone cannot authorize activation/completion. `worker/src/organization.ts:1681` reads proof from the reservation's bound Channel and compares the immutable payload with Organization correlation.
+- `worker/src/organization.ts:1705`, `activateRegistration`: after durable dual-consumption proof, activates the reserved identity and repeats central authority checks for the short exact apply receipt. No credential or enrollment is created here. `worker/src/channel.ts:3051`, `commitRegistration` call: integrates the existing synchronous local registration algorithm into TXN-2; installs the request-local callback collector, snapshots/restores lastSeq/recentLocal, records an inactive association and applies the intent atomically. Sends/watch/Relay/Host callbacks release after commit, fenced individually. Prior association termination is scheduled only after apply; it does not precede TXN-1 or TXN-2.
+- `worker/src/organization.ts:1822`, `completeRegistration`: completion is the sole production caller of `RegistrationEnrollments.complete`; checks durable applied proof/current authority in the Organization transaction. Enrollment and first credential issuance occur together there. Channel activates its association only after completion acknowledgement (`worker/src/channel.ts:3096`). No credential/digest/code enters Channel storage.
+- `worker/src/organization.ts:1799`, `cancelRegistration`; `worker/src/channel.ts:3137`, `#reconcileRegistration`: pre-apply ambiguity cancels, never reapplies. Applied recovery retries completion or ends authority; it does not rerun queues/Tasks/registration. `#retryRegistrationIntents` (`:3193`) processes bounded recovery batches. New `registration-intents` alarm job is only scheduled/handled for managed registration (`worker/src/alarms.ts:10`, `worker/src/channel.ts:804`); no constructor/schema work or new awaited branch on unlinked registration/alarms.
+- `worker/src/policy-permits.ts:172`, `consumeSet`: separates apply-eligibility expiry (`consumptionExpiresAt`) from bounded 24h evidence retention. Current-time `consumedByIntent` still refuses at the original intent expiry (`:198`); historical correlation permits completion/cancellation without extending apply eligibility or refunding a permit. Invalidation still destroys evidence; reconciliation when evidence is unavailable needs additional coverage (see Remaining).
+
+Tests added (not executed):
+
+- `worker/test/managed-registration-protocol.test.ts:35`: `it("issues correlated dual receipts without creating an execution, credential, enrollment or registration audit")` invokes the real Organization preparation handler and compares identity tables before/after; asserts correlated actions/targets/deadlines and no enrollment table.
+- Same file: generated `it("denies ${mode} before any reservation or execution effect")` for nonmember, foreign Organization, foreign Workspace, wrong generation, wrong role, expired native session, expired grant and revoked principal. This is native registration preparation, not a claim of expired/revoked execution-handler coverage.
+- Same file: `it("refuses activation without a durable dual-consumption Channel proof")` invokes the real Organization activation handler and asserts no execution/credential effect, unchanged reserved state and 404.
+- `worker/test/managed-verified-registration.ts:9`, `verifiedRegistrationFixture`: creates only an advisory Host through the existing Host module, then runs actual native owner registration through dual receipts, Channel intent/apply and Organization completion; it never INSERTs an enrollment. Its completed Task-sync fixture prevents unrelated GitHub setup from substituting for registration coverage.
+
+D5 / test-fixture accounting:
+
+- `worker/test/managed-agent-controls.test.ts:223`, fixture in `manages approvals and requires terminal_control consent for cross-owner deny`: `queryExecutionFixture()` -> `verifiedRegistrationFixture()`. Required HTTP **200 -> 200** and all response/negative assertions unchanged (`:279`). No assertion removed or loosened.
+- `worker/test/managed-consent-control.test.ts:357`, fixture in `handles DD-1 terminal_control consent lifecycle in Organization DO and audit logs`: `managedAuthorityFixture()` / arbitrary `"test-host-1"` -> real verified-registration fixture / `f.hostId`. Required **true -> true** (`:375`); all assertions unchanged. Imports adjusted only for the fixture.
+- `worker/test/managed-registration-effects.test.ts:55` / `:84`: add completed Task-sync fixture before the existing snapshots/handler invocation, now that the actual protocol requires preparation sync. Both existing test titles and every rollback/notification/status assertion remain unchanged. This file was Package-3-added and was already untracked WIP, not a baseline test.
+- No deferral assertion flipped. No baseline test edited: read-only comparison against `git show 0bfb31f:<path>` checked **138** worker/cli/dashboard/shared test files, **0 changed**.
+
+#### RESOLVED BY OWNER RULING R16 — baseline registration expectations versus R10–R15
+
+`worker/test/managed-registration.test.ts` is present at baseline 0bfb31f and remains byte-identical. The test `denies unlinked intent without registration and never replays a managed secret` has two expectations incompatible with the implemented approved lifecycle:
+
+1. At `:186`–`:192`, a request with nonexistent Host expects 409 **and an ended Organization execution row**. Before that request this test has only one successfully registered, still-active execution. The old eager execution path created then ended a second execution for the rejected registration. R10–R15 require non-mutating prerequisite validation, a reservation rather than eager execution, and no activation for a rejected attempt. Current Host prerequisite rejection (`worker/src/channel.ts:2878`) returns 409 before reservation/activation and creates no ended execution. Creating one solely to satisfy the assertion would recreate the rejected architecture and would be test-specific behavior. There is no permitted previous execution to end here.
+2. At `:183`, an identical completed-key retry must return **409**. Approved design PC-4 says completed identical retries return the recorded non-secret outcome; the new completed-replay path (`worker/src/channel.ts:2883`) returns that outcome with 200 and no token. The baseline's no-secret replay assertion remains valid; its status expectation needs explicit disposition. Returning the non-secret outcome with 409 may preserve both interpretations, but the design's status contract describes conflict/self-continuation as 409, so this has not been silently reinterpreted.
+
+Options:
+
+- **A (recommended):** authorize the narrowly documented baseline expectation changes for this test: failed Host registration leaves execution tables unchanged (no fabricated ended execution); completed same-key replay returns 200 with a recorded non-secret outcome and never a credential. Independent reviewer reviews the exact changes; keep all other baseline assertions byte-identical.
+- **B:** explicitly retain completed replay's 409 transport status while returning a non-secret recorded outcome, and authorize only replacement of the failed-Host ended-execution assertion with unchanged-state evidence. This narrows the approval needed but requires owner clarification of the replay status contract.
+- **C:** revise R10–R15 to permit eager execution creation on rejected preconditions. This is not implemented: it contradicts the approved prepared-reservation design.
+
+No baseline assertions were changed. This is a static incompatibility finding, **not a reported runtime test failure**. The task is incomplete and no PCFIX_DONE.md is written.
+
+#### Incompatible existing expectations
+
+See the R16-resolved baseline conflict immediately above: `worker/test/managed-registration.test.ts`, `denies unlinked intent without registration and never replays a managed secret`, `:183` (409 -> proposed 200/non-secret outcome) and `:192` (expects eager-created ended execution -> proposed unchanged execution state). Proposed only; zero edits to this baseline file.
+
+#### Remaining
+
+Owner/reviewer disposition of the baseline conflicts above is required before claiming gate readiness. In addition, continue the full real-handler matrix from the approved design: independent START/HAND expiry/reuse/revision/generation/binding races and all-shared-table TXN-1 snapshot; activation loss/unavailable authority/cancel/crash; live Task/resume/Claim/Directive/delivery changes during activation; TXN-2 exception/Host-waiter rollback; post-apply completion timeout/retry without duplicates; Host enrollment capacity/renewal/end/revoke/unlink; owner/cross-owner approval and consent target/Host/grantee/kind/expiry/admin matrix. The two required positive fixtures were upgraded but **not runtime-verified**. Recovery scheduling must be checked for overlapping deadlines, binding transition/invalidation deleting receipt evidence and expiry/cancellation with unavailable authority; do not claim those paths complete. Registration audit/outbox semantics and exact status handling on each authority failure require final review. No B3 machine-local enforcement work is included.
+
+Validation in this continuation:
+
+- `npm run typecheck` in worker: **passed** after protocol/handler/fixture integration. Earlier transient test tuple and missing AlarmJob type errors were corrected; final typecheck output is clean.
+- `npm run lint` in worker: **passed**, final rerun checked 248 files with no warnings/errors after the final fixture adjustments.
+- `git diff --check`: **passed** after final documentation/fixture changes.
+- Runtime tests: **not run**, per coordinator's explicit prohibition on vitest/npm test in this sandbox; manager owns runtime gates. No full suites/e2e/deploy/git writes/network operations performed.
+
+
+### PCFIX2 continuation — R16 resolution and recovery corrections
+
+R16 selects Option A above. The baseline-expectation conflict is resolved; its historical options and proposed-only statements describe the earlier stop, not the current authorization.
+
+#### Incompatible existing expectations
+
+- `worker/test/managed-registration.test.ts:183`: completed identical replay status 409 → 200, returning the recorded non-secret outcome per PC-4. Line 184's no-secret assertion remains verbatim.
+- `worker/test/managed-registration.test.ts:191`: ended-execution containment → exactly one active execution matching the successful registration. Missing-Host rejection creates no execution under R10–R15. The request and 409 remain verbatim. These are the ONLY R16-authorized baseline edits.
+
+
+Changes in this continuation (retained all prior WIP; no rebuild/revert):
+
+- `worker/src/channel.ts:3203`, `#scheduleRegistrationRecovery`: preserve the earliest registration deadline instead of overwriting it with a later intent. `#retryRegistrationIntents` at `:3208` rearms for both unexpired prepared/activated intents and pending cancellation/completion; an early alarm no longer strands a later intent. The managed alarm branch at `:804` permits recovery of formerly linked generations, while generation-zero legacy alarms perform no new work.
+- `worker/src/channel.ts:3232`, `preparedRegistrationProof`; `worker/src/organization.ts:1671`, `registrationProof`; `:1815`, `cancelRegistration`: cancellation-only proof survives binding changes and receipt invalidation, using the immutable correlated intent. Only cancellation requests can use that exception, and only for cancelling/applied/applied-failed states. Activation/completion retain current binding, association and receipt fences. Cancellation cannot issue an apply permit, credential or enrollment. Never-linked Channels skip synchronously before schema reads.
+- `worker/src/channel.ts:2820`, `registerManagedAgent`: Workspace admission RPC now uses the bounded authority helper; timeout reaches the existing 503 handler.
+- `worker/src/channel.ts:3073`, TXN-2 registration callback: reserve a bounded audit-outbox row inside the apply transaction, keyed by the fresh apply permit; refusal/exception rolls it back with registration. Queue export only on successful local registration. `worker/src/organization.ts:1787`, `activateRegistration`: persist the corresponding `permit_issued` audit fact so the existing audit sink can authenticate this outcome; this is an authority decision fact, not a registration-success audit. Replays never repeat TXN-2 or its outcome row.
+
+New tests in `worker/test/managed-registration-failures.test.ts` (NOT executed):
+
+- `:39`, generated `rejects ${action} ${fault} before any shared registration effect`: real Channel/Organization preparation and TXN-1 path, independently corrupt START and HAND expiry, Host, generation, revision and actor; asserts unchanged shared SQL and zero installed receipts/intents after rejection.
+- `:75`, generated `keeps TXN-1 invisible and cancels after activation ${fault}`: observe shared SQL at actual activation boundary; deny/throw authority; assert no shared registration effects, terminal cancellation and same-key denial.
+- `:100`, `recovers lost completion without repeating registration or returning the lost credential`: actual completion commits, response throws; retry completes from proof, returns no token/secret/credential, and leaves shared registration SQL unchanged.
+
+Package-3-added expectation changes in this continuation: **none**. Added new tests only. The prior fixture-only 200→200 and true→true changes remain as documented above. R16 baseline diff was inspected: only status line 183 and the lines 191–193 execution expectation changed; line 184 and the missing-Host request/status are unchanged.
+
+Validation actually executed: worker `npm run typecheck` **passed**; worker `npm run lint` **passed**, 249 files checked; `git diff --check` **passed** before the final audit correlation edit (rerun below). Typecheck initially found numeric Github ID in a new test; corrected to the required string. Lint initially found formatting only; corrected. A formatter invocation from repository root rejected nested Biome config and wrote nothing; rerun from worker succeeded. One initial edit used the wrong cwd and wrote nothing; corrected. No config, package, binding, baseline timeout, credential file, network or git-writing operation was used. Read-only baseline comparison checked **138 files**; the sole changed baseline file is `worker/test/managed-registration.test.ts`, with the two R16-authorized changes. Runtime tests **not run**, per coordinator prohibition; no runtime success claimed.
+
+#### Remaining (current)
+
+PCFIX2 remains incomplete; no PCFIX_DONE.md. R16 is resolved and is NOT a blocker. Registration prepare/activate/apply/complete/cancel handlers are integrated, but the complete approved real-handler verification matrix is still outstanding: receipt reuse and post-await binding/invalidation races, delayed activation after cancellation, TTL/crash/cancellation recovery under unavailable authority and overlapping deadlines, live Task/resume/Claim/Directive/delivery changes during activation, Host-spawn waiter rollback, completion terminal denial, enrollment capacity/renewal and lifecycle invalidation, and full owner/cross-owner consent/approval negative combinations. New cancellation-proof and audit-export changes require dedicated handler tests. Required 200/true fixtures and all added tests remain runtime-unverified. No new owner-level design conflict and no B3 work. Continue from this worktree; do not interpret static checks or component coverage as completion.
+
+Final validation after the audit-correlation edit: worker typecheck **passed** (exit 0), worker lint **passed** (249 files, exit 0), `git diff --check` **passed** (exit 0). Runtime tests remain **not run**.
+
+### PCFIX2 continuation — apply and consented-control handler matrix (in progress)
+
+Retained previous partial implementation and all R16 changes. No baseline test edits in this continuation; no B3 work. Runtime tests remain **not run** under the coordinator prohibition.
+
+- `worker/src/channel.ts:3041`, `registerManagedAgent`: complete Task synchronization again before requesting activation/fresh apply authority. TXN-2 still reads live local state; no Task snapshot or permit extension.
+- `worker/src/channel.ts:2300`, approval target lookup: preserve authority 503 instead of converting unavailable authority into a resource 404.
+- `worker/src/agents.ts:555`, `denyApproval`: retain the legacy own-Agent default; managed permit commit supplies the live target Person separately from the acting Person. The exact Host/owner/execution/consent permission is still decided only by Organization/decide and consumed by the facade. Without this narrow argument the legacy roster ownership predicate rejected every consented cross-owner request even after central admission. Audit/deniedBy continues to identify the acting Person. `worker/src/channel.ts:2319` passes only the owner of the already resolved live Agent, inside the synchronous permit commit. No other caller changes.
+- `worker/test/managed-registration-failures.test.ts:129`: `it("cancels an activated identity after a lost activation response and never revives it")`; actual activation then lost response, cancellation, delayed activation rejection, ended execution and unchanged shared snapshot.
+- Same file `:167`: generated `it("rejects fresh apply ${fault} without registration effects or a credential")`, expiry/Host/generation/actor/original-receipt substitution, unchanged shared SQL and cancelled intent.
+- Same file `:201`: `it("reconciles unavailable cancellation without applying or acquiring replacement permits")`; cancelling state remains non-applicable and same-key retry cancels without fresh preparation.
+- New `worker/test/managed-verified-control.test.ts:1`: real verified-handoff completion fixture, real approval report and deny handlers; positive consented cross-owner dispatch; negative no/read/screen/wrong Host/target/grantee/expired/revoked consent, admin without consent, ended enrollment, generation, viewer and nonmember; consent issuance negatives for non-owner/inactive issuer/foreign Workspace/missing Host/wrong target/expiry. Denied approval tests compare Agent+Event rows and assert no interrupt. Enrollment is never seeded with SQL.
+
+Static checks so far: worker typecheck and lint passed after failure-matrix changes. New control test initially had a private-method spy typing error, corrected using a narrow internal shape; typecheck then passed. Final checks pending after roster extension. Two edit commands used worker-relative paths from worker cwd and failed before writing; corrected from repository cwd. No runtime pass is claimed. Package-3-added expectation flips: **none**, new cases only.
+
+### PCFIX2 final implementation and verification handoff
+
+This section supersedes the historical Remaining lists above. Prepared-intent registration, Organization prepare/activate/complete/cancel, completion-only enrollment, recovery scheduling, consent provenance and Host-bound approval authorization are integrated. No outstanding owner design decision; R10–R16 govern the implementation. No B3 work was started. Manager runtime gates and independent review remain pending; **no runtime success is claimed**.
+
+Additional production changes in this continuation:
+
+- `worker/src/channel.ts:2842`, `registerManagedAgent`: bound predecessor/previous-association authority RPCs and preliminary continuation permit request with `authorityRequest`; preserve 503 on unavailable continuation authority. These are preparation facts, never permission caches. Fresh Organization `registrationCurrent` still repeats predecessor consent at activation/completion.
+- `worker/src/channel.ts:2998`, TXN-1 preparation: schedule recovery BEFORE intent commit. A crash immediately after TXN-1 therefore retains a durable wakeup; final binding/association checks remain after this last await. Failed TXN-1 can leave only a harmless recovery deadline, never shared registration state. `:3058` completes Task synchronization before fresh apply issuance.
+- `worker/src/organization.ts:460`, `mutateIdentity`: non-completed prepared executions cannot rotate/redeem credentials through the ordinary identity endpoint. This is a lifecycle predicate in addition to central policy; completion remains the sole initial credential-release point for these executions.
+- `worker/src/organization.ts:911`, `mutateConsent`; `worker/src/policy.ts:257`, consent issuance: Host-local private/history kinds use the same authority-resolved enrollment/issuer decision as terminal_control, with distinct exact consent kind and private-action predicates. `worker/src/organization.ts:1285`, `channelDecision`, requires current enrollment for Host-local reads and validates enrollment/target-execution provenance on consent use (`:1338`). A pre-redesign row without provenance cannot grant such access. Read/screen/history still cannot match terminal_control.
+- `worker/src/channel.ts:2300`, managed approval branch: preserve 503 from target authority; outer input carries Host, execution and owner before permit preparation. The synchronous final predicate checks both live Host and Person against the resolved Agent before dispatch; `worker/src/agents.ts:555` preserves actual acting Person in attribution while allowing the policy-admitted target owner argument. Legacy calls omit that argument and retain own-Agent behavior.
+
+New tests and strengthened WIP snapshots (all **not run**):
+
+- `worker/test/managed-registration-failures.test.ts:231`, `fences ${fault} after activation and before the synchronous apply`: lost consumption, consumption by another intent, changed binding/revision, revoked principal. Original consumed IDs cannot be borrowed by another registration.
+- Same file `:292`, `uses live Tasks and queue rows changed during activation without restoring or double draining`; `:338`, `rolls back a late apply failure including live queue drains, spawn SQL and Host waiter notification`; `:391`, `records terminal applied failure after completion denial without undoing or repeating committed registration`.
+- Same file `:421`, `rolls back BOTH receipts when ${action} was already consumed at TXN-1`; `:451`, `refuses apply when the immutable intent TTL expires after activation`; `:475`, `recovers cancellation from the real alarm without reapplying registration`; `:503`, `cannot rotate an activated but unapplied identity into a usable credential`.
+- Same file `:536`, `preserves a prior execution when its live Resume ticket disappears during activation`; `:577`, `recovers a crashed ${phase} intent by cancellation only at its durable alarm` (prepared, activated, receipt-invalidated; real Organization preparation and local intent commit, then real alarm/cancellation, never guessed activation/apply).
+- Same file `:680`, `serializes identical concurrent handler retries and rejects a changed body without replaying a credential`; `:704`, `times out pending activation with 503 and refuses its delayed response after cancellation`; `:729`, `preserves the earliest durable recovery deadline across overlapping intents and reconciles both`.
+- `worker/test/managed-registration-protocol.test.ts:133`, `rejects competing Agent and Host reservations and changed-body keys without replacing the first intent`: actual Organization prepare calls, exact 409, one reservation and original two receipts retained.
+- `worker/test/managed-verified-control.test.ts:78`, `dispatches cross-owner denial only with the enrolled owner's exact terminal_control consent`; `:94`–`:201` generated control/issuance denials; `:229` authority 503; `:245` recipient refusal; `:263` full `queryDenials` through real approval-report handler (including revoked AND expired execution credentials); `:276` verified Host-local history provenance and rejection of old rows; `:312` execution end/revoke enrollment invalidation; `:342` enrollment invalidation at real unbind reservation even if Channel transition fails; `:383` consent issuance/control after revocation, grant expiry/scope loss, wrong binding and foreign Organization/Workspace. Host ownership proof always comes from actual verified registration, never SQL enrollment seeding. The unbind test stubs only external repository-owner proof and the failed transition; actual Organization reservation/invalidation runs.
+- `worker/test/managed-registration-enrollments.test.ts:111`, `caps retained enrollment rows and frees only revoked rows past retention`: storage-only capacity/retention test; explicitly NOT a registration provenance or handler-admission fixture. Existing completion-conflict/idempotency/rollback tests remain.
+- `worker/test/managed-registration-failures.test.ts:24` and `worker/test/managed-registration-effects.test.ts:31`, shared snapshots: include association and managed outbox rows (stronger than the earlier blanket managed/m1 exclusion). Exclude only receipt/revision bookkeeping, immutable-intent storage, SQLite internals and recovery scheduler deadlines. Alarm scheduling is recovery metadata outside the shared registration algorithm; roster/Person/Task/Claim/delivery/Directive/resume/spawn/Event and available outbox tables remain compared. The late-rollback test includes queued rows and pending spawn/waiter; the earlier effects tests retain lastSeq/cache/Relay assertions. No assertion removed or loosened.
+
+#### D5 and incompatible existing expectations (final)
+
+- Required existing Package-3-added positives remain `worker/test/managed-agent-controls.test.ts:279` **200 → 200**, and `worker/test/managed-consent-control.test.ts:375` **true → true**. Their fixtures now use `worker/test/managed-verified-registration.ts:9` and the actual verified-owner registration/completion protocol, rather than an unenrolled arbitrary Host. All response assertions remain.
+- No deferral/success expectation was flipped in any other Package-3-added test. New tests and stronger snapshot coverage only; existing WIP snapshot helper additionally excludes recovery alarm metadata as described above.
+- R16 baseline exceptions remain EXACTLY `worker/test/managed-registration.test.ts:183` **409 → 200** for completed non-secret replay, and `:191`–`:193` **contains ended row → exactly the existing active execution** for missing-Host refusal. The no-secret assertion at `:184`, missing-Host request/status at `:186`–`:187`, and all other baseline lines remain unchanged. Reason: PC-4 recorded non-secret outcomes; R10–R15 forbid eager execution creation for a rejected Host prerequisite. No other baseline test changed.
+
+#### Remaining / scope boundaries
+
+PCFIX2 implementation and added verification cases are ready for manager execution and independent adversarial review. Runtime correctness, the mandatory 200/true runtime gates and the full suites are **not verified in this sandbox**. Machine-local CLI enforcement and stream/transport revocation completion remain B3b/B4 as explicitly ruled by R6; no claim that a simulated recipient refusal tests the actual CLI local ceiling. DD-2 Langfuse migration, terminal keyboard and other later-batch surfaces were not opened. No production deployment, commit, staging, push, merge, dependency/config change, credential-file read or external network operation was performed.
+
+#### Final executed checks
+
+- Worker `npm run typecheck`: **passed, exit 0**, after the final authority-wrapper correction. The preceding run identified lost TypeScript narrowing of the validated Workspace ID inside the new RPC closure; corrected with the already-validated string type. Earlier new-test spy typing issues (private method, synchronous transition callback and explicit `this`) were corrected before the final pass.
+- Worker `npm run lint`: **passed, exit 0**, 250 files checked, no changes requested. Targeted Biome formatting was executed from worker; no package/config semantics changed.
+- `git diff --check`: **passed, exit 0**.
+- Read-only byte comparison against `0bfb31f`: **138 baseline test files checked**; only `worker/test/managed-registration.test.ts` differs. Explicit equality checks on baseline lines 1–182, 184–187 and 194–end passed; the no-secret assertion remains verbatim. Exact two R16 hunks inspected in the diff.
+- Runtime tests: **not run: coordinator explicitly prohibits vitest/npm test in this sandbox**. The manager must execute the new files, required positive fixtures, baseline suites and CLI e2e gate; no unexecuted test is reported as passing. No network access, git-writing operation or deployment was performed.
