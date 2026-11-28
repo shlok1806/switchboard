@@ -1682,8 +1682,11 @@ describe("the Relay and Queue delivery (ADR 0005)", () => {
     // The Verdict is on the Channel with Jev's probabilities.
     const verdict = await waitFor("the Verdict", async () =>
       (await history()).events.find(
-        (e): e is Extract<ChannelEvent, { type: "verdict" }> =>
-          e.type === "verdict" && e.payload.agent === aId && e.payload.state?.event.type === "push",
+        (e): e is Extract<ChannelEvent, { type: "verdict" }> & { payload: Verdict } =>
+          e.type === "verdict" &&
+          "agent" in e.payload &&
+          e.payload.agent === aId &&
+          e.payload.state?.event.type === "push",
       ),
     );
     expect(verdict.payload).toMatchObject({
@@ -1896,8 +1899,11 @@ describe("Interrupt delivery", () => {
         const { events } = await history();
         const pushEvent = events.find((e) => e.type === "push" && e.payload.commit === commit);
         const verdict = events.find(
-          (e): e is Extract<ChannelEvent, { type: "verdict" }> =>
-            e.type === "verdict" && e.payload.agent === aId && e.payload.event === pushEvent?.id,
+          (e): e is Extract<ChannelEvent, { type: "verdict" }> & { payload: Verdict } =>
+            e.type === "verdict" &&
+            "agent" in e.payload &&
+            e.payload.agent === aId &&
+            e.payload.event === pushEvent?.id,
         );
         return verdict?.payload;
       },
@@ -2719,7 +2725,7 @@ describe("Idle wake", () => {
         const event = events.filter(match).at(-1);
         return events.find(
           (e): e is EventOf<"verdict"> =>
-            e.type === "verdict" && e.payload.agent === id && e.payload.event === event?.id,
+            e.type === "verdict" && "agent" in e.payload && e.payload.agent === id && e.payload.event === event?.id,
         );
       },
       30_000,
@@ -3038,7 +3044,7 @@ describe("Idle wake in Codex", () => {
         const event = events.filter(match).at(-1);
         return events.find(
           (e): e is EventOf<"verdict"> =>
-            e.type === "verdict" && e.payload.agent === id && e.payload.event === event?.id,
+            e.type === "verdict" && "agent" in e.payload && e.payload.agent === id && e.payload.event === event?.id,
         );
       },
       30_000,

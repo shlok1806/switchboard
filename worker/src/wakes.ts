@@ -6,7 +6,7 @@
 // - `wake.capped`: the wrapper stopped waking its Agent at the cap. The Channel posts
 //   an Update for the Agent saying so, with no Task, so it wakes no one in turn.
 
-import type { AgentId, ChannelEvent, EventPayloads, Verdict } from "../../shared/src/index";
+import type { AgentId, ChannelEvent, EventPayloads, VerdictRecord } from "../../shared/src/index";
 import { WAKE_WINDOW_MS, wakeCappedText } from "../../shared/src/index";
 import type { NewEvent } from "./channel";
 
@@ -33,8 +33,11 @@ export class Wakes {
   woke(agent: AgentId, deliveries: readonly string[], directives: readonly string[]): ChannelEvent | null {
     const verdicts = this.events(deliveries).flatMap((row) => {
       if (row.type !== "verdict") return [];
-      const verdict = JSON.parse(row.payload) as Verdict;
-      return verdict.agent === agent && verdict.delivered === "queue" ? [{ id: row.id, event: verdict.event }] : [];
+      // Rule Drops (ADR 0030) delivered nothing, so a Wake never names them.
+      const verdict = JSON.parse(row.payload) as VerdictRecord;
+      return "agent" in verdict && verdict.agent === agent && verdict.delivered === "queue"
+        ? [{ id: row.id, event: verdict.event }]
+        : [];
     });
     const sent = this.events(directives).filter(
       (row) => row.type === "directive" && (JSON.parse(row.payload) as EventPayloads["directive"]).to === agent,

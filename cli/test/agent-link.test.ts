@@ -2,8 +2,16 @@
 // Channel whose answers the test releases by hand, to put a heartbeat exactly where
 // a real one can land: while the first registration is still on the wire.
 
-import { describe, expect, it } from "vitest";
-import type { Agent, AgentId, AgentResponse, RegisterAgentRequest } from "../../shared/src/index";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  Agent,
+  AgentContext,
+  AgentId,
+  AgentResponse,
+  RegisterAgentRequest,
+  ReportedUsage,
+} from "../../shared/src/index";
+import { CONTEXT_REFRESH_MS } from "../../shared/src/index";
 import { AgentLink } from "../src/agent-link";
 import type { ChannelClient } from "../src/channel-client";
 import { ChannelError } from "../src/channel-client";
@@ -64,6 +72,100 @@ describe("AgentLink", () => {
     // One start for the session; what came meanwhile goes as heartbeats of the Agent it registered.
     expect(channel.registers.map((r) => r.rejoin)).toEqual([undefined]);
     expect(channel.heartbeats).toEqual(["idle", "idle"]);
+  });
+});
+
+describe("what a heartbeat carries", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A Channel that answers at once, and forgets the Agent once when `forget` is set. */
+  function channel() {
+    const beats: { usage?: ReportedUsage; context?: AgentContext }[] = [];
+    let registers = 0;
+    const state = { forget: false };
+    const client = {
+      register: async (): Promise<AgentResponse> => {
+        registers += 1;
+        return { ok: true, agent: AGENT, token: "t" };
+      },
+      heartbeat: async (
+        _id: AgentId,
+        _presence: string,
+        usage?: ReportedUsage,
+        context?: AgentContext,
+      ): Promise<AgentResponse> => {
+        if (state.forget) {
+          state.forget = false;
+          throw new ChannelError(404, "No Agent shlok/claude/7f3a on this Channel. Register it first.");
+        }
+        beats.push({ ...(usage === undefined ? {} : { usage }), ...(context === undefined ? {} : { context }) });
+        return { ok: true, agent: AGENT };
+      },
+    } as unknown as ChannelClient;
+    return { client, beats, state, registers: () => registers };
+  }
+
+  /** A Codex session's reading: its context, stamped as it is read, and its account's limits from the last turn. */
+  function codex(tokens: number, percent: number) {
+    return {
+      context: { readAt: new Date().toISOString(), tokens, window: 258_400 },
+      usage: {
+        accountId: "Codex · shlok · work",
+        limits: { readAt: "2026-10-15T00:00:00.000Z", session: { percent }, models: [] },
+      },
+    };
+  }
+
+  async function linked(read: () => ReturnType<typeof codex>) {
+    const ch = channel();
+    const link = new AgentLink(ch.client, SESSION, 60_000, () => {});
+    link.readContext = async () => read();
+    await link.register();
+    const beat = async () => {
+      link.report("live");
+      await settle();
+    };
+    return { ...ch, beat };
+  }
+
+  it("carries the context when it changed, and an unchanged one again before it would look stale", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let tokens = 1000;
+    const { beats, beat } = await linked(() => codex(tokens, 10));
+    await beat();
+    await beat();
+    tokens = 2000;
+    await beat();
+    vi.setSystemTime(Date.now() + CONTEXT_REFRESH_MS - 1000);
+    await beat();
+    vi.setSystemTime(Date.now() + 1000);
+    await beat();
+    expect(beats.map((b) => b.context?.tokens)).toEqual([1000, undefined, 2000, undefined, 2000]);
+  });
+
+  it("carries a usage reading from the session once", async () => {
+    let percent = 10;
+    const { beats, beat } = await linked(() => codex(1000, percent));
+    await beat();
+    await beat();
+    percent = 11;
+    await beat();
+    expect(beats.map((b) => b.usage?.limits?.session?.percent)).toEqual([10, undefined, 11]);
+  });
+
+  it("tells a Channel that forgot the Agent everything again, once it registered it again", async () => {
+    const { beats, beat, state, registers } = await linked(() => codex(1000, 10));
+    await beat();
+    state.forget = true;
+    await beat();
+    expect(registers()).toBe(2);
+    await beat();
+    expect(beats.map((b) => [b.context?.tokens, b.usage?.limits?.session?.percent])).toEqual([
+      [1000, 10],
+      [1000, 10],
+    ]);
   });
 });
 

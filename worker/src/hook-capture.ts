@@ -172,7 +172,7 @@ export class HookCapture {
    * considers, so they come from memory, not from `touched_files`, while this object lives.
    * Edit counts and recency after a file's first edit live only here (ADR 0037).
    * Anything else that writes or deletes an Agent's rows must update this too: pruning
-   * Gone Agents (#114) must `touched.delete(id)` with their rows.
+   * Gone Agents (ADR 0031) must `forget` theirs with their rows.
    */
   private readonly touched = new Map<AgentId, TouchedFile[]>();
 
@@ -221,6 +221,11 @@ export class HookCapture {
     return { type: "hook.ack", recorded, events };
   }
 
+  /** Forgets Agent `id`'s files kept in memory: retention is deleting its rows (ADR 0031). */
+  forget(id: AgentId): void {
+    this.touched.delete(id);
+  }
+
   /** The files Agent `id` has edited, most recently edited first. */
   touchedFiles(id: AgentId): TouchedFile[] {
     const known = this.touched.get(id);
@@ -231,6 +236,23 @@ export class HookCapture {
       .map(rowToTouchedFile);
     this.touched.set(id, files);
     return files;
+  }
+
+  /**
+   * At most `count` of the files Agent `id` has edited, in `touchedFiles`' order: from
+   * memory when its files are there, else only those rows, never every file it ever edited.
+   */
+  recentFiles(id: AgentId, count: number): TouchedFile[] {
+    const known = this.touched.get(id);
+    if (known !== undefined) return known.slice(0, count);
+    return this.host.sql
+      .exec<TouchedFileRow>(
+        "SELECT * FROM touched_files INDEXED BY touched_files_by_recency WHERE agent = ? ORDER BY last_seq DESC LIMIT ?",
+        id,
+        count,
+      )
+      .toArray()
+      .map(rowToTouchedFile);
   }
 
   /**

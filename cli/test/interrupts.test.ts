@@ -5,6 +5,8 @@
 // Enter pressed on top of the Person's half-written prompt, submitting it.
 
 import { describe, expect, it } from "vitest";
+import { claude } from "../src/clis/claude";
+import { codex } from "../src/clis/codex";
 import type { ClaudeHookInput } from "../src/hooks/summarize";
 import { DOUBLE_ESCAPE_MS, InputLine, InterruptTyper, pasteText } from "../src/interrupts";
 
@@ -759,5 +761,73 @@ describe("InterruptTyper holding keys back while it types", () => {
     expect(written.join("")).not.toMatch(/keys/);
     await typing;
     expect(written.filter((d) => d.includes("keys"))).toEqual(["bob's keys", "owner's keys"]);
+  });
+});
+
+describe("InterruptTyper, prompt modes without a submission hook", () => {
+  function guarded(idleClears: boolean, vimMode = false) {
+    const written: string[] = [];
+    const typer = new InterruptTyper({
+      write: (data) => written.push(data),
+      log: () => {},
+      quietMs: 0,
+      waitMs: 0,
+      idleClears,
+      vimMode,
+    });
+    typer.hook({ hook_event_name: "SessionStart", source: "startup" });
+    typer.output("\x1b[?2004h");
+    return { typer, written };
+  }
+
+  it("keeps completions and local command panels guarded until a submission hook", async () => {
+    for (const input of ["/help", "@src/inter"]) {
+      const { typer, written } = guarded(claude.idleClears);
+      typer.personTyped(`${input}\r\x15\r`);
+      expect(await typer.type("Directive")).toEqual({ typed: false, reason: "person-typing" });
+      expect(written).toEqual([`${input}\r\x15\r`]);
+      typer.hook({ hook_event_name: "UserPromptSubmit" });
+      expect(await typer.type("Directive")).toEqual({ typed: true });
+    }
+  });
+
+  it("releases an unknown completion with Ctrl+C at Claude's normal idle prompt", async () => {
+    const { typer } = guarded(claude.idleClears);
+    typer.personTyped("@src/inter\r");
+    typer.personTyped("\x03");
+    expect(await typer.type("Directive")).toEqual({ typed: true });
+  });
+
+  it("does not strand an empty prompt after Escape stops a turn", async () => {
+    for (const adapter of [claude, codex]) {
+      const { typer } = guarded(adapter.idleClears);
+      typer.hook({ hook_event_name: "UserPromptSubmit" });
+      typer.personTyped("\x1b");
+      typer.hook({ hook_event_name: "Stop" });
+      expect(await typer.type("Directive")).toEqual({ typed: true });
+    }
+  });
+
+  it("keeps ordinary Escape and Ctrl+U usable outside vim mode", async () => {
+    const { typer } = guarded(claude.idleClears);
+    typer.personTyped("draft\x1b");
+    typer.personTyped("\x15");
+    expect(await typer.type("Directive")).toEqual({ typed: true });
+  });
+
+  it("does not mistake vim normal-mode paste and deletes for an empty prompt", async () => {
+    const { typer } = guarded(claude.idleClears, true);
+    // Escape enters normal mode, p can paste unseen text, and Ctrl+U need not clear it.
+    typer.personTyped("draft\x1b");
+    typer.personTyped("p\x15\r\x03\x1b\x1b");
+    expect(await typer.type("Directive")).toEqual({ typed: false, reason: "person-typing" });
+  });
+
+  it("keeps a Codex draft guarded after Escape and Ctrl+C until the next prompt hook", async () => {
+    const { typer } = guarded(codex.idleClears);
+    typer.personTyped("draft\x1b\x1b\x03");
+    expect(await typer.type("Directive")).toEqual({ typed: false, reason: "person-typing" });
+    typer.hook({ hook_event_name: "UserPromptSubmit" });
+    expect(await typer.type("Directive")).toEqual({ typed: true });
   });
 });

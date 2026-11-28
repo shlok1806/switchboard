@@ -5,7 +5,8 @@
 //
 // Changes arrive three ways: a Person creating a Task through the Channel API, a
 // GitHub webhook naming the Issues that changed, and a periodic reconcile (a Durable
-// Object alarm) that re-reads every open Issue to repair missed webhooks.
+// Object alarm) that re-reads every open Issue to repair missed webhooks. A reconcile
+// that finds GitHub as the last one left it, with no sync since, reads no Task.
 
 import type {
   AgentId,
@@ -127,6 +128,8 @@ function changedFields(before: Task, after: Task): TaskField[] {
 export class Tasks {
   /** Serializes every sync, so an older read of GitHub never lands after a newer one. */
   private tail: Promise<unknown> = Promise.resolve();
+  /** How many times a Task was written or removed, so a reconcile can tell whether any was while it ran. */
+  private writes = 0;
 
   constructor(private readonly host: TaskHost) {
     host.storage.sql.exec(`
@@ -151,15 +154,28 @@ export class Tasks {
     host.storage.sql.exec(
       "CREATE INDEX IF NOT EXISTS tasks_by_holder_agent ON tasks (holder_agent) WHERE holder_agent IS NOT NULL",
     );
+    // A done Task keeps its Claim, and so its holder_agent, so the Tasks Agents hold only
+    // grow. The ones still being worked on are what the hot paths read.
+    host.storage.sql.exec(
+      `CREATE INDEX IF NOT EXISTS tasks_working_by_holder_agent ON tasks (holder_agent)
+       WHERE holder_agent IS NOT NULL AND json_extract(data, '$.status') <> 'done'`,
+    );
+    // The Tasks not done, so a reconcile looks for closed Issues among them and not every Task there ever was.
+    host.storage.sql.exec(
+      "CREATE INDEX IF NOT EXISTS tasks_not_done ON tasks (number) WHERE json_extract(data, '$.status') <> 'done'",
+    );
     // The Tasks with a Claim, whoever holds it, so "what is in progress" (ADR 0040)
     // reads only those. A Claim is a few rows of a Channel's Tasks at any time.
     host.storage.sql.exec(`CREATE INDEX IF NOT EXISTS tasks_claimed ON tasks (number) WHERE ${CLAIMED}`);
     // A done Task's Claim is history, never Stale: nothing is left to take over. Tasks
-    // closed before `write` cleared it keep the flag; this clears them, reading only
-    // the claimed Tasks through their index.
+    // closed before `write` cleared it keep the flag; this clears them. A done Task keeps
+    // its Claim, so the claimed Tasks only grow: it reads only the Stale ones, a few.
     host.storage.sql.exec(
-      `UPDATE tasks SET data = json_set(data, '$.claim.stale', json('false'))
-       WHERE ${CLAIMED} AND json_extract(data, '$.status') = 'done' AND json_extract(data, '$.claim.stale') = 1`,
+      "CREATE INDEX IF NOT EXISTS tasks_stale ON tasks (number) WHERE json_extract(data, '$.claim.stale') = 1",
+    );
+    host.storage.sql.exec(
+      `UPDATE tasks INDEXED BY tasks_stale SET data = json_set(data, '$.claim.stale', json('false'))
+       WHERE json_extract(data, '$.claim.stale') = 1 AND json_extract(data, '$.status') = 'done'`,
     );
   }
 
@@ -249,32 +265,59 @@ export class Tasks {
     }
   }
 
+  /** When the first reconcile ran: only whether it has is read, so it is written once. */
   private syncedAt(): string | null {
+    return this.sync("syncedAt");
+  }
+
+  private sync(key: "syncedAt" | "reconciled"): string | null {
     return (
-      this.host.storage.sql.exec<{ value: string }>("SELECT value FROM task_sync WHERE key = 'syncedAt'").toArray()[0]
+      this.host.storage.sql.exec<{ value: string }>("SELECT value FROM task_sync WHERE key = ?", key).toArray()[0]
         ?.value ?? null
     );
   }
 
-  /** Re-reads every open Issue, plus every Task GitHub no longer lists as open. */
+  /**
+   * Re-reads every open Issue, plus every Task GitHub no longer lists as open. A reconcile
+   * during which no Task was written, by it or anything else, found every Task saying what
+   * it read: it keeps what it read (`reconciled`). Until a Task is written (`write` and
+   * `remove` forget it), a reconcile that reads the same has nothing to repair, and reads
+   * no Task.
+   */
   private async reconcile(gitHub: GitHub): Promise<void> {
+    const writes = this.writes;
     const open = (await gitHub.listOpenIssues()).sort((a, b) => a.number - b.number);
     const openNumbers = new Set(open.map((issue) => issue.number));
     const mirrors = await mapPooled(open, (issue) => readMirror(gitHub, issue));
+    const read = await fingerprint(mirrors);
+    if (read === this.sync("reconciled")) return;
     for (const mirror of mirrors) this.apply(mirror, "reconcile");
 
     const vanished = this.host.storage.sql
-      .exec<TaskRow>("SELECT * FROM tasks ORDER BY number")
+      .exec<{ number: number }>(
+        "SELECT number FROM tasks INDEXED BY tasks_not_done WHERE json_extract(data, '$.status') <> 'done' ORDER BY number",
+      )
       .toArray()
-      .map((row) => JSON.parse(row.data) as Task)
-      .filter((task) => task.status !== "done" && !openNumbers.has(task.number))
-      .map((task) => task.number);
+      .map((row) => row.number)
+      .filter((number) => !openNumbers.has(number));
     await this.refresh(gitHub, vanished, "reconcile");
 
-    this.host.storage.sql.exec(
-      "INSERT OR REPLACE INTO task_sync (key, value) VALUES ('syncedAt', ?)",
-      new Date().toISOString(),
-    );
+    if (this.syncedAt() === null) {
+      this.host.storage.sql.exec("INSERT INTO task_sync (key, value) VALUES ('syncedAt', ?)", new Date().toISOString());
+    }
+    if (this.writes === writes) {
+      this.host.storage.sql.exec("INSERT OR REPLACE INTO task_sync (key, value) VALUES ('reconciled', ?)", read);
+    }
+  }
+
+  /**
+   * A Task was written, so it may no longer say what the last reconcile read: the next
+   * one reads them all. Claims write some GitHub-owned fields too (the body's Steps,
+   * the claimed label), not only syncs.
+   */
+  private forgetReconciled(): void {
+    this.writes += 1;
+    this.host.storage.sql.exec("DELETE FROM task_sync WHERE key = 'reconciled'");
   }
 
   /**
@@ -374,22 +417,26 @@ export class Tasks {
   }
 
   private remove(number: TaskNumber, via: TaskSyncVia): void {
+    this.forgetReconciled();
     this.host.storage.sql.exec("DELETE FROM tasks WHERE number = ?", number);
     this.host.append({ type: "task.remove", actor: { kind: "github" }, capture: null, task: number, payload: { via } });
   }
 
   /**
-   * Every stored Task whose Claim an Agent holds, done or not, or only Agent
-   * `agent`'s, without syncing first. Synchronous, like `read`.
+   * Every stored Task not done whose Claim an Agent holds, or only Agent `agent`'s,
+   * without syncing first. A done Task keeps its Claim but is left out: its work is
+   * over. Synchronous, like `read`.
    */
   held(agent?: AgentId): Task[] {
     const rows =
       agent === undefined
         ? this.host.storage.sql.exec<TaskRow>(
-            "SELECT * FROM tasks INDEXED BY tasks_by_holder_agent WHERE holder_agent IS NOT NULL ORDER BY number",
+            `SELECT * FROM tasks INDEXED BY tasks_working_by_holder_agent
+             WHERE holder_agent IS NOT NULL AND json_extract(data, '$.status') <> 'done' ORDER BY number`,
           )
         : this.host.storage.sql.exec<TaskRow>(
-            "SELECT * FROM tasks INDEXED BY tasks_by_holder_agent WHERE holder_agent = ? ORDER BY number",
+            `SELECT * FROM tasks INDEXED BY tasks_working_by_holder_agent
+             WHERE holder_agent = ? AND json_extract(data, '$.status') <> 'done' ORDER BY number`,
             agent,
           );
     return rows.toArray().map((row) => JSON.parse(row.data) as Task);
@@ -418,6 +465,7 @@ export class Tasks {
 
   /** Stores a Task and tells every client. Callers own only the Switchboard fields (ADR 0001). */
   write(written: Task): void {
+    this.forgetReconciled();
     // A done Task's Claim is history, never Stale: nothing is left to take over.
     const task =
       written.status === "done" && written.claim?.stale === true
@@ -431,6 +479,13 @@ export class Tasks {
     );
     this.host.broadcast({ type: "task", task });
   }
+}
+
+/** What a reconcile read of the open Issues, as one value: their GitHub-owned fields, hashed. */
+async function fingerprint(mirrors: Mirror[]): Promise<string> {
+  const read = JSON.stringify(mirrors.map((mirror) => [mirror.issue.number, mirroredFields(mirror)]));
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(read));
+  return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** Maps with at most RECONCILE_CONCURRENCY calls in flight, keeping the input order. */

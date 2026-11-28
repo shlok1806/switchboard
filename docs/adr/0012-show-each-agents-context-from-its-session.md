@@ -11,3 +11,7 @@ The first Person prompt supplies a 160-character task summary and an expandable 
 This extends ADR 0011's Claude-only Usage Reading to Codex: `rate_limits.primary` and `secondary` supply 5-hour and weekly percentages and reset times, without a separate API call or opening authentication files. A Codex reading carries `accountId` instead of a fabricated email. An explicit Account Label groups sessions under that label and Person; without one a session-scoped label keeps unidentified accounts apart. The existing account storage's `email` key is also used for these labelled account identifiers for backwards compatibility. Tokens and authentication files remain local. `SWITCHBOARD_USAGE=off` disables account reporting, not context readings.
 
 New fields are optional on registration and heartbeat. An installed CLI update affects new or resumed wrappers; an already-running wrapper keeps its loaded code until it restarts.
+
+## Amendment, 2026-10-28
+
+The wrapper still reads the session on every heartbeat, but sends the reading only when it changed, its `readAt` aside, and at least every 5 minutes (`CONTEXT_REFRESH_MS`), so a current reading never looks stale. The Channel writes it only when it changed: the same context with a newer `readAt`, as an older wrapper sends with every heartbeat, is kept in memory, and its stamp goes into the Agent's row the next time that row is written anyway. Cloudflare bills every row a Channel writes (ADR 0030).

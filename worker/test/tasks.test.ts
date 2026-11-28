@@ -13,6 +13,7 @@ import type {
   TaskListResponse,
   TaskResponse,
 } from "../../shared/src/index";
+import { CLAIMED_LABEL, claimPath } from "../../shared/src/index";
 import { installGitHub, sign } from "../src/github/index";
 import { bearer, channelStub, url } from "./client";
 import { FakeGitHub, type WebhookDelivery } from "./fake-github";
@@ -296,6 +297,46 @@ describe("reconcile", () => {
     await reconcile();
     await reconcile();
     expect(await lastSeq()).toBe(since);
+  });
+
+  it("repairs a webhook's change undone on GitHub, though GitHub reads as it did at the last reconcile", async () => {
+    const number = github.open({ title: "Original" }).number;
+    await tasks();
+    await reconcile();
+
+    await delivered(github.edit(number, { title: "Renamed" }));
+    expect((await task(number)).title).toBe("Renamed");
+    // Renamed back, and that delivery never arrives.
+    github.edit(number, { title: "Original" });
+
+    await reconcile();
+    expect((await task(number)).title).toBe("Original");
+  });
+
+  it("repairs a label the Channel set itself, taken off on GitHub with its webhook missed", async () => {
+    const number = github.open({ title: "Claim me" }).number;
+    await tasks();
+    await reconcile();
+    const claimed = await call(claimPath(number), await as("shlok", { method: "POST", body: "{}" }));
+    expect(claimed.status).toBe(200);
+    expect((await task(number)).labels).toEqual([CLAIMED_LABEL]);
+
+    // Taken off on GitHub: GitHub reads as it did at the last reconcile again.
+    github.edit(number, { labels: [] });
+    await reconcile();
+    expect((await task(number)).labels).toEqual([]);
+  });
+
+  it("finds an Issue closed with its webhook missed, among many Tasks done long ago", async () => {
+    const done = Array.from({ length: 5 }, (_, i) => github.open({ title: `Shipped ${i}` }).number);
+    const open = github.open({ title: "Still open" }).number;
+    await tasks();
+    for (const number of done) await delivered(github.close(number, "shlok1806"));
+    await reconcile();
+
+    github.close(open, "Sam-Codes");
+    await reconcile();
+    expect((await task(open)).status).toBe("done");
   });
 });
 

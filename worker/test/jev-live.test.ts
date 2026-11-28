@@ -5,7 +5,14 @@
 import { env, reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentId, AgentResponse, ChannelEvent, HistoryResponse, VerdictOption } from "../../shared/src/index";
+import type {
+  AgentId,
+  AgentResponse,
+  ChannelEvent,
+  HistoryResponse,
+  Verdict,
+  VerdictOption,
+} from "../../shared/src/index";
 import { HttpJev, installJev } from "../src/relay/jev";
 import { bearer, forgetTokens, remember, streamQuery, url } from "./client";
 
@@ -67,7 +74,7 @@ describe.skipIf(!env.JEV_API_KEY)("the real Jev", () => {
     );
 
     const deadline = Date.now() + 15_000;
-    let verdict: Extract<ChannelEvent, { type: "verdict" }>["payload"] | undefined;
+    let verdict: Verdict | undefined;
     while (verdict === undefined && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 200));
       const response = await exports.default.fetch(
@@ -75,7 +82,8 @@ describe.skipIf(!env.JEV_API_KEY)("the real Jev", () => {
       );
       const events = (await response.json<HistoryResponse>()).events;
       verdict = events.find(
-        (e): e is Extract<ChannelEvent, { type: "verdict" }> => e.type === "verdict" && e.payload.event === edit,
+        (e): e is Extract<ChannelEvent, { type: "verdict" }> & { payload: Verdict } =>
+          e.type === "verdict" && "agent" in e.payload && e.payload.event === edit,
       )?.payload;
     }
     socket?.close();

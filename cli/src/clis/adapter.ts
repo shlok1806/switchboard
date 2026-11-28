@@ -89,6 +89,8 @@ export interface CliAdapter {
    * the line "not empty", so an Interrupt is never typed onto text still there.
    */
   idleClears: boolean;
+  /** Whether vim editing is enabled at launch. Other CLIs use the normal key model. */
+  vimMode?: (context: SessionContext & { args: string[] }) => Promise<boolean>;
   /**
    * Whether the wrapper wakes this CLI's idle session for what is Queued for it (a
    * Wake, see wake.ts): true only where its hooks tell when a turn ends and typing a

@@ -1,7 +1,9 @@
 // Histories longer than what the Dashboard loads. The store holds only the Channel's
 // latest Events (and older pages the feed asked for), so a view of one Agent or one
 // Task reads that scope's own pages from the Channel and merges them with what is
-// loaded, which also brings in new Events as they arrive.
+// loaded, which also brings in new Events as they arrive. When the store loads its
+// snapshot again, there may be Events between the two, so the scope's latest page is
+// read again too.
 
 import type { AgentId, ChannelEvent, HistoryGap } from "@shared/index";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -30,7 +32,7 @@ interface Pages {
 /** The Events of `scope`: those loaded that `matches` keeps, and the scope's own pages, oldest first. */
 export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEvent) => boolean): ScopedHistory {
   const store = useStore();
-  const { events } = useChannel();
+  const { events, loads } = useChannel();
   const key = "agent" in scope ? `agent:${scope.agent}` : `task:${scope.task}`;
   const [pages, setPages] = useState<Pages>({ key, events: [], loading: true });
 
@@ -43,11 +45,12 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
       setPages((p) => (p.key === key ? { ...p, loading: true } : { key, events: [], loading: true }));
       try {
         const page = await store.source.scopedEvents(stableScope, before);
+        // The latest page starts the scope's pages over; an older one goes before them.
         setPages((p) =>
           p.key === key
             ? {
                 key,
-                events: [...page.events, ...p.events],
+                events: before === undefined ? page.events : [...page.events, ...p.events],
                 olderBefore: page.olderBefore,
                 // What the first page could not read is what the view is missing now.
                 unavailable: before === undefined ? page.unavailable : p.unavailable,
@@ -66,6 +69,7 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
   );
 
   // The first page is what the view is about, so a failed read is tried again, a few times, backing off.
+  // A new snapshot (`loads`) reads it again.
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -78,7 +82,7 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [read]);
+  }, [read, loads]);
 
   const merged = useMemo(() => {
     const byId = new Map<string, ChannelEvent>();

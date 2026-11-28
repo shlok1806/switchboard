@@ -308,6 +308,7 @@ export interface HeartbeatRequest {
   presence: ReportedPresence;
   /** A new usage reading (ADR 0011), sent when the wrapper has one. Omitted keeps the Channel's. */
   usage?: ReportedUsage;
+  /** The Agent's context (ADR 0012), sent when it changed and every `CONTEXT_REFRESH_MS`. Omitted keeps the Channel's. */
   context?: AgentContext;
 }
 
@@ -340,6 +341,13 @@ export interface AgentsResponse {
 
 /** How often the wrapper heartbeats. */
 export const HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
+ * A heartbeat carries the Agent's context (ADR 0012) when it changed, and an unchanged one
+ * again after this long, so the Channel keeps hearing it is current: well inside the 15
+ * minutes after which the Dashboard marks a reading stale.
+ */
+export const CONTEXT_REFRESH_MS = 5 * 60_000;
 
 /** The wrapper reports Idle after this long without any output from the agent CLI. */
 export const DEFAULT_IDLE_AFTER_MS = 2 * 60_000;

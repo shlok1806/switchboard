@@ -46,7 +46,7 @@ type Item =
 const whoKey = (e: ChannelEvent) => (e.actor.kind === "agent" ? e.actor.agentId : e.actor.kind === "person" ? `person:${e.actor.person}` : e.actor.kind);
 
 export function ActivityView({ selected, byTurn = false, turn }: { selected?: string; byTurn?: boolean; turn?: string }) {
-  const { events, verdictsByEvent, agents, tasks, snapshot, fresh, olderBefore, loadingOlder } = useChannel();
+  const { events, verdictsByEvent, agents, tasks, snapshot, fresh, olderBefore, loadingOlder, loads } = useChannel();
   const store = useStore();
   const { agentById, taskByNumber } = useIndex();
   const mobile = useIsMobile();
@@ -155,6 +155,18 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
       setReadTo(maxSeq);
     }
   }, [newest, maxSeq]);
+  // The snapshot loaded again, the stream having fallen too far behind: the rows being read are
+  // gone, so the log starts at the newest, as when the Dashboard opens.
+  const loadsSeen = useRef(loads);
+  useLayoutEffect(() => {
+    if (loadsSeen.current === loads) return;
+    loadsSeen.current = loads;
+    follow(true);
+    setLimit(SHOW);
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setReadTo(maxSeqNow.current);
+  }, [loads]);
   // Older Events loaded above: keep the rows being read where they were. Only a change of the
   // oldest row counts, not React running the effect again.
   const oldestSeen = useRef(oldestId);

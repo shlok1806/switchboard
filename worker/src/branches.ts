@@ -6,11 +6,14 @@
 // - Finishing a Task opens a pull request from its branch into the default branch
 //   whose body closes the Issue and names the holder, and marks the Task in review.
 //   When the PR merges, GitHub closes the Issue and the Task sync marks it done.
+// - A Task branch pushed without the wrapper reporting it (the Agent made its own)
+//   is linked to its claimed Task when the push arrives. A pull request opened for
+//   it without finish_task is linked the same way and puts the Task in review.
 // - Pushes to Task branches and merges into the default branch arrive from the
 //   GitHub webhook and become `push` and `merge` Events, with the changed files
 //   and capped diff hunks read from the compare API.
 
-import type { ChannelEvent, EventType, Holder, PushCommit, TaskNumber } from "../../shared/src/index";
+import type { Actor, ChannelEvent, EventType, Holder, PushCommit, Task, TaskNumber } from "../../shared/src/index";
 import { CLAIMED_LABEL, REVIEW_LABEL, taskOfBranch } from "../../shared/src/index";
 import type { NewEvent } from "./channel";
 import type { Caller, ClaimResult, Claims } from "./claims";
@@ -126,6 +129,8 @@ export class Branches {
     // The Task may have moved while GitHub answered: only a Task still held the same way goes to review.
     const now = tasks.read(number);
     if (now === null || now.status === "done" || now.claim === undefined) return claims.current(number);
+    // The webhook for this very pull request can arrive before GitHub answers us, and link it first.
+    if (now.status === "review" && now.pr === pr.number) return claims.current(number);
     tasks.write({ ...now, status: "review", pr: pr.number, updatedAt: new Date().toISOString() });
     this.host.append({
       type: "task.review",
@@ -136,7 +141,14 @@ export class Branches {
     });
     claims.status.note(number, `Pull request #${pr.number} opened by ${claims.describe(holder)}.`);
 
-    await claims.mirror(acting, "finish", number, async (gh) => [
+    await this.mirrorReview(acting.actor, number);
+    return claims.current(number);
+  }
+
+  /** Keeps the review labels and status comment consistent for tool and webhook finishes. */
+  private async mirrorReview(actor: Actor, number: TaskNumber): Promise<void> {
+    const { claims } = this.host;
+    await claims.mirror({ actor }, "finish", number, async (gh) => [
       [
         "label",
         async () => {
@@ -150,17 +162,20 @@ export class Branches {
       ],
       claims.statusCall(gh, number),
     ]);
-    return claims.current(number);
   }
 
   /**
-   * A verified `push` or `pull_request` delivery. Reads what changed from the compare
+   * A verified `push` or `pull_request` delivery. A pull request opened for a Task
+   * branch is linked to its Task. Otherwise reads what changed from the compare
    * API and records one Event, under the delivery's ID so a redelivery is not
    * recorded twice. A push that changes nothing (a new branch at main) records none.
+   * A push to a claimed Task's branch also links the branch to the Task (#45).
    */
   async codeEvent(delivery: string, change: CodeChange): Promise<CodeEventResult> {
     const gitHub = this.host.gitHub();
     if (gitHub === null) return { ok: false, status: 503, reason: APP_NOT_CONFIGURED };
+    if (change.kind === "pull_request") return this.linkPullRequest(delivery, change);
+    if (change.kind === "push" && change.task !== null) this.linkBranch(change.task, change.branch);
     let comparison: Awaited<ReturnType<GitHub["compare"]>>;
     try {
       comparison = await gitHub.compare(change.base, change.head);
@@ -202,6 +217,63 @@ export class Branches {
         ...note,
       },
     });
+    return { ok: true, event };
+  }
+
+  /**
+   * A Task branch that reached GitHub without the wrapper reporting it, as when
+   * setting it up on Claim failed and the Agent made its own (#45). A claimed Task
+   * with no branch on record takes it, as if its holder had reported it. Returns
+   * the Task when it changed, else null.
+   */
+  private linkBranch(number: TaskNumber, branch: string): Task | null {
+    const { tasks } = this.host;
+    const task = tasks.read(number);
+    if (task === null || task.status !== "claimed" || task.claim === undefined) return null;
+    if (task.branch !== undefined || taskOfBranch(branch) !== number) return null;
+    const linked = { ...task, branch, updatedAt: new Date().toISOString() };
+    tasks.write(linked);
+    this.host.append({
+      type: "task.branch",
+      actor: { kind: "github" },
+      capture: null,
+      task: number,
+      payload: { branch },
+    });
+    return linked;
+  }
+
+  /**
+   * Links a pull request opened outside finish_task, and puts the Task in review as
+   * finish_task would. A Task that is not claimed, or already has another branch or
+   * a pull request, is left alone.
+   */
+  private async linkPullRequest(
+    delivery: string,
+    change: Extract<CodeChange, { kind: "pull_request" }>,
+  ): Promise<CodeEventResult> {
+    const { tasks, claims } = this.host;
+    const task = tasks.read(change.task);
+    if (
+      task === null ||
+      task.status !== "claimed" ||
+      task.claim === undefined ||
+      (task.branch !== undefined && task.branch !== change.branch) ||
+      task.pr !== undefined
+    )
+      return { ok: true, event: null };
+    const linked = this.linkBranch(change.task, change.branch) ?? task;
+    const event = this.host.appendOnce(`github:${delivery}`, {
+      type: "task.review",
+      actor: { kind: "github" },
+      capture: null,
+      task: change.task,
+      payload: { pr: change.pr, url: change.url, branch: change.branch },
+    });
+    if (event === null) return { ok: true, event: null };
+    tasks.write({ ...linked, pr: change.pr, status: "review", updatedAt: new Date().toISOString() });
+    claims.status.note(change.task, `Pull request #${change.pr} linked from GitHub.`);
+    await this.mirrorReview({ kind: "github" }, change.task);
     return { ok: true, event };
   }
 

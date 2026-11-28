@@ -4,7 +4,10 @@
 //   read from GitHub with the App's installation token. The answer is cached here
 //   for at most MEMBERSHIP_TTL_MS per Person, so someone removed from the repo is
 //   refused within minutes. When GitHub cannot be reached, a Person let in within
-//   the last GRACE_MS stays in; anyone else waits.
+//   the last GRACE_MS stays in; anyone else waits. The answer is written when it
+//   changes; that GitHub said it again is kept in memory and on the Person's open
+//   sockets, and written only when they have none or the stored check is half
+//   GRACE_MS old, so the grace still holds after a restart.
 // - Agent tokens: `switchboard run` trades its Person session for a token bound to
 //   one Agent. Only the token's SHA-256 is stored. Every token of an Agent is
 //   deleted when it goes Gone.
@@ -57,11 +60,24 @@ export interface AccessHost {
   gitHub(): GitHub | null;
   /** Called when a Person is found to have lost access, so their open streams close. */
   refused(person: PersonName): void;
+  /**
+   * Keeps when `person`'s access was last checked where it outlives this object's
+   * memory: on their open sockets. False when they have none.
+   */
+  remember?(person: PersonName, checkedAt: number): boolean;
+  /** What `remember` kept, read once when the Channel starts. */
+  remembered?(): Iterable<readonly [PersonName, number]>;
 }
 
 export class Access {
+  /** When each Person's access was last checked, when that is later than their row says. */
+  private readonly checked = new Map<PersonName, number>();
+
   constructor(private readonly host: AccessHost) {
     host.sql.exec(ACCESS_SCHEMA);
+    for (const [person, at] of host.remembered?.() ?? []) {
+      this.checked.set(person, Math.max(at, this.checked.get(person) ?? 0));
+    }
     // ADR 0045: a librarian's token, marked on its own row so admitting it reads no more.
     try {
       host.sql.exec("ALTER TABLE agent_tokens ADD COLUMN librarian INTEGER");
@@ -122,7 +138,8 @@ export class Access {
   ): Promise<{ ok: true } | { ok: false; status: 403 | 503; reason: string }> {
     const now = Date.now();
     const row = this.host.sql.exec<MemberRow>("SELECT * FROM members WHERE person = ?", person).toArray()[0];
-    if (!fresh && row !== undefined && now - row.checked_at < MEMBERSHIP_TTL_MS)
+    const checkedAt = Math.max(row?.checked_at ?? 0, this.checked.get(person) ?? 0);
+    if (!fresh && row !== undefined && now - checkedAt < MEMBERSHIP_TTL_MS)
       return this.answer(person, row.allowed === 1);
 
     const gitHub = this.host.gitHub();
@@ -135,15 +152,19 @@ export class Access {
       allowed = canWrite(await gitHub.permission(person));
     } catch (error) {
       console.error(`Membership check for ${person} failed`, error);
-      if (row?.allowed === 1 && now - row.checked_at < GRACE_MS) return { ok: true };
+      if (row?.allowed === 1 && now - checkedAt < GRACE_MS) return { ok: true };
       return { ok: false, status: 503, reason: "Could not check your access to the repo with GitHub. Try again." };
     }
-    this.host.sql.exec(
-      "INSERT OR REPLACE INTO members (person, allowed, checked_at) VALUES (?, ?, ?)",
-      person,
-      allowed ? 1 : 0,
-      now,
-    );
+    this.checked.set(person, now);
+    const kept = this.host.remember?.(person, now) ?? false;
+    if (row === undefined || (row.allowed === 1) !== allowed || !kept || now - row.checked_at >= GRACE_MS / 2) {
+      this.host.sql.exec(
+        "INSERT OR REPLACE INTO members (person, allowed, checked_at) VALUES (?, ?, ?)",
+        person,
+        allowed ? 1 : 0,
+        now,
+      );
+    }
     if (!allowed && row?.allowed === 1) this.host.refused(person);
     return this.answer(person, allowed);
   }

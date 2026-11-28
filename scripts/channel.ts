@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import type { ChannelEvent, ErrorResponse, HistoryResponse, JoinResponse, StreamMessage } from "../shared/src/index";
-import { channelApiBase, LIVE_PING, LIVE_PONG } from "../shared/src/index";
+import { channelApiBase, LIVE_PING, LIVE_PONG, MAX_STREAM_REPLAY } from "../shared/src/index";
 
 const defaultConfig = join(
   process.env.SWITCHBOARD_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "switchboard"),
@@ -75,8 +75,11 @@ function format(event: ChannelEvent): string {
       return `${dim(time)} ${who} ${dim("joined the Channel")}`;
     case "update":
       return `${dim(time)} ${who}: ${event.payload.text}`;
-    case "verdict":
-      return `${dim(time)} ${who} ${dim(`${event.payload.option} for ${event.payload.agent} (${event.payload.source})`)}`;
+    case "verdict": {
+      // All of one Event's rule Drops are one Verdict Event naming the Agents (ADR 0030).
+      const agents = "agents" in event.payload ? event.payload.agents.join(", ") : event.payload.agent;
+      return `${dim(time)} ${who} ${dim(`${event.payload.option} for ${agents} (${event.payload.source})`)}`;
+    }
     default:
       return `${dim(time)} ${who} ${dim(event.type)}`;
   }
@@ -107,6 +110,30 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** Live Events that arrive while `catchUp` reads the latest page, shown after it; null when it is not reading. */
+let held: ChannelEvent[] | null = null;
+
+/**
+ * The stream was too far behind to replay what it missed (`reload`): reads the latest
+ * page instead, shows what is new in it and says how many older Events it skipped, then
+ * shows the live Events that arrived meanwhile.
+ */
+async function catchUp(): Promise<void> {
+  held = [];
+  try {
+    const page = await request<HistoryResponse>(`/api/events?tail=${MAX_STREAM_REPLAY}`);
+    const skipped = (page.events[0]?.seq ?? lastSeq + 1) - lastSeq - 1;
+    if (skipped > 0) print(`\x1b[2m(${skipped} older Events skipped)\x1b[0m`);
+    for (const event of page.events) show(event);
+  } catch (error) {
+    print(`\x1b[31mCould not catch up: ${(error as Error).message}\x1b[0m`);
+  } finally {
+    const arrived = held;
+    held = null;
+    for (const event of arrived) show(event);
+  }
+}
+
 function connect(): void {
   const query = new URLSearchParams({ after: String(lastSeq), token: session });
   const socket = new WebSocket(`${base.replace(/^http/, "ws")}/api/stream?${query}`);
@@ -117,7 +144,11 @@ function connect(): void {
   socket.addEventListener("message", (message) => {
     if (message.data === LIVE_PONG) return;
     const frame = JSON.parse(String(message.data)) as StreamMessage;
-    if (frame.type === "event") show(frame.event);
+    if (frame.type === "reload") void catchUp();
+    if (frame.type === "event") {
+      if (held === null) show(frame.event);
+      else held.push(frame.event);
+    }
   });
   socket.addEventListener("close", () => {
     clearInterval(keepalive);

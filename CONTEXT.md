@@ -28,6 +28,10 @@ _Avoid_: Subtask, todo, item
 The exclusive hold one Person or Agent has on a Task. At most one holder per Task at a time.
 _Avoid_: Assignment, lock, ownership
 
+**Collaborator**:
+An Agent working on a Task another Agent holds, with the holder's or a Person's consent. It commits to the Task's one branch, and its Events carry the Task. The holder stays accountable and is the only one who finishes (ADR 0035).
+_Avoid_: Co-holder, helper, assignee
+
 ## Channel
 
 **Event**:
@@ -41,6 +45,10 @@ _Avoid_: Log line, trace, local log
 **Update**:
 An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening. It may be addressed to Agents by their Agent IDs: each addressee always hears it, Queued at least, and still as information, never as an instruction (ADR 0026).
 _Avoid_: Status, note, post
+
+**Proposal**:
+An Update addressed to one Agent that asks to join its Task, to split a Task into Sub-tasks or to hand a Task over. The addressee accepts, counters or declines it with an addressed Update of its own. Like every Update it is information, never an instruction (ADR 0035).
+_Avoid_: Request, offer, negotiation
 
 **Memory Note**:
 A short, tagged fact an Agent writes on purpose for the Channel's shared memory: a decision, a fact, a dead end, an open question or the files that matter (ADR 0019). An Update says what is happening now; a Memory Note is kept to be found later, with `memory_search` and `memory_recent`. Only Agents write them, and they are information, never instructions.
@@ -139,7 +147,7 @@ A short summary of one model turn: model, token counts, reply text and tool call
 _Avoid_: Summary, redacted event
 
 **Directive**:
-A message from a Person to an Agent, labelled as coming from that Person, or from a Lead to an Agent it started, labelled as from the Lead its Person put over that Agent (ADR 0018). It is the only channel message that carries instruction weight. Everything else an Agent receives from another Agent is information.
+A message from a Person to an Agent, labelled as coming from that Person, or from a Lead to an Agent it started, labelled as from the Lead its Person put over that Agent (ADR 0018). It is the only channel message that carries instruction weight, so an Agent never sends one as its Person (ADR 0034). Everything else an Agent receives from another Agent is information.
 _Avoid_: Command, order, instruction
 
 **Relay**:
@@ -147,7 +155,7 @@ The layer between the channel and each Agent. For every Event and every Agent it
 _Avoid_: Router, filter, gate, arbiter
 
 **Verdict**:
-The Relay's decision for one Event and one Agent. Drop means the Agent never hears about it. Queue means it is delivered at the start of the Agent's next turn, or by a Wake when it needs the Agent and the Agent is idle. Interrupt means it is sent right away as a prompt into the Agent's running session, which reads it mid-work without being stopped. People on the Dashboard always see every Event, whatever the Verdict.
+The Relay's decision for one Event and one Agent. Drop means the Agent never hears about it. Queue means it is delivered at the start of the Agent's next turn, or by a Wake when it needs the Agent and the Agent is idle. Interrupt means it is sent right away as a prompt into the Agent's running session, which reads it mid-work without being stopped. People on the Dashboard always see every Event, whatever the Verdict. A Drop without asking Jev, because nothing overlaps and nothing is addressed to the Agent, is a rule Drop: all of one Event's rule Drops are recorded as one Event, and every other Verdict as an Event of its own (ADR 0030).
 _Avoid_: Decision, classification, routing
 
 **Wake**:
@@ -213,12 +221,12 @@ Which login of its agent CLI an Agent runs under, such as `sh…@illinois.edu`, 
 _Avoid_: Account, login, profile
 
 **Usage Reading**:
-How much of its Claude or Codex account's limits an Agent's account has used, as Claude Code's own `/usage` reports it (the session, the week and each model's week, with their resets), with the account's full email address and plan and what the Agent's own session used. The wrapper sends one with the Agent's heartbeat; the Dashboard shows one card per account (ADR 0011).
+How much of its Claude or Codex account's limits an Agent's account has used, as Claude Code's own `/usage` reports it (the session, the week and each model's week, with their resets), with the account's full email address and plan and what the Agent's own session used. The wrapper sends each new one with the Agent's heartbeat, and the Channel keeps a reading only when the account's limits changed; the Dashboard shows one card per account (ADR 0011).
 _Avoid_: Quota, billing, limits report
 
 
 **Context Reading**:
-The latest main-session context fullness, automatic compactions when known, first prompt brief, current activity, model and working location, read by the wrapper and sent with each heartbeat (ADR 0012). Separate from cumulative session usage and account limits.
+The latest main-session context fullness, automatic compactions when known, first prompt brief, current activity, model and working location, read by the wrapper on every heartbeat and sent when it changes, and at least every 5 minutes. The Channel writes it only when it changes (ADR 0012). Separate from cumulative session usage and account limits.
 
 **Pending Approval**:
 A permission prompt an Agent's CLI is waiting on (Codex's approval dialog, Claude Code's permission prompt), as its wrapper reports it: the tool, what it asks for with secrets masked, the CLI's reason and when it opened. The Agent carries it until the prompt closes, which is an `approval.closed` Event. It is answered at the Agent's terminal (ADR 0013); a Claude Code Agent's own Person may also deny it from the Channel, never approve it (ADR 0014). A question the CLI asks (AskUserQuestion, a plan to accept) is not one.
@@ -231,3 +239,5 @@ _Avoid_: Take over (the terminal), remote control, join
 **Attach Key**:
 A key pair a browser makes for Attach, whose private half never leaves that browser. Its Person allows its fingerprint on the machine that runs their Agents (`switchboard attach allow`), and the wrapper there checks every keystroke's signature against that list. The Channel carries keystrokes but cannot make one that passes (ADR 0021).
 _Avoid_: Token, credential
+
+Gone Agents without Claims, granted roles or incoming parent/hand-off links are pruned after seven days in bounded alarm passes; Events remain history and historical lookup returns every retained Agent (ADR 0031).

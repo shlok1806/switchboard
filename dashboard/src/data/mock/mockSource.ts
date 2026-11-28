@@ -50,6 +50,7 @@ import {
   permissionModeWithin,
   sameNickname,
   underRoots,
+  verdictsOf,
 } from "@shared/index";
 import {
   ALL_CAPABILITIES,
@@ -82,7 +83,7 @@ const clone = <T>(v: T): T => structuredClone(v);
  * The states every view must draw (`?state=`), for the screenshot tests. Any of them also
  * stops the timed live Events, so two runs draw the same page (the clock is frozen in main.tsx).
  */
-export type MockState = "ready" | "loading" | "empty" | "error" | "read-error";
+export type MockState = "ready" | "loading" | "empty" | "error" | "read-error" | "reloading";
 
 const READ_FAILED = "The Channel's Worker answered 500 to this read.";
 
@@ -126,6 +127,8 @@ export class MockChannelSource implements ChannelSource {
   private timers: ReturnType<typeof setTimeout>[] = [];
 
   private started = false;
+  /** How many times the snapshot was asked for. */
+  private snapshots = 0;
 
   constructor(
     private readonly opts: {
@@ -136,8 +139,10 @@ export class MockChannelSource implements ChannelSource {
       /**
        * A Channel in one of the states every view must draw (`?state=`): as usual but still
        * (ready), still loading (the snapshot never comes), empty (no Agents, Tasks, Events or
-       * Hosts), unreachable, or reachable with every read of its Hosts, notes and Events by ID
-       * failing (read-error).
+       * Hosts), unreachable, reachable with every read of its Hosts, notes and Events by ID
+       * failing (read-error), or loading its snapshot again after the stream fell too far
+       * behind (reloading: the stream says `reload` once it is live, and the snapshot it
+       * asks for again never comes).
        */
       state?: MockState;
     } = {},
@@ -153,7 +158,10 @@ export class MockChannelSource implements ChannelSource {
   }
 
   async snapshot(): Promise<ChannelSnapshot> {
-    if (this.opts.state === "loading") await new Promise(() => {});
+    this.snapshots += 1;
+    if (this.opts.state === "loading" || (this.opts.state === "reloading" && this.snapshots > 1)) {
+      await new Promise(() => {});
+    }
     await new Promise((r) => setTimeout(r, this.opts.latencyMs ?? 700));
     if (this.opts.state === "error") throw new Error("The Channel's Worker answered 503: it is restarting after a deploy.");
     return clone({
@@ -203,7 +211,10 @@ export class MockChannelSource implements ChannelSource {
   subscribe(_cursor: number, onMessage: (m: StreamMessage) => void, onState: (s: ConnectionState) => void) {
     this.listeners.add(onMessage);
     onState("connecting");
-    const ready = setTimeout(() => onState("live"), 250);
+    const ready = setTimeout(() => {
+      onState("live");
+      if (this.opts.state === "reloading") onMessage({ type: "reload" });
+    }, 250);
     if (!this.started && this.opts.state === undefined) {
       this.started = true;
       this.play();
@@ -302,7 +313,7 @@ export class MockChannelSource implements ChannelSource {
         if (broadcast) this.emit({ type: "agent", agent: a });
       }
     }
-    const vs = relay(event, this.agents, this.tasks, jev);
+    const vs = relay(event, this.agents, this.tasks, jev).flatMap(verdictsOf);
     this.verdicts.push(...vs);
     if (broadcast) {
       this.emit({ type: "event", event });

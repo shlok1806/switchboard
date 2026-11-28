@@ -10,6 +10,11 @@
 //   A Paused Agent is not Gone: neither its wrapper's heartbeat or end of session nor
 //   the silence check change it. Registering again (a resume) brings it back.
 // - Every Presence change is an Event.
+// - That an Agent is still there is kept in memory (`Heard`): its last-seen time is
+//   written only with a Presence change, at session end, or once the stored one is a
+//   third of `goneAfterMs` old. So a heartbeat or a Hook Event that changes nothing
+//   writes no row, and the silence check still finds a heartbeating Agent in the row
+//   after a restart. Context and usage are written only when what they say changes.
 // - A Nickname is unique on the Channel and can change while the Agent runs: by the
 //   Agent itself or by any Person on the Channel. A name held by a Gone Agent is free
 //   to take; every change is an `agent.rename` Event (ADR 0009).
@@ -43,11 +48,11 @@ import type {
 import {
   agentIdFor,
   DEFAULT_PROXY_MODE,
-  HEARTBEAT_INTERVAL_MS,
   hostIdFor,
   isAgentRole,
   MAX_LEAD_DEPTH,
   sameNickname,
+  sameReading,
 } from "../../shared/src/index";
 
 type AgentRow = {
@@ -76,6 +81,9 @@ type AgentRow = {
   librarian: string | null;
 };
 
+export const GONE_RETENTION_MS = 7 * 86_400_000;
+const PRUNE_BATCH = 10;
+
 export const AGENTS_SCHEMA = `
   CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
@@ -83,6 +91,7 @@ export const AGENTS_SCHEMA = `
     cli TEXT NOT NULL,
     session_id TEXT NOT NULL,
     nickname TEXT,
+    nickname_key TEXT,
     account TEXT,
     model TEXT,
     effort TEXT,
@@ -98,6 +107,7 @@ export const AGENTS_SCHEMA = `
     proxy_mode TEXT NOT NULL,
     secret_masking INTEGER NOT NULL,
     can_receive_interrupts INTEGER NOT NULL,
+    gone_at INTEGER,
     last_seen_at INTEGER NOT NULL,
     started_at TEXT NOT NULL
   );
@@ -130,26 +140,68 @@ export function createAgentsTable(sql: SqlStorage): void {
       // The column is there already.
     }
   }
+  try {
+    sql.exec("ALTER TABLE agents ADD COLUMN gone_at INTEGER");
+  } catch {
+    // Existing Channels already have the retention timestamp.
+  }
+  // ADR 0009: Nicknames clash without regard to case. The case-folded Nickname, so a
+  // registration or rename finds a clash through an index instead of reading every name.
+  const columns = sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('agents')").toArray();
+  if (!columns.some((c) => c.name === "nickname_key")) {
+    sql.exec("ALTER TABLE agents ADD COLUMN nickname_key TEXT");
+    const named = sql.exec<{ id: string; nickname: string }>(
+      "SELECT id, nickname FROM agents WHERE nickname IS NOT NULL",
+    );
+    for (const row of named.toArray()) {
+      sql.exec("UPDATE agents SET nickname_key = ? WHERE id = ?", nicknameKey(row.nickname), row.id);
+    }
+  }
   // The roster keeps every Agent the Channel has seen, so the queries that run on
   // every heartbeat or Relay decision read through these instead of the whole table.
   sql.exec(`
+    CREATE TABLE IF NOT EXISTS agent_prune_cursor (singleton INTEGER PRIMARY KEY, seen INTEGER NOT NULL, id TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS agents_gone ON agents (COALESCE(gone_at, last_seen_at), id) WHERE presence = 'gone';
     CREATE INDEX IF NOT EXISTS agents_by_last_seen ON agents (last_seen_at DESC, id);
     CREATE INDEX IF NOT EXISTS agents_live ON agents (last_seen_at) WHERE presence != 'gone';
     CREATE INDEX IF NOT EXISTS agents_by_parent ON agents (parent) WHERE parent IS NOT NULL;
     CREATE INDEX IF NOT EXISTS agents_by_continues ON agents (continues) WHERE continues IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS agents_by_nickname ON agents (nickname_key) WHERE nickname_key IS NOT NULL;
   `);
+}
+
+/** A Nickname as `sameNickname` compares it, as `nickname_key` keeps it. */
+function nicknameKey(nickname: string | null): string | null {
+  return nickname === null ? null : nickname.toLowerCase();
 }
 
 /** Who changes a Nickname, and through which Capture: the Agent itself (Tool Capture), or a Person. */
 export type Renamer = { actor: Extract<Actor, { kind: "agent" | "person" }>; capture: Capture | null };
+
+/**
+ * What the roster heard from an Agent and may not have written yet: when it last heard
+ * from it, and the stamp of its latest context reading when only the stamp moved.
+ */
+export interface Heard {
+  seenAt: number;
+  contextReadAt?: string;
+}
 
 /** What the roster needs from the Channel that hosts it. */
 export interface RosterHost {
   sql: SqlStorage;
   /** Schedules the next silence check on the Channel's shared alarm; null when nobody can go silent. */
   schedulePresenceCheck(at: number | null): Promise<void>;
+  /** Makes sure a silence check runs by `at`, leaving an earlier one as it is. */
+  presenceCheckBy(at: number): Promise<void>;
   /** How long an Agent may stay silent before it is Gone. */
   goneAfterMs: number;
+  /** Keeps what the roster heard from Agent `id` where it outlives this object's memory: on its wrapper's socket. */
+  remember?(id: AgentId, heard: Heard): void;
+  /** What `remember` kept, read once when the roster starts. */
+  remembered?(): Iterable<readonly [AgentId, Heard]>;
+  forget?(id: AgentId): void;
+  retentionCheckBy?(at: number): void;
   append<K extends EventType>(event: {
     type: K;
     actor: Extract<Actor, { kind: "agent" | "person" }>;
@@ -214,35 +266,168 @@ function stamped(usage: ReportedUsage, now: number): string {
   return JSON.stringify(kept);
 }
 
-export class AgentRoster {
-  constructor(private readonly host: RosterHost) {}
+/** The later of two ISO times, either of which may be missing. */
+function later(a: string | undefined, b: string | undefined): string | undefined {
+  if (a === undefined) return b;
+  return b !== undefined && b > a ? b : a;
+}
 
-  list(includeGone = false): Agent[] {
-    return this.host.sql
-      .exec<AgentRow>(
-        includeGone
-          ? "SELECT * FROM agents ORDER BY last_seen_at DESC, id"
-          : "SELECT * FROM agents WHERE presence != 'gone' OR EXISTS (SELECT 1 FROM tasks WHERE holder_agent = agents.id) ORDER BY last_seen_at DESC, id",
-      )
-      .toArray()
-      .map(rowToAgent);
+/** A JSON column as its value, or null when it holds none. */
+function parsed<T = unknown>(json: string | null): T | null {
+  return json == null ? null : (JSON.parse(json) as T);
+}
+
+/** Columns of an Agent's row a heartbeat or a sign of life writes. */
+type Changes = Partial<Record<"presence" | "usage" | "context" | "last_seen_at" | "gone_at", string | number>>;
+
+export class AgentRoster {
+  /**
+   * What each Agent was heard saying since its row was last written: kept here, and on
+   * its wrapper's socket through hibernation (`RosterHost.remember`). Every reader of an
+   * Agent's last-seen time or context stamp reads through it (`toAgent`, `seen`).
+   */
+  private readonly heard = new Map<AgentId, Heard>();
+  /** How old the stored last-seen time may get while the Agent is heard from: a third of `goneAfterMs`. */
+  private readonly flushMs: number;
+
+  constructor(private readonly host: RosterHost) {
+    this.flushMs = host.goneAfterMs / 3;
+    for (const [id, heard] of host.remembered?.() ?? []) this.keep(id, heard);
   }
 
-  /** The Agents that are not Gone, most recently seen first; at most `limit` of them when given. */
-  live(limit = -1): Agent[] {
-    return this.host.sql
-      .exec<AgentRow>(
-        "SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone' ORDER BY last_seen_at DESC, id LIMIT ?",
-        limit,
+  list(includeGone = false): Agent[] {
+    // Historical lookup deliberately returns every retained Agent. Pruning bounds
+    // this to roughly seven days plus Claim holders, leads and linked Agents.
+    if (includeGone)
+      return this.byLastSeen(
+        this.host.sql.exec<AgentRow>("SELECT * FROM agents ORDER BY last_seen_at DESC, id").toArray(),
+      );
+    // Start with the two small indexed sets, never scan Gone history for Claims. A done
+    // Task keeps its Claim, but its holder holds nothing being worked on.
+    return this.byLastSeen(
+      this.host.sql
+        .exec<AgentRow>(`
+      SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone'
+      UNION SELECT agents.* FROM tasks INDEXED BY tasks_working_by_holder_agent
+        CROSS JOIN agents ON agents.id = tasks.holder_agent
+        WHERE tasks.holder_agent IS NOT NULL AND json_extract(tasks.data, '$.status') <> 'done'
+    `)
+        .toArray(),
+    );
+  }
+
+  /**
+   * Visit only ten old Gone rows per pass, with a durable keyset cursor so protected
+   * rows cannot starve later candidates. Keep Claim holders, granted leads and any
+   * referenced predecessor or parent. Their summaries and authority chains must stay
+   * usable (ADRs 0002, 0018, 0024). Unreferenced history remains in Events (ADR 0031).
+   * Cleanup may span passes when an Agent has many files or tokens.
+   */
+  prune(cleanup: (id: AgentId) => boolean): number | null {
+    const sql = this.host.sql;
+    const cursor = sql
+      .exec<{ seen: number; id: string }>("SELECT seen, id FROM agent_prune_cursor WHERE singleton = 1")
+      .toArray()[0];
+    // Separate equal-time and later-time seeks: SQLite does not seek through a
+    // tuple comparison on this expression index and would reread earlier pages.
+    // Apply the expiry cutoff after each limited seek, so it cannot cause SQLite
+    // to choose an upper-bound scan instead of seeking forward from the cursor.
+    const candidates = sql
+      .exec<{ id: AgentId; last_seen_at: number; role: string | null }>(
+        `
+      SELECT * FROM (
+        SELECT * FROM (
+          SELECT id, COALESCE(agents.gone_at, agents.last_seen_at) AS last_seen_at, role
+          FROM agents INDEXED BY agents_gone
+          WHERE presence = 'gone' AND COALESCE(agents.gone_at, agents.last_seen_at) = ? AND id > ?
+          ORDER BY id LIMIT ?
+        ) UNION ALL SELECT * FROM (
+          SELECT id, COALESCE(agents.gone_at, agents.last_seen_at) AS last_seen_at, role
+          FROM agents INDEXED BY agents_gone
+          WHERE presence = 'gone' AND COALESCE(agents.gone_at, agents.last_seen_at) > ?
+          ORDER BY COALESCE(agents.gone_at, agents.last_seen_at), id LIMIT ?
+        )
+      ) WHERE last_seen_at <= ? ORDER BY last_seen_at, id LIMIT ?
+    `,
+        cursor?.seen ?? -1,
+        cursor?.id ?? "",
+        PRUNE_BATCH,
+        cursor?.seen ?? -1,
+        PRUNE_BATCH,
+        Date.now() - GONE_RETENTION_MS,
+        PRUNE_BATCH,
       )
-      .toArray()
-      .map(rowToAgent);
+      .toArray();
+    for (const row of candidates) {
+      if (row.role !== null) continue;
+      if (sql.exec("SELECT 1 FROM tasks WHERE holder_agent = ? LIMIT 1", row.id).toArray().length) continue;
+      if (sql.exec("SELECT 1 FROM agents WHERE parent = ? LIMIT 1", row.id).toArray().length) continue;
+      if (sql.exec("SELECT 1 FROM agents WHERE continues = ? LIMIT 1", row.id).toArray().length) continue;
+      if (!cleanup(row.id)) continue;
+      sql.exec("DELETE FROM agents WHERE id = ?", row.id);
+      this.heard.delete(row.id);
+      this.host.forget?.(row.id);
+    }
+    const last = candidates.at(-1);
+    if (last === undefined) sql.exec("DELETE FROM agent_prune_cursor WHERE singleton = 1");
+    else sql.exec("INSERT OR REPLACE INTO agent_prune_cursor VALUES (1, ?, ?)", last.last_seen_at, last.id);
+    if (candidates.length === PRUNE_BATCH) return Date.now() + 60_000;
+    return this.retentionDeadline(last);
+  }
+
+  /** The next unvisited Gone row's expiry, with six hours between incomplete sweeps. */
+  retentionDeadline(cursor?: { last_seen_at: number; id: string }): number | null {
+    const sql = this.host.sql;
+    const next = sql
+      .exec<{ at: number }>(
+        `
+      SELECT * FROM (
+        SELECT COALESCE(gone_at, last_seen_at) AS at, id FROM agents INDEXED BY agents_gone
+        WHERE presence = 'gone' AND COALESCE(gone_at, last_seen_at) = ? AND id > ?
+        ORDER BY id LIMIT 1
+      ) UNION ALL SELECT * FROM (
+        SELECT COALESCE(gone_at, last_seen_at) AS at, id FROM agents INDEXED BY agents_gone
+        WHERE presence = 'gone' AND COALESCE(gone_at, last_seen_at) > ?
+        ORDER BY COALESCE(gone_at, last_seen_at), id LIMIT 1
+      ) ORDER BY at, id LIMIT 1
+    `,
+        cursor?.last_seen_at ?? -1,
+        cursor?.id ?? "",
+        cursor?.last_seen_at ?? -1,
+      )
+      .toArray()[0];
+    if (next !== undefined) return Math.max(Date.now() + 6 * 3_600_000, next.at + GONE_RETENTION_MS);
+    // At the end, wrap so protected rows and unfinished cleanup are reconsidered.
+    sql.exec("DELETE FROM agent_prune_cursor WHERE singleton = 1");
+    const oldest = sql
+      .exec<{ at: number }>(`
+      SELECT COALESCE(gone_at, last_seen_at) AS at FROM agents INDEXED BY agents_gone
+      WHERE presence = 'gone' ORDER BY COALESCE(gone_at, last_seen_at), id LIMIT 1
+    `)
+      .toArray()[0];
+    return oldest === undefined ? null : Math.max(Date.now() + 6 * 3_600_000, oldest.at + GONE_RETENTION_MS);
+  }
+
+  /**
+   * The Agents that are not Gone, most recently seen first; at most `limit` of them when
+   * given. A limit picks by the stored last-seen time, which memory may run ahead of by
+   * up to `flushMs`, then orders what it picked as memory knows it.
+   */
+  live(limit = -1): Agent[] {
+    return this.byLastSeen(
+      this.host.sql
+        .exec<AgentRow>(
+          "SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone' ORDER BY last_seen_at DESC, id LIMIT ?",
+          limit,
+        )
+        .toArray(),
+    );
   }
 
   /** One Agent, or null when the Channel has never seen it. */
   find(id: AgentId): Agent | null {
     const row = this.row(id);
-    return row === undefined ? null : rowToAgent(row);
+    return row === undefined ? null : this.toAgent(row);
   }
 
   /**
@@ -308,11 +493,12 @@ export class AgentRoster {
     if (existing) {
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
-        `UPDATE agents SET nickname = ?, account = ?, model = ?, effort = ?, usage = ?, proxy_mode = ?,
-             secret_masking = ?, can_receive_interrupts = ?, host = ?, history_host = ?, librarian = ?,
-             presence = 'live', last_seen_at = ?
+        `UPDATE agents SET nickname = ?, nickname_key = ?, account = ?, model = ?, effort = ?, usage = ?,
+             proxy_mode = ?, secret_masking = ?, can_receive_interrupts = ?, host = ?, history_host = ?,
+             librarian = ?, presence = 'live', last_seen_at = ?
          WHERE id = ?`,
         nickname,
+        nicknameKey(nickname),
         account,
         model,
         effort,
@@ -328,15 +514,16 @@ export class AgentRoster {
       );
     } else {
       this.host.sql.exec(
-        `INSERT INTO agents (id, person, cli, session_id, nickname, account, model, effort, usage, host, history_host,
-                             librarian, presence, proxy_mode, secret_masking, can_receive_interrupts, last_seen_at,
-                             started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
+        `INSERT INTO agents (id, person, cli, session_id, nickname, nickname_key, account, model, effort, usage, host,
+                             history_host, librarian, presence, proxy_mode, secret_masking, can_receive_interrupts,
+                             last_seen_at, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
         request.sessionId,
         nickname,
+        nicknameKey(nickname),
         account,
         model,
         effort,
@@ -372,7 +559,7 @@ export class AgentRoster {
     }
     if (existing?.presence !== "live") this.changed(id, "live");
     this.host.broadcast({ type: "agent", agent });
-    await this.watch();
+    await this.host.presenceCheckBy(now + this.host.goneAfterMs);
     return { ok: true, agent, ...(nicknameRefused === undefined ? {} : { nicknameRefused }) };
   }
 
@@ -391,7 +578,7 @@ export class AgentRoster {
       };
     }
     const had = row.role !== null && isAgentRole(row.role) ? row.role : null;
-    if (had === role) return { ok: true, agent: rowToAgent(row) };
+    if (had === role) return { ok: true, agent: this.toAgent(row) };
     this.host.sql.exec("UPDATE agents SET role = ? WHERE id = ?", role, id);
     if (had !== null) {
       this.host.append({
@@ -478,12 +665,17 @@ export class AgentRoster {
   rename(id: AgentId, nickname: string | null, by: Renamer): RosterResult {
     const row = this.row(id);
     if (!row) return { ok: false, status: 404, reason: `No Agent ${id} on this Channel.` };
-    if (row.nickname === nickname) return { ok: true, agent: rowToAgent(row) };
+    if (row.nickname === nickname) return { ok: true, agent: this.toAgent(row) };
     if (nickname !== null) {
       const taken = this.takeName(nickname, id, by);
       if (!taken.ok) return taken;
     }
-    this.host.sql.exec("UPDATE agents SET nickname = ? WHERE id = ?", nickname, id);
+    this.host.sql.exec(
+      "UPDATE agents SET nickname = ?, nickname_key = ? WHERE id = ?",
+      nickname,
+      nicknameKey(nickname),
+      id,
+    );
     this.renamed(id, row.nickname, nickname, by);
     const agent = this.agent(id);
     this.host.broadcast({ type: "agent", agent });
@@ -503,7 +695,7 @@ export class AgentRoster {
   ): RosterResult {
     const found = this.owned(person, id);
     if (!found.ok) return found;
-    if (found.row.model === model && found.row.effort === effort) return { ok: true, agent: rowToAgent(found.row) };
+    if (found.row.model === model && found.row.effort === effort) return { ok: true, agent: this.toAgent(found.row) };
     this.host.sql.exec("UPDATE agents SET model = ?, effort = ? WHERE id = ?", model, effort, id);
     this.modelChanged(id, found.row.model, model, effort, capture);
     const agent = this.agent(id);
@@ -521,9 +713,9 @@ export class AgentRoster {
     const found = this.owned(person, id);
     if (!found.ok) return found;
     const held = found.row.approval == null ? null : (JSON.parse(found.row.approval) as PendingApproval);
-    if (held?.id === approval?.id) return { ok: true, agent: rowToAgent(found.row) };
+    if (held?.id === approval?.id) return { ok: true, agent: this.toAgent(found.row) };
     // A Gone Agent shows no prompt: it may come back with a heartbeat, and report it again.
-    if (approval !== null && found.row.presence === "gone") return { ok: true, agent: rowToAgent(found.row) };
+    if (approval !== null && found.row.presence === "gone") return { ok: true, agent: this.toAgent(found.row) };
     this.closeApproval(found.row);
     if (approval !== null) {
       this.host.sql.exec("UPDATE agents SET approval = ? WHERE id = ?", JSON.stringify(approval), id);
@@ -613,7 +805,11 @@ export class AgentRoster {
    */
   private takeName(nickname: string, id: AgentId, by: Renamer): { ok: true } | Refusal {
     const holders = this.host.sql
-      .exec<AgentRow>("SELECT * FROM agents WHERE nickname IS NOT NULL AND id != ?", id)
+      .exec<AgentRow>(
+        "SELECT * FROM agents INDEXED BY agents_by_nickname WHERE nickname_key = ? AND id != ?",
+        nicknameKey(nickname),
+        id,
+      )
       .toArray()
       .filter((row) => row.nickname !== null && sameNickname(row.nickname, nickname));
     const live = holders.find((row) => row.presence !== "gone");
@@ -625,7 +821,7 @@ export class AgentRoster {
       };
     }
     for (const gone of holders) {
-      this.host.sql.exec("UPDATE agents SET nickname = NULL WHERE id = ?", gone.id);
+      this.host.sql.exec("UPDATE agents SET nickname = NULL, nickname_key = NULL WHERE id = ?", gone.id);
       this.renamed(gone.id as AgentId, gone.nickname, null, by);
       this.host.broadcast({ type: "agent", agent: this.agent(gone.id) });
     }
@@ -645,7 +841,9 @@ export class AgentRoster {
   /**
    * The Agent is still running, with the Presence its wrapper observes. A Gone Agent
    * comes back. A usage reading, when the wrapper has a new one, replaces the
-   * Agent's (ADR 0011); it is not an Event.
+   * Agent's (ADR 0011); it is not an Event. Usage and context are written only when
+   * they say something new: the same reading again, or the same context with a newer
+   * `readAt`, as an older wrapper sends with every heartbeat, is only heard.
    */
   async heartbeat(
     person: PersonName,
@@ -656,27 +854,26 @@ export class AgentRoster {
   ): Promise<RosterResult> {
     const found = this.owned(person, id);
     if (!found.ok) return found;
+    const { row } = found;
     // The wrapper of a Paused Agent is on its way out: its heartbeat does not bring the Agent back.
-    if (found.row.presence === "paused") return { ok: true, agent: rowToAgent(found.row) };
+    if (row.presence === "paused") return { ok: true, agent: this.toAgent(row) };
     const now = Date.now();
-    if (usage === undefined) {
-      this.host.sql.exec("UPDATE agents SET presence = ?, last_seen_at = ? WHERE id = ?", presence, now, id);
-    } else {
-      this.host.sql.exec(
-        "UPDATE agents SET presence = ?, last_seen_at = ?, usage = ? WHERE id = ?",
-        presence,
-        now,
-        stamped(usage, now),
-        id,
-      );
+    const changes: Changes = {};
+    if (row.presence !== presence) changes.presence = presence;
+    if (usage !== undefined && !sameReading(parsed<AgentUsage>(row.usage), usage, "reportedAt")) {
+      changes.usage = stamped(usage, now);
     }
-    if (context !== undefined)
-      this.host.sql.exec("UPDATE agents SET context = ? WHERE id = ?", JSON.stringify(context), id);
+    let contextReadAt: string | undefined;
+    if (context !== undefined) {
+      if (sameReading(parsed<AgentContext>(row.context), context, "readAt")) contextReadAt = context.readAt;
+      else changes.context = JSON.stringify(context);
+    }
+    this.heardFrom(row, now, changes, contextReadAt);
     const agent = this.agent(id);
-    if (found.row.presence !== presence) this.changed(id, presence);
-    if (found.row.presence !== presence || usage !== undefined || context !== undefined)
+    if (row.presence !== presence) this.changed(id, presence);
+    if (row.presence !== presence || usage !== undefined || context !== undefined)
       this.host.broadcast({ type: "agent", agent });
-    await this.watch();
+    await this.host.presenceCheckBy(now + this.host.goneAfterMs);
     return { ok: true, agent };
   }
 
@@ -688,15 +885,15 @@ export class AgentRoster {
     const found = this.owned(person, id);
     if (!found.ok) return found;
     if (found.row.presence === "gone" || found.row.presence === "paused") {
-      return { ok: true, agent: rowToAgent(found.row) };
+      return { ok: true, agent: this.toAgent(found.row) };
     }
-    this.host.sql.exec("UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?", Date.now(), id);
+    this.gone(found.row, Math.max(Date.now(), this.seen(found.row)));
     this.closeApproval(found.row);
     const agent = this.agent(id);
     this.record(id, "session.end", { reason: "exit", ...(detail ? { detail: detail.slice(0, 40) } : {}) });
     this.changed(id, "gone");
     this.host.broadcast({ type: "agent", agent });
-    await this.watch();
+    // The silence check set for it stays: when it runs early it finds the next deadline itself.
     return { ok: true, agent };
   }
 
@@ -704,21 +901,38 @@ export class AgentRoster {
    * Marks every Agent that has been silent for `goneAfterMs` as Gone, then schedules
    * the check for the next Agent that could go silent. Runs from the Channel's alarm.
    * The Channel, not the Agent, decides this, so these Events carry no Capture.
+   *
+   * The rows find who may be silent; what memory heard since has the last word. The
+   * stored time of an Agent that is heard from is never older than `flushMs` plus one
+   * heartbeat, so after a restart, with nothing in memory, the rows alone are enough.
    */
   async expireSilent(now = Date.now()): Promise<void> {
-    const silent = this.host.sql
+    const silentSince = now - this.host.goneAfterMs;
+    const candidates = this.host.sql
       .exec<AgentRow>(
-        "UPDATE agents SET presence = 'gone' WHERE presence != 'gone' AND presence != 'paused' AND last_seen_at <= ? RETURNING *",
-        now - this.host.goneAfterMs,
+        "SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone' AND presence != 'paused' AND last_seen_at <= ?",
+        silentSince,
       )
       .toArray();
-    for (const row of silent) {
+    for (const row of candidates) {
+      const seen = this.seen(row);
+      if (seen > silentSince) continue;
+      this.gone(row, seen);
       this.changed(row.id as AgentId, "gone");
       // Silent for minutes: whatever prompt it reported is no longer known to be open.
       this.closeApproval(row);
       this.host.broadcast({ type: "agent", agent: this.agent(row.id) });
     }
-    await this.watch();
+    // The next check is for the quietest Agent left, as recently as anyone heard from it.
+    const quietest = this.host.sql
+      .exec<Pick<AgentRow, "id" | "last_seen_at">>(
+        "SELECT id, last_seen_at FROM agents INDEXED BY agents_live WHERE presence != 'gone' AND presence != 'paused'",
+      )
+      .toArray()
+      .reduce((min, row) => Math.min(min, this.seen(row)), Number.POSITIVE_INFINITY);
+    await this.host.schedulePresenceCheck(
+      quietest === Number.POSITIVE_INFINITY ? null : quietest + this.host.goneAfterMs,
+    );
   }
 
   /**
@@ -733,12 +947,8 @@ export class AgentRoster {
   touch(person: PersonName, id: AgentId): { ok: true; agent: Agent } | Refusal {
     const found = this.owned(person, id);
     if (!found.ok) return found;
-    const now = Date.now();
-    const resolution = Math.min(2 * HEARTBEAT_INTERVAL_MS, this.host.goneAfterMs / 10);
-    if (now - found.row.last_seen_at >= resolution) {
-      this.host.sql.exec("UPDATE agents SET last_seen_at = MAX(last_seen_at, ?) WHERE id = ?", now, id);
-    }
-    return { ok: true, agent: rowToAgent(found.row) };
+    this.heardFrom(found.row, Date.now(), {});
+    return { ok: true, agent: this.toAgent(found.row) };
   }
 
   /** Whether the Channel knows Agent `id`. */
@@ -753,7 +963,7 @@ export class AgentRoster {
   setProxyMode(person: PersonName, id: AgentId, mode: ProxyMode): RosterResult {
     const found = this.owned(person, id);
     if (!found.ok) return found;
-    if (found.row.proxy_mode === mode) return { ok: true, agent: rowToAgent(found.row) };
+    if (found.row.proxy_mode === mode) return { ok: true, agent: this.toAgent(found.row) };
     this.host.sql.exec("UPDATE agents SET proxy_mode = ? WHERE id = ?", mode, id);
     const agent = this.agent(id);
     this.host.broadcast({ type: "agent", agent });
@@ -778,30 +988,116 @@ export class AgentRoster {
   async unpause(id: AgentId): Promise<void> {
     const row = this.row(id);
     if (row === undefined || row.presence !== "paused") return;
-    this.host.sql.exec("UPDATE agents SET presence = 'idle', last_seen_at = ? WHERE id = ?", Date.now(), id);
+    const now = Date.now();
+    this.host.sql.exec("UPDATE agents SET presence = 'idle', last_seen_at = ? WHERE id = ?", now, id);
     this.changed(id, "idle");
     this.host.broadcast({ type: "agent", agent: this.agent(id) });
-    await this.watch();
+    await this.host.presenceCheckBy(now + this.host.goneAfterMs);
   }
 
   /** A Paused Agent was stopped: Gone, with a `session.end` since no process is left to end it. */
   endPaused(id: AgentId): void {
     const row = this.row(id);
     if (row === undefined || row.presence !== "paused") return;
-    this.host.sql.exec("UPDATE agents SET presence = 'gone', last_seen_at = ? WHERE id = ?", Date.now(), id);
+    this.gone(row, Math.max(Date.now(), this.seen(row)));
     this.record(id, "session.end", { reason: "exit", detail: "stopped while paused" });
     this.changed(id, "gone");
     this.host.broadcast({ type: "agent", agent: this.agent(id) });
   }
 
-  /** Schedules the silence check for when the quietest Agent that is not Gone would go Gone. */
-  private async watch(): Promise<void> {
-    const oldest = this.host.sql
-      .exec<{ oldest: number | null }>(
-        "SELECT MIN(last_seen_at) AS oldest FROM agents WHERE presence != 'gone' AND presence != 'paused'",
-      )
-      .one().oldest;
-    await this.host.schedulePresenceCheck(oldest === null ? null : oldest + this.host.goneAfterMs);
+  /**
+   * Counts Agent `row` as heard from at `now`, and writes `changes` to its row. The
+   * last-seen time goes with them only when they change its Presence or the stored one
+   * is `flushMs` old; until then memory keeps it. An unchanged context's newer stamp
+   * goes into a row that is written anyway.
+   */
+  private heardFrom(row: AgentRow, now: number, changes: Changes, contextReadAt?: string): void {
+    const heard = this.hear(row.id as AgentId, now, contextReadAt);
+    if (changes.presence !== undefined || row.last_seen_at <= now - this.flushMs) {
+      changes.last_seen_at = Math.max(heard.seenAt, row.last_seen_at);
+      changes.context ??= this.freshContext(row, heard);
+    }
+    this.update(row.id as AgentId, changes);
+  }
+
+  /** Notes that Agent `id` was heard from at `now`, in memory and where `remember` keeps it. */
+  private hear(id: AgentId, now: number, contextReadAt?: string): Heard {
+    const heard = this.keep(id, { seenAt: now, ...(contextReadAt === undefined ? {} : { contextReadAt }) });
+    this.host.remember?.(id, heard);
+    return heard;
+  }
+
+  /** Adds `heard` to what memory holds for Agent `id`, keeping the later of each. */
+  private keep(id: AgentId, heard: Heard): Heard {
+    const before = this.heard.get(id);
+    const readAt = later(before?.contextReadAt, heard.contextReadAt);
+    const kept: Heard = {
+      seenAt: Math.max(heard.seenAt, before?.seenAt ?? 0),
+      ...(readAt === undefined ? {} : { contextReadAt: readAt }),
+    };
+    this.heard.set(id, kept);
+    return kept;
+  }
+
+  /** Marks Agent `row` Gone, last seen at `seenAt`, with the context stamp memory held. */
+  private gone(row: AgentRow, seenAt: number): void {
+    const id = row.id as AgentId;
+    const goneAt = Date.now();
+    this.update(id, {
+      presence: "gone",
+      gone_at: goneAt,
+      ...(seenAt > row.last_seen_at ? { last_seen_at: seenAt } : {}),
+      context: this.freshContext(row, this.heard.get(id)),
+    });
+    this.heard.delete(id);
+    this.host.retentionCheckBy?.(goneAt + GONE_RETENTION_MS);
+  }
+
+  /** When Agent `row` was last heard from: its row, or memory when that heard it since. */
+  private seen(row: Pick<AgentRow, "id" | "last_seen_at">): number {
+    return Math.max(row.last_seen_at, this.heard.get(row.id as AgentId)?.seenAt ?? 0);
+  }
+
+  /** The row's context with the newer stamp `heard` holds for it, as JSON; undefined when there is none. */
+  private freshContext(row: AgentRow, heard: Heard | undefined): string | undefined {
+    const context = parsed<AgentContext>(row.context);
+    if (context === null || heard?.contextReadAt === undefined || heard.contextReadAt <= context.readAt) {
+      return undefined;
+    }
+    return JSON.stringify({ ...context, readAt: heard.contextReadAt });
+  }
+
+  /** Writes `changes` to Agent `id`'s row; with none, writes nothing. */
+  private update(id: AgentId, changes: Changes): void {
+    const columns = (Object.keys(changes) as (keyof Changes)[]).filter((column) => changes[column] !== undefined);
+    if (columns.length === 0) return;
+    this.host.sql.exec(
+      `UPDATE agents SET ${columns.map((column) => `${column} = ?`).join(", ")} WHERE id = ?`,
+      ...columns.map((column) => changes[column] ?? null),
+      id,
+    );
+  }
+
+  /** The Agent a row describes, with what memory heard since the row was written. */
+  private toAgent(row: AgentRow): Agent {
+    const agent = rowToAgent(row);
+    const heard = this.heard.get(agent.id);
+    if (heard === undefined) return agent;
+    const { context } = agent;
+    const readAt = context === undefined ? undefined : later(context.readAt, heard.contextReadAt);
+    return {
+      ...agent,
+      lastSeenAt: new Date(this.seen(row)).toISOString(),
+      ...(context === undefined || readAt === undefined ? {} : { context: { ...context, readAt } }),
+    };
+  }
+
+  /** The Agents of `rows`, most recently seen first, as memory knows it. */
+  private byLastSeen(rows: AgentRow[]): Agent[] {
+    return rows
+      .map((row) => ({ row, seen: this.seen(row) }))
+      .sort((a, b) => b.seen - a.seen || (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0))
+      .map(({ row }) => this.toAgent(row));
   }
 
   private row(id: string): AgentRow | undefined {
@@ -811,7 +1107,7 @@ export class AgentRoster {
   private agent(id: string): Agent {
     const row = this.row(id);
     if (!row) throw new Error(`Agent ${id} vanished`);
-    return rowToAgent(row);
+    return this.toAgent(row);
   }
 
   /** Finds an Agent that `person` may act for: only an Agent's own Person may. */

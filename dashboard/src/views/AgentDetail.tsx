@@ -59,7 +59,22 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
   }, [current, id, store]);
   const agent = current ?? historical;
   if (agent === undefined) return null;
-  if (!agent) {
+  if (!agent) return <PastAgent id={id as AgentId} />;
+  return <AgentPage key={agent.id} agent={agent} focus={focus} />;
+}
+
+/** Retention removes roster details, but the Agent's Events remain readable. */
+function PastAgent({ id }: { id: AgentId }) {
+  const matches = useCallback(
+    (event: ChannelEvent) =>
+      (event.actor.kind === "agent" && event.actor.agentId === id) ||
+      (event.type === "directive" && event.payload.to === id) ||
+      (event.type === "agent.rename" && event.payload.agent === id) ||
+      (event.type === "agent.handoff" && event.payload.from === id),
+    [id],
+  );
+  const scoped = useScopedHistory({ agent: id }, matches);
+  if (!scoped.loading && scoped.events.length === 0)
     return (
       <ErrorPage
         missing
@@ -74,8 +89,25 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
         No Agent on this Channel has that ID.
       </ErrorPage>
     );
-  }
-  return <AgentPage key={agent.id} agent={agent} focus={focus} />;
+  // Laid out as an Agent's own page, with only what is left of it: its ID and its History.
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-7 px-[var(--gutter)] pt-[var(--page-top)] pb-10">
+        <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex min-w-0 flex-[1_1_420px] flex-col gap-1">
+            <h1 className="font-display text-head font-medium [overflow-wrap:anywhere] text-ink max-sm:text-head-phone">{id}</h1>
+            <p className="text-small text-ink-3">No longer in the roster. Its recorded Events remain below.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <a href={href({ view: "agents" })} className={buttonVariants({ variant: "primary" })}>
+              Back to Agents
+            </a>
+          </div>
+        </header>
+        <History scoped={scoped} />
+      </div>
+    </div>
+  );
 }
 
 function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {
