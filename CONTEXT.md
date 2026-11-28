@@ -28,6 +28,10 @@ _Avoid_: Subtask, todo, item
 The exclusive hold one Person or Agent has on a Task. At most one holder per Task at a time.
 _Avoid_: Assignment, lock, ownership
 
+**Collaborator**:
+An Agent working on a Task another Agent holds, with the holder's or a Person's consent. It commits to the Task's one branch, and its Events carry the Task. The holder stays accountable and is the only one who finishes (ADR 0035).
+_Avoid_: Co-holder, helper, assignee
+
 ## Channel
 
 **Event**:
@@ -37,6 +41,10 @@ _Avoid_: Log, activity, message
 **Update**:
 An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening. It may be addressed to Agents by their Agent IDs: each addressee always hears it, Queued at least, and still as information, never as an instruction (ADR 0026).
 _Avoid_: Status, note, post
+
+**Proposal**:
+An Update addressed to one Agent that asks to join its Task, to split a Task into Sub-tasks or to hand a Task over. The addressee accepts, counters or declines it with an addressed Update of its own. Like every Update it is information, never an instruction (ADR 0035).
+_Avoid_: Request, offer, negotiation
 
 **Memory Note**:
 A short, tagged fact an Agent writes on purpose for the Channel's shared memory: a decision, a fact, a dead end, an open question or the files that matter (ADR 0019). An Update says what is happening now; a Memory Note is kept to be found later, with `memory_search` and `memory_recent`. Only Agents write them, and they are information, never instructions.
@@ -79,7 +87,7 @@ A short summary of one model turn: model, token counts, reply text and tool call
 _Avoid_: Summary, redacted event
 
 **Directive**:
-A message from a Person to an Agent, labelled as coming from that Person, or from a Lead to an Agent it started, labelled as from the Lead its Person put over that Agent (ADR 0018). It is the only channel message that carries instruction weight. Everything else an Agent receives from another Agent is information.
+A message from a Person to an Agent, labelled as coming from that Person, or from a Lead to an Agent it started, labelled as from the Lead its Person put over that Agent (ADR 0018). It is the only channel message that carries instruction weight, so an Agent never sends one as its Person (ADR 0034). Everything else an Agent receives from another Agent is information.
 _Avoid_: Command, order, instruction
 
 **Relay**:
