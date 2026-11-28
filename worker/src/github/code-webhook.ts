@@ -1,7 +1,6 @@
 // GitHub `push` and `pull_request` webhook deliveries (ADR 0006): a push to a Task
-// branch, or a pull request merged into the default branch. Everything else in
-// those events (pushes to other branches, tags, deleted branches, PRs opened or
-// closed without merging) is ignored.
+// branch, a Task pull request opened into the default branch, or a merged PR.
+// Other branches, tags, deleted branches and PRs closed without merging are ignored.
 
 import type { TaskNumber } from "../../../shared/src/index";
 import { isTaskBranch, taskOfBranch } from "../../../shared/src/index";
@@ -13,6 +12,7 @@ export const CODE_WEBHOOK_EVENTS: ReadonlySet<string> = new Set(["push", "pull_r
 const NO_COMMIT = /^0{40}$/;
 
 export type CodeChange =
+  | { kind: "pull_request"; pr: number; branch: string; task: TaskNumber; url: string }
   | {
       kind: "push";
       branch: string;
@@ -70,7 +70,7 @@ export function readCodeWebhook(event: string, payload: unknown, repo: string): 
   }
 
   const pr = object(body.pull_request);
-  if (body.action !== "closed" || pr === undefined || pr.merged !== true) return null;
+  if (pr === undefined) return null;
   const number = typeof pr.number === "number" ? pr.number : body.number;
   const base = object(pr.base);
   const head = object(pr.head);
@@ -79,6 +79,15 @@ export function readCodeWebhook(event: string, payload: unknown, repo: string): 
   const baseSha = text(base?.sha);
   const headSha = text(head?.sha);
   if (typeof number !== "number" || into !== defaultBranch || branch === undefined) return null;
+  if (body.action === "opened" || body.action === "reopened") {
+    const task = taskOfBranch(branch);
+    const url = text(pr.html_url);
+    // Fork branches can share a name with a Task branch in this repo.
+    if (text(object(head?.repo)?.full_name)?.toLowerCase() !== repo.toLowerCase()) return null;
+    if (!Number.isSafeInteger(number) || number <= 0 || task === null || url === undefined) return null;
+    return { kind: "pull_request", pr: number, branch, task, url };
+  }
+  if (body.action !== "closed" || pr.merged !== true) return null;
   if (baseSha === undefined || headSha === undefined) return null;
   return {
     kind: "merge",

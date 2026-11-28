@@ -118,7 +118,10 @@ export interface ChannelSource {
   eventsById(ids: readonly string[]): Promise<ChannelEvent[]>;
   /** The first Wakes after `seq` `after`, oldest first. */
   wakesAfter(after: number): Promise<ChannelEvent[]>;
-  /** Follow the stream after `cursor`. Returns an unsubscribe function. */
+  /**
+   * Follow the stream after `cursor`. Returns an unsubscribe function. A stream too far
+   * behind to replay what it missed sends `reload`: the subscriber loads the snapshot again.
+   */
   subscribe(
     cursor: number,
     onMessage: (message: StreamMessage) => void,

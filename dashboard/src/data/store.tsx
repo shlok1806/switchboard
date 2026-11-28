@@ -31,9 +31,23 @@ export interface ChannelState {
   /** Set while the Channel has Events older than `events` to page back to: the `seq` to page back from. */
   olderBefore?: number;
   loadingOlder: boolean;
+  /**
+   * How many times the snapshot has been loaded. It is loaded again when the stream fell
+   * too far behind to replay what it missed, which replaces what was loaded: views that
+   * read pages of their own read them again, and the log starts at the newest.
+   */
+  loads: number;
 }
 
 type Listener = () => void;
+
+/** One run of the store: following the stream until it is stopped. */
+interface Run {
+  stopped: boolean;
+  /** Stops following the stream, while it is followed. */
+  unsubscribe?: () => void;
+  retry?: ReturnType<typeof setTimeout>;
+}
 
 /** Holds Channel state and applies stream messages. Views read it through hooks. */
 export class ChannelStore {
@@ -49,6 +63,7 @@ export class ChannelStore {
     verdictsByEvent: new Map(),
     fresh: new Set(),
     loadingOlder: false,
+    loads: 0,
   };
   private listeners = new Set<Listener>();
   private messageListeners = new Set<(m: StreamMessage) => void>();
@@ -87,12 +102,25 @@ export class ChannelStore {
   }
 
   start(): () => void {
-    let stop: (() => void) | null = null;
-    let cancelled = false;
+    const run: Run = { stopped: false };
+    this.load(run, false);
+    return () => {
+      run.stopped = true;
+      clearTimeout(run.retry);
+      run.unsubscribe?.();
+    };
+  }
+
+  /**
+   * Loads the snapshot, then follows the stream from its cursor. Loading it `again` keeps
+   * what is drawn until the new snapshot replaces it in one change, so nothing flashes,
+   * and a failed reload is tried again rather than ending on the error page.
+   */
+  private load(run: Run, again: boolean, attempt = 0) {
     this.source
       .snapshot()
       .then((snap) => {
-        if (cancelled) return;
+        if (run.stopped) return;
         const { events, verdicts, agents, tasks, accounts = [], olderBefore, ...rest } = snap;
         this.allAgents = agents;
         const byEvent = new Map<string, Verdict[]>();
@@ -107,26 +135,49 @@ export class ChannelStore {
           tasks,
           verdictsByEvent: byEvent,
           olderBefore,
+          loadingOlder: false,
+          // A reload brings Events in at once: none of them arrived live.
+          fresh: again ? new Set() : this.state.fresh,
+          loads: this.state.loads + 1,
         });
-        stop = this.source.subscribe(snap.cursor, (m) => this.apply(m), (connection) => this.set({ connection }));
+        run.unsubscribe = this.source.subscribe(
+          snap.cursor,
+          (m) => (m.type === "reload" ? this.reload(run) : this.apply(m)),
+          (connection) => this.set({ connection }),
+        );
       })
       .catch((e: unknown) => {
-        if (!cancelled) this.set({ status: "error", error: e instanceof Error ? e.message : String(e) });
+        if (run.stopped) return;
+        if (!again) {
+          this.set({ status: "error", error: e instanceof Error ? e.message : String(e) });
+          return;
+        }
+        run.retry = setTimeout(() => this.load(run, true, attempt + 1), Math.min(10_000, 1000 * 2 ** attempt));
       });
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
+  }
+
+  /**
+   * The stream fell too far behind to replay what it missed: load the snapshot again,
+   * which reads no more, and follow the stream from there.
+   */
+  private reload(run: Run) {
+    run.unsubscribe?.();
+    run.unsubscribe = undefined;
+    this.set({ connection: "reconnecting" });
+    this.load(run, true);
   }
 
   /** Loads the page of Events before the oldest one loaded, if the Channel has older ones. */
   async loadOlder(): Promise<void> {
     const before = this.state.olderBefore;
+    const loads = this.state.loads;
     if (before === undefined || this.state.loadingOlder) return;
     this.set({ loadingOlder: true });
     try {
       const page = await this.source.olderEvents(before);
       const s = this.state;
+      // The snapshot was loaded again meanwhile: this page is older than what is loaded now.
+      if (s.loads !== loads) return;
       const known = new Set(s.events.map((e) => e.id));
       // The page's Verdicts are older than the loaded ones: they go first, in their own order.
       const older = new Map<string, Verdict[]>();
@@ -141,11 +192,11 @@ export class ChannelStore {
       });
     } catch {
       // Scrolling up again tries again.
-      this.set({ loadingOlder: false });
+      if (this.state.loads === loads) this.set({ loadingOlder: false });
     }
   }
 
-  private apply(m: StreamMessage) {
+  private apply(m: Exclude<StreamMessage, { type: "reload" }>) {
     const s = this.state;
     switch (m.type) {
       case "event": {
@@ -185,8 +236,13 @@ export class ChannelStore {
   }
 }
 
+/** The roster: Agents not Gone, and Gone ones still holding a Task not done (a Stale Claim). */
 function visibleAgents(agents: Agent[], tasks: Task[]): Agent[] {
-  const holders = new Set(tasks.flatMap((task) => task.claim?.holder.kind === "agent" ? [task.claim.holder.agentId] : []));
+  const holders = new Set(
+    tasks.flatMap((task) =>
+      task.status !== "done" && task.claim?.holder.kind === "agent" ? [task.claim.holder.agentId] : [],
+    ),
+  );
   return agents.filter((agent) => agent.presence !== "gone" || holders.has(agent.id));
 }
 

@@ -4,36 +4,56 @@
 // every Issue. So each call that runs per tool call, per heartbeat or per Relay
 // decision must read a bounded number of rows however big the Channel gets. A
 // query that scans one of those tables shows up here as thousands of rows.
+//
+// Rows written are billed the same way, each index row too, so what runs on every
+// heartbeat, sign of life or timer writes nothing when nothing changed.
 
-import { env, reset, runInDurableObject } from "cloudflare:test";
+import { env, reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
+  AccountsResponse,
+  AgentContext,
   AgentId,
   AgentResponse,
+  AgentSummary,
   ChannelEvent,
+  HeartbeatRequest,
   HookEvent,
   MemoryNote,
   MemoryResponse,
+  PostUpdateResponse,
+  ReportedUsage,
+  StreamMessage,
   Task,
+  TaskResponse,
 } from "../../shared/src/index";
-import { agentPath } from "../../shared/src/index";
+import { agentPath, MAX_ACCOUNT_HISTORY, nicknamePath, SUMMARY_MAX_FILES, summaryPath } from "../../shared/src/index";
+import type { AgentRoster } from "../src/agents";
 import { Channel } from "../src/channel";
+import { installGitHub } from "../src/github/index";
 import { installJev } from "../src/relay/jev";
 import { lastUpdate } from "../src/status-comment";
 import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
+import { FakeGitHub } from "./fake-github";
 import { FakeJev } from "./fake-jev";
 
 /**
  * The history the Channel is given before anything is measured: Events from Agents
  * and People, each followed by the Relay's Verdicts about it for the other live
- * Agents, as on a real Channel, where most rows are Verdicts.
+ * Agents, one Event per Agent, as a Channel kept them before ADR 0030, when most of
+ * its rows were Verdicts.
  */
 const SOURCES = 10_000;
 const VERDICTS_PER_EVENT = 2;
 const EVENTS = SOURCES * (1 + VERDICTS_PER_EVENT);
-const GONE_AGENTS = 300;
+const GONE_AGENTS = 3000;
 const TASKS = 200;
+/**
+ * Tasks finished long ago, after the open ones. A done Task keeps its Claim, so each
+ * still names the Agent that held it, as Tasks a Channel's Agents finished do.
+ */
+const FINISHED_TASKS = 3000;
 /** Files each live Agent has edited. */
 const TOUCHED_FILES = 100;
 /** Notes Agents wrote (ADR 0019), every one with the word "progress". */
@@ -42,14 +62,24 @@ const NOTES = 3000;
 /** Generous for what each call needs, far below one scan of any seeded table. */
 const BUDGET = 150;
 
-type Cursor = { rowsRead: number };
-type Meter = { cursors: Cursor[]; paused: boolean };
-const meter = (globalThis as unknown as { rowsReadMeter?: Meter }).rowsReadMeter ?? { cursors: [], paused: true };
-(globalThis as unknown as { rowsReadMeter: Meter }).rowsReadMeter = meter;
+type Cursor = { rowsRead: number; rowsWritten: number };
+/** A query the Channel ran, and the table it writes to, if it writes. */
+type Metered = { cursor: Cursor; table: string | null };
+type Meter = { cursors: Metered[]; paused: boolean };
+const meter = (globalThis as unknown as { rowsMeter?: Meter }).rowsMeter ?? { cursors: [], paused: true };
+(globalThis as unknown as { rowsMeter: Meter }).rowsMeter = meter;
+
+/** The table a statement writes to: what Durable Objects bill it under, with its index rows. */
+function writesTo(query: unknown): string | null {
+  const match = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)\s+(\w+)/i.exec(
+    String(query),
+  );
+  return match?.[1] ?? null;
+}
 
 /**
- * Counts what every query of the Channel's SqlStorage reads from now on. The test
- * and the Durable Object share one isolate, so the cursors land in `meter`.
+ * Counts what every query of the Channel's SqlStorage reads and writes from now on.
+ * The test and the Durable Object share one isolate, so the cursors land in `meter`.
  */
 async function meterChannel(): Promise<void> {
   await runInDurableObject(channelStub(), (_channel, state) => {
@@ -57,7 +87,7 @@ async function meterChannel(): Promise<void> {
     const exec = sql.exec.bind(sql);
     sql.exec = (...args: unknown[]) => {
       const cursor = exec(...args);
-      if (!meter.paused) meter.cursors.push(cursor);
+      if (!meter.paused) meter.cursors.push({ cursor, table: writesTo(args[0]) });
       return cursor;
     };
   });
@@ -72,17 +102,35 @@ async function settled(check: () => Promise<boolean>): Promise<void> {
   }
 }
 
-/** Rows read by everything `work` makes the Channel do, its background work included once `until` holds. */
-async function rowsRead(work: () => Promise<unknown>, until?: () => Promise<boolean>): Promise<number> {
+/** What a piece of work cost: rows read, and rows written to each table. */
+interface Rows {
+  read: number;
+  written: number;
+  writtenTo: Record<string, number>;
+}
+
+/** Rows read and written by everything `work` makes the Channel do, its background work included once `until` holds. */
+async function rows(work: () => Promise<unknown>, until?: () => Promise<boolean>): Promise<Rows> {
   meter.cursors = [];
   meter.paused = false;
   await work();
-  if (until !== undefined) {
-    meter.paused = true;
-    await settled(until);
-  }
+  // `until` reads without being counted (see `unmetered`), so the background work it waits for still is.
+  if (until !== undefined) await settled(until);
   meter.paused = true;
-  return meter.cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0);
+  const writtenTo: Record<string, number> = {};
+  for (const { cursor, table } of meter.cursors) {
+    if (cursor.rowsWritten > 0) writtenTo[table ?? "other"] = (writtenTo[table ?? "other"] ?? 0) + cursor.rowsWritten;
+  }
+  return {
+    read: meter.cursors.reduce((sum, { cursor }) => sum + cursor.rowsRead, 0),
+    written: meter.cursors.reduce((sum, { cursor }) => sum + cursor.rowsWritten, 0),
+    writtenTo,
+  };
+}
+
+/** Rows read by everything `work` makes the Channel do, its background work included once `until` holds. */
+async function rowsRead(work: () => Promise<unknown>, until?: () => Promise<boolean>): Promise<number> {
+  return (await rows(work, until)).read;
 }
 
 function call(path: string, init?: RequestInit): Promise<Response> {
@@ -105,13 +153,18 @@ async function register(sessionId: string): Promise<AgentId> {
   return remember(await response.json<AgentResponse>()).agent.id;
 }
 
-async function heartbeat(agent: AgentId, presence: "live" | "idle"): Promise<void> {
+async function heartbeat(
+  agent: AgentId,
+  presence: "live" | "idle",
+  reading: Omit<HeartbeatRequest, "presence"> = {},
+): Promise<AgentResponse> {
   const response = await call(`${agentPath(agent)}/heartbeat`, {
     method: "POST",
     headers: { Authorization: await bearer({ person: "shlok", agent }) },
-    body: JSON.stringify({ presence }),
+    body: JSON.stringify({ presence, ...reading }),
   });
   expect(response.status).toBe(200);
+  return response.json<AgentResponse>();
 }
 
 function task(number: number, holder?: AgentId): Task {
@@ -192,11 +245,13 @@ async function seed(live: AgentId[]): Promise<void> {
       }
     }
     const template = sql.exec<Record<string, SqlStorageValue>>("SELECT * FROM agents LIMIT 1").one();
+    const goneAt = Date.now() - 8 * 86_400_000;
     for (let k = 0; k < GONE_AGENTS; k++) {
       const row: Record<string, SqlStorageValue> = {
         ...template,
         id: `shlok/claude/g${k}`,
         session_id: `gone-${k}`,
+        last_seen_at: goneAt,
         presence: "gone",
         nickname: null,
       };
@@ -237,6 +292,9 @@ async function seed(live: AgentId[]): Promise<void> {
     }
     const tasks = (channel as unknown as { tasks: { write(task: Task): void } }).tasks;
     for (let n = 1; n <= TASKS; n++) tasks.write(task(n, n % 40 === 0 ? live[n % live.length] : undefined));
+    for (let n = TASKS + 1; n <= TASKS + FINISHED_TASKS; n++) {
+      tasks.write({ ...task(n, live[n % live.length]), status: "done" });
+    }
   });
 }
 
@@ -255,13 +313,15 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   installJev(null);
+  installGitHub(null);
   forgetTokens();
   await reset();
 });
 
-/** Sends Hook Events over Agent `agent`'s WebSocket, as its wrapper does, and waits for the ack. */
-async function sendHooks(agent: AgentId, events: HookEvent[]): Promise<void> {
+/** Sends `frame` over Agent `agent`'s WebSocket, as its wrapper does, and waits for the `ack`. */
+async function sendFrame(agent: AgentId, frame: Record<string, unknown>, ack: string): Promise<void> {
   const response = await call(`/api/stream?${await streamQuery({ person: "shlok", agent })}`, {
     headers: { Upgrade: "websocket" },
   });
@@ -270,19 +330,40 @@ async function sendHooks(agent: AgentId, events: HookEvent[]): Promise<void> {
   socket.accept();
   const acked = new Promise<void>((resolve) => {
     socket.addEventListener("message", (message) => {
-      if (String(message.data).includes('"hook.ack"')) resolve();
+      if (String(message.data).includes(`"${ack}"`)) resolve();
     });
   });
   meter.paused = false;
-  socket.send(JSON.stringify({ type: "hook", agent, events }));
+  socket.send(JSON.stringify(frame));
   await acked;
   socket.close();
 }
 
-/** The Relay's Verdicts about Event `id`, read without being counted. */
-async function verdictsAbout(id: string): Promise<boolean> {
-  return runInDurableObject(channelStub(), (_channel, state) =>
-    state.storage.sql
+/** Sends Hook Events over Agent `agent`'s WebSocket, as its wrapper does, and waits for the ack. */
+function sendHooks(agent: AgentId, events: HookEvent[]): Promise<void> {
+  return sendFrame(agent, { type: "hook", agent, events }, "hook.ack");
+}
+
+/**
+ * Reads the Channel's storage without counting it. The read runs in one synchronous
+ * turn of the Durable Object, so none of the Channel's own work lands in the pause.
+ */
+function unmetered<T>(read: (sql: SqlStorage) => T): Promise<T> {
+  return runInDurableObject(channelStub(), (_channel, state) => {
+    const paused = meter.paused;
+    meter.paused = true;
+    try {
+      return read(state.storage.sql);
+    } finally {
+      meter.paused = paused;
+    }
+  });
+}
+
+/** Whether the Relay has recorded its Verdicts about Event `id`. */
+function verdictsAbout(id: string): Promise<boolean> {
+  return unmetered((sql) =>
+    sql
       .exec<{ payload: string }>("SELECT payload FROM events WHERE type = 'verdict' ORDER BY seq DESC LIMIT 10")
       .toArray()
       .some((row) => JSON.stringify(row.payload).includes(id)),
@@ -380,7 +461,9 @@ it("writing a note reads a bounded number of rows", async () => {
 
 it("reading notes, latest or narrowed or caught up, reads only the notes it answers with", async () => {
   const author = live[1] as AgentId;
-  for (const query of ["", "?tag=question", `?author=${encodeURIComponent(author)}`, "?task=7", `?after=${EVENTS}`]) {
+  // Task 7's notes are all facts, among the Channel's hundreds of facts.
+  const queries = ["", "?tag=question", `?author=${encodeURIComponent(author)}`, "?task=7", "?task=7&tag=fact"];
+  for (const query of [...queries, `?after=${EVENTS}`]) {
     const read = await rowsRead(async () => {
       expect((await memory(`${query}${query === "" ? "?" : "&"}limit=50`, measured)).length).toBeGreaterThan(0);
     });
@@ -467,4 +550,658 @@ it("a Durable Object that starts again reads a bounded number of rows, its histo
   });
   expect(await restart()).toBeGreaterThan(EVENTS);
   expect(await restart()).toBeLessThan(BUDGET);
+});
+
+/** What the wrapper reads of its session (ADR 0012), stamped when it read it, as it is every heartbeat. */
+function context(): AgentContext {
+  return {
+    readAt: new Date().toISOString(),
+    tokens: 120_000,
+    window: 1_000_000,
+    task: "Add retries",
+    activity: "Tool: Edit",
+    cwd: "/repo",
+  };
+}
+
+/** A Codex account's limits as its wrapper reads them from the session, the same reading until the next turn. */
+const CODEX_USAGE = {
+  accountId: "Codex · shlok · work",
+  plan: "plus",
+  limits: {
+    readAt: new Date(Date.now() - 60_000).toISOString(),
+    session: { percent: 32, resetsAt: new Date(Date.now() + 3_600_000).toISOString() },
+    week: { percent: 51, resetsAt: new Date(Date.now() + 86_400_000).toISOString() },
+    models: [],
+  },
+} satisfies ReportedUsage;
+
+const ACCOUNTS = [CODEX_USAGE.accountId, "shlokthakkar1806@gmail.com"];
+
+/** The day of readings before CODEX_USAGE for each account, one every heartbeat, each saying something new. */
+async function seedReadings(): Promise<void> {
+  await runInDurableObject(channelStub(), (_channel, state) => {
+    const latest = Date.parse(CODEX_USAGE.limits.readAt);
+    for (const account of ACCOUNTS) {
+      for (let i = 1; i < 2880; i++) {
+        const at = latest - i * 30_000;
+        const limits = { ...CODEX_USAGE.limits, readAt: new Date(at).toISOString(), session: { percent: i % 100 } };
+        state.storage.sql.exec(
+          "INSERT INTO account_usage (email, read_at, plan, limits) VALUES (?, ?, ?, ?)",
+          account,
+          at,
+          "plus",
+          JSON.stringify(limits),
+        );
+      }
+    }
+  });
+}
+
+it("a heartbeat that changes nothing writes no row, the quietest Agent's included", async () => {
+  await heartbeat(measured, "live", { context: context() });
+  // The same context with a newer stamp, as a wrapper sends it.
+  expect((await rows(() => heartbeat(measured, "live", { context: context() }))).written).toBe(0);
+  // The Agent heard from longest ago: its heartbeat does not move the silence check later.
+  expect((await rows(() => heartbeat(live[1] as AgentId, "live"))).written).toBe(0);
+});
+
+it("a Hook Event's or a Proxy Event's sign of life writes no Agent row", async () => {
+  const hooked = await rows(async () => {
+    meter.paused = true;
+    await sendHooks(measured, [hook("tool.call", { tool: "Bash", arg: "npm test", ok: true })]);
+  });
+  expect(hooked.writtenTo.agents ?? 0).toBe(0);
+  const turn = hook("tool.call", {});
+  const proxied = await rows(async () => {
+    meter.paused = true;
+    await sendFrame(
+      measured,
+      {
+        type: "proxy",
+        agent: measured,
+        event: {
+          id: turn.id,
+          type: "proxy.digest",
+          payload: {
+            model: "gpt-5.5-codex",
+            inputTokens: 10,
+            outputTokens: 20,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            reply: "Done.",
+            toolCalls: [],
+            maskedSecrets: 0,
+          },
+        },
+      },
+      "proxy.ack",
+    );
+  });
+  expect(proxied.writtenTo.agents ?? 0).toBe(0);
+});
+
+it("a Codex heartbeat writes nothing for a usage reading the Channel has, and reads a bounded number of rows", async () => {
+  await seedReadings();
+  await heartbeat(measured, "live", { context: context(), usage: CODEX_USAGE });
+  const again = await rows(() => heartbeat(measured, "live", { context: context(), usage: CODEX_USAGE }));
+  expect(again.written).toBe(0);
+  expect(again.read).toBeLessThan(BUDGET);
+
+  const next = { ...CODEX_USAGE, limits: { ...CODEX_USAGE.limits, readAt: new Date().toISOString() } };
+  // A new reading of the same limits is not one more row in the account's history either.
+  expect(
+    (await rows(() => heartbeat(measured, "live", { context: context(), usage: next }))).writtenTo.account_usage ?? 0,
+  ).toBe(0);
+  const moved = { ...next, limits: { ...next.limits, session: { percent: 40 } } };
+  const changed = await rows(() => heartbeat(measured, "live", { context: context(), usage: moved }));
+  expect(changed.writtenTo.account_usage).toBeGreaterThan(0);
+  expect(changed.read).toBeLessThan(BUDGET);
+});
+
+it("serving every account reads a bounded number of rows, after a day of readings", async () => {
+  await seedReadings();
+  const read = await rowsRead(async () => {
+    const response = await call("/api/accounts", { headers: { Authorization: await bearer("shlok") } });
+    const { accounts } = await response.json<AccountsResponse>();
+    expect(accounts.map((a) => a.email).sort()).toEqual([...ACCOUNTS].sort());
+    for (const account of accounts) {
+      expect(account.history).toHaveLength(MAX_ACCOUNT_HISTORY);
+      expect(account.history.at(-1)?.at).toBe(account.limits.readAt);
+    }
+  });
+  expect(read).toBeLessThan(BUDGET);
+});
+
+it("an idle Task reconcile reads and writes a bounded number of rows", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  const github = new FakeGitHub();
+  for (let n = 1; n <= TASKS; n++) github.open({ title: `Task ${n}` });
+  installGitHub(github);
+  // Listing the Tasks runs the first reconcile, which brings the seeded Tasks in line with GitHub;
+  // the next one finds nothing to change.
+  expect((await call("/api/tasks", { headers: { Authorization: await bearer("shlok") } })).status).toBe(200);
+  vi.setSystemTime(Date.now() + 5 * 60_000 + 1000);
+  await runDurableObjectAlarm(channelStub());
+  // The Agents stay Live meanwhile, so none goes Gone and leaves its Claim Stale.
+  for (const agent of live) await heartbeat(agent, "live");
+  vi.setSystemTime(Date.now() + 5 * 60_000 + 1000);
+  const idle = await rows(() => runDurableObjectAlarm(channelStub()));
+  expect(idle.read).toBeLessThan(BUDGET);
+  expect(idle.writtenTo.tasks ?? 0).toBe(0);
+  expect(idle.writtenTo.task_sync ?? 0).toBe(0);
+
+  // A missed change is still found, on the same schedule.
+  github.edit(7, { title: "Task 7, renamed on GitHub" });
+  vi.setSystemTime(Date.now() + 5 * 60_000 + 1000);
+  await runDurableObjectAlarm(channelStub());
+  const response = await call("/api/tasks/7", { headers: { Authorization: await bearer("shlok") } });
+  expect((await response.json<TaskResponse>()).task.title).toBe("Task 7, renamed on GitHub");
+});
+
+it("a member re-check that finds the same answer asks GitHub, and writes no members row", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  const github = new FakeGitHub();
+  installGitHub(github);
+  // An open stream has its Person's access re-checked every 5 minutes.
+  const response = await call(`/api/stream?${await streamQuery("shlok")}`, { headers: { Upgrade: "websocket" } });
+  response.webSocket?.accept();
+  const checks = github.permissionChecks;
+  vi.setSystemTime(Date.now() + 5 * 60_000 + 1000);
+  const recheck = await rows(() => runDurableObjectAlarm(channelStub()));
+  expect(github.permissionChecks).toBe(checks + 1);
+  expect(recheck.writtenTo.members ?? 0).toBe(0);
+  response.webSocket?.close();
+});
+
+/** What `work` cost, with the Relay's Verdicts about the Event it returns the ID of, and how many Events it stored. */
+async function relayed(work: () => Promise<string>): Promise<Rows & { events: number }> {
+  const last = () => unmetered((sql) => sql.exec<{ seq: number }>("SELECT max(seq) AS seq FROM events").one().seq);
+  const before = await last();
+  let id = "";
+  const cost = await rows(
+    async () => {
+      id = await work();
+    },
+    () => verdictsAbout(id),
+  );
+  return { ...cost, events: (await last()) - before };
+}
+
+it("an Event that overlaps no other Agent writes itself and one verdict row, however many Agents it Drops", async () => {
+  const edit = () =>
+    relayed(async () => {
+      const event = hook("file.edit", { path: `src/solo-${nextId}.ts`, additions: 1, deletions: 0 });
+      meter.paused = true;
+      await sendHooks(measured, [event]);
+      return event.id;
+    });
+  const update = () =>
+    relayed(async () => {
+      const response = await call("/api/updates", {
+        method: "POST",
+        headers: { Authorization: await bearer({ person: "shlok", agent: measured }) },
+        body: JSON.stringify({ text: "Tidying the README" }),
+      });
+      return (await response.json<PostUpdateResponse>()).event.id;
+    });
+  const two = { edit: await edit(), update: await update() };
+  for (const prefix of ["7f3d", "7f3e"])
+    await heartbeat(await register(`${prefix}0000-0000-4000-8000-000000000000`), "live");
+  const four = { edit: await edit(), update: await update() };
+
+  for (const kind of ["edit", "update"] as const) {
+    // The source Event, and one verdict Event naming the 4 Agents it Dropped by rule.
+    expect(four[kind].events, kind).toBe(2);
+    // Each with its own index rows, as many as with 2 other Agents: nothing is written per Agent.
+    expect(four[kind].writtenTo.events, kind).toBe(two[kind].writtenTo.events);
+  }
+  const dropped = await unmetered((sql) =>
+    sql
+      .exec<{ payload: string }>("SELECT payload FROM events WHERE type = 'verdict' ORDER BY seq DESC LIMIT 1")
+      .toArray()
+      .map((row) => (JSON.parse(row.payload) as { agents?: AgentId[] }).agents),
+  );
+  expect(dropped[0]).toHaveLength(4);
+});
+
+it("retention listings and stream open read bounded rows", async () => {
+  const auth = { Authorization: await bearer("shlok") };
+  for (const path of ["/api/agents"]) {
+    const cost = await rows(async () => {
+      expect((await call(path, { headers: auth })).status).toBe(200);
+    });
+    expect(cost.read, path).toBeLessThan(BUDGET);
+    expect(cost.written, path).toBeLessThan(BUDGET);
+  }
+  const cost = await rows(async () => {
+    const response = await call(`/api/stream?${await streamQuery("shlok")}`, { headers: { Upgrade: "websocket" } });
+    response.webSocket?.accept();
+    response.webSocket?.close();
+  });
+  expect(cost.read).toBeLessThan(BUDGET);
+  expect(cost.written).toBeLessThan(BUDGET);
+});
+
+it("one retention alarm pass has bounded row costs", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  await unmetered((sql) => {
+    sql.exec("DELETE FROM alarm_deadlines");
+    sql.exec("INSERT INTO alarm_deadlines VALUES ('retention', 0)");
+  });
+  const cost = await rows(() => runDurableObjectAlarm(channelStub()));
+  expect(cost.read).toBeLessThan(400);
+  expect(cost.written).toBeLessThan(400);
+  expect(
+    await unmetered(
+      (sql) => sql.exec<{ n: number }>("SELECT count(*) AS n FROM agents WHERE presence = 'gone'").one().n,
+    ),
+  ).toBe(GONE_AGENTS - 10);
+  expect(
+    await unmetered(
+      (sql) => sql.exec<{ at: number }>("SELECT at FROM alarm_deadlines WHERE job = 'retention'").one().at,
+    ),
+  ).toBe(Date.now() + 60_000);
+  vi.setSystemTime(Date.now() + 60_000);
+  const followup = await rows(() => runDurableObjectAlarm(channelStub()));
+  expect(followup.read).toBeLessThan(400);
+  expect(followup.written).toBeLessThan(400);
+  expect(
+    await unmetered(
+      (sql) => sql.exec<{ n: number }>("SELECT count(*) AS n FROM agents WHERE presence = 'gone'").one().n,
+    ),
+  ).toBe(GONE_AGENTS - 20);
+
+  // A late page must seek through the index, rather than reading past all earlier rows.
+  await unmetered((sql) => {
+    const cursor = sql
+      .exec<{ seen: number; id: string }>(`
+      SELECT COALESCE(gone_at, last_seen_at) AS seen, id FROM agents
+      WHERE presence = 'gone' ORDER BY COALESCE(gone_at, last_seen_at) DESC, id DESC LIMIT 1 OFFSET 20
+    `)
+      .one();
+    sql.exec("INSERT OR REPLACE INTO agent_prune_cursor VALUES (1, ?, ?)", cursor.seen, cursor.id);
+    sql.exec("INSERT OR REPLACE INTO alarm_deadlines VALUES ('retention', 0)");
+  });
+  const late = await rows(() => runDurableObjectAlarm(channelStub()));
+  expect(late.read).toBeLessThan(400);
+  expect(late.written).toBeLessThan(400);
+});
+
+it("retention keeps Claims, recent Agents and referenced hand-offs, and leaves pruned Events", async () => {
+  const held = "shlok/claude/g0" as AgentId;
+  const recent = "shlok/claude/g1" as AgentId;
+  const predecessor = "shlok/claude/g10" as AgentId;
+  const removed = "shlok/claude/g4" as AgentId;
+  const lead = "shlok/claude/g5" as AgentId;
+  const parent = "shlok/claude/g6" as AgentId;
+  await runInDurableObject(channelStub(), (channel, state) => {
+    const sql = state.storage.sql;
+    // Put every protected row and the cleanup candidate inside the first batch.
+    for (const id of [held, predecessor, removed, lead, parent])
+      sql.exec("UPDATE agents SET last_seen_at = 1 WHERE id = ?", id);
+    sql.exec("UPDATE tasks SET holder_agent = ? WHERE number = 1", held);
+    sql.exec("UPDATE agents SET last_seen_at = ? WHERE id = ?", Date.now(), recent);
+    sql.exec("UPDATE agents SET continues = ?, parent = ? WHERE id = ?", predecessor, parent, measured);
+    sql.exec("UPDATE agents SET role = 'lead' WHERE id = ?", lead);
+    sql.exec("INSERT INTO touched_files VALUES (?, 'old.ts', 1, 'now', 'now', 1)", removed);
+    expect(channel.touchedFiles(removed)).toHaveLength(1);
+    sql.exec("INSERT INTO agent_tokens VALUES ('expired', ?, 'shlok', 0)", removed);
+    sql.exec("DELETE FROM alarm_deadlines");
+    sql.exec("INSERT INTO alarm_deadlines VALUES ('retention', 0)");
+  });
+  await runDurableObjectAlarm(channelStub());
+  await runInDurableObject(channelStub(), (channel, state) => {
+    const sql = state.storage.sql;
+    for (const id of [held, recent, predecessor, lead, parent])
+      expect(sql.exec("SELECT id FROM agents WHERE id = ?", id).toArray()).toHaveLength(1);
+    expect(channel.touchedFiles(removed)).toBeNull();
+    expect(sql.exec("SELECT * FROM touched_files WHERE agent = ?", removed).toArray()).toHaveLength(0);
+    expect(sql.exec("SELECT * FROM agent_tokens WHERE agent = ?", removed).toArray()).toHaveLength(0);
+  });
+  const auth = { Authorization: await bearer("shlok") };
+  const history = await call(`/api/events?agent=${encodeURIComponent(removed)}&tail=20`, { headers: auth });
+  expect((await history.json<{ events: ChannelEvent[] }>()).events.length).toBeGreaterThan(0);
+  const successor = await call("/api/agents", {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      cli: "claude-code",
+      sessionId: "abcd0000-0000-4000-8000-000000000000",
+      resumed: false,
+      cwd: "/repo",
+      continues: predecessor,
+    }),
+  });
+  expect(successor.status).toBe(200);
+  expect((await successor.json<AgentResponse>()).agent.continues).toBe(predecessor);
+});
+
+it("historical lookup includes every retained Gone Agent", async () => {
+  const cost = await rows(async () => {
+    const response = await call("/api/agents?include=gone", { headers: { Authorization: await bearer("shlok") } });
+    expect((await response.json<{ agents: unknown[] }>()).agents).toHaveLength(GONE_AGENTS + live.length);
+  });
+  expect(cost.read).toBeGreaterThanOrEqual(GONE_AGENTS);
+  expect(cost.written).toBe(0);
+});
+
+it("an idle Channel with only recent Gone Agents schedules no retention alarm within a day, including restarts", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  const started = Date.now();
+  await unmetered((sql) => {
+    sql.exec("UPDATE agents SET gone_at = ? WHERE presence = 'gone'", started);
+    sql.exec("DELETE FROM alarm_deadlines");
+    sql.exec("DELETE FROM channel_meta WHERE key = 'retention_started'");
+  });
+  const bootstrap = await rows(() =>
+    runInDurableObject(channelStub(), (_channel, state) => {
+      new Channel(state, env);
+    }),
+  );
+  expect(bootstrap.read).toBeLessThan(BUDGET);
+  expect(bootstrap.written).toBeLessThan(20);
+  const deadline = started + 7 * 86_400_000;
+  expect(
+    await unmetered(
+      (sql) => sql.exec<{ at: number }>("SELECT at FROM alarm_deadlines WHERE job = 'retention'").one().at,
+    ),
+  ).toBe(deadline);
+  for (let hour = 1; hour <= 24; hour++) {
+    vi.setSystemTime(started + hour * 3_600_000);
+    // No alarm fires in production before this deadline. The test helper would
+    // force an early alarm, so inspect the actual scheduled alarm instead.
+    const idle = await rows(() =>
+      runInDurableObject(channelStub(), async (_channel, state) => {
+        expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+      }),
+    );
+    expect(idle.read).toBe(0);
+    expect(idle.written).toBe(0);
+  }
+  const restarted = await rows(() =>
+    runInDurableObject(channelStub(), (_channel, state) => {
+      new Channel(state, env);
+    }),
+  );
+  expect(restarted.read).toBeLessThan(BUDGET);
+  expect(restarted.writtenTo.alarm_deadlines ?? 0).toBe(0);
+  expect(
+    await unmetered(
+      (sql) => sql.exec<{ at: number }>("SELECT at FROM alarm_deadlines WHERE job = 'retention'").one().at,
+    ),
+  ).toBe(deadline);
+});
+
+it("retention clears with no Gone Agents and going Gone schedules it again", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  await unmetered((sql) => {
+    sql.exec("DELETE FROM agents WHERE presence = 'gone'");
+    sql.exec("DELETE FROM alarm_deadlines");
+    sql.exec("INSERT INTO alarm_deadlines VALUES ('retention', 0)");
+  });
+  const empty = await rows(() => runDurableObjectAlarm(channelStub()));
+  expect(empty.read).toBeLessThan(BUDGET);
+  expect(empty.written).toBeLessThan(20);
+  await runInDurableObject(channelStub(), async (_channel, state) => {
+    expect(await state.storage.getAlarm()).toBeNull();
+  });
+  const restarted = await rows(() =>
+    runInDurableObject(channelStub(), (_channel, state) => {
+      new Channel(state, env);
+    }),
+  );
+  expect(restarted.read).toBeLessThan(BUDGET);
+  expect(restarted.writtenTo.alarm_deadlines ?? 0).toBe(0);
+  await runInDurableObject(channelStub(), async (_channel, state) => {
+    expect(await state.storage.getAlarm()).toBeNull();
+  });
+  expect(
+    (
+      await call(`${agentPath(measured)}/end`, {
+        method: "POST",
+        headers: { Authorization: await bearer("shlok") },
+        body: "{}",
+      })
+    ).status,
+  ).toBe(200);
+  const scheduled = await unmetered(
+    (sql) => sql.exec<{ at: number }>("SELECT at FROM alarm_deadlines WHERE job = 'retention'").one().at,
+  );
+  expect(scheduled).toBe(Date.now() + 7 * 86_400_000);
+});
+
+it("a short retention pass waits at least six hours for the next expiry", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  await unmetered((sql) => {
+    sql.exec("DELETE FROM agents WHERE presence = 'gone' AND id != 'shlok/claude/g0' AND id != 'shlok/claude/g1'");
+    sql.exec("UPDATE agents SET role = 'lead' WHERE id = 'shlok/claude/g0'");
+    sql.exec("UPDATE agents SET gone_at = ? WHERE id = 'shlok/claude/g1'", Date.now() - 7 * 86_400_000 + 3_600_000);
+    sql.exec("DELETE FROM alarm_deadlines");
+    sql.exec("INSERT INTO alarm_deadlines VALUES ('retention', 0)");
+  });
+  const cost = await rows(() => runDurableObjectAlarm(channelStub()));
+  expect(cost.read).toBeLessThan(BUDGET);
+  expect(cost.written).toBeLessThan(20);
+  expect(
+    await unmetered(
+      (sql) => sql.exec<{ at: number }>("SELECT at FROM alarm_deadlines WHERE job = 'retention'").one().at,
+    ),
+  ).toBe(Date.now() + 6 * 3_600_000);
+});
+
+/** Lost Claims waiting for Agents that never came back, as Takeovers of Gone Agents' Claims leave them. */
+const LOST_CLAIMS = 5000;
+
+it("a heartbeat hands over the Agent's lost Claims, reading only its own among thousands", async () => {
+  await unmetered((sql) => {
+    const lose = (n: number, agent: string) =>
+      sql.exec(
+        "INSERT INTO lost_claims (event, agent, seq, data) VALUES (?, ?, ?, ?)",
+        `lost-${n}`,
+        agent,
+        n,
+        JSON.stringify({ task: n, title: `Task ${n}`, by: "shlok", to: { kind: "person", person: "shlok" } }),
+      );
+    for (let n = 0; n < LOST_CLAIMS; n++) lose(n, `shlok/claude/g${n % GONE_AGENTS}`);
+    lose(LOST_CLAIMS + 1, measured);
+    lose(LOST_CLAIMS, measured);
+  });
+  let answer: AgentResponse | undefined;
+  const read = await rowsRead(async () => {
+    answer = await heartbeat(measured, "live");
+  });
+  expect(read).toBeLessThan(BUDGET);
+  expect(answer?.lostClaims?.map((claim) => claim.task)).toEqual([LOST_CLAIMS, LOST_CLAIMS + 1]);
+  expect((await heartbeat(measured, "live")).lostClaims).toBeUndefined();
+});
+
+/** Opens the Dashboard's stream from `after`: what that read, and what it sent before the Agents, its replay. */
+async function streamFrom(after: number): Promise<{ read: number; sent: StreamMessage[] }> {
+  let response: Response | undefined;
+  const read = await rowsRead(async () => {
+    response = await call(`/api/stream?${await streamQuery("shlok", { after: String(after) })}`, {
+      headers: { Upgrade: "websocket" },
+    });
+  });
+  const socket = response?.webSocket;
+  if (!socket) throw new Error("No WebSocket in the upgrade response");
+  const sent: StreamMessage[] = [];
+  socket.addEventListener("message", (message) => sent.push(JSON.parse(String(message.data)) as StreamMessage));
+  socket.accept();
+  await settled(async () => sent.some((m) => m.type === "agent"));
+  socket.close();
+  return {
+    read,
+    sent: sent.slice(
+      0,
+      sent.findIndex((m) => m.type === "agent"),
+    ),
+  };
+}
+
+it("a stream far behind is told to reload instead of replaying, and one a little behind replays what it missed", async () => {
+  const newest = await unmetered((sql) => sql.exec<{ seq: number }>("SELECT max(seq) AS seq FROM events").one().seq);
+  const far = await streamFrom(0);
+  expect(far.read).toBeLessThan(BUDGET);
+  expect(far.sent).toEqual([{ type: "reload" }]);
+  const near = await streamFrom(newest - 50);
+  expect(near.read).toBeLessThan(50 + BUDGET);
+  expect(near.sent.map((m) => (m.type === "event" ? m.event.seq : m.type))).toEqual(
+    Array.from({ length: 50 }, (_, i) => newest - 49 + i),
+  );
+});
+
+it("a Nickname is checked for a clash without reading every named Agent, and a clash is still refused", async () => {
+  await runInDurableObject(channelStub(), (channel) => {
+    const roster = (channel as unknown as { agents: AgentRoster }).agents;
+    const by = { actor: { kind: "person" as const, person: "shlok" }, capture: null };
+    for (let k = 0; k < GONE_AGENTS; k++) roster.rename(`shlok/claude/g${k}` as AgentId, `Gone-${k}`, by);
+  });
+  const rename = async (id: AgentId, nickname: string) =>
+    call(nicknamePath(id), {
+      method: "POST",
+      headers: { Authorization: await bearer("shlok") },
+      body: JSON.stringify({ nickname }),
+    });
+  const registered = await rows(async () => {
+    const response = await call("/api/agents", {
+      method: "POST",
+      headers: { Authorization: await bearer("shlok") },
+      body: JSON.stringify({
+        cli: "claude-code",
+        sessionId: "7f3d0000-0000-4000-8000-000000000000",
+        resumed: false,
+        cwd: "/repo",
+        nickname: "scout",
+      }),
+    });
+    expect((await response.json<AgentResponse>()).agent.nickname).toBe("scout");
+  });
+  expect(registered.read).toBeLessThan(BUDGET);
+  // A Gone Agent's name is free to take, whatever its case.
+  const taken = await rows(async () => expect((await rename(live[1] as AgentId, "gone-7")).status).toBe(200));
+  expect(taken.read).toBeLessThan(BUDGET);
+  const refused = await rows(async () => expect((await rename(live[2] as AgentId, "GONE-7")).status).toBe(409));
+  expect(refused.read).toBeLessThan(BUDGET);
+});
+
+it("an Agent Summary reads a bounded number of rows, and only the files it shows however many its Agent edited", async () => {
+  const summary = async () => {
+    let files: string[] = [];
+    const read = await rowsRead(async () => {
+      const response = await call(summaryPath(measured), { headers: { Authorization: await bearer("shlok") } });
+      files = (await response.json<AgentSummary>()).files;
+    });
+    return { read, files };
+  };
+  const hundred = await summary();
+  await unmetered((sql) => {
+    for (let f = TOUCHED_FILES; f < 1000; f++) {
+      sql.exec(
+        `INSERT INTO touched_files (agent, path, edits, first_edited_at, last_edited_at, last_seq)
+         VALUES (?, ?, 1, ?, ?, ?)`,
+        measured,
+        `src/more-${f}.ts`,
+        new Date().toISOString(),
+        new Date().toISOString(),
+        f,
+      );
+    }
+  });
+  const thousand = await summary();
+  // Its Task's open questions and dead ends are looked for among that Task's notes, not every note so tagged.
+  expect(hundred.read).toBeLessThan(BUDGET);
+  expect(thousand.read).toBe(hundred.read);
+  expect(thousand.files).toEqual(Array.from({ length: SUMMARY_MAX_FILES }, (_, i) => `src/more-${999 - i}.ts`));
+});
+
+/** The most Deliveries the Relay keeps for one Agent. */
+const MAX_PENDING_DELIVERIES = 200;
+
+it("a Queue for an Agent whose backlog is full reads a bounded number of rows, and keeps its newest", async () => {
+  // Its wrapper is gone, so nothing it was Queued is taken or acknowledged.
+  const waiting = live[1] as AgentId;
+  await unmetered((sql) => {
+    for (let i = 1; i <= MAX_PENDING_DELIVERIES; i++) {
+      sql.exec(
+        "INSERT INTO deliveries (id, agent, seq, data, place) VALUES (?, ?, ?, '{}', ?)",
+        `queued-${i}`,
+        waiting,
+        i,
+        i,
+      );
+    }
+  });
+  const verdicts = (id: string) =>
+    unmetered(
+      (sql) =>
+        sql
+          .exec<{ payload: string }>("SELECT payload FROM events WHERE type = 'verdict' ORDER BY seq DESC LIMIT 10")
+          .toArray()
+          .filter((row) => row.payload.includes(id)).length,
+    );
+  // The first Event the Relay considers reads each Agent's touched files once.
+  const first = hook("file.edit", { path: "src/file-1.ts", additions: 1, deletions: 0 });
+  await sendHooks(measured, [first]);
+  await settled(async () => (await verdicts(first.id)) === 2);
+  const edit = hook("file.edit", { path: "src/file-2.ts", additions: 1, deletions: 0 });
+  const read = await rowsRead(
+    async () => {
+      meter.paused = true;
+      await sendHooks(measured, [edit]);
+    },
+    async () => (await verdicts(edit.id)) === 2,
+  );
+  expect(read).toBeLessThan(BUDGET);
+  const backlog = await unmetered((sql) =>
+    sql
+      .exec<{ n: number; oldest: number }>(
+        "SELECT count(*) AS n, min(seq) AS oldest FROM deliveries WHERE agent = ?",
+        waiting,
+      )
+      .one(),
+  );
+  // The two it was Queued now, and the newest of the rest.
+  expect(backlog).toEqual({ n: MAX_PENDING_DELIVERIES, oldest: 3 });
+});
+
+it("retention clears a pruned Agent's queued rows, over passes that stay bounded", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  const removed = "shlok/claude/g4" as AgentId;
+  const QUEUED = 150;
+  await unmetered((sql) => {
+    sql.exec("DELETE FROM agents WHERE presence = 'gone' AND id != ?", removed);
+    for (let i = 1; i <= QUEUED; i++) {
+      sql.exec(
+        "INSERT INTO deliveries (id, agent, seq, data, place) VALUES (?, ?, ?, '{}', ?)",
+        `d-${i}`,
+        removed,
+        i,
+        i,
+      );
+      sql.exec("INSERT INTO directive_deliveries (id, agent, seq, data) VALUES (?, ?, ?, '{}')", `dd-${i}`, removed, i);
+      sql.exec("INSERT INTO lost_claims (event, agent, seq, data) VALUES (?, ?, ?, '{}')", `lc-${i}`, removed, i);
+    }
+    sql.exec("INSERT INTO interrupts (agent, at) VALUES (?, 0)", removed);
+    sql.exec("DELETE FROM alarm_deadlines");
+    sql.exec("INSERT INTO alarm_deadlines VALUES ('retention', 0)");
+  });
+  const kept = () =>
+    unmetered((sql) =>
+      ["deliveries", "directive_deliveries", "lost_claims", "interrupts"]
+        .map((table) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table} WHERE agent = ?`, removed).one().n)
+        .concat(sql.exec<{ n: number }>("SELECT count(*) AS n FROM agents WHERE id = ?", removed).one().n),
+    );
+  for (let pass = 0; pass < 20 && (await kept()).some((n) => n > 0); pass++) {
+    const cost = await rows(() => runDurableObjectAlarm(channelStub()));
+    expect(cost.read).toBeLessThan(400);
+    expect(cost.written).toBeLessThan(400);
+    // The next pass, when the Agent is still there to prune.
+    const next = await unmetered(
+      (sql) => sql.exec<{ at: number }>("SELECT at FROM alarm_deadlines WHERE job = 'retention'").toArray()[0]?.at,
+    );
+    if (next !== undefined) vi.setSystemTime(next);
+  }
+  expect(await kept()).toEqual([0, 0, 0, 0, 0]);
 });

@@ -5,8 +5,9 @@
 //    addressed to the Agent: an Update naming it in `to` (ADR 0026), its Task or
 //    its Claim changing. Directives never reach the Relay: they are addressed and
 //    always delivered (directives.ts).
-// 2. With neither, it Drops without asking Jev, and still records the Verdict
-//    (source "rule").
+// 2. With neither, it Drops without asking Jev (source "rule"). All of one Event's
+//    rule Drops are recorded together, as one `verdict` Event naming the Agents
+//    (ADR 0030), so the rows it writes do not grow with the number of Agents.
 // 3. Otherwise it asks Jev one choice question with structured state (issue #3).
 //    An Interrupt below the threshold becomes a Queue. Jev failing or timing out
 //    never loses the Event: it is Queued (source "fallback") and logged. An Update
@@ -17,9 +18,10 @@
 //    Interrupts, its wrapper is not connected, it had an Interrupt less than
 //    `interruptIntervalMs` ago, or the wrapper could not type it (its Person was
 //    typing, a dialog was open) or did not answer in time.
-// 5. Every Verdict is an Event (`verdict`, actor `relay`) with its probabilities,
-//    the state sent and how it was delivered. A Queue becomes a Delivery for the
-//    Agent's next turn.
+// 5. Every other Verdict is an Event of its own (`verdict`, actor `relay`) with its
+//    probabilities, the state sent and how it was delivered. A Queue becomes a
+//    Delivery for the Agent's next turn, and the Delivery and any Wake name the
+//    Verdict by its Event's ID.
 //
 // The Relay runs after the Event is stored, off the request that stored it, so it
 // never slows or breaks Event intake. It asks Jev about one Event's Agents
@@ -60,19 +62,44 @@ import { buildDelivery, diffText, summarizeEvent } from "./delivery";
 import { JEV_MODEL, type Jev, type JevAnswer, jevFor } from "./jev";
 import { corpusOf, eventFiles, overlapOf } from "./overlap";
 
-export const RELAY_SCHEMA = `
+const RELAY_SCHEMA = `
   CREATE TABLE IF NOT EXISTS deliveries (
     id TEXT PRIMARY KEY,
     agent TEXT NOT NULL,
     seq INTEGER NOT NULL,
-    data TEXT NOT NULL
+    data TEXT NOT NULL,
+    place INTEGER
   );
-  CREATE INDEX IF NOT EXISTS deliveries_by_agent ON deliveries (agent, seq);
   CREATE TABLE IF NOT EXISTS interrupts (
     agent TEXT PRIMARY KEY,
     at INTEGER NOT NULL
   );
 `;
+
+/**
+ * Creates the Relay's tables. Each Delivery keeps its `place` in its Agent's backlog:
+ * one past the newest's when it was queued. The Queue keeps the newest
+ * MAX_PENDING_DELIVERIES places, so trimming a full backlog reads only the rows it
+ * deletes, not the whole backlog.
+ */
+function createRelayTables(sql: SqlStorage): void {
+  sql.exec(RELAY_SCHEMA);
+  const columns = sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('deliveries')").toArray();
+  if (!columns.some((c) => c.name === "place")) {
+    sql.exec("ALTER TABLE deliveries ADD COLUMN place INTEGER");
+    // The backlogs kept before, placed in the order they are handed over.
+    sql.exec(`
+      UPDATE deliveries SET place = ranked.place
+      FROM (SELECT rowid AS row, row_number() OVER (PARTITION BY agent ORDER BY seq, rowid) AS place FROM deliveries)
+        AS ranked
+      WHERE deliveries.rowid = ranked.row
+    `);
+  }
+  sql.exec(`
+    CREATE INDEX IF NOT EXISTS deliveries_by_place ON deliveries (agent, place);
+    DROP INDEX IF EXISTS deliveries_by_agent;
+  `);
+}
 
 /** How long the Relay waits for Jev before it falls back to Queue. */
 export const JEV_TIMEOUT_MS = 5000;
@@ -96,7 +123,7 @@ export interface RelayHost {
   liveAgents(): Agent[];
   /** Agent `id`, Gone or not, or null when the Channel does not know it. */
   agent(id: AgentId): Agent | null;
-  /** The Tasks whose Claim an Agent holds. */
+  /** The Tasks not done whose Claim an Agent holds. */
   heldTasks(): Task[];
   task(number: TaskNumber): Task | null;
   touchedFiles(id: AgentId): TouchedFile[];
@@ -247,7 +274,9 @@ export class Relay {
   /** Interrupts sent to wrappers that have not answered yet, by Verdict ID. */
   private readonly waiting = new Map<string, WaitingInterrupt>();
 
-  constructor(private readonly host: RelayHost) {}
+  constructor(private readonly host: RelayHost) {
+    createRelayTables(host.sql);
+  }
 
   /** A new Event was stored. Gives its Verdicts after the current request, never in it. */
   consider(event: ChannelEvent): void {
@@ -265,7 +294,7 @@ export class Relay {
   /** Deliveries waiting for Agent `id`, handed over once. */
   takeDeliveries(id: AgentId): Delivery[] {
     return this.host.sql
-      .exec<DeliveryRow>("DELETE FROM deliveries WHERE agent = ? RETURNING *", id)
+      .exec<DeliveryRow>("DELETE FROM deliveries INDEXED BY deliveries_by_place WHERE agent = ? RETURNING *", id)
       .toArray()
       .sort((a, b) => a.seq - b.seq)
       .map((row) => JSON.parse(row.data) as Delivery);
@@ -285,18 +314,16 @@ export class Relay {
 
   private async relay(event: AgentDeliverable): Promise<void> {
     const plans = this.plan(event);
+    const dropped: AgentId[] = [];
     const asked: Plan[] = [];
     for (const plan of plans) {
       if (plan.overlap.files.length === 0 && plan.overlap.symbols.length === 0 && plan.addressed === null) {
-        this.record(event, plan, {
-          option: "drop",
-          delivered: "drop",
-          source: "rule",
-        });
+        dropped.push(plan.agent.id);
       } else {
         asked.push(plan);
       }
     }
+    if (dropped.length > 0) this.recordDrops(event, dropped);
     // Waiting on a wrapper to type an Interrupt does not hold up other Jev calls.
     await Promise.all(
       asked.map((plan) =>
@@ -429,6 +456,24 @@ export class Relay {
     );
   }
 
+  /** Records all of `event`'s rule Drops as one Verdict Event. Nothing reaches those Agents. */
+  private recordDrops(event: AgentDeliverable, agents: AgentId[]): void {
+    this.host.append(crypto.randomUUID(), {
+      type: "verdict",
+      actor: { kind: "relay" },
+      capture: null,
+      ...(event.task === undefined ? {} : { task: event.task }),
+      payload: {
+        event: event.id,
+        agents,
+        at: new Date().toISOString(),
+        option: "drop",
+        delivered: "drop",
+        source: "rule",
+      },
+    });
+  }
+
   private record(event: AgentDeliverable, plan: Plan, decision: Decision, id: string = crypto.randomUUID()): void {
     const verdict: Verdict = {
       event: event.id,
@@ -449,23 +494,31 @@ export class Relay {
     this.queue(plan.agent, this.delivery(id, event, plan, decision));
   }
 
-  /** Keeps a Delivery until the Agent's wrapper has it, and pushes it there now. */
+  /**
+   * Keeps a Delivery until the Agent's wrapper has it, and pushes it there now. A
+   * backlog past MAX_PENDING_DELIVERIES places loses its oldest.
+   */
   private queue(agent: Agent, delivery: Delivery): void {
     const { sql } = this.host;
-    sql.exec(
-      "INSERT INTO deliveries (id, agent, seq, data) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
-      delivery.id,
-      agent.id,
-      delivery.seq,
-      JSON.stringify(delivery),
-    );
-    sql.exec(
-      `DELETE FROM deliveries WHERE agent = ? AND id NOT IN
-         (SELECT id FROM deliveries WHERE agent = ? ORDER BY seq DESC LIMIT ?)`,
-      agent.id,
-      agent.id,
-      MAX_PENDING_DELIVERIES,
-    );
+    const queued = sql
+      .exec<{ place: number }>(
+        `INSERT INTO deliveries (id, agent, seq, data, place) VALUES (?, ?, ?, ?,
+           coalesce((SELECT max(place) FROM deliveries INDEXED BY deliveries_by_place WHERE agent = ?), 0) + 1)
+         ON CONFLICT (id) DO NOTHING RETURNING place`,
+        delivery.id,
+        agent.id,
+        delivery.seq,
+        JSON.stringify(delivery),
+        agent.id,
+      )
+      .toArray()[0];
+    if (queued !== undefined && queued.place > MAX_PENDING_DELIVERIES) {
+      sql.exec(
+        "DELETE FROM deliveries INDEXED BY deliveries_by_place WHERE agent = ? AND place <= ?",
+        agent.id,
+        queued.place - MAX_PENDING_DELIVERIES,
+      );
+    }
     this.host.sendTo(agent.person, { type: "delivery", agent: agent.id, deliveries: [delivery] });
   }
 
@@ -493,6 +546,10 @@ export class Relay {
     return agents.map((agent): Plan => {
       const held = tasks.filter((t) => t.claim?.holder.kind === "agent" && t.claim.holder.agentId === agent.id);
       const heldNumbers = new Set(held.map((t) => t.number));
+      // A done Task is not among the held ones, but an Event about it, such as its Issue
+      // closing, is still about a Task the Agent holds.
+      const holder = eventTask?.claim?.holder;
+      if (eventTask && holder?.kind === "agent" && holder.agentId === agent.id) heldNumbers.add(eventTask.number);
       const touched = this.host.touchedFiles(agent.id).map((f) => f.path);
       const own = recent.filter((code) => code.type === "push" && code.task !== null && heldNumbers.has(code.task));
       const taskFiles = [...new Set(own.flatMap((code) => code.files.map((f) => f.path)))];

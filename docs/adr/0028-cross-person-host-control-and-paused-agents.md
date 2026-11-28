@@ -50,10 +50,14 @@ An Agent started in a terminal has no supervisor that can reliably pause it and 
 
 ### Roster (shipped in 75d5827)
 
-`GET /api/agents` is the current roster: Live, Idle and Paused Agents, plus Gone Agents that still hold Claims. `?include=gone` returns the full history. A Gone Agent with a Stale Claim remains until a Person releases or takes over its Claim. Claims never expire on their own (ADR 0002).
+`GET /api/agents` is the current roster: Live, Idle and Paused Agents, plus Gone Agents that hold Claims on Tasks not done. `?include=gone` returns the full history. A Gone Agent with a Stale Claim remains until a Person releases or takes over its Claim. Claims never expire on their own (ADR 0002).
 
 ## Consequences
 
 Cross-Person control grants access to processes on another Person's machine, within the limits that Person installed there. The local file is the authority; the Channel copy only improves discoverability and errors, and the Dashboard toggles are one more way to write the file, gated by a key the owner trusted at the machine. The owner sees who requested each action. Pausing frees CLI resources without losing work, but a resumed CLI still has to accept its saved session; a missing or corrupt session yields a visible failure and a still-Paused Agent rather than a different Agent.
 
 Known limits: the Dashboard cannot share an Offline Host; the allow-list is the same for all four actions (there is no "may start but not stop"); a captured signed change can be replayed within five minutes until a higher sequence number is seen.
+
+## Amendment, 2026-10-28
+
+The roster counts only Claims on Tasks not done. A done Task keeps its Claim, but a Gone Agent whose Tasks are all done holds nothing being worked on, so it leaves the roster; `?include=gone` still returns it. Every Stale Claim is on a Task not done, so a Gone Agent holding one stays. Reading only those Tasks keeps the roster from reading every Task the Channel's Agents ever finished.

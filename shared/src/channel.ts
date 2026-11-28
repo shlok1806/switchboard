@@ -44,9 +44,15 @@ export interface ChannelSnapshot {
   olderBefore?: number;
 }
 
-/** Messages the Worker sends over the WebSocket (`/api/stream?after=<cursor>`). */
+/**
+ * Messages the Worker sends over the WebSocket (`/api/stream?after=<cursor>`). The stream
+ * first replays the Events after the cursor, unless it is more than `MAX_STREAM_REPLAY`
+ * behind: then it sends `reload` instead, and the client loads the snapshot again and
+ * follows the stream from its cursor.
+ */
 export type StreamMessage =
   | { type: "event"; event: ChannelEvent }
+  | { type: "reload" }
   | { type: "verdict"; verdict: Verdict }
   | { type: "agent"; agent: Agent }
   | { type: "task"; task: Task }
@@ -112,6 +118,12 @@ export interface PersonsResponse {
 
 /** Largest `limit` a history read accepts, and the default. */
 export const MAX_HISTORY_LIMIT = 1000;
+
+/**
+ * The most Events a stream replays after its cursor. The Dashboard's snapshot loads
+ * this many, so a client further behind reads no more by loading it again (`reload`).
+ */
+export const MAX_STREAM_REPLAY = MAX_HISTORY_LIMIT;
 
 /** Most Event IDs one `GET /api/events?ids=` names. */
 export const MAX_EVENT_IDS = 100;

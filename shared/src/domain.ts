@@ -482,9 +482,10 @@ export interface EventPayloads {
   "task.remove": { via: TaskSyncVia };
   /**
    * The Relay's Verdict for one Event and one Agent, with Jev's probabilities and the
-   * state Jev was sent. Recorded by the Relay (actor `relay`), never relayed itself.
+   * state Jev was sent, or all of one Event's rule Drops (ADR 0030). Recorded by the
+   * Relay (actor `relay`), never relayed itself. `verdictsOf` reads either as Verdicts.
    */
-  verdict: Verdict;
+  verdict: VerdictRecord;
 }
 
 /**
@@ -543,7 +544,7 @@ export interface Overlap {
  * Where a Verdict came from.
  * - `jev`: Jev was asked.
  * - `rule`: no overlap and nothing addressed to the Agent, so the Relay dropped
- *   without calling Jev (still recorded).
+ *   without calling Jev. Recorded with the Event's other rule Drops (`RuleDrops`).
  * - `fallback`: Jev failed or timed out, so the Relay queued the Event rather than lose it.
  */
 export type VerdictSource = "jev" | "rule" | "fallback";
@@ -656,6 +657,34 @@ export interface Verdict {
   /** Why Jev gave no answer, for a `fallback`. */
   error?: string;
   latencyMs?: number;
+}
+
+/**
+ * All of one Event's rule Drops, recorded as one `verdict` Event (ADR 0030): the
+ * Agents the Relay Dropped without asking Jev, because nothing overlapped and nothing
+ * was addressed to them. Nothing reached them, so no Delivery or Wake names it.
+ */
+export interface RuleDrops {
+  event: string;
+  /** Each Agent once. */
+  agents: AgentId[];
+  at: string;
+  option: "drop";
+  delivered: "drop";
+  source: "rule";
+}
+
+/**
+ * What one `verdict` Event records: one Agent's Verdict, or all of one Event's rule
+ * Drops. A Channel older than ADR 0030 also keeps a Verdict for each rule Drop.
+ */
+export type VerdictRecord = Verdict | RuleDrops;
+
+/** The Verdicts one `verdict` Event records, one for each Agent it names. */
+export function verdictsOf(record: VerdictRecord): Verdict[] {
+  if (!("agents" in record)) return [record];
+  const { agents, ...drop } = record;
+  return agents.map((agent) => ({ ...drop, agent, overlap: { files: [], symbols: [] } }));
 }
 
 /** Relay settings visible to Persons (`GET /api/relay`). Never carries a secret. */

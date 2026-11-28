@@ -4,7 +4,8 @@
 // through indexes instead of scanning the Events.
 //
 // Every query reaches its rows through an index: the notes by `seq` (the table's key),
-// by author, by Task, by tag, or the full-text index. Notes cost rows written, so a
+// by author, by Task, by tag, or the full-text index. A Task's notes with a tag are
+// read through the Task's index, the tag checked on each. Notes cost rows written, so a
 // Channel takes at most MEMORY_NOTES_PER_DAY of them per UTC day.
 
 import type { ChannelEvent, MemoryNote, MemoryQuery } from "../../shared/src/index";
@@ -106,8 +107,8 @@ export class Memory {
     const where: string[] = [];
     const args: (string | number)[] = [];
     let from = "memory_notes n";
-    // The column the newest-first order and the seq bounds read. With a tag it is the
-    // tag index's own, so a tag's notes are found in order without reading the others.
+    // The column the newest-first order and the seq bounds read. With a tag and no Task it
+    // is the tag index's own, so a tag's notes are found in order without reading the others.
     let key = "n.seq";
     if (query.q !== undefined) {
       const match = ftsQuery(query.q);
@@ -116,7 +117,13 @@ export class Memory {
       where.push("memory_fts MATCH ?");
       args.push(match);
     }
-    if (query.tag !== undefined) {
+    if (query.tag !== undefined && query.task !== undefined && query.q === undefined) {
+      // A Task's notes with a tag: the Task's own notes in order, each checked for the tag,
+      // so the read never walks the tag's notes on every other Task.
+      from = "memory_notes n INDEXED BY memory_notes_by_task";
+      where.push("EXISTS (SELECT 1 FROM memory_tags t WHERE t.tag = ? AND t.seq = n.seq)");
+      args.push(query.tag);
+    } else if (query.tag !== undefined) {
       from += " JOIN memory_tags t ON t.seq = n.seq";
       key = "t.seq";
       where.push("t.tag = ?");

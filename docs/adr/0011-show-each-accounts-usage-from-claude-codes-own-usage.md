@@ -37,3 +37,7 @@ An Accounts panel at the top of the Activity, Board and Agents views: one card p
 ## Compatibility
 
 Every field is optional. An older wrapper sends no usage and its Agents show none; an older Worker ignores the field, and the Dashboard shows no Accounts panel when `GET /api/accounts` is missing.
+
+## Amendment, 2026-10-28
+
+The Channel no longer keeps every reading. It keeps one only when it says something the account's latest reading does not: the same limits read again, at the next heartbeat or by another Agent on the account, write no row. So an account's history is each change over the day, and `GET /api/accounts` serves the latest 60 of them (`MAX_ACCOUNT_HISTORY`). The wrapper does not send a reading the Channel has already heard either. Cloudflare bills every row a Channel writes (ADR 0030).

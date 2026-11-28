@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useState, type CSSProperties, type ReactNode } from "react";
 
 /* ─────────────────────────────────────────────────────────
  * CODE BLOCK
@@ -158,6 +158,9 @@ export default function CodeBlock({
 
   const added = diff.filter((r) => r.type === "add").length;
   const removed = diff.filter((r) => r.type === "del").length;
+  // The gutter fits the widest line number: 20px holds one digit, and each more digit widens it.
+  const widest = isDiff ? Math.max(0, ...diff.map((r) => (r.type === "del" ? r.old : r.cur) ?? 0)) : lines.length;
+  const gutter = { "--gutter": `max(20px, calc(${String(widest).length}ch + 10px))` } as CSSProperties;
 
   return (
     <div className={`${className} overflow-hidden rounded-md bg-panel`}>
@@ -207,8 +210,8 @@ export default function CodeBlock({
       {/* body - equal 12px inset on top / left / right; lines wrap */}
       <div className="py-3 text-small leading-[1.65] text-ink-2">
         {isDiff ? (
-          <div className="relative">
-            <span className="pointer-events-none absolute inset-y-0 left-5 w-0.5 bg-hover" />
+          <div className="relative" style={gutter}>
+            <span className="pointer-events-none absolute inset-y-0 left-[var(--gutter)] w-0.5 bg-hover" />
             {diff.map((r, i) => {
               const add = r.type === "add";
               const del = r.type === "del";
@@ -217,7 +220,7 @@ export default function CodeBlock({
               return (
                 <div
                   key={i}
-                  className={`relative grid grid-cols-[20px_minmax(0,1fr)] items-start
+                  className={`relative grid grid-cols-[var(--gutter)_minmax(0,1fr)] items-start
                     ${add ? "bg-paper-2" : del ? "bg-paper-2" : ""}`}
                 >
                   {(add || del) && (
@@ -232,10 +235,10 @@ export default function CodeBlock({
             })}
           </div>
         ) : (
-          <div className="relative">
-            <span className="pointer-events-none absolute inset-y-0 left-5 w-0.5 bg-hover" />
+          <div className="relative" style={gutter}>
+            <span className="pointer-events-none absolute inset-y-0 left-[var(--gutter)] w-0.5 bg-hover" />
             {lines.map((line, i) => (
-              <div key={i} className="grid grid-cols-[20px_minmax(0,1fr)] items-start">
+              <div key={i} className="grid grid-cols-[var(--gutter)_minmax(0,1fr)] items-start">
                 <span className="select-none text-center text-small tabular-nums text-ink-3">{i + 1}</span>
                 <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">{/* taste-skill-ignore: a code line */}{highlight(line)}</code>
               </div>

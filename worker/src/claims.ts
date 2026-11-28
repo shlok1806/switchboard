@@ -336,7 +336,7 @@ export class Claims {
    * Channel. Each call that fails is recorded and the rest still run.
    */
   async mirror(
-    acting: Acting,
+    acting: { actor: Actor },
     change: Change,
     number: TaskNumber,
     calls: (gitHub: GitHub) => Promise<MirrorCall[]>,

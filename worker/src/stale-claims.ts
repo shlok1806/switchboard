@@ -37,6 +37,8 @@ import type { Caller, ClaimResult, Claims } from "./claims";
 import { holderPerson, lastUpdate } from "./status-comment";
 import type { Tasks } from "./tasks";
 
+// Lost Claims wait for Agents that may never come back, so every heartbeat and
+// registration finds its own Agent's through the index, not by reading them all.
 export const STALE_CLAIMS_SCHEMA = `
   CREATE TABLE IF NOT EXISTS lost_claims (
     event TEXT PRIMARY KEY,
@@ -44,6 +46,7 @@ export const STALE_CLAIMS_SCHEMA = `
     seq INTEGER NOT NULL,
     data TEXT NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS lost_claims_by_agent ON lost_claims (agent, seq);
 `;
 
 /** What the Channel lends this module. */
@@ -202,7 +205,7 @@ export class StaleClaims {
    */
   takeLostClaims(id: AgentId): LostClaim[] {
     const rows = this.host.sql
-      .exec<LostRow>("DELETE FROM lost_claims WHERE agent = ? RETURNING *", id)
+      .exec<LostRow>("DELETE FROM lost_claims INDEXED BY lost_claims_by_agent WHERE agent = ? RETURNING *", id)
       .toArray()
       .sort((a, b) => a.seq - b.seq);
     return rows.map((row) => JSON.parse(row.data) as LostClaim);

@@ -74,13 +74,14 @@ import {
   LIVE_PING,
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
+  MAX_STREAM_REPLAY,
   SUMMARY_MAX_FILES,
   SUMMARY_MAX_NOTES,
   SUMMARY_MAX_UPDATES,
   TRANSCRIPT_WAIT_MS,
 } from "../../shared/src/index";
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
-import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
+import { AgentRoster, createAgentsTable, type Heard, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
 import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
@@ -92,7 +93,7 @@ import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } fr
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
-import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
+import { interruptIntervalMs, interruptThreshold, Relay } from "./relay/relay";
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
 import { type NewTask, type TaskResult, Tasks, workingTasks } from "./tasks";
@@ -417,7 +418,6 @@ export class Channel extends DurableObject<Env> {
     createAgentsTable(ctx.storage.sql);
     this.usage = new AccountUsageStore(ctx.storage.sql);
     ctx.storage.sql.exec(HOOK_CAPTURE_SCHEMA);
-    ctx.storage.sql.exec(RELAY_SCHEMA);
     ctx.storage.sql.exec(DIRECTIVES_SCHEMA);
     ctx.storage.sql.exec(MEMORY_SCHEMA);
     const notesPerDay = Number(env.MEMORY_NOTES_PER_DAY);
@@ -432,6 +432,18 @@ export class Channel extends DurableObject<Env> {
       sql: ctx.storage.sql,
       gitHub: () => this.gitHub(),
       refused: (person) => this.closeSockets(person, 4003, "No longer a member of this Channel's repo."),
+      // When each Person's access was last checked rides on their sockets, through hibernation.
+      remember: (person, checkedAt) => {
+        const sockets = this.ctx.getWebSockets(person);
+        for (const ws of sockets) note(ws, { checkedAt });
+        return sockets.length > 0;
+      },
+      remembered: () =>
+        this.ctx.getWebSockets().flatMap((ws) => {
+          const [person] = this.ctx.getTags(ws);
+          const { checkedAt } = notes(ws);
+          return person === undefined || checkedAt === undefined ? [] : [[person, checkedAt] as const];
+        }),
     });
     this.tasks = new Tasks({
       storage: ctx.storage,
@@ -446,7 +458,25 @@ export class Channel extends DurableObject<Env> {
     this.agents = new AgentRoster({
       sql: ctx.storage.sql,
       schedulePresenceCheck: (at) => this.alarms.set("presence", at),
+      presenceCheckBy: (at) => this.alarms.wakeBy("presence", at),
+      retentionCheckBy: (at) => ctx.waitUntil(this.alarms.wakeBy("retention", at)),
       goneAfterMs: (goneAfterSeconds > 0 ? goneAfterSeconds : DEFAULT_GONE_AFTER_SECONDS) * 1000,
+      // What the roster heard and has not written rides on the Agent's wrapper sockets, through hibernation.
+      remember: (id, heard) => {
+        for (const ws of this.ctx.getWebSockets(agentTag(id))) note(ws, { heard });
+      },
+      forget: (id) => {
+        for (const ws of this.ctx.getWebSockets(agentTag(id))) note(ws, { heard: undefined });
+        this.closeSockets(agentTag(id), 4001, "Agent history expired.");
+      },
+      remembered: () =>
+        this.ctx.getWebSockets().flatMap((ws) => {
+          const [, tag] = this.ctx.getTags(ws);
+          const { heard } = notes(ws);
+          return !tag?.startsWith(AGENT_TAG) || heard === undefined
+            ? []
+            : [[tag.slice(AGENT_TAG.length) as AgentId, heard] as const];
+        }),
       append: (event) => this.append(event),
       broadcast: (message) => this.broadcast(message),
       presenceChanged: (id, presence) => {
@@ -528,6 +558,16 @@ export class Channel extends DurableObject<Env> {
     const transcriptWait = Number(env.TRANSCRIPT_WAIT_SECONDS);
     this.transcriptWaitMs = transcriptWait > 0 ? transcriptWait * 1000 : TRANSCRIPT_WAIT_MS;
     const wait = Number(env.HOST_SPAWN_WAIT_SECONDS);
+    // Bootstrap old Channels once. Restarts must leave an existing deadline alone,
+    // including a cleared job on a Channel with no Gone Agents.
+    const retentionStarted =
+      ctx.storage.sql
+        .exec("INSERT OR IGNORE INTO channel_meta (key, value) VALUES ('retention_started', '1') RETURNING key")
+        .toArray().length > 0;
+    if (retentionStarted) {
+      const next = this.agents.retentionDeadline();
+      if (next !== null) ctx.waitUntil(this.alarms.wakeBy("retention", next));
+    }
     this.hosts = new Hosts({
       sql: ctx.storage.sql,
       append: (event) => this.append(event),
@@ -566,6 +606,14 @@ export class Channel extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     const due = this.alarms.takeDue();
     try {
+      if (due.has("retention")) {
+        let left = PRUNE_ROWS;
+        const next = this.agents.prune((id) => {
+          left -= this.forgetAgentRows(id, left);
+          return !this.hasAgentRows(id);
+        });
+        await this.alarms.set("retention", next);
+      }
       if (due.has("tasks")) await this.tasks.alarm();
       if (due.has("presence")) await this.agents.expireSilent();
       if (due.has("members")) await this.recheckMembers();
@@ -574,6 +622,30 @@ export class Channel extends DurableObject<Env> {
     } finally {
       await this.alarms.arm();
     }
+  }
+
+  /** Deletes up to `count` of Agent `id`'s rows in `AGENT_TABLES`, retention pruning it: how many it deleted. */
+  private forgetAgentRows(id: AgentId, count: number): number {
+    this.hooks.forget(id);
+    let deleted = 0;
+    for (const table of AGENT_TABLES) {
+      if (deleted >= count) break;
+      deleted += this.ctx.storage.sql
+        .exec(
+          `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE agent = ? LIMIT ?) RETURNING 1`,
+          id,
+          count - deleted,
+        )
+        .toArray().length;
+    }
+    return deleted;
+  }
+
+  /** Whether any of `AGENT_TABLES` still has a row for Agent `id`. */
+  private hasAgentRows(id: AgentId): boolean {
+    return AGENT_TABLES.some(
+      (table) => this.ctx.storage.sql.exec(`SELECT 1 FROM ${table} WHERE agent = ? LIMIT 1`, id).toArray().length > 0,
+    );
   }
 
   /** The GitHub for this Channel's repo, or null when the App is not configured. */
@@ -773,7 +845,6 @@ export class Channel extends DurableObject<Env> {
     if (agent === null) return null;
     const tasks = this.tasks
       .held(id)
-      .filter((task) => task.status !== "done")
       .sort((a, b) => (b.claim?.claimedAt ?? "").localeCompare(a.claim?.claimedAt ?? "") || b.number - a.number);
     const updates = this.ctx.storage.sql
       .exec<{ payload: string; at: string; seq: number; task: number | null }>(
@@ -789,10 +860,7 @@ export class Channel extends DurableObject<Env> {
         text: (JSON.parse(row.payload) as { text: string }).text,
         ...(row.task === null ? {} : { task: row.task as TaskNumber }),
       }));
-    const files = this.hooks
-      .touchedFiles(id)
-      .slice(0, SUMMARY_MAX_FILES)
-      .map((file) => file.path);
+    const files = this.hooks.recentFiles(id, SUMMARY_MAX_FILES).map((file) => file.path);
     // Its own notes, and the open questions and dead ends anyone wrote on its Tasks.
     const notes = new Map<number, MemoryNote>();
     const add = (result: MemoryReadResult) => {
@@ -1295,7 +1363,7 @@ export class Channel extends DurableObject<Env> {
 
   /**
    * The latest `count` Events on Task `task` with `seq` below `before`, oldest first.
-   * Verdicts are left out, as from the index: there are many per Event, and the
+   * Verdicts are left out, as from the index: there may be several per Event, and the
    * Dashboard reads them with the Events they judge.
    */
   latestEventsOfTask(
@@ -1364,6 +1432,8 @@ export class Channel extends DurableObject<Env> {
    * admitted Person as `?person=`, the Agent when the stream was opened with an
    * Agent token as `?agent=`, and the resume cursor as `?after=`. An Agent's stream
    * is its wrapper's: only it may send that Agent's Hook and Proxy Events.
+   * A cursor more than `MAX_STREAM_REPLAY` Events behind is not replayed: the client
+   * is told to reload its snapshot, which reads no more than the replay would.
    */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -1391,9 +1461,11 @@ export class Channel extends DurableObject<Env> {
     // Everything below is synchronous, so no other Event can be appended
     // between the backlog and the live stream: none is missed or sent twice.
     if (after !== null) {
-      for (const event of this.history(Number(after), Number.MAX_SAFE_INTEGER)) {
-        send(server, { type: "event", event });
-      }
+      const newest = this.ctx.storage.sql
+        .exec<{ seq: number }>("SELECT seq FROM events ORDER BY seq DESC LIMIT 1")
+        .toArray()[0]?.seq;
+      if (newest !== undefined && newest - Number(after) > MAX_STREAM_REPLAY) send(server, { type: "reload" });
+      else for (const event of this.history(Number(after), MAX_STREAM_REPLAY)) send(server, { type: "event", event });
     }
     for (const agent of this.agents.list()) send(server, { type: "agent", agent });
     this.join(name);
@@ -1516,7 +1588,7 @@ export class Channel extends DurableObject<Env> {
       if (type === "interrupt.attach") {
         // Kept on the socket itself, so it survives hibernation and goes when the socket does.
         const attached: WrapperAttachment = { agent: agent as AgentId, at: Date.now() };
-        ws.serializeAttachment(attached);
+        note(ws, attached);
         // Tells the wrapper its Agent's Interrupts and Directives come here from now on.
         send(ws, { type: "interrupt.attached", agent: agent as AgentId });
         // And whether anyone watches its terminal, so a new run of the wrapper starts streaming.
@@ -1648,7 +1720,7 @@ export class Channel extends DurableObject<Env> {
     const watch = (ws.deserializeAttachment() as WatchAttachment | null)?.watch ?? [];
     const next = on ? (watch.includes(id) ? watch : [...watch, id]) : watch.filter((a) => a !== id);
     if (next.length > MAX_WATCHED) return;
-    ws.serializeAttachment({ watch: next } satisfies WatchAttachment);
+    note(ws, { watch: next } satisfies WatchAttachment);
     this.tellWatchers(id);
   }
 
@@ -1807,6 +1879,27 @@ export class Channel extends DurableObject<Env> {
   }
 }
 
+/**
+ * What retention deletes with a pruned Agent (ADR 0031), each table naming it in `agent`
+ * through an index: the files it edited, its Agent Tokens, and what waited for its next
+ * turn or its next Interrupt. Its Events stay: they are the Channel's history.
+ */
+const AGENT_TABLES = [
+  "touched_files",
+  "agent_tokens",
+  "deliveries",
+  "directive_deliveries",
+  "lost_claims",
+  "interrupts",
+] as const;
+
+/**
+ * The most rows one retention pass deletes for the Agents it prunes, so a pass stays
+ * bounded however much they left: deleting a row also reads and writes its index
+ * entries. An Agent with more is pruned on a later pass.
+ */
+const PRUNE_ROWS = 50;
+
 /** The tag on a WebSocket opened with an Agent's token. */
 const AGENT_TAG = "agent:";
 
@@ -1830,6 +1923,31 @@ interface HostAttachment {
 interface WrapperAttachment {
   agent: AgentId;
   at: number;
+}
+
+/**
+ * What the Channel keeps on a socket so it outlives this object's memory through
+ * hibernation, beside what the socket's kind carries.
+ */
+interface SocketNotes {
+  /** On an Agent's wrapper socket: what the roster heard from the Agent and may not have written. */
+  heard?: Heard;
+  /** On any of a Person's sockets: when the Person's access to the repo was last checked with GitHub. */
+  checkedAt?: number;
+}
+
+/** What `ws` carries. */
+function notes(ws: WebSocket): SocketNotes {
+  return (ws.deserializeAttachment() as SocketNotes | null) ?? {};
+}
+
+/** Adds `part` to what `ws` carries, keeping the rest. */
+function note(ws: WebSocket, part: SocketNotes | WrapperAttachment | WatchAttachment): void {
+  try {
+    ws.serializeAttachment({ ...notes(ws), ...part });
+  } catch {
+    // The socket is closing; what it carried goes with it.
+  }
 }
 
 const WRAPPER_DOWNGRADES: ReadonlySet<string> = new Set(["person-typing", "dialog-open", "session-not-ready"]);

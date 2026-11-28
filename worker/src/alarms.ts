@@ -7,7 +7,7 @@
 // and the one real alarm is always set to the earliest of them.
 
 /** The parts of the Channel that wake up on a timer. */
-export type AlarmJob = "tasks" | "presence" | "members" | "hosts" | "directives";
+export type AlarmJob = "tasks" | "presence" | "members" | "hosts" | "directives" | "retention";
 
 type DeadlineRow = { job: string; at: number };
 
@@ -31,6 +31,20 @@ export class Alarms {
   /** Sets (or, with null, clears) when `job` next wakes, and re-arms the alarm. */
   async set(job: AlarmJob, at: number | null): Promise<void> {
     if (this.deadline(job) === at) return;
+    await this.write(job, at);
+  }
+
+  /**
+   * Makes `job` wake by `at`: sets its deadline when it has none or a later one. An
+   * earlier one stands, so the job finds out then whether it still has work, and sets
+   * its next deadline itself.
+   */
+  async wakeBy(job: AlarmJob, at: number): Promise<void> {
+    const deadline = this.deadline(job);
+    if (deadline === null || at < deadline) await this.write(job, at);
+  }
+
+  private async write(job: AlarmJob, at: number | null): Promise<void> {
     if (at === null) this.storage.sql.exec("DELETE FROM alarm_deadlines WHERE job = ?", job);
     else this.storage.sql.exec("INSERT OR REPLACE INTO alarm_deadlines (job, at) VALUES (?, ?)", job, at);
     await this.arm();

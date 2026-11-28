@@ -50,6 +50,7 @@ import {
   rolePath,
   memoryQueryString,
   summaryPath,
+  verdictsOf,
 } from "@shared/index";
 import type {
   Capabilities,
@@ -281,7 +282,8 @@ export class HttpChannelSource implements ChannelSource {
       onState(retry === 0 ? "connecting" : "reconnecting");
       const url = new URL(`${this.base}/api/stream`, window.location.href);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      // The Worker replays every Event after `after`, so a reconnect misses nothing.
+      // The Worker replays the Events after `after`, so a reconnect misses nothing. One too
+      // far behind is told to `reload` instead, and the store loads the snapshot again.
       url.searchParams.set("after", String(last));
       socket = new WebSocket(url);
       this.socket = socket;
@@ -305,9 +307,9 @@ export class HttpChannelSource implements ChannelSource {
           return;
         }
         if (message.type === "event") last = Math.max(last, message.event.seq);
-        // A Verdict Event reaches the views as a Verdict, next to the Event it is about.
+        // A Verdict Event reaches the views as Verdicts, one per Agent, next to the Event they are about.
         if (message.type === "event" && message.event.type === "verdict") {
-          onMessage({ type: "verdict", verdict: message.event.payload });
+          for (const verdict of verdictsOf(message.event.payload)) onMessage({ type: "verdict", verdict });
           return;
         }
         onMessage(message);
@@ -509,12 +511,12 @@ function reasonOf(body: unknown, status: number): string {
   return body && typeof body === "object" && "reason" in body ? String(body.reason) : `HTTP ${status}`;
 }
 
-/** Separates the Relay's Verdict Events from the rest, keeping order. */
+/** Separates the Relay's Verdict Events from the rest, keeping order, as one Verdict per Agent. */
 function splitVerdicts(all: ChannelEvent[]): { events: ChannelEvent[]; verdicts: Verdict[] } {
   const events: ChannelEvent[] = [];
   const verdicts: Verdict[] = [];
   for (const e of all) {
-    if (e.type === "verdict") verdicts.push(e.payload);
+    if (e.type === "verdict") verdicts.push(...verdictsOf(e.payload));
     else events.push(e);
   }
   return { events, verdicts };

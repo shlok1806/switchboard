@@ -9,6 +9,10 @@
 // Channel's: anyone may change them while the Agent runs (ADR 0009). Registering
 // again within the session sends what the Channel last said, never what the
 // wrapper started with, so a change made meanwhile is not undone.
+//
+// A heartbeat carries the session's context (ADR 0012) and a usage reading only when
+// the Channel has not heard them: the context when it changed, or every
+// CONTEXT_REFRESH_MS so it does not look stale, and a reading once.
 
 import { randomUUID } from "node:crypto";
 import type {
@@ -20,6 +24,7 @@ import type {
   ReportedPresence,
   ReportedUsage,
 } from "../../shared/src/index";
+import { CONTEXT_REFRESH_MS, sameReading } from "../../shared/src/index";
 import { type ChannelClient, ChannelError } from "./channel-client";
 import type { NextTurnItems } from "./next-turn";
 
@@ -70,6 +75,9 @@ export class AgentLink {
   private usage: ReportedUsage | null = null;
   private usageUnsent = false;
   readContext?: () => Promise<{ context: AgentContext; usage?: ReportedUsage }>;
+  /** The context the Channel last heard from `readContext`, and when; and the usage reading it last heard from it. */
+  private heardContext: { context: AgentContext; at: number } | null = null;
+  private heardUsage: ReportedUsage | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
   private inFlight: Promise<void> = Promise.resolve();
 
@@ -171,6 +179,9 @@ export class AgentLink {
     });
     const { agent } = answer;
     if (this.usage === sentUsage) this.usageUnsent = false;
+    // A Channel that registers the Agent again may have forgotten it: the next heartbeat tells it everything.
+    this.heardContext = null;
+    this.heardUsage = null;
     this.agent = agent;
     this.known = agent;
     this.registered = true;
@@ -264,7 +275,20 @@ export class AgentLink {
         this.log(`context reading failed: ${error.message}`);
         return undefined;
       });
-      const answer = await this.client.heartbeat(id, this.presence, reading?.usage ?? usage, reading?.context);
+      const now = Date.now();
+      const heard = this.heardContext;
+      const context =
+        reading !== undefined &&
+        (heard === null ||
+          now - heard.at >= CONTEXT_REFRESH_MS ||
+          !sameReading(heard.context, reading.context, "readAt"))
+          ? reading.context
+          : undefined;
+      const read =
+        reading?.usage !== undefined && !sameReading(this.heardUsage, reading.usage) ? reading.usage : undefined;
+      const answer = await this.client.heartbeat(id, this.presence, read ?? usage, context);
+      if (context !== undefined) this.heardContext = { context, at: now };
+      if (read !== undefined) this.heardUsage = read;
       if (usage !== undefined && usage === this.usage) this.usageUnsent = false;
       this.agentChanged(answer.agent);
       this.handOver(answer);

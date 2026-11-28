@@ -2,13 +2,14 @@
 // wrapper and the Dashboard use it, against the real Worker and the real Channel
 // Durable Object running in memory.
 
-import { reset, runDurableObjectAlarm } from "cloudflare:test";
+import { evictDurableObject, reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   Agent,
   AgentId,
   AgentResponse,
+  AgentSummary,
   AgentsResponse,
   ChannelEvent,
   ErrorResponse,
@@ -20,6 +21,7 @@ import type {
   TaskListResponse,
 } from "../../shared/src/index";
 import { agentPath, approvalDenyPath, approvalPath, modelPath, nicknamePath } from "../../shared/src/index";
+import { createAgentsTable } from "../src/agents";
 import { installGitHub } from "../src/github/index";
 import { type As, bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
@@ -133,6 +135,31 @@ function person(name: string): FakePerson {
 /** Lets time pass for the Channel as well as the test: they share one isolate. */
 function advance(ms: number): void {
   vi.setSystemTime(Date.now() + ms);
+}
+
+/** An Agent's wrapper socket, opened with its token, that sends its Hook Events. */
+async function agentSocket(name: string, id: AgentId): Promise<{ hook(event: unknown): Promise<void>; close(): void }> {
+  const response = await call(`/api/stream?${await streamQuery({ person: name, agent: id })}`, {
+    headers: { Upgrade: "websocket" },
+  });
+  const socket = response.webSocket;
+  if (!socket) throw new Error("No WebSocket in the upgrade response");
+  socket.accept();
+  let sent = 0;
+  return {
+    async hook(event) {
+      sent += 1;
+      const eventId = `00000000-0000-4000-8000-${String(sent).padStart(12, "0")}`;
+      const acked = new Promise<void>((resolve) => {
+        socket.addEventListener("message", (message) => {
+          if (String(message.data).includes(eventId)) resolve();
+        });
+      });
+      socket.send(JSON.stringify({ type: "hook", agent: id, events: [{ id: eventId, ...(event as object) }] }));
+      await acked;
+    },
+    close: () => socket.close(),
+  };
 }
 
 afterEach(async () => {
@@ -377,8 +404,11 @@ describe("going Gone after silence", () => {
     expect(await runDurableObjectAlarm(channelStub())).toBe(true);
     expect(await shlok.agents()).toEqual([]);
     expect((await shlok.agents(true)).every((a) => a.presence === "gone")).toBe(true);
-    // With everyone Gone there is nothing left to watch.
-    expect(await runDurableObjectAlarm(channelStub())).toBe(false);
+    // Presence has nothing left to watch, but retention still has a future alarm.
+    await runInDurableObject(channelStub(), (_channel, state) => {
+      expect(state.storage.sql.exec("SELECT * FROM alarm_deadlines WHERE job = 'presence'").toArray()).toEqual([]);
+      expect(state.storage.sql.exec("SELECT * FROM alarm_deadlines WHERE job = 'retention'").toArray()).toHaveLength(1);
+    });
   });
 
   it("brings a Gone Agent back when it heartbeats again", async () => {
@@ -395,6 +425,84 @@ describe("going Gone after silence", () => {
       ["presence", id, "gone"],
       ["presence", id, "live"],
     ]);
+  });
+
+  it("counts every heartbeat and Hook Event, however recent, before it marks anyone Gone", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const shlok = person("shlok");
+    const { id } = await shlok.registered("5ee00000-0000-4000-8000-000000000000");
+    advance(60_000);
+    await shlok.heartbeat(id, "live");
+    advance(TEN_MINUTES - 30_000);
+    // Ten minutes after it registered, but its heartbeat was nine and a half minutes ago.
+    await runDurableObjectAlarm(channelStub());
+    expect((await shlok.agents())[0]?.presence).toBe("live");
+
+    const wrapper = await agentSocket("shlok", id);
+    await wrapper.hook({ type: "tool.call", payload: { tool: "Bash", arg: "npm test", ok: true } });
+    advance(TEN_MINUTES - 1000);
+    await runDurableObjectAlarm(channelStub());
+    expect((await shlok.agents())[0]?.presence).toBe("live");
+
+    advance(2000);
+    expect(await runDurableObjectAlarm(channelStub())).toBe(true);
+    expect((await shlok.agents(true))[0]?.presence).toBe("gone");
+    wrapper.close();
+  });
+
+  it("shows every reader when the Agent was last heard from, through hibernation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const shlok = person("shlok");
+    const { id } = await shlok.registered("5ea00000-0000-4000-8000-000000000000");
+    const wrapper = await agentSocket("shlok", id);
+    advance(60_000);
+    await shlok.heartbeat(id, "live");
+    const heard = new Date().toISOString();
+    advance(1000);
+    await wrapper.hook({ type: "tool.call", payload: { tool: "Read", arg: "README.md", ok: true } });
+    const hooked = new Date().toISOString();
+
+    const lastSeen = async () => ({
+      list: (await shlok.agents())[0]?.lastSeenAt,
+      summary: (
+        await (
+          await call(`${agentPath(id)}/summary`, { headers: { Authorization: await bearer("sam") } })
+        ).json<AgentSummary>()
+      ).agent.lastSeenAt,
+    });
+    expect(heard < hooked).toBe(true);
+    expect(await lastSeen()).toEqual({ list: hooked, summary: hooked });
+    const sam = person("sam");
+    await sam.subscribe();
+    expect((await sam.waitForAgent(id, "live")).lastSeenAt).toBe(hooked);
+
+    // The Channel hibernates while its sockets stay open: it still knows.
+    await evictDurableObject(channelStub());
+    expect(await lastSeen()).toEqual({ list: hooked, summary: hooked });
+    wrapper.close();
+  });
+
+  it("keeps an Agent that goes on heartbeating through a restart of the Channel, and lets it go once it stops", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const shlok = person("shlok");
+    const { id } = await shlok.registered("5e500000-0000-4000-8000-000000000000");
+    for (let beat = 0; beat < 19; beat++) {
+      advance(30_000);
+      await shlok.heartbeat(id, "live");
+    }
+    // A restart forgets everything the Channel held in memory, and closes every socket.
+    await evictDurableObject(channelStub(), { webSockets: "close" });
+    advance(30_000);
+    await runDurableObjectAlarm(channelStub());
+    expect((await shlok.agents())[0]?.presence).toBe("live");
+    await shlok.heartbeat(id, "live");
+    advance(TEN_MINUTES - 1000);
+    await runDurableObjectAlarm(channelStub());
+    expect((await shlok.agents())[0]?.presence).toBe("live");
+
+    advance(2000);
+    await runDurableObjectAlarm(channelStub());
+    expect((await shlok.agents(true))[0]?.presence).toBe("gone");
   });
 });
 
@@ -515,6 +623,24 @@ describe("Renaming and Account Labels (ADR 0009)", () => {
       { agent: scout.id, from: "Scout" },
       { agent: other.id, to: "scout" },
     ]);
+  });
+
+  it("finds a clash whatever the case, of any letter, and in Nicknames given before it kept them case-folded", async () => {
+    const shlok = person("shlok");
+    const eclair = await shlok.registered("aaaa0000-0000-4000-8000-000000000008", { nickname: "Éclair" });
+    const other = await shlok.registered("bbbb0000-0000-4000-8000-000000000008");
+    expect((await rename("shlok", other.id, "éclair")).status).toBe(409);
+
+    // A Channel from before the case-folded Nicknames: starting again keeps them from the Nicknames it has.
+    await runInDurableObject(channelStub(), (_channel, state) => {
+      state.storage.sql.exec("DROP INDEX agents_by_nickname");
+      state.storage.sql.exec("ALTER TABLE agents DROP COLUMN nickname_key");
+      createAgentsTable(state.storage.sql);
+    });
+    const clash = await rename("shlok", other.id, "ÉCLAIR");
+    expect(clash.status).toBe(409);
+    expect((await clash.json<ErrorResponse>()).reason).toContain(eclair.id);
+    expect((await rename("shlok", other.id, "Eclair")).status).toBe(200);
   });
 
   it("registers an Agent whose --nickname is taken, without the name, and says why", async () => {
@@ -770,7 +896,9 @@ describe("Denying a pending approval from the Channel (ADR 0014)", () => {
     if (!socket) throw new Error("No WebSocket");
     socket.accept();
     const frames: { type: string }[] = [];
-    socket.addEventListener("message", (message) => frames.push(JSON.parse(message.data as string)));
+    socket.addEventListener("message", (message) => {
+      frames.push(JSON.parse(message.data as string));
+    });
     socket.send(JSON.stringify({ type: "interrupt.attach", agent: as.agent }));
     await waitUntil(() => frames.find((f) => f.type === "interrupt.attached"));
     return { frames };

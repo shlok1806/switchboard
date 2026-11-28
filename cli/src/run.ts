@@ -356,6 +356,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     quietMs: seconds(env.SWITCHBOARD_INTERRUPT_QUIET_SECONDS, DEFAULT_QUIET_MS),
     waitMs: seconds(env.SWITCHBOARD_INTERRUPT_WAIT_SECONDS, DEFAULT_WAIT_MS),
     idleClears: adapter.idleClears,
+    vimMode: (await adapter.vimMode?.({ cwd, env, args: plan.args })) ?? false,
     log,
     onPersonPrompt: () => waker?.reset("the Person sent a prompt"),
     // Set below to the hook trust watch, once the CLI runs.

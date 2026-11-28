@@ -11,11 +11,12 @@ import type {
   Agent,
   AgentId,
   AgentResponse,
+  AgentSummary,
   AgentsResponse,
   ReportedUsage,
   StreamMessage,
 } from "../../shared/src/index";
-import { agentPath } from "../../shared/src/index";
+import { agentPath, MAX_ACCOUNT_HISTORY } from "../../shared/src/index";
 import { type As, bearer, forgetTokens, remember, streamQuery, url } from "./client";
 
 function call(path: string, init?: RequestInit): Promise<Response> {
@@ -86,7 +87,9 @@ async function subscribe(person: string): Promise<{ received: StreamMessage[]; c
   if (!socket) throw new Error("No WebSocket in the upgrade response");
   socket.accept();
   const received: StreamMessage[] = [];
-  socket.addEventListener("message", (m) => received.push(JSON.parse(m.data as string) as StreamMessage));
+  socket.addEventListener("message", (m) => {
+    received.push(JSON.parse(m.data as string) as StreamMessage);
+  });
   return { received, close: () => socket.close() };
 }
 
@@ -189,6 +192,42 @@ describe("Usage on the Channel (ADR 0011)", () => {
     expect(await accounts("shlok")).toEqual([]);
   });
 
+  it("keeps a reading that says what the account's latest one says once, while the Agent shows it was read again", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-10-07T05:00:00Z"), toFake: ["Date"] });
+    const agent = await register("shlok", "abab0000-0000-4000-8000-000000000001");
+    const first = Date.now();
+    await heartbeat(agent, reading(first, 70));
+    // A wrapper that sends its reading with every heartbeat.
+    await heartbeat(agent, reading(first, 70));
+    vi.setSystemTime(first + 5 * 60_000);
+    const again = await heartbeat(agent, reading(first + 5 * 60_000, 70));
+    expect(again.usage?.limits?.readAt).toBe(new Date(first + 5 * 60_000).toISOString());
+    vi.setSystemTime(first + 10 * 60_000);
+    await heartbeat(agent, reading(first + 10 * 60_000, 75));
+
+    const [account] = await accounts("shlok");
+    expect(account?.history).toEqual([
+      { at: new Date(first).toISOString(), session: 70, week: 44 },
+      { at: new Date(first + 10 * 60_000).toISOString(), session: 75, week: 44 },
+    ]);
+  });
+
+  it("serves each account's latest readings, at most MAX_ACCOUNT_HISTORY of them", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-10-07T05:00:00Z"), toFake: ["Date"] });
+    const agent = await register("shlok", "acac0000-0000-4000-8000-000000000001");
+    const first = Date.now();
+    const readings = MAX_ACCOUNT_HISTORY + 10;
+    for (let i = 0; i < readings; i++) {
+      vi.setSystemTime(first + i * 60_000);
+      await heartbeat(agent, reading(Date.now(), i));
+    }
+    const [account] = await accounts("shlok");
+    expect(account?.limits.session?.percent).toBe(readings - 1);
+    expect(account?.history.map((point) => point.session)).toEqual(
+      Array.from({ length: MAX_ACCOUNT_HISTORY }, (_, i) => readings - MAX_ACCOUNT_HISTORY + i),
+    );
+  });
+
   it("takes a reading sent with the registration", async () => {
     const agent = await register("shlok", "eeee0000-0000-4000-8000-000000000001", reading(Date.now(), 33));
     expect(agent.usage?.limits?.session?.percent).toBe(33);
@@ -229,6 +268,36 @@ describe("Context Reading on the Channel (ADR 0012)", () => {
     expect((await invalid.json<AgentResponse>()).agent.context).toEqual(context);
     watcher.close();
   });
+  it("shows an unchanged context with the stamp of its latest reading, and a changed one at once", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const agent = await register("shlok", "fefe0000-0000-4000-8000-000000000001");
+    const send = async (tokens: number) => {
+      const context = { readAt: new Date().toISOString(), tokens, window: 200000, task: "Fix redirect" };
+      const response = await post({ person: agent.person, agent: agent.id }, `${agentPath(agent.id)}/heartbeat`, {
+        presence: "live",
+        context,
+      });
+      expect(response.status).toBe(200);
+      return context;
+    };
+    const summary = async () =>
+      (
+        await (
+          await call(`${agentPath(agent.id)}/summary`, { headers: { Authorization: await bearer("ana") } })
+        ).json<AgentSummary>()
+      ).agent.context;
+
+    await send(1000);
+    vi.setSystemTime(Date.now() + 60_000);
+    const reread = await send(1000);
+    expect((await agentNamed("ana", agent.id))?.context).toEqual(reread);
+    expect(await summary()).toEqual(reread);
+
+    vi.setSystemTime(Date.now() + 60_000);
+    const grown = await send(5000);
+    expect((await agentNamed("ana", agent.id))?.context).toEqual(grown);
+  });
+
   it("serves Codex primary and weekly limits as a labelled account without inventing an email", async () => {
     const agent = await register("shlok", "fffe0000-0000-4000-8000-000000000001");
     const usage = {

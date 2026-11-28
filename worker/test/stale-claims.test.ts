@@ -133,6 +133,21 @@ afterEach(async () => {
 });
 
 describe("a Claim held by a Gone Agent", () => {
+  it("keeps its Gone holder on the roster until the Task is done", async () => {
+    const number = github.open({ title: "Claims" }).number;
+    const shlok = await agent("shlok");
+    await post(claimPath(number), shlok);
+    await end(shlok);
+    const roster = async () =>
+      (await (await call("/api/agents", { person: "shlok" })).json<AgentsResponse>()).agents.map((a) => a.id);
+    expect(await roster()).toContain(shlok.agent);
+
+    await deliver(github.close(number));
+    // A done Task keeps its Claim, but its holder holds nothing being worked on.
+    expect(await task(number)).toMatchObject({ status: "done", claim: { holder: byAgent(shlok.agent) } });
+    expect(await roster()).not.toContain(shlok.agent);
+  });
+
   it("is marked Stale, as an Event, when its session ends", async () => {
     const number = github.open({ title: "Claims" }).number;
     const other = github.open({ title: "Held by a Person" }).number;

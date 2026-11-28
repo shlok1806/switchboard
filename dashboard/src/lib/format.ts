@@ -223,7 +223,7 @@ export function summarize(e: ChannelEvent): string {
     case "terminal.attached":
       return `${e.payload.person} typed into the terminal (key ${e.payload.key})`;
     case "verdict":
-      return `${VERDICT_LABEL[e.payload.option]} for ${e.payload.agent}`;
+      return `${VERDICT_LABEL[e.payload.option]} for ${"agents" in e.payload ? e.payload.agents.join(", ") : e.payload.agent}`;
     case "agent.model": {
       const { from, to, effort } = e.payload;
       const effortNote = effort ? ` (effort ${effort})` : "";

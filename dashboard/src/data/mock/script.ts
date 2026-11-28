@@ -128,7 +128,7 @@ export const HISTORY: Beat[] = [
   beat(-4, "tool.call", SX, "hook", { tool: "apply_patch", arg: "AGENTS.md", ok: true }, { task: 19, turn: "shlokx-t12" }),
   // Codex reports a shell command's exit code; Claude Code does not.
   beat(-3.5, "command", SX, "hook", { command: "npm run lint", exitCode: 0 }, { task: 19, turn: "shlokx-t12" }),
-  beat(-4, "step.complete", SX, "tool", { step: 1, text: "Draft the rule" }, { task: 19, turn: "shlokx-t12" }),
+  beat(-3.25, "step.complete", SX, "tool", { step: 1, text: "Draft the rule" }, { task: 19, turn: "shlokx-t12" }),
   beat(-3, "presence", SX, null, { presence: "idle" }),
   beat(-2, "tool.call", S, "hook", { tool: "Read", arg: "web/src/api/client.ts", ok: true }, { task: 12 }),
   beat(-1, "tool.call", S, "hook", { tool: "Grep", arg: "getJson web/src", ok: true }, { task: 12 }),

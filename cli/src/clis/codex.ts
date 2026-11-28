@@ -319,7 +319,10 @@ export const codex: CliAdapter = {
   command: "codex",
   binEnv: "SWITCHBOARD_CODEX_BIN",
   interrupts: true,
-  // Not known to clear its composer on double Escape or Ctrl+C, so neither reads as clearing.
+  // Codex 0.165.0 kept a draft after double Escape in a real PTY. Ctrl+C cleared
+  // that idle draft, but a running turn and other composer modes are not verified.
+  // The shared idleClears switch enables both keys, so leave it off. A prompt hook
+  // releases an unknown line; local slash commands may stay guarded until then.
   idleClears: false,
   // Its Stop hook ends a turn, and a paste then Enter at its idle prompt starts one (ADR 0029).
   wakes: true,

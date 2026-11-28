@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { claudeVimMode } from "../src/clis/claude";
 import {
   codexHookAnswer,
   codexHookOverrides,
@@ -207,5 +208,37 @@ describe("Gemini CLI", () => {
     expect(JSON.parse(geminiHookAnswer("UserPromptSubmit", "told"))).toEqual({
       hookSpecificOutput: { hookEventName: "BeforeAgent", additionalContext: "told" },
     });
+  });
+});
+
+describe("Claude's editor mode at launch", () => {
+  it("ignores malformed settings while still reading valid sources", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sb-vim-"));
+    try {
+      const context = { cwd: dir, env: { CLAUDE_CONFIG_DIR: dir }, args: [] as string[] };
+      await writeFile(join(dir, "settings.json"), '{"editorMode":"normal",}');
+      await writeFile(join(dir, ".claude.json"), JSON.stringify({ editorMode: "vim" }));
+      await expect(claudeVimMode(context)).resolves.toBe(true);
+      await rm(join(dir, ".claude.json"));
+      await expect(claudeVimMode(context)).resolves.toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a private config directory and settings overrides without changing them", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sb-vim-"));
+    try {
+      const context = { cwd: dir, env: { CLAUDE_CONFIG_DIR: dir }, args: [] as string[] };
+      expect(await claudeVimMode(context)).toBe(false);
+      await writeFile(join(dir, ".claude.json"), JSON.stringify({ editorMode: "vim" }));
+      expect(await claudeVimMode(context)).toBe(true);
+      await writeFile(join(dir, "settings.json"), JSON.stringify({ editorMode: "normal" }));
+      expect(await claudeVimMode(context)).toBe(false);
+      expect(await claudeVimMode({ ...context, args: ["--setting-sources", ""] })).toBe(true);
+      expect(await claudeVimMode({ ...context, args: ["--settings", '{"editorMode":"vim"}'] })).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -22,6 +22,7 @@ import type {
   InterruptResult,
   ProxyEvent,
   RelayResponse,
+  RuleDrops,
   Task,
   TaskResponse,
   Verdict,
@@ -38,6 +39,7 @@ import {
   interruptNotice,
   releasePath,
   taskBranch,
+  verdictsOf,
   wakeCappedText,
 } from "../../shared/src/index";
 import type { ComparedFile } from "../src/github/index";
@@ -87,11 +89,13 @@ async function verdictEvents(): Promise<EventOf<"verdict">[]> {
   return (await events()).filter((e): e is EventOf<"verdict"> => e.type === "verdict");
 }
 
-/** Waits until the Relay has recorded `count` Verdicts on `event`, and returns them. */
+/** Waits until the Relay has recorded `count` Verdicts on `event`, and returns them, one per Agent. */
 async function verdictsOn(event: string, count: number): Promise<Verdict[]> {
   const deadline = Date.now() + 8000;
   for (;;) {
-    const found = (await verdictEvents()).filter((e) => e.payload.event === event).map((e) => e.payload);
+    const found = (await verdictEvents())
+      .filter((e) => e.payload.event === event)
+      .flatMap((e) => verdictsOf(e.payload));
     if (found.length >= count) return found;
     if (Date.now() > deadline) throw new Error(`Only ${found.length} of ${count} Verdicts on ${event}`);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -360,6 +364,45 @@ describe("Verdicts", () => {
     expect(alice.deliveries).toEqual([]);
   });
 
+  it("records all of one Event's rule Drops as one Verdict Event, and each Verdict Jev gave as its own (ADR 0030)", async () => {
+    const { alice, bob } = await twoAgents();
+    const carol = await FakeAgent.start("carol");
+    const dave = await FakeAgent.start("dave");
+    // On Alice's Task, so the Relay asks Jev about her; Carol and Dave share nothing with it.
+    const response = await post("/api/updates", "bob", { text: "I can help with names", task: 1 }, bob.id);
+    const update = (await response.json<{ event: ChannelEvent }>()).event;
+
+    const verdicts = await verdictsOn(update.id, 3);
+    expect(verdicts.find((v) => v.agent === alice.id)).toMatchObject({ source: "jev", option: "queue" });
+    for (const agent of [carol, dave]) {
+      expect(verdicts.find((v) => v.agent === agent.id)).toEqual({
+        event: update.id,
+        agent: agent.id,
+        at: expect.any(String),
+        option: "drop",
+        delivered: "drop",
+        source: "rule",
+        overlap: { files: [], symbols: [] },
+      });
+    }
+    expect(jev.calls.map((state) => state.agent.id)).toEqual([alice.id]);
+
+    const stored = (await verdictEvents()).filter((e) => e.payload.event === update.id);
+    expect(stored).toHaveLength(2);
+    const asked = stored.find((e) => "agent" in e.payload);
+    const drops = stored.find((e): e is EventOf<"verdict"> & { payload: RuleDrops } => "agents" in e.payload);
+    expect(drops).toMatchObject({
+      actor: { kind: "relay" },
+      task: 1,
+      payload: { event: update.id, option: "drop", delivered: "drop", source: "rule" },
+    });
+    expect([...(drops?.payload.agents ?? [])].sort()).toEqual([carol.id, dave.id].sort());
+    // Alice's Delivery names her own Verdict Event; the Agents Dropped by rule hear nothing.
+    const [delivery] = await waitFor(async () => (alice.deliveries.length > 0 ? alice.deliveries : undefined));
+    expect(delivery?.id).toBe(asked?.id);
+    expect([carol.deliveries, dave.deliveries]).toEqual([[], []]);
+  });
+
   it("asks Jev about overlap, with the Agent's work, the Event and the overlap as structured state", async () => {
     const { alice, bob, aliceBranch, bobBranch } = await twoAgents();
     // Alice's own pushed code calls formatName; she also touches the shared file.
@@ -507,6 +550,19 @@ describe("Verdicts", () => {
     expect(jev.calls[0]?.overlap.addressedToAgent).toBe("it is about Task #1, which you hold");
   });
 
+  it("asks Jev about its Task closing on GitHub, though the Task is done once it closes", async () => {
+    const { alice, bob } = await twoAgents();
+    await delivered(github.close(1));
+    const done = (await events()).find((e) => e.type === "task.done" && e.task === 1);
+    if (!done) throw new Error("No task.done Event");
+    const verdicts = await verdictsOn(done.id, 2);
+    expect(verdicts.find((v) => v.agent === alice.id)).toMatchObject({
+      source: "jev",
+      addressed: "it is about Task #1, which you hold",
+    });
+    expect(verdicts.find((v) => v.agent === bob.id)).toMatchObject({ source: "rule", option: "drop" });
+  });
+
   it("downgrades an Interrupt below the threshold to a Queue, and pushes one at or above it to the wrapper", async () => {
     const { alice, bob, bobBranch } = await twoAgents();
     await alice.edited("src/shared.ts");
@@ -553,7 +609,7 @@ describe("Verdicts", () => {
     expect((await alice.heartbeat()).deliveries?.map((d) => d.event)).toEqual([unsure.id]);
   });
 
-  it("stores every Verdict as an Event from the Relay, with its probabilities, source and state", async () => {
+  it("stores each Verdict Jev gave as an Event from the Relay, with its probabilities, source and state", async () => {
     const { alice, bobBranch } = await twoAgents();
     await alice.edited("src/shared.ts");
     const push = await pushed(bobBranch, "Rename formatName", [RENAME]);
@@ -605,7 +661,9 @@ describe("Verdicts", () => {
     let verdicts: Verdict[] = [];
     while (verdicts.length === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
-      verdicts = (await verdictEvents()).filter((e) => e.payload.event === push.id).map((e) => e.payload);
+      verdicts = (await verdictEvents())
+        .filter((e) => e.payload.event === push.id)
+        .flatMap((e) => verdictsOf(e.payload));
     }
     expect(verdicts[0]).toMatchObject({ source: "fallback", option: "queue" });
     expect(verdicts[0]?.error).toMatch(/timed out|timeout|abort/i);
@@ -1084,6 +1142,32 @@ describe("Idle wake", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect((await verdictEvents()).filter((v) => v.payload.event === wake?.id)).toEqual([]);
     expect(jev.calls.length).toBe(asked);
+  });
+
+  it("records a Wake naming a Queued Verdict, never the rule Drops on the same Event", async () => {
+    const { alice, bobBranch } = await twoAgents();
+    const carol = await FakeAgent.start("carol");
+    await alice.edited("src/shared.ts");
+    const push = await pushed(bobBranch, "Rename formatName", [RENAME]);
+    const [delivery] = await waitFor(async () => (alice.deliveries.length > 0 ? alice.deliveries : undefined));
+    if (!delivery) throw new Error("No Delivery");
+    const drops = await waitFor(async () =>
+      (await verdictEvents()).find((e) => e.payload.event === push.id && "agents" in e.payload),
+    );
+    expect(drops.payload).toMatchObject({ agents: [carol.id] });
+
+    // Nothing reached Carol, so naming the rule Drops wakes her for nothing.
+    carol.send({ type: "wake", agent: carol.id, deliveries: [drops.id], directives: [] });
+    alice.send({ type: "wake", agent: alice.id, deliveries: [drops.id, delivery.id], directives: [] });
+    const [wake] = await waitFor(async () => {
+      const found = await wakes();
+      return found.length > 0 ? found : undefined;
+    });
+    expect(wake?.payload).toEqual({ verdicts: [delivery.id], events: [push.id], directives: [] });
+    const named = (await verdictEvents()).find((e) => e.id === wake?.payload.verdicts[0]);
+    expect(named?.payload).toMatchObject({ event: push.id, agent: alice.id, delivered: "queue" });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await wakes()).toHaveLength(1);
   });
 
   it("records the Directives a Wake typed, when they were for that Agent", async () => {

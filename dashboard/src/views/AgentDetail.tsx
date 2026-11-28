@@ -53,23 +53,29 @@ export function AgentDetail({ id, focus }: { id: string; focus?: "directive" }) 
   }, [current, id, store]);
   const agent = current ?? historical;
   if (agent === undefined) return null;
-  if (!agent) {
-    return (
-      <ErrorPage
-        missing
-        title="No such Agent"
-        reason={id}
-        actions={
-          <a href={href({ view: "agents" })} className={buttonVariants({ variant: "primary" })}>
-            Back to Agents
-          </a>
-        }
-      >
-        No Agent on this Channel has that ID.
-      </ErrorPage>
-    );
-  }
+  if (!agent) return <PastAgent id={id as AgentId} />;
   return <AgentPage key={agent.id} agent={agent} focus={focus} />;
+}
+
+/** Retention removes roster details, but the Agent's Events remain readable. */
+function PastAgent({ id }: { id: AgentId }) {
+  const matches = useCallback((event: ChannelEvent) =>
+    (event.actor.kind === "agent" && event.actor.agentId === id) ||
+    (event.type === "directive" && event.payload.to === id) ||
+    (event.type === "agent.rename" && event.payload.agent === id) ||
+    (event.type === "agent.handoff" && event.payload.from === id), [id]);
+  const scoped = useScopedHistory({ agent: id }, matches);
+  if (!scoped.loading && scoped.events.length === 0) return <ErrorPage missing title="No such Agent" reason={id}
+    actions={<a href={href({ view: "agents" })} className={buttonVariants({ variant: "primary" })}>Back to Agents</a>}>
+    No Agent on this Channel has that ID.
+  </ErrorPage>;
+  return <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
+    <div><h1 className="text-xl text-ink">{id}</h1>
+      <p className="text-row text-ink-3">This Agent is no longer in the roster. Its recorded Events remain below.</p>
+      <a href={href({ view: "agents" })} className={buttonVariants({ variant: "primary" })}>Back to Agents</a>
+    </div>
+    <History scoped={scoped} />
+  </div>;
 }
 
 function AgentPage({ agent, focus }: { agent: Agent; focus?: "directive" }) {

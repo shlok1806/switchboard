@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentId,
   ChannelEvent,
   Overlap,
   RelayConfig,
@@ -7,6 +8,7 @@ import type {
   Verdict,
   VerdictOption,
   VerdictProbabilities,
+  VerdictRecord,
 } from "@shared/index";
 import { DEFAULT_INTERRUPT_INTERVAL_SECONDS, DEFAULT_INTERRUPT_THRESHOLD, UNRELAYED_EVENT_TYPES } from "@shared/index";
 import { AGENT_FILES, AGENT_SYMBOLS } from "./fixtures";
@@ -61,15 +63,17 @@ const pick = (p: VerdictProbabilities): VerdictOption =>
 /**
  * A stand-in for the Relay: overlap in code first, skip Jev when there is none,
  * otherwise use scripted or heuristic probabilities, then apply the threshold
- * and the CLI downgrade exactly as the spec describes.
+ * and the CLI downgrade exactly as the spec describes. Records what the Relay
+ * records: the rule Drops together, then each Verdict Jev gave (ADR 0030).
  */
 export function relay(
   event: ChannelEvent,
   agents: Agent[],
   tasks: Task[],
   scripted: Record<string, VerdictProbabilities> = {},
-): Verdict[] {
+): VerdictRecord[] {
   const verdicts: Verdict[] = [];
+  const dropped: AgentId[] = [];
   // As the real Relay: no Verdicts on Directives (addressed and always delivered), model
   // context, or per-call lifecycle Events such as tool calls and commands.
   if (UNRELAYED_EVENT_TYPES.includes(event.type)) return verdicts;
@@ -98,15 +102,7 @@ export function relay(
     }
 
     if (!probabilities) {
-      verdicts.push({
-        event: event.id,
-        agent: agent.id,
-        at: event.at,
-        option: "drop",
-        delivered: "drop",
-        source: "rule",
-        overlap,
-      });
+      dropped.push(agent.id);
       continue;
     }
 
@@ -139,5 +135,6 @@ export function relay(
       latencyMs: 170 + Math.round(Math.random() * 60),
     });
   }
-  return verdicts;
+  if (dropped.length === 0) return verdicts;
+  return [{ event: event.id, agents: dropped, at: event.at, option: "drop", delivered: "drop", source: "rule" }, ...verdicts];
 }

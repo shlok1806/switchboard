@@ -87,6 +87,8 @@ export class FakeGitHub implements GitHub {
   readonly calls: MirrorCall[] = [];
   /** Writes that fail, as when GitHub is down or the token lacks a permission. */
   readonly failing = new Set<MirrorMethod>();
+  /** Runs once a pull request exists but before GitHub answers for it, as when its webhook gets there first. */
+  beforePullRequestAnswers: ((pr: PullRequestRef) => Promise<void>) | undefined;
   private readonly issues = new Map<TaskNumber, FakeIssue>();
   private readonly pulls = new Map<number, FakePullRequest>();
   /** The newest commit of each branch. */
@@ -390,7 +392,9 @@ export class FakeGitHub implements GitHub {
     const open = [...this.pulls.values()].find((pr) => pr.state === "open" && pr.head === input.head);
     const pr: FakePullRequest = open ?? { number: this.nextNumber++, ...input, state: "open" };
     this.pulls.set(pr.number, pr);
-    return { number: pr.number, url: `https://github.com/${this.repo}/pull/${pr.number}` };
+    const ref = { number: pr.number, url: `https://github.com/${this.repo}/pull/${pr.number}` };
+    await this.beforePullRequestAnswers?.(ref);
+    return ref;
   }
 
   async compare(base: string, head: string): Promise<Comparison> {

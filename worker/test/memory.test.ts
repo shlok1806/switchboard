@@ -260,6 +260,45 @@ describe("Reading notes", () => {
     expect((await asAgent.json<MemoryResponse>()).notes.map((n) => n.text)).toEqual(["Three", "Two", "One"]);
   });
 
+  it("narrows a Task's notes by tag, newest first, with the other narrowings and bounds", async () => {
+    const alice = await register("alice");
+    const bob = await register("bob");
+    const one = await noted("alice", alice, { text: "Is the cache per tenant?", tags: ["question"], task: 3 });
+    await noted("bob", bob, { text: "The cache is per tenant.", tags: ["fact"], task: 3 });
+    await noted("bob", bob, { text: "Is retry idempotent?", tags: ["question"], task: 4 });
+    await noted("bob", bob, { text: "Does the key hold the region?", tags: ["question", "dead-end"], task: 3 });
+    const five = await noted("alice", alice, { text: "Who owns eviction?", tags: ["question"], task: 3 });
+
+    expect(await read({ task: 3, tag: "question" })).toEqual([
+      "Who owns eviction?",
+      "Does the key hold the region?",
+      "Is the cache per tenant?",
+    ]);
+    expect(await read({ task: 3, tag: "question", limit: 2 })).toEqual([
+      "Who owns eviction?",
+      "Does the key hold the region?",
+    ]);
+    const more = async (query: MemoryQuery) =>
+      (await (await get(memoryQueryString(query), "dashboard")).json<MemoryResponse>()).more;
+    expect(await more({ task: 3, tag: "question", limit: 2 })).toBe(true);
+    expect(await more({ task: 3, tag: "question", limit: 3 })).toBeUndefined();
+    expect(await read({ task: 3, tag: "question", after: one.note.seq })).toEqual([
+      "Who owns eviction?",
+      "Does the key hold the region?",
+    ]);
+    expect(await read({ task: 3, tag: "question", before: five.note.seq })).toEqual([
+      "Does the key hold the region?",
+      "Is the cache per tenant?",
+    ]);
+    expect(await read({ task: 3, tag: "question", author: alice })).toEqual([
+      "Who owns eviction?",
+      "Is the cache per tenant?",
+    ]);
+    expect(await read({ task: 3, tag: "dead-end" })).toEqual(["Does the key hold the region?"]);
+    expect(await read({ task: 4, tag: "fact" })).toEqual([]);
+    expect(await read({ task: 3, tag: "question", q: "region" })).toEqual(["Does the key hold the region?"]);
+  });
+
   it("searches the text and the files, every word required, and reads search syntax as plain words", async () => {
     const agent = await register("alice");
     await noted("alice", agent, {

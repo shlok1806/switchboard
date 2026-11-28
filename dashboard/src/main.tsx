@@ -88,7 +88,7 @@ function Root() {
       const speed = Number(params.get("speed") ?? "1");
       const fleet = Number(params.get("agents") ?? "0");
       // `?state=` draws a Channel in that state for the screenshot tests, on a stopped clock.
-      const MOCK_STATES = ["ready", "loading", "empty", "error", "read-error"] as const;
+      const MOCK_STATES = ["ready", "loading", "empty", "error", "read-error", "reloading"] as const;
       const state = MOCK_STATES.find((s) => s === params.get("state"));
       void (async () => {
         if (state) (await import("@/data/mock/clock")).freezeClock("2026-10-15T10:00:00.000Z");

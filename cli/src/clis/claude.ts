@@ -10,12 +10,15 @@
 // - Proxy Capture: ANTHROPIC_BASE_URL, and ENABLE_TOOL_SEARCH so the proxy does not
 //   turn tool search off (see toolSearchSetting).
 
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "../claude-session";
 import { withMcpConfig, writeClaudeMcpConfig } from "../mcp-config";
 import { anthropicMessages } from "../proxy/anthropic";
 import { claudeEnvSetting, originalBaseUrl } from "../proxy/options";
 import { applySessionSettings } from "../session-settings";
-import type { CliAdapter, ProxyRoute } from "./adapter";
+import type { CliAdapter, ProxyRoute, SessionContext } from "./adapter";
 
 export const claude: CliAdapter = {
   cli: "claude-code",
@@ -23,7 +26,10 @@ export const claude: CliAdapter = {
   command: "claude",
   binEnv: "SWITCHBOARD_CLAUDE_BIN",
   interrupts: true,
+  // Unverified: an autonomous turn with no hook before Stop would leave idle
+  // stale. Do not infer such a turn from keys; keep normal idle clears (#52).
   idleClears: true,
+  vimMode: claudeVimMode,
   wakes: true,
   remoteDeny: true,
   memoryNudges: ["stop", "compaction"],
@@ -84,4 +90,42 @@ async function toolSearchSetting(env: NodeJS.ProcessEnv, route?: ProxyRoute): Pr
   if (route?.upstream !== anthropicMessages.defaultUpstream) return {};
   if ((await claudeEnvSetting(env, claudeConfigDir(env), "ENABLE_TOOL_SEARCH")) !== undefined) return {};
   return { ENABLE_TOOL_SEARCH: "true" };
+}
+
+/**
+ * Read once at launch. Claude Code keeps editorMode in its legacy user config,
+ * with settings overriding it. Changes through /config during a session are not
+ * observed: restart the wrapper after changing editor mode. Custom keybindings
+ * are not modeled.
+ */
+export async function claudeVimMode({ cwd, env, args }: SessionContext & { args: string[] }): Promise<boolean> {
+  const dir = claudeConfigDir(env);
+  const legacy = env.CLAUDE_CONFIG_DIR ? join(dir, ".claude.json") : join(env.HOME || homedir(), ".claude.json");
+  let mode: unknown;
+  async function read(value: string, inline = false): Promise<void> {
+    try {
+      const settings = JSON.parse(inline ? value : await readFile(value, "utf8"));
+      if (settings.editorMode === "vim" || settings.editorMode === "normal" || settings.editorMode === "emacs") {
+        mode = settings.editorMode;
+      }
+    } catch {
+      // An unreadable or malformed source says nothing about editor mode.
+    }
+  }
+  await read(legacy);
+  const flag = (name: string): string | undefined => {
+    const end = args.indexOf("--");
+    const flags = end < 0 ? args : args.slice(0, end);
+    const at = flags.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+    if (at < 0) return undefined;
+    return flags[at] === name ? flags[at + 1] : flags[at]?.slice(name.length + 1);
+  };
+  const sources = new Set((flag("--setting-sources") ?? "user,project,local").split(","));
+  if (sources.has("user")) await read(join(dir, "settings.json"));
+  if (sources.has("project")) await read(join(cwd, ".claude", "settings.json"));
+  if (sources.has("local")) await read(join(cwd, ".claude", "settings.local.json"));
+  const own = flag("--settings");
+  if (own !== undefined)
+    await read(own.trimStart().startsWith("{") ? own : resolve(cwd, own), own.trimStart().startsWith("{"));
+  return mode === "vim";
 }

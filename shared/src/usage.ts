@@ -60,7 +60,7 @@ export interface AgentUsage {
   plan?: string;
   limits?: LimitsReading;
   session?: SessionUsage;
-  /** When the Channel last heard it (ISO), set by the Channel. */
+  /** When the Channel first heard this reading (ISO), set by the Channel. Hearing it again changes nothing. */
   reportedAt: string;
 }
 
@@ -81,8 +81,9 @@ export interface UsagePoint {
 export interface AccountUsage {
   email: string;
   plan?: string;
+  /** The latest reading: `readAt` is when the account's limits were first read as they are now. */
   limits: LimitsReading;
-  /** Oldest first, over the last `ACCOUNT_HISTORY_MS`. */
+  /** Oldest first: each change over the last `ACCOUNT_HISTORY_MS`, the latest `MAX_ACCOUNT_HISTORY` of them. */
   history: UsagePoint[];
 }
 
@@ -93,6 +94,9 @@ export interface AccountsResponse {
 
 /** How long the Channel keeps an account's readings, for its history. */
 export const ACCOUNT_HISTORY_MS = 24 * 60 * 60_000;
+
+/** The most readings an account's history carries: enough for its sparkline, and a bounded read. */
+export const MAX_ACCOUNT_HISTORY = 60;
 
 /** How long a Claude session window lasts: a session limit resets this long after it starts. */
 export const SESSION_WINDOW_MS = 5 * 60 * 60_000;
@@ -173,6 +177,26 @@ function session(value: unknown): SessionUsage | undefined {
     cacheWriteTokens: count(raw.cacheWriteTokens) ?? 0,
     ...(typeof cost === "number" && Number.isFinite(cost) && cost >= 0 && cost < 1e7 ? { costUsd: cost } : {}),
   };
+}
+
+/** `value` as JSON with every object's keys sorted, so two readings compare by what they say. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
+}
+
+/**
+ * Whether two readings (a usage report, or an Agent's context) say the same thing, leaving
+ * out `stamp`: the field that only says when each was read or heard.
+ */
+export function sameReading(a: object | null | undefined, b: object | null | undefined, stamp?: string): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  const without = (reading: object) =>
+    stamp === undefined ? reading : Object.fromEntries(Object.entries(reading).filter(([key]) => key !== stamp));
+  return canonical(without(a)) === canonical(without(b));
 }
 
 /**

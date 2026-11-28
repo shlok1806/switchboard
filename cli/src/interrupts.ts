@@ -190,7 +190,11 @@ function suggesting(text: string, moved: boolean): boolean {
  * wrapper sees keys, not Claude Code's screen. It may wrongly think the line has
  * text, which only delays an Interrupt, but never wrongly thinks it is empty,
  * which would type the Interrupt onto the Person's prompt and submit both. So it
- * treats a key as clearing only when Claude Code certainly clears on it.
+ * treats a key as clearing only when the adapter enables that behavior.
+ * Vim commands and custom keymaps are not modeled. In vim mode, Escape makes
+ * the line unknown until UserPromptSubmit because commands can recall unseen
+ * text. Local command panels have no reliable close hook, so they stay guarded
+ * until a submitted prompt or Ctrl+C at the normal idle prompt clears the line.
  */
 export class InputLine {
   /** The text the wrapper knows is on the line. */
@@ -213,9 +217,16 @@ export class InputLine {
   /** The prompt clears on double Escape and Ctrl+C at its idle prompt, as Claude Code's does. */
   private readonly idleClears: boolean;
 
-  constructor({ now = Date.now, idleClears = false }: { now?: () => number; idleClears?: boolean } = {}) {
+  private readonly vimMode: boolean;
+
+  constructor({
+    now = Date.now,
+    idleClears = false,
+    vimMode = false,
+  }: { now?: () => number; idleClears?: boolean; vimMode?: boolean } = {}) {
     this.now = now;
-    this.idleClears = idleClears;
+    this.vimMode = vimMode;
+    this.idleClears = idleClears && !vimMode;
   }
 
   get empty(): boolean {
@@ -289,7 +300,14 @@ export class InputLine {
       case "enter": {
         // `\` then Enter starts a new line; Enter on a suggestion takes the suggestion.
         const backslash = this.moved ? this.text.includes("\\") : this.text.endsWith("\\");
-        if (this.unknown || backslash || suggesting(this.text, this.moved)) {
+        if (suggesting(this.text, this.moved)) {
+          // Enter can accept a longer completion, run a local command, or open a
+          // panel. No hook proves which happened. Keep the guard until a submitted
+          // prompt hook; deletes cannot follow the text the CLI put there.
+          this.unknown = true;
+          return false;
+        }
+        if (this.unknown || backslash) {
           if (!this.moved && backslash) this.text = `${this.text.slice(0, -1)}\n`;
           return false;
         }
@@ -300,6 +318,9 @@ export class InputLine {
         return submitted;
       }
       case "escape": {
+        // In vim mode, Escape enters normal mode. Paste, undo and editing commands
+        // can put unseen text on the line, so deletes and Enter cannot release it.
+        if (this.vimMode) this.unknown = true;
         const now = this.now();
         // On an empty line a double Escape opens Claude Code's rewind picker (Codex's
         // "edit previous message"), where Enter puts an earlier prompt back on the line.
@@ -507,6 +528,8 @@ export interface InterruptTyperOptions {
    * as Claude Code's does. Off, the wrapper never reads those keys as clearing.
    */
   idleClears?: boolean;
+  /** Vim commands can recall unseen text after Escape; idle clear keys are not modeled. */
+  vimMode?: boolean;
   /** The Person submitted a prompt they typed themselves. */
   onPersonPrompt?: () => void;
   /** The Person pressed Enter, at their own keyboard or from the Dashboard, a dialog open or not. */
@@ -541,7 +564,11 @@ export class InterruptTyper {
     this.quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
     this.waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
     this.now = options.now ?? Date.now;
-    this.line = new InputLine({ now: this.now, idleClears: options.idleClears ?? false });
+    this.line = new InputLine({
+      now: this.now,
+      idleClears: options.idleClears ?? false,
+      vimMode: options.vimMode ?? false,
+    });
   }
 
   /**
