@@ -67,7 +67,9 @@ async function continuationFixture() {
     );
   });
 
-  await runInDurableObject(channel, (object) => {
+  await runInDurableObject(channel, (object, state) => {
+    // Registration must finish Task sync before acquiring its short-lived permits.
+    state.storage.sql.exec("INSERT OR REPLACE INTO task_sync VALUES('syncedAt',?)", new Date().toISOString());
     Object.assign(object, {
       binding: { version: 1, generation: 1, workspace: workspaceId, operation: "binding", state: "linked" },
     });

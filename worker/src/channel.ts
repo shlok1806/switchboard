@@ -3194,14 +3194,9 @@ export class Channel extends DurableObject<Env> {
           this.binding.workspace === p.workspaceId &&
           new LocalMutationPermits(this.ctx.storage.sql).revisionFloor(p.workspaceId) <= result.policyRevision
         ) {
-          this.ctx.storage.transactionSync(() => {
-            intents.transition(p.intentId, "applied", "completed");
-            this.ctx.storage.sql.exec(
-              "UPDATE m1_agent_executions SET active=1 WHERE agent=? AND executionId=?",
-              p.agentId,
-              p.reservedExecutionId,
-            );
-          });
+          // Recovery has no credential to deliver. Record completion without
+          // activating an association whose initial response was lost.
+          intents.transition(p.intentId, "applied", "completed");
           return;
         }
         if (!result.ok && result.status === 503) throw new Error("completion_unavailable");
