@@ -33,6 +33,9 @@ export function workingTasks(tasks: readonly Task[], agent: AgentId): Task[] {
     .sort((a, b) => (b.claim?.claimedAt ?? "").localeCompare(a.claim?.claimedAt ?? "") || b.number - a.number);
 }
 
+/** Which Task rows hold a Claim, as the `tasks_claimed` index and its reads say it. */
+const CLAIMED = "json_extract(data, '$.claim') IS NOT NULL";
+
 /** How often the reconcile re-reads GitHub. */
 export const RECONCILE_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -147,6 +150,16 @@ export class Tasks {
     }
     host.storage.sql.exec(
       "CREATE INDEX IF NOT EXISTS tasks_by_holder_agent ON tasks (holder_agent) WHERE holder_agent IS NOT NULL",
+    );
+    // The Tasks with a Claim, whoever holds it, so "what is in progress" (ADR 0040)
+    // reads only those. A Claim is a few rows of a Channel's Tasks at any time.
+    host.storage.sql.exec(`CREATE INDEX IF NOT EXISTS tasks_claimed ON tasks (number) WHERE ${CLAIMED}`);
+    // A done Task's Claim is history, never Stale: nothing is left to take over. Tasks
+    // closed before `write` cleared it keep the flag; this clears them, reading only
+    // the claimed Tasks through their index.
+    host.storage.sql.exec(
+      `UPDATE tasks SET data = json_set(data, '$.claim.stale', json('false'))
+       WHERE ${CLAIMED} AND json_extract(data, '$.status') = 'done' AND json_extract(data, '$.claim.stale') = 1`,
     );
   }
 
@@ -383,13 +396,33 @@ export class Tasks {
   }
 
   /** The stored Task, or null. Synchronous, so a caller can check and write it atomically. */
+  /**
+   * The Tasks with a Claim, newest Issue first, at most `limit`: claimed, in review, or
+   * Stale. Reads what the Channel holds and never syncs with GitHub, so a reader
+   * never writes (ADR 0040).
+   */
+  claimed(limit: number): Task[] {
+    return this.host.storage.sql
+      .exec<TaskRow>(
+        `SELECT number, data FROM tasks INDEXED BY tasks_claimed WHERE ${CLAIMED} ORDER BY number DESC LIMIT ?`,
+        limit,
+      )
+      .toArray()
+      .map((row) => JSON.parse(row.data) as Task);
+  }
+
   read(number: TaskNumber): Task | null {
     const row = this.host.storage.sql.exec<TaskRow>("SELECT * FROM tasks WHERE number = ?", number).toArray()[0];
     return row === undefined ? null : (JSON.parse(row.data) as Task);
   }
 
   /** Stores a Task and tells every client. Callers own only the Switchboard fields (ADR 0001). */
-  write(task: Task): void {
+  write(written: Task): void {
+    // A done Task's Claim is history, never Stale: nothing is left to take over.
+    const task =
+      written.status === "done" && written.claim?.stale === true
+        ? { ...written, claim: { ...written.claim, stale: false } }
+        : written;
     this.host.storage.sql.exec(
       "INSERT OR REPLACE INTO tasks (number, data, holder_agent) VALUES (?, ?, ?)",
       task.number,

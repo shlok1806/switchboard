@@ -3,7 +3,8 @@
 // gets a session.
 //
 //   GET  /auth/config                    what sign-in can do here (AuthConfigResponse)
-//   GET  /auth/github/start?repo=o/r     the Dashboard: off to GitHub's web flow
+//   GET  /auth/github/start?repo=o/r     the Dashboard: off to GitHub's web flow (`&return=` the
+//                                        connector's authorize page, to come back to it: ADR 0040)
 //   GET  /auth/github/callback           back from GitHub: the session cookie, then the Dashboard
 //   POST /auth/device/code               the CLI: starts GitHub's device flow
 //   POST /auth/device/token              the CLI: one poll; a session once the Person approved
@@ -28,11 +29,23 @@ import { personFromLogin, SESSION_COOKIE } from "../../shared/src/index";
 import { allowedRepos, channelRepo, cookie, devMode, readCookie, sessionSecret } from "./auth";
 import { APP_NOT_CONFIGURED, missingAppSecrets, signInFor } from "./github/index";
 import { fail, json, readJson } from "./http";
+import { AUTHORIZE_PATH } from "./mcp/paths";
 import { base64url, SESSION_TTL_SECONDS, signPayload, signSession, verifyPayload } from "./session";
 
 /** The short-lived cookie that ties GitHub's callback to the browser that started the sign-in. */
 const STATE_COOKIE = "sb_oauth";
 const STATE_TTL_SECONDS = 10 * 60;
+
+/**
+ * Where a sign-in may return to instead of the Dashboard: only the read-only
+ * connector's own authorize page on this Worker (ADR 0040), so `return` is never an
+ * open redirect. Null for anything else.
+ */
+export function signInReturn(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string" || !raw.startsWith(AUTHORIZE_PATH)) return null;
+  const rest = raw.slice(AUTHORIZE_PATH.length);
+  return rest === "" || rest.startsWith("?") ? raw : null;
+}
 
 /** The routes this module answers, or null. */
 export function isAuthRoute(pathname: string): boolean {
@@ -40,7 +53,7 @@ export function isAuthRoute(pathname: string): boolean {
 }
 
 /** Why GitHub sign-in is off, or null when it is on. The dev-only fake sign-in does not need it. */
-function notConfigured(env: Env, dev: boolean): string | null {
+export function notConfigured(env: Env, dev: boolean): string | null {
   // A sign-in the tests installed stands in for the App.
   const missing = signInFor(env) === null ? missingAppSecrets(env) : [];
   if (sessionSecret(env, dev) === null) missing.push("SESSION_SECRET");
@@ -121,11 +134,13 @@ async function startWebFlow(url: URL, env: Env, dev: boolean): Promise<Response>
   const nonceBytes = new Uint8Array(16);
   crypto.getRandomValues(nonceBytes);
   const nonce = base64url(nonceBytes);
+  const back = signInReturn(url.searchParams.get("return"));
   const state = await signPayload(secret, {
     kind: "oauth-state",
     repo,
     nonce,
     exp: Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
+    ...(back === null ? {} : { return: back }),
   });
   return redirect(signIn.authorizeUrl(state, `${url.origin}/auth/github/callback`), [
     cookie(STATE_COOKIE, nonce, STATE_TTL_SECONDS, "/auth/github"),
@@ -173,7 +188,8 @@ async function finishWebFlow(
   if (!admitted.ok) {
     return problem(repo, admitted.status === 403 ? "not-a-member" : "not-configured", [clearState]);
   }
-  return redirect(`/${repo}`, [clearState, sessionCookie(await signSession(secret, person))]);
+  const back = signInReturn(typeof state.return === "string" ? state.return : null);
+  return redirect(back ?? `/${repo}`, [clearState, sessionCookie(await signSession(secret, person))]);
 }
 
 async function startDeviceFlow(env: Env, dev: boolean): Promise<Response> {
@@ -250,6 +266,7 @@ async function devSignIn(request: Request, url: URL, env: Env, channels: Channel
       : fail(admitted.status, admitted.reason);
   }
   const session = await signSession(secret, person);
-  if (browser) return redirect(`/${repo}`, [sessionCookie(session)]);
+  if (browser)
+    return redirect(signInReturn(input.return as string | undefined) ?? `/${repo}`, [sessionCookie(session)]);
   return json<DevSessionResponse>({ ok: true, session, person, repo });
 }

@@ -20,7 +20,8 @@
 //   turn (ADR 0029). Nothing wakes a new session before its first prompt, when its
 //   hooks first run, or a session whose hooks the Person has not trusted.
 // - MCP tools: `-c mcp_servers.switchboard...`, approved for the session (Codex
-//   otherwise asks before each call, and refuses them all under `-a never`).
+//   otherwise asks before each call, and refuses them all under `-a never`), apart
+//   from the skill tools that publish and write, which ask every time (ADR 0039).
 // - Proxy Capture: `-c openai_base_url=<proxy>`, which the built-in openai provider
 //   uses whether logged in with ChatGPT or an API key (codex-route.ts works out the
 //   real upstream). Codex runs turns over a WebSocket at `/responses` and falls back
@@ -32,6 +33,7 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { SKILL_WRITE_TOOLS } from "../../../shared/src/index";
 import { HOOK_SOCKET_ENV } from "../hooks/capture";
 import type { ClaudeHookInput } from "../hooks/summarize";
 import type { CliAdapter, SessionPlan } from "./adapter";
@@ -182,6 +184,8 @@ export function codexMcpOverrides(server: {
     // Switchboard's own tools only talk to the Channel, so they are approved.
     "-c",
     `${key}.default_tools_approval_mode="approve"`,
+    // Except the skill tools that publish and write: the Person approves each call (ADR 0039).
+    ...SKILL_WRITE_TOOLS.flatMap((tool) => ["-c", `${key}.tools.${tool}.approval_mode="prompt"`]),
   ];
 }
 
@@ -329,6 +333,8 @@ export const codex: CliAdapter = {
   // PreCompact answer cannot hold a compaction back, and its compaction point is its own.
   memoryNudges: ["stop"],
   proxy: true,
+  // The two tools get `approval_mode = "prompt"` over the server's "approve".
+  promptsForSkillWrites: true,
   sessionFromHooks: true,
 
   plan: async (args) => planCodexSession(args),

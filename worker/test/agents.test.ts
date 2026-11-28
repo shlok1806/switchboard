@@ -770,7 +770,9 @@ describe("Denying a pending approval from the Channel (ADR 0014)", () => {
     if (!socket) throw new Error("No WebSocket");
     socket.accept();
     const frames: { type: string }[] = [];
-    socket.addEventListener("message", (message) => frames.push(JSON.parse(message.data as string)));
+    socket.addEventListener("message", (message) => {
+      frames.push(JSON.parse(message.data as string));
+    });
     socket.send(JSON.stringify({ type: "interrupt.attach", agent: as.agent }));
     await waitUntil(() => frames.find((f) => f.type === "interrupt.attached"));
     return { frames };

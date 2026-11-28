@@ -29,7 +29,7 @@ export function needsPerson(state: GlyphState): boolean {
 /**
  * Whether an Agent's state waits on the Person using the Dashboard: a prompt on their own
  * Agent, or a Stale Claim, which anyone may take over. Another Person's prompt is theirs.
- * How many lines need you is `needsYouCount` in lib/queue, which also counts reviews.
+ * How many items need you is `needsYouCount` in lib/queue, which also counts reviews.
  */
 export function isNeedsYou(state: AgentState): boolean {
   return state === "needs" || state === "stale";
@@ -63,6 +63,25 @@ export function stateWord(state: GlyphState, person?: PersonName): string {
       return "Gone";
     case "done":
       return "Done";
+  }
+}
+
+/**
+ * The thinking orb an Agent's state shows beside its glyph and word (ADR 0047): a running
+ * turn works, a prompt waiting on a Person listens, an idle session breathes. A Stale,
+ * Paused or Gone Agent runs nothing, so it shows none.
+ */
+export function orbOf(state: AgentState): "working" | "listening" | "breathing" | undefined {
+  switch (state) {
+    case "running":
+      return "working";
+    case "needs":
+    case "needs-other":
+      return "listening";
+    case "idle":
+      return "breathing";
+    default:
+      return undefined;
   }
 }
 

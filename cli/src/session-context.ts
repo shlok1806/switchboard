@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { AgentContext, Cli, ReportedUsage, UsageLimit } from "../../shared/src/index";
 import { directiveText } from "../../shared/src/index";
+import { maskSecrets } from "../../shared/src/mask";
 import { claudeConfigDir, projectDir } from "./claude-session";
 import { cursorProjects } from "./clis/cursor";
-import { maskSecrets } from "./proxy/mask";
 
 const run = promisify(execFile);
 const number = (n: unknown): number | undefined =>

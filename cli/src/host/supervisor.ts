@@ -26,17 +26,21 @@
 import { randomUUID } from "node:crypto";
 import { renameSync } from "node:fs";
 import * as pty from "@lydell/node-pty";
-import type { AgentId, HostSpawnedMessage } from "../../../shared/src/index";
+import type { AgentId, HistoryPageMessage, HistoryRequestMessage, HostSpawnedMessage } from "../../../shared/src/index";
 import {
   agentIdFor,
   channelApiBase,
+  channelKey,
   directiveHeading,
-  LIVE_PING,
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
 } from "../../../shared/src/index";
 import { ChannelClient, targetOf } from "../channel-client";
+import { Backoff } from "../channel-net";
+import { closeSocket, dropSocket, openSocket, WebSocket as Socket, type WebSocket } from "../channel-socket";
 import type { Config } from "../config";
+import { type Keepalive, keepalive, silentAfterMs, streamPingMs } from "../keepalive";
+import { type LocalStore, openLocalStore } from "../local-store";
 import { cachedAttachList } from "../terminal/attach-keys";
 import { checkAllowChange } from "./allow";
 import { checkControl, checkFolderAndMode, checkSpawn, type LocalLimits, resolveRoots } from "./check";
@@ -143,6 +147,7 @@ export function wrapperArgs(entry: HostedAgent, resume: boolean, prompt?: string
     ...(entry.nickname === undefined ? [] : ["--nickname", entry.nickname]),
     ...(from === undefined || resume ? [] : ["--from", from]),
     ...(entry.model === undefined ? [] : ["--model", entry.model]),
+    ...(entry.librarian === true ? ["--librarian"] : []),
     // Always given, so the Person's own default mode never applies to a Host's Agent.
     "--permission-mode",
     entry.permissionMode,
@@ -159,7 +164,8 @@ export class HostSupervisor {
   private readonly resumes = new Map<AgentId, number[]>();
   private socket: WebSocket | null = null;
   private closed = false;
-  private retry = 0;
+  /** Each failed attach in a row waits longer, with jitter, up to a minute (ADR 0052). */
+  private readonly backoff = new Backoff(1_000, 60_000);
   private pending: ReturnType<typeof setTimeout> | undefined;
   /** This machine's own limits, from `switchboard host install`: never the Channel's copy (ADR 0017). */
   private limits: LocalLimits;
@@ -168,6 +174,8 @@ export class HostSupervisor {
   private readonly attachList = cachedAttachList();
   private readonly allowSeqs = new Map<string, number>();
   private readonly hostId: string;
+  /** The machine's store of its Agents' Local Events, which the Host answers history reads from (ADR 0037). */
+  private store: LocalStore | null = null;
 
   constructor(private readonly options: SupervisorOptions) {
     // Compared after resolving links, so a root reached through a symlink still counts.
@@ -198,6 +206,7 @@ export class HostSupervisor {
         // Gone already.
       }
     }
+    this.store = openLocalStore(this.options.log, this.options.env);
     for (const entry of saved) this.known.set(entry.agent, entry);
     for (const entry of saved) {
       // A Paused Agent stays paused through a restart: only a resume request brings it back.
@@ -215,7 +224,7 @@ export class HostSupervisor {
   async shutdown(): Promise<void> {
     this.closed = true;
     clearTimeout(this.pending);
-    this.socket?.close();
+    if (this.socket !== null) closeSocket(this.socket, "the Host is stopping");
     const exits = [...this.running.values()].map(
       (r) =>
         new Promise<void>((resolve) => {
@@ -229,6 +238,8 @@ export class HostSupervisor {
         }),
     );
     await Promise.all(exits);
+    this.store?.close();
+    this.store = null;
   }
 
   /** The Agents running now. */
@@ -245,20 +256,42 @@ export class HostSupervisor {
     if (this.closed) return;
     this.pending = undefined;
     const { config, settings } = this.options;
-    const query = new URLSearchParams({ token: config.session, host: settings.name });
+    const query = new URLSearchParams({
+      token: config.session,
+      host: settings.name,
+      // It answers the Channel's history reads from the machine's store (ADR 0037).
+      ...(this.store === null ? {} : { history: "1" }),
+    });
     const base = `${config.url.replace(/\/+$/, "")}${channelApiBase(settings.repo)}`;
-    const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/stream?${query}`);
+    const pingMs = streamPingMs(this.options.env);
+    const ws = openSocket(`${base.replace(/^http/, "ws")}/api/stream?${query}`, silentAfterMs(pingMs));
     this.socket = ws;
-    let keepalive: ReturnType<typeof setInterval> | undefined;
+    let alive: Keepalive | undefined;
+    let heard = false;
     ws.addEventListener("open", () => {
-      this.retry = 0;
       this.options.log(`attached to ${settings.repo} at ${config.url} as ${this.hostId}`);
       // A pause whose confirmation went out while detached: say so again (the Channel ignores repeats).
       for (const paused of this.pausedAgents()) this.send({ type: "host.paused", agent: paused.agent });
-      keepalive = setInterval(() => ws.send(LIVE_PING), 30_000);
+      alive = keepalive(ws, pingMs, (quiet) => {
+        if (this.closed || this.socket !== ws) return;
+        // Half-open: its close may never come, so it is let go and replaced now (ADR 0048).
+        this.options.log(`heard nothing from the Channel for ${Math.round(quiet / 1000)}s; reconnecting`);
+        this.socket = null;
+        dropSocket(ws);
+        clearTimeout(this.pending);
+        this.pending = setTimeout(() => this.connect(), this.backoff.next());
+      });
     });
     ws.addEventListener("message", (event) => {
-      if (event.data === LIVE_PONG) return;
+      alive?.heard();
+      if (event.data === LIVE_PONG) {
+        // Only a socket the Channel answers a ping on resets the backoff: one that opens and goes silent does not.
+        if (!heard) {
+          heard = true;
+          this.backoff.reset();
+        }
+        return;
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(String(event.data));
@@ -278,6 +311,7 @@ export class HostSupervisor {
         else if (frame.type === "host.pause") this.control("pause", frame);
         else if (frame.type === "host.resume") this.control("resume", frame);
         else if (frame.type === "host.allow") void this.changeAllow(frame);
+        else if (frame.type === "history.request") this.answerHistory(frame as unknown as HistoryRequestMessage);
       } catch (error) {
         this.options.log(
           `could not handle a ${type} frame: ${error instanceof Error ? error.message : "unknown error"}`,
@@ -285,11 +319,13 @@ export class HostSupervisor {
       }
     });
     ws.addEventListener("close", (event) => {
-      clearInterval(keepalive);
+      alive?.stop();
       if (this.closed || this.socket !== ws) return;
-      this.retry += 1;
-      const delay = Math.min(60_000, 1000 * 2 ** this.retry);
-      this.options.log(`detached from the Channel (${event.code} ${event.reason}); trying again in ${delay / 1000} s`);
+      this.socket = null;
+      const delay = this.backoff.next();
+      this.options.log(
+        `detached from the Channel (${event.code} ${event.reason}); trying again in ${Math.round(delay / 100) / 10} s`,
+      );
       this.pending = setTimeout(() => this.connect(), delay);
     });
     ws.addEventListener("error", () => {
@@ -297,8 +333,22 @@ export class HostSupervisor {
     });
   }
 
+  /** A page of the Local Events this machine keeps for the Channel, for any of its Agents (ADR 0037). */
+  private answerHistory(request: HistoryRequestMessage): void {
+    if (typeof request.id !== "string" || typeof request.before !== "number" || typeof request.limit !== "number")
+      return;
+    const repo = channelKey(this.options.settings.repo) ?? this.options.settings.repo;
+    let frame: HistoryPageMessage;
+    try {
+      frame = { type: "history.page", id: request.id, events: this.store?.page(repo, request) ?? [] };
+    } catch (error) {
+      frame = { type: "history.page", id: request.id, error: (error as Error).message.slice(0, 300) };
+    }
+    this.send(frame as unknown as Record<string, unknown>);
+  }
+
   private send(frame: Record<string, unknown>): void {
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(frame));
+    if (this.socket?.readyState === Socket.OPEN) this.socket.send(JSON.stringify(frame));
   }
 
   private fail(spawn: string, reason: string): void {
@@ -396,6 +446,7 @@ export class HostSupervisor {
       ...(request.nickname === undefined ? {} : { nickname: request.nickname }),
       ...(request.model === undefined ? {} : { model: request.model }),
       permissionMode: request.permissionMode,
+      ...(request.librarian === true ? { librarian: true as const } : {}),
     };
     this.options.log(`spawn ${request.spawn} from ${request.lead ?? request.by}: ${entry.agent} in ${entry.cwd}`);
     this.launch(entry, {

@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { AlertTriangle, Check, Copy, ExternalLink } from "lucide-react";
 import type { DeviceCodeResponse } from "@shared/index";
-import type { DeviceSignIn } from "@/lib/session";
-import { Mark } from "@/components/shell/nav";
+import { AlertTriangle, Check, Copy, ExternalLink } from "lucide-react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
+import { Mark } from "@/components/shell/nav";
+import type { DeviceSignIn } from "@/lib/session";
 
 /** GitHub's mark, from Octicons (MIT): `mark-github`, 16px. */
 function GitHubMark({ className }: { className?: string }) {
@@ -48,19 +48,17 @@ export function SignInScreen({
   };
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-page px-4 py-10">
+    <main className="flex min-h-dvh items-center justify-center bg-paper px-4 py-10">
       <div className="flex w-full max-w-sm flex-col gap-6">
         <header className="flex flex-col items-center gap-3 text-center">
           <Mark className="size-10" />
           <div className="flex min-w-0 flex-col gap-1">
-            <h1 className="text-title font-semibold text-ink">Sign in to Switchboard</h1>
-            <p className="text-body break-all text-ink-3">{repo}</p>
+            <h1 className="font-display text-section font-medium text-ink">Sign in to Switchboard</h1>
+            <p className="text-row break-all text-ink-3">{repo}</p>
           </div>
         </header>
-        <div className="flex flex-col gap-4 rounded-md bg-panel p-6">
-          <p className="text-center text-body leading-relaxed text-ink-2">
-            Use a GitHub account with write access to this repo.
-          </p>
+        <div className="flex flex-col gap-4 rounded-md bg-paper-2 p-6">
+          <p className="text-center text-row leading-relaxed text-ink-2">Use a GitHub account with write access to this repo.</p>
           {notConfigured ? (
             <p role="status" className="flex items-start gap-2 text-small text-ink-2">
               <AlertTriangle className="mt-0.5 size-4 shrink-0 text-ink" aria-hidden />
@@ -91,16 +89,10 @@ export function SignInScreen({
             <GitHubMark className="size-4" />
             {busy ? "Opening GitHub" : "Sign in with GitHub"}
           </Button>
-          {device && onSignedIn && (
-            <DeviceCodeSignIn repo={repo} device={device} onSignedIn={onSignedIn} disabled={Boolean(notConfigured)} />
-          )}
+          {device && onSignedIn && <DeviceCodeSignIn repo={repo} device={device} onSignedIn={onSignedIn} disabled={Boolean(notConfigured)} />}
         </div>
         {onDevSignIn && (
-          <form
-            onSubmit={devSubmit}
-            className="flex flex-col gap-3 rounded-md bg-paper-2 p-4"
-            aria-label="Dev sign-in"
-          >
+          <form onSubmit={devSubmit} className="flex flex-col gap-3 rounded-md bg-paper-2 p-4" aria-label="Dev sign-in">
             <span className="text-small font-medium text-ink">Dev sign-in, local only</span>
             <div className="flex gap-2">
               <input
@@ -112,7 +104,7 @@ export function SignInScreen({
                 value={login}
                 onChange={(e) => setLogin(e.target.value)}
                 placeholder="github-login"
-                className="h-9 min-w-0 flex-1 rounded-md border border-line-strong bg-field px-3 text-body text-ink transition-colors placeholder:text-ink-3 max-md:text-[16px]"
+                className="h-9 min-w-0 flex-1 rounded-md border border-rule-2 bg-paper px-3 text-row text-ink transition-colors placeholder:text-ink-3 max-md:text-read"
               />
               <Button type="submit" variant="secondary" size="md" disabled={!login.trim()}>
                 Sign in
@@ -125,35 +117,26 @@ export function SignInScreen({
   );
 }
 
-type DeviceState =
-  | { kind: "idle" }
-  | { kind: "starting" }
-  | { kind: "waiting"; code: DeviceCodeResponse }
-  | { kind: "stopped"; reason: string };
+type DeviceState = { kind: "idle" } | { kind: "starting" } | { kind: "waiting"; code: DeviceCodeResponse } | { kind: "stopped"; reason: string };
 
 /**
  * "Sign in with a code": shows GitHub's user code, and polls until the Person has approved it
  * at github.com/login/device, the code expired, or it was refused. The session arrives as a
  * cookie from the Worker, so nothing here holds it.
  */
-function DeviceCodeSignIn({
-  repo,
-  device,
-  onSignedIn,
-  disabled,
-}: {
-  repo: string;
-  device: DeviceSignIn;
-  onSignedIn: () => void;
-  disabled: boolean;
-}) {
+function DeviceCodeSignIn({ repo, device, onSignedIn, disabled }: { repo: string; device: DeviceSignIn; onSignedIn: () => void; disabled: boolean }) {
   const [state, setState] = useState<DeviceState>({ kind: "idle" });
   const [copied, setCopied] = useState(false);
   const [slow, setSlow] = useState(false);
   const run = useRef(0);
 
   // Leaving the screen, or starting over, ends the poll of the run before.
-  useEffect(() => () => void (run.current += 1), []);
+  useEffect(
+    () => () => {
+      run.current += 1;
+    },
+    [],
+  );
 
   const cancel = () => {
     run.current += 1;
@@ -185,7 +168,7 @@ function DeviceCodeSignIn({
         setState({ kind: "stopped", reason: "The code expired before it was approved. Get a new code." });
         return;
       }
-      let poll;
+      let poll: Awaited<ReturnType<typeof device.poll>>;
       try {
         poll = await device.poll(code.deviceCode, repo);
       } catch {
@@ -219,13 +202,11 @@ function DeviceCodeSignIn({
   if (state.kind === "waiting") {
     const { code } = state;
     return (
-      <div className="flex flex-col gap-3 border-t border-rule pt-4" aria-label="Sign in with a code">
+      <section className="flex flex-col gap-3 border-t border-rule pt-4" aria-label="Sign in with a code">
         <p className="text-small text-ink-2">Enter this code on GitHub to sign in:</p>
-        <p
-          aria-label={`Your code is ${code.userCode}`}
-          className="text-center font-mono text-[28px] leading-none font-semibold tracking-[0.08em] text-ink select-all"
-        >
-          {code.userCode}
+        <p className="text-center font-mono text-figure font-semibold tracking-[0.08em] text-ink select-all">
+          <span className="sr-only">Your code is </span>
+          <span>{code.userCode}</span>
         </p>
         <div className="flex gap-2">
           <Button type="button" variant="secondary" size="md" className="flex-1" onClick={() => void copy(code.userCode)}>
@@ -236,21 +217,19 @@ function DeviceCodeSignIn({
             href={code.verificationUri}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-md border border-rule-2 bg-transparent px-3 text-body font-medium text-ink transition-colors hover:border-ink-3 hover:bg-paper-2"
+            className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-md border border-rule-2 bg-transparent px-3 text-row font-medium text-ink transition-colors hover:border-ink-3 hover:bg-paper-2"
           >
             <ExternalLink className="size-4" aria-hidden />
             Open GitHub
           </a>
         </div>
         <p role="status" className="text-small text-ink-3">
-          {slow
-            ? "Cannot reach Switchboard right now. Still waiting."
-            : "Waiting for you to approve it on GitHub. This page signs you in by itself."}
+          {slow ? "Cannot reach Switchboard right now. Still waiting." : "Waiting for you to approve it on GitHub. This page signs you in by itself."}
         </p>
         <Button type="button" variant="ghost" size="sm" className="self-start" onClick={cancel}>
           Cancel
         </Button>
-      </div>
+      </section>
     );
   }
 
@@ -262,14 +241,7 @@ function DeviceCodeSignIn({
           {state.reason}
         </p>
       )}
-      <Button
-        type="button"
-        variant="secondary"
-        size="md"
-        className="w-full"
-        disabled={disabled || state.kind === "starting"}
-        onClick={() => void start()}
-      >
+      <Button type="button" variant="secondary" size="md" className="w-full" disabled={disabled || state.kind === "starting"} onClick={() => void start()}>
         {state.kind === "starting" ? "Getting a code" : state.kind === "stopped" ? "Get a new code" : "Sign in with a code"}
       </Button>
     </div>
@@ -279,12 +251,13 @@ function DeviceCodeSignIn({
 /** At `/`, with no repo in the path: where Channels live. */
 export function NoChannelScreen() {
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-page px-4 py-10">
+    <main className="flex min-h-dvh items-center justify-center bg-paper px-4 py-10">
       <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center">
         <Mark className="size-10" />
-        <h1 className="text-title font-semibold text-ink">Switchboard</h1>
-        <p className="text-body leading-relaxed text-ink-3">
-          Each repo has its own Channel. Open it at <code className="font-mono text-ink-2">/owner/repo</code>{/* taste-skill-ignore: a path */}.
+        <h1 className="font-display text-section font-medium text-ink">Switchboard</h1>
+        <p className="text-row leading-relaxed text-ink-3">
+          Each repo has its own Channel. Open it at <code className="font-mono text-ink-2">/owner/repo</code>
+          {/* taste-skill-ignore: a path */}.
         </p>
       </div>
     </main>

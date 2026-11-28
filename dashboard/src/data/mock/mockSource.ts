@@ -1,18 +1,31 @@
 import type {
-  SetHostAllowRequest,
-  CreateTaskRequest,
   ActionResult,
   Agent,
   AgentId,
   AgentRole,
+  ArtifactPublisher,
+  ArtifactResponse,
+  ArtifactsResponse,
+  BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
+  ConnectLangfuseRequest,
+  CreateTaskRequest,
   Holder,
   Host,
+  HostId,
   HostsResponse,
+  LangfuseConnection,
+  LangfuseSettingsResponse,
   MemoryQuery,
   MemoryResponse,
   PersonAction,
+  PublishArtifactRequest,
+  SetHostAllowRequest,
+  Skill,
+  SkillEntry,
+  SkillResponse,
+  SkillsResponse,
   SpawnAgentRequest,
   StreamMessage,
   Task,
@@ -20,15 +33,20 @@ import type {
   VerdictProbabilities,
 } from "@shared/index";
 import {
+  ARTIFACT_VERSIONS_KEPT,
+  agentIdFor,
+  checkArtifact,
+  cleanLangfuseConnect,
+  cleanNickname,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
   DEFAULT_PERMISSION_MODE,
-  agentIdFor,
-  cleanNickname,
   holderName,
   hostIdFor,
+  LANGFUSE_KEY_END,
+  MAX_MEMORY_LIMIT,
   noteFromEvent,
   notUnderRootsReason,
-  MAX_MEMORY_LIMIT,
+  offlineReason,
   permissionModeWithin,
   sameNickname,
   underRoots,
@@ -39,16 +57,22 @@ import {
   type ClaimResult,
   type ConnectionState,
   type EventPage,
+  type HistoryScope,
+  type LangfuseResult,
+  type PublishArtifactResult,
   type SpawnResult,
   type TerminalFrame,
   type TerminalLink,
 } from "../source";
-import { accounts, ME, REPO, agent as agentActor, agents as seedAgents, makeEvent, person, persons, tasks as seedTasks, T0, withCounts } from "./fixtures";
+import { ARTIFACT_VERSIONS, artifactVersion, type MockArtifact } from "./artifacts";
+import { BRIEF_PAGES } from "./brief";
+import { accounts, agent as agentActor, ME, makeEvent, person, persons, REPO, agents as seedAgents, tasks as seedTasks, T0, withCounts } from "./fixtures";
 import { RELAY, relay } from "./relay";
-import { AMBIENT, HISTORY, LIVE, type Beat } from "./script";
+import { AMBIENT, type Beat, HISTORY, LIVE } from "./script";
+import { SKILL_BYTES, SKILL_VERSIONS } from "./skills";
 import { mockTerminal } from "./terminal";
 
-const clone = <T,>(v: T): T => structuredClone(v);
+const clone = <T>(v: T): T => structuredClone(v);
 
 /**
  * A simulated Channel. It replays a scripted history, then plays live Events on a
@@ -70,6 +94,14 @@ export class MockChannelSource implements ChannelSource {
   readonly capabilities = ALL_CAPABILITIES;
   readonly isMock = true;
   private agents: Agent[];
+  /** The Channel's Langfuse project (ADR 0044): connected, unless the Channel is empty. */
+  private langfuseProject: LangfuseConnection | null = {
+    host: "https://cloud.langfuse.com",
+    publicKeyEnd: "4f2a",
+    project: { id: "cm1greenroom", name: "greenroom" },
+    connectedBy: ME,
+    connectedAt: new Date(T0 - 3 * 86_400_000).toISOString(),
+  };
   /** The demo Person's one Host, as `switchboard host install` would register it. */
   private host: Host = {
     id: hostIdFor(ME, "studio"),
@@ -84,6 +116,10 @@ export class MockChannelSource implements ChannelSource {
     lastSeenAt: new Date(T0).toISOString(),
   };
   private tasks: Task[] = clone(seedTasks);
+  /** Every artifact version kept, oldest first: a publish adds one and drops the oldest past the limit. */
+  private artifactVersions: MockArtifact[] = clone(ARTIFACT_VERSIONS);
+  /** Each version's page as a blob URL, made once: it opens in a frame and in a new tab, as the Worker's page does. */
+  private pageUrls = new Map<string, string>();
   private events: ChannelEvent[] = [];
   private verdicts: Verdict[] = [];
   private listeners = new Set<(m: StreamMessage) => void>();
@@ -107,6 +143,7 @@ export class MockChannelSource implements ChannelSource {
     } = {},
   ) {
     if (opts.state === "empty") {
+      this.langfuseProject = null;
       this.agents = [];
       this.tasks = [];
       return;
@@ -129,7 +166,16 @@ export class MockChannelSource implements ChannelSource {
       relay: RELAY,
       accounts,
       cursor: this.events.at(-1)?.seq ?? 0,
+      // The simulated Channel's offline Host keeps Local Events nobody can read now (ADR 0037).
+      unavailable: this.offlineHosts().map((id) => ({ host: id, agents: [], reason: offlineReason(id) })),
     });
+  }
+
+  /** The simulated Channel's Hosts that are away. */
+  private offlineHosts(): HostId[] {
+    return this.allHosts()
+      .filter((host) => !host.live)
+      .map((host) => host.id);
   }
 
   /** The simulated Channel's snapshot holds its whole history. */
@@ -137,9 +183,12 @@ export class MockChannelSource implements ChannelSource {
     return { events: [], verdicts: [] };
   }
 
-  // The simulated Channel's whole history is in its snapshot.
-  async scopedEvents(): Promise<EventPage> {
-    return { events: [] };
+  // The simulated Channel's whole history is in its snapshot; an Agent whose Host is away says so.
+  async scopedEvents(scope: HistoryScope): Promise<EventPage> {
+    if (!("agent" in scope)) return { events: [] };
+    const host = this.agents.find((agent) => agent.id === scope.agent)?.historyHost;
+    if (host === undefined || !this.offlineHosts().includes(host)) return { events: [] };
+    return { events: [], unavailable: [{ host, agents: [scope.agent], reason: offlineReason(host) }] };
   }
 
   async eventsById(): Promise<ChannelEvent[]> {
@@ -197,11 +246,17 @@ export class MockChannelSource implements ChannelSource {
             build: (at) =>
               a.tool === "Bash"
                 ? makeEvent("command", agentActor(a.agent as Agent["id"]), "hook", { command: a.arg }, { at, task: a.task })
-                : makeEvent("tool.call", agentActor(a.agent as Agent["id"]), "hook", {
-                    tool: a.tool,
-                    arg: a.arg,
-                    ok: true,
-                  }, { at, task: a.task }),
+                : makeEvent(
+                    "tool.call",
+                    agentActor(a.agent as Agent["id"]),
+                    "hook",
+                    {
+                      tool: a.tool,
+                      arg: a.arg,
+                      ok: true,
+                    },
+                    { at, task: a.task },
+                  ),
           },
           new Date().toISOString(),
           true,
@@ -215,8 +270,14 @@ export class MockChannelSource implements ChannelSource {
   /** Record one Event, run the Relay, apply side effects, and broadcast. */
   private apply(b: Beat, at: string, broadcast: boolean, jev?: Record<string, VerdictProbabilities>) {
     const event = b.build(at);
-    this.record(event, jev ?? b.jev, broadcast);
     const e = b.effect;
+    // An Agent's publish is kept before its tool call streams, as the Worker's is.
+    if (e?.kind === "artifact" && event.actor.kind === "agent") {
+      const id = event.actor.agentId;
+      const a = this.agents.find((x) => x.id === id);
+      this.keepArtifact(e.name, e.html, { person: a?.person ?? id.split("/")[0] ?? this.me, agent: id, ...(a?.nickname ? { nickname: a.nickname } : {}) }, at);
+    }
+    this.record(event, jev ?? b.jev, broadcast);
     if (e?.kind === "step") {
       const task = this.tasks.find((t) => t.number === e.task);
       const step = task?.steps.find((s) => s.index === e.step);
@@ -296,15 +357,19 @@ export class MockChannelSource implements ChannelSource {
         if (!task?.claim) return { ok: false, reason: `Task #${action.task} has no Claim.` };
         if (!task.claim.stale) return { ok: false, reason: "Only a Stale Claim can be taken over." };
         const from = task.claim.holder;
-        const lastUpdate = [...this.events]
-          .reverse()
-          .find((e) => e.type === "update" && e.task === task.number && e.actor.kind === "agent");
-        const event = makeEvent("takeover", me, null, {
-          from,
-          to: action.to,
-          stepsCompleted: task.steps.filter((s) => s.done).map((s) => s.text),
-          lastUpdate: lastUpdate?.type === "update" ? lastUpdate.payload.text : undefined,
-        }, { at, task: task.number });
+        const lastUpdate = [...this.events].reverse().find((e) => e.type === "update" && e.task === task.number && e.actor.kind === "agent");
+        const event = makeEvent(
+          "takeover",
+          me,
+          null,
+          {
+            from,
+            to: action.to,
+            stepsCompleted: task.steps.filter((s) => s.done).map((s) => s.text),
+            lastUpdate: lastUpdate?.type === "update" ? lastUpdate.payload.text : undefined,
+          },
+          { at, task: task.number },
+        );
         task.claim = { task: task.number, holder: action.to, claimedAt: at, stale: false };
         task.updatedAt = at;
         this.record(event, undefined, true);
@@ -405,8 +470,7 @@ export class MockChannelSource implements ChannelSource {
     if (task.status === "done") return { ok: false, reason: `Task #${number} is done.` };
     if (!task.claim) return { ok: false, reason: `Task #${number} is not claimed.` };
     const h = task.claim.holder;
-    const mine =
-      h.kind === "person" ? h.person === this.me : this.agents.find((a) => a.id === h.agentId)?.person === this.me;
+    const mine = h.kind === "person" ? h.person === this.me : this.agents.find((a) => a.id === h.agentId)?.person === this.me;
     if (!mine) {
       const name = h.kind === "agent" ? h.agentId : h.person;
       return { ok: false, reason: `Task #${number} is held by ${name}. Only its holder can release it.`, heldBy: h };
@@ -420,6 +484,31 @@ export class MockChannelSource implements ChannelSource {
     return { ok: true, task: clone(task) };
   }
 
+  /** This machine's Host, the other Persons' Hosts the demo Agents run on, and a laptop of shlok's that has been Offline for two days. */
+  private allHosts(): Host[] {
+    if (this.opts.state === "empty") return [];
+    const host = (id: `${string}/${string}`, roots: string[], extra: Partial<Host> = {}): Host => ({
+      ...this.host,
+      id,
+      person: id.split("/")[0],
+      name: id.split("/")[1],
+      roots,
+      ...extra,
+    });
+    const twoDays = new Date(T0 - 2 * 86_400_000).toISOString();
+    const others = [
+      host("shlok/laptop", ["/Users/shlok/code"], {
+        live: false,
+        lastSeenAt: twoDays,
+        registeredAt: new Date(T0 - 40 * 86_400_000).toISOString(),
+        maxPermissionMode: "default",
+      }),
+      host("maya/maya-mbp", ["/Users/maya/src/app", "/Users/maya/src/design"], { maxPermissionMode: "default" }),
+      host("dev/devbox", ["/home/dev/app"], { maxPermissionMode: "auto" }),
+    ];
+    return [this.host, ...others];
+  }
+
   async hosts(): Promise<HostsResponse> {
     await new Promise((r) => setTimeout(r, 120));
     if (this.opts.state === "read-error") throw new Error(READ_FAILED);
@@ -427,14 +516,7 @@ export class MockChannelSource implements ChannelSource {
     // The other Persons' Hosts the demo Agents run on (a Person starts Agents only on their
     // own), and a laptop of shlok's that has been Offline for two days.
     if (this.opts.state === "empty") return { hosts: [], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running: 0 };
-    const host = (id: `${string}/${string}`, roots: string[], extra: Partial<Host> = {}): Host => ({ ...this.host, id, person: id.split("/")[0]!, name: id.split("/")[1]!, roots, ...extra });
-    const twoDays = new Date(T0 - 2 * 86_400_000).toISOString();
-    const others = [
-      host("shlok/laptop", ["/Users/shlok/code"], { live: false, lastSeenAt: twoDays, registeredAt: new Date(T0 - 40 * 86_400_000).toISOString(), maxPermissionMode: "default" }),
-      host("maya/maya-mbp", ["/Users/maya/src/app", "/Users/maya/src/design"], { maxPermissionMode: "default" }),
-      host("dev/devbox", ["/home/dev/app"], { maxPermissionMode: "auto" }),
-    ];
-    return clone({ hosts: [this.host, ...others], cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
+    return clone({ hosts: this.allHosts(), cap: DEFAULT_HOST_AGENTS_LIVE_CAP, running });
   }
 
   /**
@@ -463,6 +545,154 @@ export class MockChannelSource implements ChannelSource {
       .sort((a, b) => (words.length > 0 ? b.score - a.score : 0) || b.n.seq - a.n.seq)
       .map((m) => m.n);
     return clone({ notes: notes.slice(0, limit), ...(notes.length > limit ? { more: true as const } : {}) });
+  }
+
+  /** Like the Worker: each skill's latest version, by name, without its files. */
+  async skills(): Promise<SkillsResponse> {
+    await new Promise((r) => setTimeout(r, 120));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    if (this.opts.state === "empty") return { skills: [] };
+    const latest = new Map<string, Skill>();
+    for (const v of SKILL_VERSIONS) if ((latest.get(v.name)?.version ?? 0) < v.version) latest.set(v.name, v);
+    const skills = [...latest.values()].sort((a, b) => (a.name < b.name ? -1 : 1)).map(({ files: _files, ...summary }) => summary);
+    return clone({ skills });
+  }
+
+  /** Like the Worker: one version in full, or why there is none. */
+  async skill(name: string, version?: number): Promise<SkillResponse> {
+    await new Promise((r) => setTimeout(r, 80));
+    const all = SKILL_VERSIONS.filter((v) => v.name === name);
+    if (all.length === 0) throw new Error(`No skill is named ${name} on this Channel.`);
+    const versions = all.map((v) => v.version).sort((a, b) => a - b);
+    const wanted = version ?? versions.at(-1);
+    const skill = all.find((v) => v.version === wanted);
+    if (!skill) throw new Error(`${name} has no version ${wanted}; it has ${versions.join(", ")}.`);
+    return clone({ skill, versions });
+  }
+
+  /** Like the Worker's file reads: the bytes of each file, by path. */
+  async skillFiles(files: SkillEntry[]): Promise<Map<string, Uint8Array>> {
+    await new Promise((r) => setTimeout(r, 60));
+    return new Map(files.map((f) => [f.path, SKILL_BYTES.get(f.digest) ?? new Uint8Array()]));
+  }
+
+  /** Like the Worker: each artifact's latest version, the latest published first. */
+  async artifacts(): Promise<ArtifactsResponse> {
+    await new Promise((r) => setTimeout(r, 100));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    if (this.opts.state === "empty") return { artifacts: [] };
+    const latest = new Map<string, MockArtifact>();
+    for (const v of this.artifactVersions) if ((latest.get(v.name)?.version ?? 0) < v.version) latest.set(v.name, v);
+    const artifacts = [...latest.values()]
+      .sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : a.publishedAt > b.publishedAt ? -1 : 0))
+      .map(({ html: _html, ...summary }) => summary);
+    return clone({ artifacts });
+  }
+
+  /** Like the Worker: one version, and every version kept, or why there is none. */
+  async artifact(name: string, version?: number): Promise<ArtifactResponse> {
+    await new Promise((r) => setTimeout(r, 80));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    const all = this.opts.state === "empty" ? [] : this.artifactVersions.filter((v) => v.name === name);
+    if (all.length === 0) throw new Error(`No artifact is named ${name} on this Channel.`);
+    const versions = all.map((v) => v.version).sort((a, b) => a - b);
+    const wanted = version ?? versions.at(-1);
+    const found = all.find((v) => v.version === wanted);
+    if (!found) throw new Error(`${name} has no version ${wanted}; it keeps ${versions.join(", ")}.`);
+    const { html: _html, ...artifact } = found;
+    return clone({ artifact, versions });
+  }
+
+  /**
+   * The page as a blob URL. In a frame it runs in the same sandbox as the Worker's page; a
+   * new tab opens it in the Dashboard's own origin, which in the demo holds nothing to read.
+   */
+  artifactPageUrl(name: string, version?: number, _download?: boolean): string {
+    const all = this.artifactVersions.filter((v) => v.name === name);
+    const found = version === undefined ? all.at(-1) : all.find((v) => v.version === version);
+    if (!found) return "about:blank";
+    const key = `${found.name}@${found.version}`;
+    let url = this.pageUrls.get(key);
+    if (url === undefined) {
+      url =
+        typeof URL.createObjectURL === "function"
+          ? URL.createObjectURL(new Blob([found.html], { type: "text/html" }))
+          : `data:text/html;charset=utf-8,${encodeURIComponent(found.html)}`;
+      this.pageUrls.set(key, url);
+    }
+    return url;
+  }
+
+  /** Like the Worker: checked, then kept as the next version, unless the latest already is this page. */
+  async publishArtifact(name: string, request: PublishArtifactRequest): Promise<PublishArtifactResult> {
+    await new Promise((r) => setTimeout(r, 300));
+    const check = checkArtifact(name, request);
+    if (!check.ok) return { ok: false, reason: check.reason };
+    const latest = this.artifactVersions.filter((v) => v.name === name).at(-1);
+    if (latest && latest.html === check.publish.html && latest.title === check.publish.title) {
+      const { html: _html, ...artifact } = latest;
+      return { ok: true, answer: clone({ artifact, published: false }) };
+    }
+    const { html: _html, ...artifact } = this.keepArtifact(name, check.publish.html, { person: this.me }, new Date().toISOString(), check.publish.title);
+    return { ok: true, answer: clone({ artifact, published: true }) };
+  }
+
+  /** Like the Worker: its owner deletes every kept version; anyone else is refused. */
+  async deleteArtifact(name: string): Promise<ActionResult> {
+    await new Promise((r) => setTimeout(r, 300));
+    const mine = this.artifactVersions.filter((v) => v.name === name);
+    const owner = mine.at(-1)?.owner;
+    if (owner === undefined) return { ok: false, reason: `No artifact is named ${name} on this Channel.` };
+    if (owner !== this.me) return { ok: false, reason: `${name} belongs to ${owner}, who published it first. Only they delete it.` };
+    this.artifactVersions = this.artifactVersions.filter((v) => v.name !== name);
+    return { ok: true };
+  }
+
+  private keepArtifact(name: string, html: string, by: ArtifactPublisher, at: string, title?: string): MockArtifact {
+    const mine = this.artifactVersions.filter((v) => v.name === name);
+    const next = artifactVersion(name, (mine.at(-1)?.version ?? 0) + 1, html, by, at, title, mine.at(-1)?.owner);
+    const dropped = new Set(mine.slice(0, Math.max(0, mine.length + 1 - ARTIFACT_VERSIONS_KEPT)));
+    this.artifactVersions = [...this.artifactVersions.filter((v) => !dropped.has(v)), next];
+    return next;
+  }
+
+  /** Like the Worker: every page's current version, the overview first and the stuck page last. */
+  async brief(): Promise<BriefResponse> {
+    await new Promise((r) => setTimeout(r, 100));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    if (this.opts.state === "empty") return { pages: [] };
+    return clone({ pages: BRIEF_PAGES });
+  }
+
+  /** Like the Worker: the project without its secret key. The demo's Person is the Channel's owner. */
+  async langfuse(): Promise<LangfuseSettingsResponse> {
+    await new Promise((r) => setTimeout(r, 100));
+    if (this.opts.state === "read-error") throw new Error(READ_FAILED);
+    return clone({ langfuse: this.langfuseProject, canManage: true });
+  }
+
+  /** Like the Worker: checked, tried against Langfuse (here, a secret key of "sk-lf-wrong" is refused), then kept. */
+  async connectLangfuse(request: ConnectLangfuseRequest): Promise<LangfuseResult> {
+    await new Promise((r) => setTimeout(r, 400));
+    const body = cleanLangfuseConnect({ ...request });
+    if (!body.ok) return { ok: false, reason: body.reason };
+    if (body.connect.secretKey === "sk-lf-wrong") {
+      return { ok: false, reason: `Langfuse at ${body.connect.host} refused these keys. Check that they are the project's.` };
+    }
+    this.langfuseProject = {
+      host: body.connect.host,
+      publicKeyEnd: body.connect.publicKey.slice(-LANGFUSE_KEY_END),
+      project: { id: "cm1greenroom", name: "greenroom" },
+      connectedBy: ME,
+      connectedAt: new Date().toISOString(),
+    };
+    return { ok: true, settings: clone({ langfuse: this.langfuseProject, canManage: true }) };
+  }
+
+  async removeLangfuse(): Promise<LangfuseResult> {
+    await new Promise((r) => setTimeout(r, 200));
+    this.langfuseProject = null;
+    return { ok: true, settings: { langfuse: null, canManage: true } };
   }
 
   /** Like the Worker and the Host: checked, then an Agent that registers a moment later. */
@@ -525,11 +755,7 @@ export class MockChannelSource implements ChannelSource {
     };
     this.agents.push(agent);
     this.emit({ type: "agent", agent: clone(agent) });
-    this.record(
-      makeEvent("agent.spawned", agentActor(agent.id), null, { spawn: spawn.id, host: host.id, agent: agent.id }, { at }),
-      undefined,
-      true,
-    );
+    this.record(makeEvent("agent.spawned", agentActor(agent.id), null, { spawn: spawn.id, host: host.id, agent: agent.id }, { at }), undefined, true);
     // Its wrapper started with `--from`: the Channel records the Hand-off as it registers (ADR 0024).
     if (request.from) this.record(makeEvent("agent.handoff", agentActor(agent.id), null, { from: request.from }, { at }), undefined, true);
     return { ok: true, answer: { ok: true, spawn: spawn.id, host: host.id, agent: clone(agent) } };
@@ -629,17 +855,34 @@ export class MockChannelSource implements ChannelSource {
     );
     this.tasks.push(task);
     this.emit({ type: "task", task });
-    this.record(
-      makeEvent("task.create", person(this.me), null, { title, url: task.url, via: "channel" }, { at, task: number }),
-      undefined,
-      true,
-    );
+    this.record(makeEvent("task.create", person(this.me), null, { title, url: task.url, via: "channel" }, { at, task: number }), undefined, true);
     return { ok: true, task };
   }
 }
 
 // Words for the extra Agents' Nicknames, so a long fleet reads like one.
-const FLEET_WORDS = ["atlas", "birch", "cobalt", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper", "kestrel", "lumen", "meadow", "nimbus", "onyx", "pebble", "quartz", "raven", "sable", "tundra"];
+const FLEET_WORDS = [
+  "atlas",
+  "birch",
+  "cobalt",
+  "delta",
+  "ember",
+  "fjord",
+  "garnet",
+  "harbor",
+  "indigo",
+  "juniper",
+  "kestrel",
+  "lumen",
+  "meadow",
+  "nimbus",
+  "onyx",
+  "pebble",
+  "quartz",
+  "raven",
+  "sable",
+  "tundra",
+];
 
 /**
  * The seed Agents and generated ones up to `size`, spread over the three People, mostly Live,
@@ -650,7 +893,7 @@ function withFleet(seed: Agent[], size: number): Agent[] {
   const people = ["shlok", "maya", "dev"];
   const at = (minutes: number) => new Date(T0 - minutes * 60_000).toISOString();
   for (let i = out.length; out.length < size; i++) {
-    const person = people[i % people.length]!;
+    const person = people[i % people.length];
     const codex = i % 5 === 4;
     const presence: Agent["presence"] = i % 9 === 0 ? "gone" : i % 4 === 0 ? "idle" : "live";
     out.push({
@@ -665,7 +908,12 @@ function withFleet(seed: Agent[], size: number): Agent[] {
       canReceiveInterrupts: true,
       lastSeenAt: at(i % 50),
       startedAt: at(30 + ((i * 7) % 600)),
-      context: { readAt: at(i % 50), tokens: 40_000 + ((i * 7919) % 800_000), window: 1_000_000, activity: i % 3 === 0 ? "Running the tests" : "Reading the code" },
+      context: {
+        readAt: at(i % 50),
+        tokens: 40_000 + ((i * 7919) % 800_000),
+        window: 1_000_000,
+        activity: i % 3 === 0 ? "Running the tests" : "Reading the code",
+      },
     } as Agent);
   }
   return out;

@@ -7,7 +7,7 @@
 
 import { env, reset, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   AgentId,
   AgentResponse,
@@ -17,12 +17,17 @@ import type {
   MemoryResponse,
   Task,
 } from "../../shared/src/index";
-import { agentPath } from "../../shared/src/index";
+import { agentPath, BRIEF_HISTORY, MAX_BRIEF_PAGES } from "../../shared/src/index";
 import { Channel } from "../src/channel";
+import { installGitHubApp } from "../src/github/index";
+import { sealSecretKey } from "../src/langfuse";
+import { signAccess } from "../src/mcp/tokens";
 import { installJev } from "../src/relay/jev";
 import { lastUpdate } from "../src/status-comment";
-import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
+import { BASE, bearer, channelStub, forgetTokens, REPO, remember, SESSION_SECRET, streamQuery, url } from "./client";
+import { FakeGitHubApi } from "./fake-github-api";
 import { FakeJev } from "./fake-jev";
+import { FakeLangfuse, LANGFUSE_HOST, PROJECT, PUBLIC_KEY, SECRET_KEY } from "./fake-langfuse";
 
 /**
  * The history the Channel is given before anything is measured: Events from Agents
@@ -153,9 +158,11 @@ async function seed(live: AgentId[]): Promise<void> {
       task: number | null,
       payload: unknown,
     ) => {
+      // An older Channel's history, from before `seq` became the time (ADR 0037): seq 1 to EVENTS.
       sql.exec(
-        `INSERT INTO events (id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO events (seq, id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        row + 1,
         `seed-${row}`,
         new Date(Date.now() - (EVENTS - row) * 1000).toISOString(),
         type,
@@ -251,6 +258,7 @@ beforeEach(async () => {
   for (const agent of live) await heartbeat(agent, "live");
   measured = live[0] as AgentId;
   await seed(live);
+  await listenForVerdicts();
   await meterChannel();
 });
 
@@ -279,14 +287,25 @@ async function sendHooks(agent: AgentId, events: HookEvent[]): Promise<void> {
   socket.close();
 }
 
-/** The Relay's Verdicts about Event `id`, read without being counted. */
+/** The Events whose Verdicts the Relay broadcast, heard on a Dashboard's stream. */
+const verdictsHeard = new Set<string>();
+
+/** Opens a Dashboard's stream, which hears every Verdict the Relay gives, stored or not (ADR 0037). */
+async function listenForVerdicts(): Promise<void> {
+  verdictsHeard.clear();
+  const response = await call(`/api/stream?${await streamQuery("shlok")}`, { headers: { Upgrade: "websocket" } });
+  const socket = response.webSocket;
+  if (!socket) throw new Error("No WebSocket in the upgrade response");
+  socket.accept();
+  socket.addEventListener("message", (message) => {
+    const frame = JSON.parse(String(message.data)) as { type: string; event?: ChannelEvent };
+    if (frame.type === "event" && frame.event?.type === "verdict") verdictsHeard.add(frame.event.payload.event);
+  });
+}
+
+/** Whether the Relay has given a Verdict about Event `id`; reads nothing. */
 async function verdictsAbout(id: string): Promise<boolean> {
-  return runInDurableObject(channelStub(), (_channel, state) =>
-    state.storage.sql
-      .exec<{ payload: string }>("SELECT payload FROM events WHERE type = 'verdict' ORDER BY seq DESC LIMIT 10")
-      .toArray()
-      .some((row) => JSON.stringify(row.payload).includes(id)),
-  );
+  return verdictsHeard.has(id);
 }
 
 it("a Hook Event reads a bounded number of rows", async () => {
@@ -442,6 +461,204 @@ it("Events by ID and the Wakes after an Event read only what they return", async
     expect(events.every((e) => e.type === "wake")).toBe(true);
   });
   expect(wakes).toBeLessThan(25);
+});
+
+/** The rows one `channel` call of the read-only connector may read (ADR 0040). */
+const ASK_BUDGET = 400;
+
+it("the connector's channel tool reads a bounded number of rows, plain or narrowed", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  // A signed-in app's grant, which each call checks is still live.
+  await runInDurableObject(channelStub(), (channel: Channel) => {
+    channel.startMcpGrant("rows-read-grant", "shlok", "rows-read-client", Date.now() + 86_400_000);
+  });
+  const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-grant", endpoint);
+  const ask = async (args: Record<string, string>) => {
+    const response = await call(`/r/${REPO}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "channel", arguments: args },
+      }),
+    });
+    const { result } = (await response.json()) as { result: { content: { text: string }[]; isError: boolean } };
+    expect(result.isError, JSON.stringify(args)).toBe(false);
+    return result.content[0]?.text ?? "";
+  };
+  // A Channel's Tasks are mostly open Issues nobody holds: far more than the seed's.
+  await runInDurableObject(channelStub(), (channel) => {
+    const tasks = (channel as unknown as { tasks: { write(task: Task): void } }).tasks;
+    for (let n = TASKS + 1; n <= TASKS + 2000; n++) tasks.write(task(n));
+  });
+  // Membership is checked, and cached, by a first call, as by any caller's.
+  await ask({});
+  const cases: [Record<string, string>, string][] = [
+    [{}, "Update"],
+    [{ since: "30d" }, "Update"],
+    [{ about: "#40" }, "Task #40"],
+    [{ about: measured }, measured],
+    [{ about: "shlok" }, "the Person shlok"],
+    [{ about: "progress" }, "progress"],
+  ];
+  for (const [args, mentions] of cases) {
+    const read = await rowsRead(async () => expect(await ask(args)).toContain(mentions));
+    expect(read, JSON.stringify(args)).toBeLessThan(ASK_BUDGET);
+  }
+});
+
+it("the connector's github tool reads only what admitting the call reads: GitHub answers it", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  const api = new FakeGitHubApi();
+  api.listen();
+  installGitHubApp(await api.app());
+  api.files.set("docs/adr/0040-ask-the-channel.md", "# Ask the Channel\n");
+  api.issues.push({ number: 1, title: "Task 1", author: "shlok", createdAt: new Date().toISOString() });
+  try {
+    await runInDurableObject(channelStub(), (channel: Channel) => {
+      channel.startMcpGrant("rows-read-github", "shlok", "rows-read-client", Date.now() + 86_400_000);
+    });
+    const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-github", endpoint);
+    const send = async (message: Record<string, unknown>) => {
+      const response = await call(`/r/${REPO}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+      });
+      return (await response.json()) as { result: { isError?: boolean } };
+    };
+    const ask = async (args: Record<string, string>) => {
+      const { result } = await send({ method: "tools/call", params: { name: "github", arguments: args } });
+      expect(result.isError, JSON.stringify(args)).toBe(false);
+    };
+    // Membership is checked, and cached, by a first call, as by any caller's.
+    await ask({});
+    // What every call reads to be let in: its grant and its Person's Membership, by key.
+    const admitting = await rowsRead(() => send({ method: "ping" }));
+    expect(admitting).toBeLessThan(10);
+    const questions: Record<string, string>[] = [
+      {},
+      { about: "#1" },
+      { about: "docs/adr" },
+      { about: "ask the channel" },
+    ];
+    for (const args of questions) {
+      expect(await rowsRead(() => ask(args)), JSON.stringify(args)).toBe(admitting);
+    }
+  } finally {
+    installGitHubApp(null);
+    vi.restoreAllMocks();
+  }
+});
+
+it("the connector's brief tool reads one row per page for the overview, and one for an area (ADR 0042)", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  // A full Brief, every page with its kept earlier versions.
+  await runInDurableObject(channelStub(), (channel: Channel, state) => {
+    channel.startMcpGrant("rows-read-brief", "shlok", "rows-read-client", Date.now() + 86_400_000);
+    const author = JSON.stringify({ agent: measured, person: "shlok" });
+    const at = new Date().toISOString();
+    const pages = ["overview", "stuck", ...Array.from({ length: MAX_BRIEF_PAGES - 2 }, (_, n) => `area-${n}`)];
+    for (const page of pages) {
+      const text = `# ${page}\n\n${"Where it stands, with #12 and ADR 0040. ".repeat(150)}`;
+      const earlier = Array.from({ length: BRIEF_HISTORY }, (_, n) => ({
+        page,
+        title: page,
+        version: BRIEF_HISTORY - n,
+        text,
+        author: JSON.parse(author),
+        updatedAt: at,
+      }));
+      state.storage.sql.exec(
+        "INSERT INTO brief_pages (page, title, version, text, author, updated_at, earlier) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        page,
+        page,
+        BRIEF_HISTORY + 1,
+        text,
+        author,
+        at,
+        JSON.stringify(earlier),
+      );
+    }
+  });
+  const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-brief", endpoint);
+  const send = async (message: Record<string, unknown>) => {
+    const response = await call(`/r/${REPO}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+    });
+    return (await response.json()) as { result: { isError?: boolean; content?: { text: string }[] } };
+  };
+  const ask = async (args: Record<string, string>) => {
+    const { result } = await send({ method: "tools/call", params: { name: "brief", arguments: args } });
+    expect(result.isError, JSON.stringify(args)).toBe(false);
+    return result.content?.[0]?.text ?? "";
+  };
+  // Membership is checked, and cached, by a first call, as by any caller's.
+  await ask({});
+  const admitting = await rowsRead(() => send({ method: "ping" }));
+  expect(await rowsRead(async () => expect(await ask({})).toContain('"area-21"'))).toBe(admitting + MAX_BRIEF_PAGES);
+  expect(await rowsRead(async () => expect(await ask({ area: "area-3" })).toContain("## area-3"))).toBe(admitting + 1);
+  // The Dashboard's read of every page reads each page's row once.
+  const dashboard = await rowsRead(async () => {
+    const response = await call("/api/brief", { headers: { Authorization: await bearer("shlok") } });
+    expect(response.status).toBe(200);
+  });
+  expect(dashboard).toBeLessThan(MAX_BRIEF_PAGES + 10);
+});
+
+it("the connector's costs tool reads the Channel's one Langfuse row besides what admits the call (ADR 0044)", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  const langfuse = new FakeLangfuse();
+  langfuse.listen();
+  langfuse.observations.push({
+    type: "GENERATION",
+    traceName: "verifier turn",
+    model: "claude-opus-4-1",
+    environment: "production",
+    startTime: new Date(Date.now() - 86_400_000).toISOString(),
+    latencyMs: 3_000,
+    cost: 0.5,
+  });
+  try {
+    const secretSealed = await sealSecretKey(SESSION_SECRET, REPO, SECRET_KEY);
+    await runInDurableObject(channelStub(), (channel: Channel) => {
+      channel.startMcpGrant("rows-read-costs", "shlok", "rows-read-client", Date.now() + 86_400_000);
+      channel.setLangfuseProject({
+        host: LANGFUSE_HOST,
+        publicKey: PUBLIC_KEY,
+        secretSealed,
+        project: PROJECT,
+        connectedBy: "shlok",
+        connectedAt: new Date().toISOString(),
+      });
+    });
+    const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-costs", endpoint);
+    const send = async (message: Record<string, unknown>) => {
+      const response = await call(`/r/${REPO}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+      });
+      return (await response.json()) as { result: { isError?: boolean; content?: { text: string }[] } };
+    };
+    const ask = async (args: Record<string, string>) => {
+      const { result } = await send({ method: "tools/call", params: { name: "costs", arguments: args } });
+      expect(result.isError, JSON.stringify(args)).toBe(false);
+      expect(result.content?.[0]?.text).toContain("$0.50");
+    };
+    // Membership is checked, and cached, by a first call, as by any caller's.
+    await ask({});
+    const admitting = await rowsRead(() => send({ method: "ping" }));
+    for (const args of [{}, { by: "trace" }, { by: "day", period: "7d" }] as Record<string, string>[]) {
+      expect(await rowsRead(() => ask(args)), JSON.stringify(args)).toBe(admitting + 1);
+    }
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 /** What starting the Channel's Durable Object again reads, as after an eviction or a deploy. */

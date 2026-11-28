@@ -42,8 +42,8 @@ export interface ProxyCaptureMessage {
 
 /** Channel to wrapper, sent to that socket only. A refused Event is not retried. */
 export type ProxyCaptureReply =
-  | { type: "proxy.ack"; id: string }
-  | { type: "proxy.refused"; id: string; reason: string };
+  /** `event`: the Event as the Channel recorded it, for the machine's local store (ADR 0037). */
+  { type: "proxy.ack"; id: string; event?: ChannelEvent } | { type: "proxy.refused"; id: string; reason: string };
 
 /** `POST /api/agents/:id/proxy-mode`: only the Agent's own Person may change it. Answers with the Agent. */
 export interface SetProxyModeRequest {

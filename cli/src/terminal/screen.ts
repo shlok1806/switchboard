@@ -6,7 +6,7 @@
 // @xterm/headless is CommonJS: Node's ESM loader finds no named exports in it.
 import xterm from "@xterm/headless";
 import { TERMINAL_FRAME_MS } from "../../../shared/src/index";
-import { MASK, maskSecrets } from "../proxy/mask";
+import { MASK, maskSecrets } from "../../../shared/src/mask";
 
 /** Header values masking by name misses: `Authorization: Bearer <token>` keeps its scheme, loses its token. */
 const HEADER =

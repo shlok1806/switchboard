@@ -10,6 +10,7 @@
 import type { ChannelEvent, MemoryNote, MemoryQuery } from "../../shared/src/index";
 import { MAX_MEMORY_LIMIT, noteFromEvent } from "../../shared/src/index";
 import { utcDay } from "./channel";
+import { searchWords } from "./search-words";
 
 export const MEMORY_SCHEMA = `
   CREATE TABLE IF NOT EXISTS memory_notes (
@@ -42,11 +43,12 @@ export type MemoryReadResult =
 
 /**
  * A search as FTS5 reads it: each word of `q` quoted, so nothing in it is syntax,
- * and all of them required. Null when `q` has no words.
+ * and any of them enough (ADR 0043). FTS5's rank puts the notes that match more of
+ * them first. Null when `q` has no words.
  */
 export function ftsQuery(q: string): string | null {
-  const words = q.match(/[\p{L}\p{N}_]+/gu)?.slice(0, MAX_SEARCH_TERMS) ?? [];
-  return words.length === 0 ? null : words.map((word) => `"${word}"`).join(" ");
+  const words = searchWords(q).slice(0, MAX_SEARCH_TERMS);
+  return words.length === 0 ? null : words.map((word) => `"${word}"`).join(" OR ");
 }
 
 export class Memory {

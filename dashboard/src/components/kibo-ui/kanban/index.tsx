@@ -26,23 +26,16 @@
  *   selection tint.
  */
 
-import type {
-  Announcements,
-  CollisionDetection,
-  DndContextProps,
-  DragEndEvent,
-  DragStartEvent,
-  KeyboardCoordinateGetter,
-} from "@dnd-kit/core";
+import type { Announcements, CollisionDetection, DndContextProps, DragEndEvent, DragStartEvent, KeyboardCoordinateGetter } from "@dnd-kit/core";
 import {
+  closestCorners,
   DndContext,
   DragOverlay,
   KeyboardCode,
   KeyboardSensor,
   MouseSensor,
-  TouchSensor,
-  closestCorners,
   pointerWithin,
+  TouchSensor,
   useDroppable,
   useSensor,
   useSensors,
@@ -69,10 +62,7 @@ export type KanbanColumnProps = {
   name: string;
 } & Record<string, unknown>;
 
-type KanbanContextProps<
-  T extends KanbanItemProps = KanbanItemProps,
-  C extends KanbanColumnProps = KanbanColumnProps,
-> = {
+type KanbanContextProps<T extends KanbanItemProps = KanbanItemProps, C extends KanbanColumnProps = KanbanColumnProps> = {
   columns: C[];
   data: T[];
   activeCardId: string | null;
@@ -106,7 +96,7 @@ export const KanbanBoard = ({ id, children, className }: KanbanBoardProps) => {
   return (
     <div
       className={cn(
-        "relative flex size-full min-h-40 flex-col rounded-md bg-panel text-small transition-colors duration-150",
+        "relative flex size-full min-h-40 flex-col rounded-md bg-paper-2 text-small transition-colors duration-150",
         isOver && "bg-paper-3",
         className,
       )}
@@ -126,14 +116,7 @@ export type KanbanCardProps<T extends KanbanItemProps = KanbanItemProps> = T & {
   onOpen?: () => void;
 };
 
-export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
-  id,
-  name,
-  column,
-  children,
-  className,
-  onOpen,
-}: KanbanCardProps<T>) => {
+export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({ id, name, column, children, className, onOpen }: KanbanCardProps<T>) => {
   const { attributes, listeners, setNodeRef, transition, transform, isDragging } = useSortable({
     id,
     data: { column },
@@ -168,18 +151,18 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
       >
         <div
           className={cn(
-            "cursor-grab rounded-md bg-surface p-3.5 text-ink transition-colors duration-150 hover:bg-hover",
+            "cursor-grab rounded-md bg-paper p-3.5 text-ink transition-colors duration-150 hover:bg-paper-2",
             isDragging && "pointer-events-none cursor-grabbing opacity-40",
             className,
           )}
         >
-          {children ?? <p className="m-0 text-sm font-medium">{name}</p>}
+          {children ?? <p className="m-0 text-row font-medium">{name}</p>}
         </div>
       </div>
       {activeCardId === id && (
         <t.In>
-          <div className={cn("cursor-grabbing rounded-md bg-surface p-3.5 text-ink shadow-float", className)}>
-            {children ?? <p className="m-0 text-sm font-medium">{name}</p>}
+          <div className={cn("cursor-grabbing rounded-md bg-paper p-3.5 text-ink shadow-float", className)}>
+            {children ?? <p className="m-0 text-row font-medium">{name}</p>}
           </div>
         </t.In>
       )}
@@ -187,21 +170,13 @@ export const KanbanCard = <T extends KanbanItemProps = KanbanItemProps>({
   );
 };
 
-export type KanbanCardsProps<T extends KanbanItemProps = KanbanItemProps> = Omit<
-  HTMLAttributes<HTMLDivElement>,
-  "children" | "id"
-> & {
+export type KanbanCardsProps<T extends KanbanItemProps = KanbanItemProps> = Omit<HTMLAttributes<HTMLDivElement>, "children" | "id"> & {
   children: (item: T) => ReactNode;
   id: string;
   empty?: ReactNode;
 };
 
-export const KanbanCards = <T extends KanbanItemProps = KanbanItemProps>({
-  children,
-  className,
-  empty,
-  ...props
-}: KanbanCardsProps<T>) => {
+export const KanbanCards = <T extends KanbanItemProps = KanbanItemProps>({ children, className, empty, ...props }: KanbanCardsProps<T>) => {
   const { data } = useContext(KanbanContext) as KanbanContextProps<T>;
   const filteredData = data.filter((item) => item.column === props.id);
   const items = filteredData.map((item) => item.id);
@@ -226,10 +201,10 @@ export const KanbanHeader = ({ className, ...props }: KanbanHeaderProps) => (
 
 export type KanbanMove<T> = { item: T; from: string; to: string };
 
-export type KanbanProviderProps<
-  T extends KanbanItemProps = KanbanItemProps,
-  C extends KanbanColumnProps = KanbanColumnProps,
-> = Omit<DndContextProps, "children" | "onDragEnd" | "onDragStart"> & {
+export type KanbanProviderProps<T extends KanbanItemProps = KanbanItemProps, C extends KanbanColumnProps = KanbanColumnProps> = Omit<
+  DndContextProps,
+  "children" | "onDragEnd" | "onDragStart"
+> & {
   children: (column: C) => ReactNode;
   className?: string;
   columns: C[];
@@ -260,10 +235,7 @@ const collision: CollisionDetection = (args) => {
 // A mask, not a fill: the last 3rem of the visible lanes fade to show there is more to scroll.
 const FADE = "linear-gradient(to right, #000 calc(100% - 3rem), transparent)"; // taste-skill-ignore: a scroll-edge mask, not a coloured fill
 
-export const KanbanProvider = <
-  T extends KanbanItemProps = KanbanItemProps,
-  C extends KanbanColumnProps = KanbanColumnProps,
->({
+export const KanbanProvider = <T extends KanbanItemProps = KanbanItemProps, C extends KanbanColumnProps = KanbanColumnProps>({
   children,
   onDragStart,
   onDragEnd,

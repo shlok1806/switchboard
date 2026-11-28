@@ -5,9 +5,10 @@
  * (unless `locked`, while an answer is awaited), and focus goes back to what opened it. The
  * head and the actions stay put while the body scrolls between them.
  */
-import { useRef, type ReactNode } from "react";
+
 import { X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { type ReactNode, useRef } from "react";
 import { buttonVariants } from "@/components/atoms/Button";
 import { cn } from "@/lib/utils";
 
@@ -39,7 +40,7 @@ export function Sheet({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(next) => !next && !locked && onClose()}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/25 dark:bg-black/55" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-veil" />
         <DialogPrimitive.Content
           onOpenAutoFocus={(e) => {
             opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -74,7 +75,11 @@ export function Sheet({
             )}
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5">{children}</div>
-          {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-rule px-5 py-3 max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">{actions}</div>}
+          {actions && (
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-rule px-5 py-3 max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+              {actions}
+            </div>
+          )}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

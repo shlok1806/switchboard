@@ -4,16 +4,17 @@
  * latest shared notes. On a desk the queue and the log take the wide column and the fleet
  * and memory the narrow one; below 640px they stack in that order.
  */
-import { useMemo, useState } from "react";
+
 import type { Agent, ChannelEvent, EventType, Person, Task } from "@shared/index";
 import { noteFromEvent } from "@shared/index";
+import { useMemo, useState } from "react";
 import { buttonVariants } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { PendingApproval } from "@/components/domain/approval";
-import { FirstAgentAction } from "@/components/domain/start-agent";
-import { GroupLine, Secondary, StackedRow, contextPercent, groupByPerson, shortName, since, useLines, type Line } from "@/components/domain/fleet";
+import { contextPercent, GroupLine, groupByPerson, type Line, Secondary, StackedRow, shortName, since, useLines } from "@/components/domain/fleet";
 import { RowFrame } from "@/components/domain/log";
-import { State } from "@/components/domain/state";
+import { FirstAgentAction } from "@/components/domain/start-agent";
+import { Orb, State } from "@/components/domain/state";
 import { TakeoverAction } from "@/components/domain/takeover";
 import { useNow } from "@/components/domain/usage";
 import { PageHead } from "@/components/shell/page-head";
@@ -21,7 +22,7 @@ import { SectionHead } from "@/components/shell/section";
 import { EmptyView } from "@/components/shell/states";
 import { useChannel, useIndex, useMe } from "@/data/store";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { TAG_LABEL, actorName, elapsed, holderName, localTime, summarize, zoneCity } from "@/lib/format";
+import { actorName, elapsed, holderName, localTime, summarize, TAG_LABEL, zoneCity } from "@/lib/format";
 import { isMine, needsQueue, type QueueItem } from "@/lib/queue";
 import { go, href } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -44,7 +45,6 @@ const QUIET: ReadonlySet<EventType> = new Set<EventType>([
   "terminal.attached",
 ]);
 
-
 export function NowView() {
   const { agents, tasks, events, snapshot } = useChannel();
   const me = useMe();
@@ -60,10 +60,7 @@ export function NowView() {
   const needYou = queue.filter(isMine).length;
   const others = new Map<string, number>();
   for (const i of queue) if (i.kind === "ask" && !i.mine) others.set(i.agent.person, (others.get(i.agent.person) ?? 0) + 1);
-  const title = [
-    needYou > 0 ? `${needYou} ${needYou === 1 ? "line needs" : "lines need"} you` : "Nothing needs you",
-    ...[...others].map(([p, k]) => `${k} ${k === 1 ? "needs" : "need"} ${p}`),
-  ].join(", ");
+  const title = [needsYouTitle(queue.filter(isMine)), ...[...others].map(([p, k]) => `${k} ${k === 1 ? "needs" : "need"} ${p}`)].join(", ");
   const today = new Date(now).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: myZone });
 
   const count = (p: Agent["presence"]) => agents.filter((a) => a.presence === p).length;
@@ -81,7 +78,7 @@ export function NowView() {
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-7 px-[var(--gutter)] pt-5 pb-10">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-7 px-[var(--gutter)] pt-[var(--page-top)] pb-10">
         <PageHead
           title={`${title}.`}
           facts={[
@@ -102,19 +99,23 @@ export function NowView() {
                   <>
                     {needYou} for you
                     {[...others].map(([p, k]) => (
-                      <span key={p} className="max-sm:hidden"> · {k} for {p}</span>
+                      <span key={p} className="max-sm:hidden">
+                        {" "}
+                        · {k} for {p}
+                      </span>
                     ))}
                   </>
                 }
                 action={
-                  <span role="group" aria-label="Show" className="flex gap-1">
-                    <Chip on={mineOnly} onClick={() => setMineOnly(true)}>
-                      Mine
-                    </Chip>
-                    <Chip on={!mineOnly} onClick={() => setMineOnly(false)}>
-                      Everyone
-                    </Chip>
-                  </span>
+                  <Segmented
+                    label="Show"
+                    value={mineOnly ? "mine" : "everyone"}
+                    onChange={(v) => setMineOnly(v === "mine")}
+                    options={[
+                      { value: "mine", label: "Mine" },
+                      { value: "everyone", label: "Everyone" },
+                    ]}
+                  />
                 }
               />
               {shown.length === 0 ? (
@@ -148,7 +149,11 @@ export function NowView() {
 /** One line of the queue. An Ask is the shared Ask; a Stale Claim and a review are drawn here. */
 function QueueLine({ item, now }: { item: QueueItem; now: number }) {
   if (item.kind === "ask") return <PendingApproval agent={item.agent} word />;
-  return item.kind === "stale" ? <StaleLine task={item.task} at={item.at} now={now} /> : <ReviewLine task={item.task} yours={item.yours} at={item.at} now={now} />;
+  return item.kind === "stale" ? (
+    <StaleLine task={item.task} at={item.at} now={now} />
+  ) : (
+    <ReviewLine task={item.task} yours={item.yours} at={item.at} now={now} />
+  );
 }
 
 function Entry({
@@ -179,7 +184,7 @@ function Entry({
         </h3>
         <span className="shrink-0 text-small text-ink-3 tabular-nums">{elapsed(at, now)}</span>
       </div>
-      {children && <p className="max-w-[72ch] text-row break-words text-ink">{children}</p>}
+      {children && <p className="max-w-[var(--measure)] text-row break-words text-ink">{children}</p>}
       <p className="text-small text-ink-3">{meta}</p>
       <div data-acts className="flex flex-wrap items-center gap-2 pt-1">
         {actions}
@@ -190,7 +195,7 @@ function Entry({
 
 function lastUpdate(task: Task, events: ChannelEvent[]): string | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
+    const e = events[i];
     if (e.type === "update" && e.task === task.number) return e.payload.text;
   }
   return undefined;
@@ -199,7 +204,8 @@ function lastUpdate(task: Task, events: ChannelEvent[]): string | undefined {
 function StaleLine({ task, at, now }: { task: Task; at: string; now: number }) {
   const { events } = useChannel();
   const { agentById } = useIndex();
-  const holder = task.claim!.holder;
+  if (!task.claim) return null;
+  const holder = task.claim.holder;
   const agent = holder.kind === "agent" ? agentById.get(holder.agentId) : undefined;
   const who = agent ? `${agent.person}'s ${shortName(agent)}` : holderName(holder);
   const update = lastUpdate(task, events);
@@ -240,7 +246,7 @@ function StaleLine({ task, at, now }: { task: Task; at: string; now: number }) {
 /** The pull request's page: from its `task.review` Event, else beside the Issue. */
 function prUrl(task: Task, events: ChannelEvent[]): string | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
+    const e = events[i];
     if (e.type === "task.review" && e.task === task.number) return e.payload.url;
   }
   return task.pr !== undefined && task.url ? task.url.replace(/\/issues\/\d+$/, `/pull/${task.pr}`) : undefined;
@@ -296,10 +302,17 @@ function ReviewLine({ task, yours, at, now }: { task: Task; yours: boolean; at: 
 function Log({ events, now }: { events: ChannelEvent[]; now: number }) {
   const { agentById } = useIndex();
   const recent: ChannelEvent[] = [];
-  for (let i = events.length - 1; i >= 0 && recent.length < 7; i--) if (!QUIET.has(events[i]!.type)) recent.push(events[i]!);
+  for (let i = events.length - 1; i >= 0 && recent.length < 7; i--) if (!QUIET.has(events[i].type)) recent.push(events[i]);
   return (
     <section aria-label="Last on the Channel" className="flex min-w-0 flex-col">
-      <SectionHead title="Last on the Channel" action={<a href={href({ view: "feed" })} className="text-ink hover:underline">All activity</a>} />
+      <SectionHead
+        title="Last on the Channel"
+        action={
+          <a href={href({ view: "feed" })} className="text-ink hover:underline">
+            All activity
+          </a>
+        }
+      />
       {recent.length === 0 ? (
         <p className="py-4 text-row text-ink-3">Nothing said yet.</p>
       ) : (
@@ -376,7 +389,13 @@ function Said({ event: e }: { event: ChannelEvent }) {
     case "task.review":
       return (
         <>
-          {k("opened")} PR #{e.payload.pr} {on && <>{k("for")}{on}</>}
+          {k("opened")} PR #{e.payload.pr}{" "}
+          {on && (
+            <>
+              {k("for")}
+              {on}
+            </>
+          )}
         </>
       );
     default:
@@ -398,7 +417,11 @@ function Fleet({ lines, me, zones }: { lines: Line[]; me: string; zones: Map<str
       <SectionHead
         title="Fleet"
         meta={`${lines.length} ${lines.length === 1 ? "Agent" : "Agents"}${hosts ? ` on ${hosts} ${hosts === 1 ? "Host" : "Hosts"}` : ""}`}
-        action={<a href={href({ view: "agents" })} className="text-ink hover:underline">All Agents</a>}
+        action={
+          <a href={href({ view: "agents" })} className="text-ink hover:underline">
+            All Agents
+          </a>
+        }
       />
       {lines.length === 0 ? (
         <p className="py-4 text-row text-ink-3">No Agents yet.</p>
@@ -473,10 +496,18 @@ function FleetRow({ line }: { line: Line }) {
         <State state={state} person={a.person} />
       </td>
       <td className="py-2 pr-3">
-        <a href={href({ view: "agent", id: a.id })} className={cn("text-row font-semibold [overflow-wrap:anywhere] hover:underline", gone ? "text-ink-2" : "text-ink")}>
-          {shortName(a)}
-        </a>
-        <Secondary agent={a} model={false} />
+        <div className="flex items-start gap-2">
+          <Orb state={state} reserve />
+          <div className="min-w-0">
+            <a
+              href={href({ view: "agent", id: a.id })}
+              className={cn("text-row font-semibold [overflow-wrap:anywhere] hover:underline", gone ? "text-ink-2" : "text-ink")}
+            >
+              {shortName(a)}
+            </a>
+            <Secondary agent={a} model={false} />
+          </div>
+        </div>
       </td>
       <td className={cn("py-2 pr-3 text-row", gone && !first ? "text-ink-3" : "text-ink")}>
         {first ? (
@@ -515,7 +546,7 @@ function Memory({ events, now }: { events: ChannelEvent[]; now: number }) {
           {notes.slice(0, 3).map((n) => (
             // A note opens in Memory, with the Events around it.
             <RowFrame key={n.id} selected={false} onPick={() => go({ view: "memory", note: n.id })} className="px-1 py-3">
-              <p className="max-w-[72ch] text-row break-words text-ink">{n.text}</p>
+              <p className="max-w-[var(--measure)] font-display text-read break-words text-ink">{n.text}</p>
               <p className="mt-1 text-small text-ink-3">
                 <span className="font-semibold text-ink-2">{n.tags.map((t) => TAG_LABEL[t]).join(", ")}</span>
                 {" · "}
@@ -531,4 +562,20 @@ function Memory({ events, now }: { events: ChannelEvent[]; now: number }) {
       )}
     </section>
   );
+}
+
+/** The head's sentence, in the glossary's words: "1 Pending Approval and 1 Stale Claim need you". */
+function needsYouTitle(mine: readonly QueueItem[]): string {
+  if (mine.length === 0) return "Nothing needs you";
+  const kinds: [QueueItem["kind"], string, string][] = [
+    ["ask", "Pending Approval", "Pending Approvals"],
+    ["stale", "Stale Claim", "Stale Claims"],
+    ["review", "review", "reviews"],
+  ];
+  const parts = kinds.flatMap(([kind, one, many]) => {
+    const n = mine.filter((i) => i.kind === kind).length;
+    return n === 0 ? [] : [`${n} ${n === 1 ? one : many}`];
+  });
+  const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+  return `${list} ${mine.length === 1 ? "needs" : "need"} you`;
 }

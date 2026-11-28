@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
 // Starting and stopping an Agent on a Host (ADR 0015), clicked through as a Person would.
 
+import type { ActionResult, Agent, Host, HostsResponse } from "@shared/index";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ActionResult, Agent, Host, HostsResponse } from "@shared/index";
 import { CommandPalette } from "@/components/domain/palette";
 import { StartAgentButton, StartAgentSheet, StopAgentButton } from "@/components/domain/start-agent";
-import type { ChannelSource, SpawnResult } from "@/data/source";
 import { readHosts } from "@/data/hosts";
+import type { ChannelSource, SpawnResult } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 
 afterEach(() => {

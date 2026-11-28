@@ -130,6 +130,8 @@ type SpawnRow = {
   /** The permission mode it asked for, and the Agent it started (ADR 0018: a lead gives no looser mode). */
   mode: string | null;
   agent: string | null;
+  /** "1" when it starts the Channel's librarian (ADR 0045). */
+  librarian: string | null;
 };
 
 /**
@@ -237,7 +239,8 @@ export class Hosts {
       }
     }
     // ADR 0018: the lead that asked, the mode and the Agent started, on a table made before them.
-    for (const column of ["lead", "mode", "agent"]) {
+    // ADR 0045: whether it starts the librarian.
+    for (const column of ["lead", "mode", "agent", "librarian"]) {
       try {
         deps.sql.exec(`ALTER TABLE host_spawns ADD COLUMN ${column} TEXT`);
       } catch {
@@ -410,6 +413,24 @@ export class Hosts {
         reason: notUnderRootsReason(request.cwd, name, roots),
       };
     }
+    if (request.librarian === true) {
+      // A Person starts the librarian, never a lead, and a Channel has one at a time (ADR 0045).
+      if (lead !== undefined) {
+        return { ok: false, status: 403, reason: "Only a Person starts the Channel's librarian, not a lead." };
+      }
+      const running = this.deps.sql
+        .exec<{ id: string }>(
+          "SELECT id FROM agents INDEXED BY agents_live WHERE presence != 'gone' AND librarian IS NOT NULL LIMIT 1",
+        )
+        .toArray()[0];
+      if (running !== undefined) {
+        return {
+          ok: false,
+          status: 409,
+          reason: `${running.id} is this Channel's librarian already. Stop it before starting another.`,
+        };
+      }
+    }
     const mode: PermissionMode = request.permissionMode ?? DEFAULT_PERMISSION_MODE;
     const max = isPermissionMode(row.max_mode) ? row.max_mode : DEFAULT_PERMISSION_MODE;
     if (!permissionModeWithin(mode, max)) {
@@ -459,17 +480,19 @@ export class Hosts {
         ...(request.brief === undefined ? {} : { brief: request.brief }),
         ...(lead === undefined ? {} : { parent: lead }),
         ...(request.from === undefined ? {} : { from: request.from }),
+        ...(request.librarian === true ? { librarian: true } : {}),
       },
     });
     const spawn = event.id;
     this.deps.sql.exec(
-      "INSERT INTO host_spawns (id, person, host, state, requested_at, lead, mode) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
+      "INSERT INTO host_spawns (id, person, host, state, requested_at, lead, mode, librarian) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)",
       spawn,
       owner,
       row.name,
       Date.now(),
       lead ?? null,
       mode,
+      request.librarian === true ? "1" : null,
     );
     const ended = new Promise<SpawnEnd>((resolve) => this.waiting.set(spawn, resolve));
     const sent = this.deps.sendTo(id, {
@@ -484,6 +507,7 @@ export class Hosts {
       by: person,
       ...(lead === undefined ? {} : { lead }),
       ...(request.from === undefined ? {} : { from: request.from }),
+      ...(request.librarian === true ? { librarian: true } : {}),
     });
     if (!sent) this.failed(spawn, `${name} went Offline before the request reached it.`);
     await this.reschedule();
@@ -507,8 +531,27 @@ export class Hosts {
    * `agent.spawned` once, for a spawn still pending on that Host; anything else is ignored.
    */
   spawned(person: PersonName, name: string, spawn: string, agent: Agent): void {
+    const asked = this.spawnRow(spawn);
+    // A Host whose switchboard predates the librarian starts a plain Agent for it, with every
+    // tool its mode allows (ADR 0045). That Agent is no librarian: the spawn fails and it is stopped.
+    if (
+      asked?.librarian != null &&
+      agent.librarian !== true &&
+      asked.state === "pending" &&
+      asked.person === person &&
+      asked.host === name
+    ) {
+      this.failed(
+        spawn,
+        `${hostIdFor(person, name)} started ${agent.id} without the librarian's mode, so it was stopped: the ` +
+          "Host's switchboard is older than the librarian (ADR 0045). Update it, restart the Host and start the librarian again.",
+      );
+      // Its Host is attached: it is answering this spawn.
+      this.control({ person }, agent.id, "stop");
+      return;
+    }
     if (!this.takePending(spawn, person, name, "spawned")) return;
-    const lead = (this.spawnRow(spawn)?.lead ?? null) as AgentId | null;
+    const lead = (asked?.lead ?? null) as AgentId | null;
     if (lead !== null) this.deps.setParent(agent.id, lead);
     this.deps.sql.exec("UPDATE host_spawns SET agent = ? WHERE id = ?", agent.id, spawn);
     this.deps.append({

@@ -72,7 +72,7 @@ export function PendingApproval({
           {a.detail}
         </pre>
       )}
-      {a.reason && <p className="max-w-[72ch] text-row break-words text-ink">The Agent says: {a.reason}</p>}
+      {a.reason && <p className="max-w-[var(--measure)] text-row break-words text-ink">The Agent says: {a.reason}</p>}
       {mine && <p className="text-small text-ink-3">{meta}</p>}
       {a.deniedBy ? (
         <p className="text-small text-ink-3">Denied by {a.deniedBy}. Waiting for the Agent to move on.</p>
@@ -92,7 +92,11 @@ export function PendingApproval({
                 {mine ? "Open the terminal" : "Watch"}
               </button>
             ) : (
-              <a href={href({ view: "agent", id: agent.id })} onClick={(e) => e.stopPropagation()} className={buttonVariants({ variant: mine ? "ghost" : "secondary" })}>
+              <a
+                href={href({ view: "agent", id: agent.id })}
+                onClick={(e) => e.stopPropagation()}
+                className={buttonVariants({ variant: mine ? "ghost" : "secondary" })}
+              >
                 {mine ? "Open the terminal" : "Watch"}
               </a>
             )}
@@ -148,8 +152,8 @@ export function DenyAction({ agent, id, tool, size }: { agent: Agent; id: string
             <DialogHeader>
               <DialogTitle>Deny {tool}</DialogTitle>
               <DialogDescription>
-                <span className="font-medium text-ink">{agent.nickname ?? agent.id}</span> does not run it, and reads your message
-                instead. Nothing can be approved from here.
+                <span className="font-medium text-ink">{agent.nickname ?? agent.id}</span> does not run it, and reads your message instead. Nothing can be
+                approved from here.
               </DialogDescription>
             </DialogHeader>
             <label className="flex flex-col gap-1.5">
@@ -164,7 +168,7 @@ export function DenyAction({ agent, id, tool, size }: { agent: Agent; id: string
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder="Not now. Use the cached build instead."
-                className="resize-none rounded-[var(--r)] border border-rule-2 bg-paper px-3 py-2 text-row text-ink hover:bg-paper-2 max-sm:text-[16px]"
+                className="resize-none rounded-[var(--r)] border border-rule-2 bg-paper px-3 py-2 text-row text-ink hover:bg-paper-2 max-sm:text-read"
               />
             </label>
             <DialogFooter>

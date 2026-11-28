@@ -3,16 +3,27 @@ import type {
   Agent,
   AgentId,
   AgentRole,
+  ArtifactResponse,
+  ArtifactsResponse,
+  BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
   ClaimRefusal,
+  ConnectLangfuseRequest,
   CreateTaskRequest,
+  HistoryGap,
   HostsResponse,
+  LangfuseSettingsResponse,
   MemoryQuery,
   MemoryResponse,
   PersonAction,
   PersonName,
+  PublishArtifactRequest,
+  PublishArtifactResponse,
   SetHostAllowRequest,
+  SkillEntry,
+  SkillResponse,
+  SkillsResponse,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StreamMessage,
@@ -25,6 +36,12 @@ import type {
 
 /** A spawn answers with the Agent once it is on the Channel, or with the Host still starting it (ADR 0015). */
 export type SpawnResult = { ok: true; answer: SpawnAgentResponse } | { ok: false; reason: string };
+
+/** Connecting or removing the Langfuse project answers with the setting as it is now, or why not. */
+export type LangfuseResult = { ok: true; settings: LangfuseSettingsResponse } | { ok: false; reason: string };
+
+/** A publish answers with the version as it is now (`published` false when nothing changed), or why not. */
+export type PublishArtifactResult = { ok: true; answer: PublishArtifactResponse } | { ok: false; reason: string };
 
 /** A Claim or release answers with the Task as it is now, or a refusal naming the holder. */
 export type ClaimResult = { ok: true; task: Task } | ClaimRefusal;
@@ -48,6 +65,8 @@ export type HistoryScope = { agent: AgentId } | { task: TaskNumber };
 export interface EventPage {
   events: ChannelEvent[];
   olderBefore?: number;
+  /** The Local Events this page could not read: their machines are away (ADR 0037). */
+  unavailable?: HistoryGap[];
 }
 
 /**
@@ -119,11 +138,7 @@ export interface ChannelSource {
   /** The first Wakes after `seq` `after`, oldest first. */
   wakesAfter(after: number): Promise<ChannelEvent[]>;
   /** Follow the stream after `cursor`. Returns an unsubscribe function. */
-  subscribe(
-    cursor: number,
-    onMessage: (message: StreamMessage) => void,
-    onState: (state: ConnectionState) => void,
-  ): () => void;
+  subscribe(cursor: number, onMessage: (message: StreamMessage) => void, onState: (state: ConnectionState) => void): () => void;
   act(action: PersonAction): Promise<ActionResult>;
   /** Create a Task. The Channel creates the GitHub Issue first. */
   createTask(request: CreateTaskRequest): Promise<{ ok: true; task: Task } | { ok: false; reason: string }>;
@@ -138,6 +153,30 @@ export interface ChannelSource {
   hosts(): Promise<HostsResponse | null>;
   /** `GET /api/memory`: the notes Agents left for each other (ADR 0019), latest or matching `q`; null when the Worker has none. */
   memory(query: MemoryQuery): Promise<MemoryResponse | null>;
+  /** `GET /api/skills`: each skill Persons share on the Channel, its latest version (ADR 0039); null when the Worker has none. */
+  skills(): Promise<SkillsResponse | null>;
+  /** `GET /api/skills/:name`: one version of a skill with its manifest (the latest when `version` is left out), and every version. */
+  skill(name: string, version?: number): Promise<SkillResponse>;
+  /** `POST /api/skill-files/read`: the bytes of a version's files, by path, each checked against its SHA-256 (ADR 0050). */
+  skillFiles(files: SkillEntry[]): Promise<Map<string, Uint8Array>>;
+  /** `GET /api/artifacts`: each artifact's latest version, the latest published first (ADR 0053); null when the Worker has none. */
+  artifacts(): Promise<ArtifactsResponse | null>;
+  /** `GET /api/artifacts/:name`: one version (the latest when `version` is left out), and every version kept. */
+  artifact(name: string, version?: number): Promise<ArtifactResponse>;
+  /** Where a version's page is served, sandboxed, for a frame or a new tab; with `download`, as a file to save. */
+  artifactPageUrl(name: string, version?: number, download?: boolean): string;
+  /** `PUT /api/artifacts/:name`: publish the next version as the Person using this Dashboard. */
+  publishArtifact(name: string, request: PublishArtifactRequest): Promise<PublishArtifactResult>;
+  /** `DELETE /api/artifacts/:name`: delete every kept version, as its owner; it cannot be undone. */
+  deleteArtifact(name: string): Promise<ActionResult>;
+  /** `GET /api/brief`: the Brief's pages, current versions, the overview first (ADR 0042); null when the Worker has none. */
+  brief(): Promise<BriefResponse | null>;
+  /** `GET /api/settings/langfuse`: the Channel's Langfuse project, never its secret key, and whether this Person may change it (ADR 0044); null when the Worker has none. */
+  langfuse(): Promise<LangfuseSettingsResponse | null>;
+  /** `PUT /api/settings/langfuse`: the owner connects the Channel's Langfuse project, or replaces its keys. */
+  connectLangfuse(request: ConnectLangfuseRequest): Promise<LangfuseResult>;
+  /** `DELETE /api/settings/langfuse`: the owner removes it. */
+  removeLangfuse(): Promise<LangfuseResult>;
   /** `POST /api/agents/spawn`: start an Agent on one of this Person's own Hosts, or one that allows them (ADR 0028). */
   spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult>;
   /** `POST /api/agents/:id/stop`: ask the Host that runs an Agent to stop it: this Person's, or on a Host that allows them. */

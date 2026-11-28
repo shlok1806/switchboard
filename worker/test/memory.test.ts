@@ -260,7 +260,7 @@ describe("Reading notes", () => {
     expect((await asAgent.json<MemoryResponse>()).notes.map((n) => n.text)).toEqual(["Three", "Two", "One"]);
   });
 
-  it("searches the text and the files, every word required, and reads search syntax as plain words", async () => {
+  it("searches the text and the files, any word enough and more matched first, and reads search syntax as plain words", async () => {
     const agent = await register("alice");
     await noted("alice", agent, {
       text: "Retries on the webhook handler double-charge customers.",
@@ -270,7 +270,12 @@ describe("Reading notes", () => {
     await noted("alice", agent, { text: "Webhook signatures use the raw body." });
 
     expect(await read({ q: "webhook" })).toHaveLength(2);
-    expect(await read({ q: "webhook charge" })).toEqual(["Retries on the webhook handler double-charge customers."]);
+    expect(await read({ q: "webhook charge" })).toEqual([
+      "Retries on the webhook handler double-charge customers.",
+      "Webhook signatures use the raw body.",
+    ]);
+    expect(await read({ q: "linux tenant windows" })).toEqual(["The cache key includes the tenant."]);
+    expect(await read({ q: "what is the" })).toHaveLength(3);
     expect(await read({ q: "keys.ts" })).toEqual(["The cache key includes the tenant."]);
     expect(await read({ q: "webhook", tag: "dead-end" })).toEqual([
       "Retries on the webhook handler double-charge customers.",
@@ -280,7 +285,7 @@ describe("Reading notes", () => {
     for (const q of ['"unbalanced', "tenant OR", "NEAR(a b)", "* AND -x", "col:tenant"]) {
       expect((await get(memoryQueryString({ q }), "dashboard")).status, q).toBe(200);
     }
-    expect(await read({ q: "tenant OR" })).toEqual([]);
+    expect(await read({ q: "tenant OR" })).toEqual(["The cache key includes the tenant."]);
   });
 
   it("refuses a query it cannot read", async () => {

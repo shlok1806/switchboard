@@ -36,6 +36,8 @@ export interface ClaudeHookInput {
   stop_hook_active?: boolean;
   /** A PreCompact hook's: "auto" when Claude Code compacts on its own, "manual" for /compact. */
   trigger?: string;
+  /** Set when the hook ran inside a subagent rather than the main thread. */
+  agent_id?: string;
 }
 
 /** The hooks the wrapper installs, and the Claude Code hook names they listen on. */

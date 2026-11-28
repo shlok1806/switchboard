@@ -1,54 +1,75 @@
 import type {
-  AccountUsage,
   AccountsResponse,
+  AccountUsage,
   ActionResult,
   AgentId,
-  AgentSummary,
   AgentResponse,
   AgentRole,
+  AgentSummary,
   AgentsResponse,
-  ClaimRequest,
-  CreateTaskRequest,
-  CreateTaskResponse,
-  Task,
+  ArtifactResponse,
+  ArtifactsResponse,
+  BriefResponse,
   ChannelEvent,
   ChannelSnapshot,
+  ClaimRefusal,
+  ClaimRequest,
+  ConnectLangfuseRequest,
+  ControlAgentResponse,
+  CreateTaskRequest,
+  CreateTaskResponse,
+  DeleteArtifactResponse,
   ErrorResponse,
   HistoryResponse,
   HostsResponse,
-  PersonsResponse,
   JoinResponse,
+  LangfuseSettingsResponse,
+  MemoryQuery,
+  MemoryResponse,
   Person,
   PersonAction,
+  PersonsResponse,
+  PublishArtifactRequest,
+  PublishArtifactResponse,
+  ReadSkillFilesResponse,
   RelayResponse,
+  SetHostAllowRequest,
+  SetHostAllowResponse,
+  SkillEntry,
+  SkillResponse,
+  SkillsResponse,
   SpawnAgentRequest,
   SpawnAgentResponse,
   StopAgentResponse,
-  ControlAgentResponse,
-  SetHostAllowRequest,
-  SetHostAllowResponse,
   StreamMessage,
+  Task,
   TaskActionResponse,
   TaskListResponse,
   TaskNumber,
-  ClaimRefusal,
-  MemoryQuery,
-  MemoryResponse,
   TerminalInputFrame,
   TerminalWatchFrame,
   Verdict,
 } from "@shared/index";
 import {
+  ARTIFACTS_PATH,
+  agentPath,
+  approvalDenyPath,
+  artifactPagePath,
+  artifactPath,
+  BRIEF_PATH,
+  claimPath,
+  downloadSkillFiles,
+  LANGFUSE_SETTINGS_PATH,
   LIVE_PING,
   MAX_EVENT_IDS,
   MAX_HISTORY_LIMIT,
-  agentPath,
-  approvalDenyPath,
-  claimPath,
+  memoryQueryString,
   nicknamePath,
   releasePath,
   rolePath,
-  memoryQueryString,
+  SKILL_FILES_READ_PATH,
+  SKILLS_PATH,
+  skillPath,
   summaryPath,
 } from "@shared/index";
 import type {
@@ -58,6 +79,8 @@ import type {
   ConnectionState,
   EventPage,
   HistoryScope,
+  LangfuseResult,
+  PublishArtifactResult,
   SpawnResult,
   TerminalFrame,
   TerminalLink,
@@ -154,10 +177,7 @@ export class HttpChannelSource implements ChannelSource {
    * `status` tells a missing session (401) from a Person without write access (403)
    * and a Worker without the GitHub App (503).
    */
-  static async join(
-    base: string,
-    repo: string,
-  ): Promise<{ ok: true; source: HttpChannelSource } | { ok: false; status: number; reason: string }> {
+  static async join(base: string, repo: string): Promise<{ ok: true; source: HttpChannelSource } | { ok: false; status: number; reason: string }> {
     try {
       const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const res = await fetch(`${base.replace(/\/$/, "")}/api/join`, {
@@ -230,12 +250,16 @@ export class HttpChannelSource implements ChannelSource {
       accounts,
       cursor: latest.cursor,
       ...olderThan(latest.events),
+      ...(latest.unavailable === undefined ? {} : { unavailable: latest.unavailable }),
     };
   }
 
   async agent(id: AgentId) {
-    try { return (await this.get<AgentSummary>(summaryPath(id))).agent; }
-    catch { return null; }
+    try {
+      return (await this.get<AgentSummary>(summaryPath(id))).agent;
+    } catch {
+      return null;
+    }
   }
 
   async olderEvents(before: number): Promise<Pick<ChannelSnapshot, "events" | "verdicts" | "olderBefore">> {
@@ -245,18 +269,20 @@ export class HttpChannelSource implements ChannelSource {
 
   async scopedEvents(scope: HistoryScope, before?: number): Promise<EventPage> {
     const of = "agent" in scope ? `agent=${encodeURIComponent(scope.agent)}` : `task=${scope.task}`;
-    const page = await this.get<HistoryResponse>(
-      `/api/events?tail=${SCOPED_PAGE}&${of}${before === undefined ? "" : `&before=${before}`}`,
-    );
+    const page = await this.get<HistoryResponse>(`/api/events?tail=${SCOPED_PAGE}&${of}${before === undefined ? "" : `&before=${before}`}`);
     const oldest = page.events[0]?.seq;
     const events = page.events.filter((e) => e.type !== "verdict");
-    return page.events.length === SCOPED_PAGE && oldest !== undefined ? { events, olderBefore: oldest } : { events };
+    const unavailable = page.unavailable === undefined ? {} : { unavailable: page.unavailable };
+    return page.events.length === SCOPED_PAGE && oldest !== undefined ? { events, olderBefore: oldest, ...unavailable } : { events, ...unavailable };
   }
 
   async eventsById(ids: readonly string[]): Promise<ChannelEvent[]> {
     const pages = [];
     for (let i = 0; i < ids.length; i += MAX_EVENT_IDS) {
-      const some = ids.slice(i, i + MAX_EVENT_IDS).map(encodeURIComponent).join(",");
+      const some = ids
+        .slice(i, i + MAX_EVENT_IDS)
+        .map(encodeURIComponent)
+        .join(",");
       pages.push(this.get<HistoryResponse>(`/api/events?ids=${some}`).then((r) => r.events));
     }
     return (await Promise.all(pages)).flat().sort((a, b) => a.seq - b.seq);
@@ -266,11 +292,7 @@ export class HttpChannelSource implements ChannelSource {
     return (await this.get<HistoryResponse>(`/api/events?type=wake&after=${after}&limit=${WAKES_PAGE}`)).events;
   }
 
-  subscribe(
-    cursor: number,
-    onMessage: (message: StreamMessage) => void,
-    onState: (state: ConnectionState) => void,
-  ): () => void {
+  subscribe(cursor: number, onMessage: (message: StreamMessage) => void, onState: (state: ConnectionState) => void): () => void {
     let socket: WebSocket | null = null;
     let ping: ReturnType<typeof setInterval> | undefined;
     let closed = false;
@@ -325,7 +347,8 @@ export class HttpChannelSource implements ChannelSource {
     return () => {
       closed = true;
       clearInterval(ping);
-      socket?.close();
+      // With a code: a close without one went unanswered before ADR 0052.
+      socket?.close(1000);
       if (this.socket === socket) this.socket = null;
     };
   }
@@ -410,6 +433,102 @@ export class HttpChannelSource implements ChannelSource {
     if (status === 404) return null;
     if (status >= 400) throw new Error(reasonOf(body, status));
     return body as MemoryResponse;
+  }
+
+  async skills(): Promise<SkillsResponse | null> {
+    const { status, body } = await this.call<SkillsResponse>(SKILLS_PATH);
+    // A Worker from before shared skills (ADR 0039): the Dashboard leaves them out.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as SkillsResponse;
+  }
+
+  async skill(name: string, version?: number): Promise<SkillResponse> {
+    const { status, body } = await this.call<SkillResponse>(skillPath(name, version));
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as SkillResponse;
+  }
+
+  skillFiles(files: SkillEntry[]): Promise<Map<string, Uint8Array>> {
+    return downloadSkillFiles(files, async (request) => {
+      const { status, body } = await this.call<ReadSkillFilesResponse>(SKILL_FILES_READ_PATH, {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      if (status >= 400) throw new Error(reasonOf(body, status));
+      return body as ReadSkillFilesResponse;
+    });
+  }
+
+  async artifacts(): Promise<ArtifactsResponse | null> {
+    const { status, body } = await this.call<ArtifactsResponse>(ARTIFACTS_PATH);
+    // A Worker from before artifacts (ADR 0053): the Dashboard says so.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as ArtifactsResponse;
+  }
+
+  async artifact(name: string, version?: number): Promise<ArtifactResponse> {
+    const { status, body } = await this.call<ArtifactResponse>(artifactPath(name, version));
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as ArtifactResponse;
+  }
+
+  artifactPageUrl(name: string, version?: number, download = false): string {
+    return `${this.base}${artifactPagePath(name, version, download)}`;
+  }
+
+  async publishArtifact(name: string, request: PublishArtifactRequest): Promise<PublishArtifactResult> {
+    try {
+      const { status, body } = await this.call<PublishArtifactResponse>(artifactPath(name), { method: "PUT", body: JSON.stringify(request) });
+      if (status < 400 && body && "artifact" in body) return { ok: true, answer: body };
+      return { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
+  async deleteArtifact(name: string): Promise<ActionResult> {
+    try {
+      const { status, body } = await this.call<DeleteArtifactResponse>(artifactPath(name), { method: "DELETE" });
+      return status < 400 ? { ok: true } : { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
+  }
+
+  async brief(): Promise<BriefResponse | null> {
+    const { status, body } = await this.call<BriefResponse>(BRIEF_PATH);
+    // A Worker from before the Brief (ADR 0042): the Dashboard leaves it out.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as BriefResponse;
+  }
+
+  async langfuse(): Promise<LangfuseSettingsResponse | null> {
+    const { status, body } = await this.call<LangfuseSettingsResponse>(LANGFUSE_SETTINGS_PATH);
+    // A Worker from before the Channel's settings (ADR 0044): the page says so.
+    if (status === 404) return null;
+    if (status >= 400) throw new Error(reasonOf(body, status));
+    return body as LangfuseSettingsResponse;
+  }
+
+  async connectLangfuse(request: ConnectLangfuseRequest): Promise<LangfuseResult> {
+    return this.changeLangfuse({ method: "PUT", body: JSON.stringify(request) });
+  }
+
+  async removeLangfuse(): Promise<LangfuseResult> {
+    return this.changeLangfuse({ method: "DELETE" });
+  }
+
+  private async changeLangfuse(init: RequestInit): Promise<LangfuseResult> {
+    try {
+      const { status, body } = await this.call<LangfuseSettingsResponse>(LANGFUSE_SETTINGS_PATH, init);
+      if (status < 400 && body && "canManage" in body) return { ok: true, settings: body };
+      return { ok: false, reason: reasonOf(body, status) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : "The Channel could not be reached." };
+    }
   }
 
   async spawnAgent(request: SpawnAgentRequest): Promise<SpawnResult> {
@@ -519,7 +638,6 @@ function splitVerdicts(all: ChannelEvent[]): { events: ChannelEvent[]; verdicts:
   }
   return { events, verdicts };
 }
-
 
 /** A full page of history means there may be older Events: page back from its oldest. */
 /** How many of an Agent's or a Task's Events one read loads. */

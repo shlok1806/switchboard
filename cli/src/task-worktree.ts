@@ -191,6 +191,21 @@ async function exclude(gitDir: string): Promise<void> {
   await appendFile(path, `${current === "" || current.endsWith("\n") ? "" : "\n"}${EXCLUDE_LINE}\n`);
 }
 
+/**
+ * The `.switchboard/` directory of the checkout `cwd` is in, at its main checkout's top,
+ * kept out of `git status` in this clone only; null outside a git repo.
+ */
+export async function switchboardDir(cwd: string): Promise<string | null> {
+  const gitDir = await git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => null);
+  if (gitDir === null) return null;
+  // A plain clone's main checkout holds its `.git`; any other checkout is its own top.
+  const root =
+    basename(gitDir) === ".git" ? dirname(gitDir) : await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => null);
+  if (root === null) return null;
+  await exclude(gitDir);
+  return join(root, ".switchboard");
+}
+
 /** Every worktree of the repo, with the branch it has checked out. */
 async function worktrees(cwd: string): Promise<{ path: string; branch?: string }[]> {
   const list = await git(cwd, ["worktree", "list", "--porcelain"]);

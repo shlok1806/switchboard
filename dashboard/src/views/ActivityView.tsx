@@ -7,19 +7,21 @@
  * never jumps while it is being read: new Events wait under a "new Events" button. A row
  * opens its Event in the inspector, or on a phone in a sheet.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+
 import type { AgentId, ChannelEvent, Verdict } from "@shared/index";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { Composer } from "@/components/domain/composer";
 import { EventDetail } from "@/components/domain/event";
-import { EMPTY_FILTERS, FilterSelect, activeCount, matches, type FeedFilters } from "@/components/domain/filters";
+import { activeCount, EMPTY_FILTERS, type FeedFilters, FilterSelect, matches } from "@/components/domain/filters";
 import { ownedName } from "@/components/domain/fleet";
-import { CAPTURES, EventRow, InterruptRow, LogHead, TurnRow, type TurnItem } from "@/components/domain/log";
+import { HistoryGaps } from "@/components/domain/history-gaps";
+import { CAPTURES, EventRow, InterruptRow, LogHead, type TurnItem, TurnRow } from "@/components/domain/log";
 import { HolderLabel } from "@/components/domain/task";
 import { InspectorFrame, InspectorMissing } from "@/components/shell/inspector";
-import { EmptyState } from "@/components/shell/states";
 import { PageHead } from "@/components/shell/page-head";
+import { EmptyState } from "@/components/shell/states";
 import { useEventDetail } from "@/data/history";
 import { interruptKey, isInterrupt, markSeen, useInterrupts } from "@/data/interrupts";
 import { useCapabilities, useChannel, useIndex, useStore } from "@/data/store";
@@ -67,7 +69,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
     const out: ChannelEvent[] = [];
     let i = events.length - 1;
     for (; i >= 0 && out.length < limit; i--) {
-      const e = events[i]!;
+      const e = events[i];
       if (matches(e, verdictsByEvent.get(e.id) ?? [], filters)) out.push(e);
     }
     return { shown: out.reverse(), all: i < 0 };
@@ -105,7 +107,7 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
       const key = it.kind === "interrupt" ? it.verdict.agent : it.kind === "turn" ? it.agent : whoKey(it.event);
       by.set(key, [...(by.get(key) ?? []), it]);
     }
-    return [...by.entries()].sort((a, b) => a[1].at(-1)!.seq - b[1].at(-1)!.seq);
+    return [...by.entries()].sort((a, b) => a[1][a[1].length - 1].seq - b[1][b[1].length - 1].seq);
   }, [items, group]);
 
   // Read here means read: the Activity key stops counting the Interrupts shown as rows, and
@@ -243,55 +245,64 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
       />
     );
 
-  const detail = selectedStatus === "missing" ? (
-    <InspectorMissing title="No such Event" sheet={mobile} onClose={close}>
-      This Channel has no Event with that address. It may be from another Channel, or the link was cut short.
-    </InspectorMissing>
-  ) : selectedStatus === "failed" ? (
-    <InspectorMissing title="Could not read the Event" sheet={mobile} onClose={close}>
-      The Channel did not answer. The Event is still there; open it again in a moment.
-    </InspectorMissing>
-  ) : selectedEvent && (
-    <InspectorFrame label={`${EVENT_TYPE_LABEL[selectedEvent.type]}, in the inspector`} onClose={mobile ? close : undefined}>
-      <EventDetail
-        key={selectedEvent.id}
-        event={selectedEvent}
-        verdicts={verdictsByEvent.get(selectedEvent.id) ?? []}
-        woken={woken}
-        taskByNumber={taskByNumber}
-        threshold={threshold}
-        verdictsLive={can.verdicts}
-        verdictsLoaded={selectedLoaded}
-        onClose={close}
-      />
-    </InspectorFrame>
-  );
+  const detail =
+    selectedStatus === "missing" ? (
+      <InspectorMissing title="No such Event" sheet={mobile} onClose={close}>
+        This Channel has no Event with that address. It may be from another Channel, or the link was cut short.
+      </InspectorMissing>
+    ) : selectedStatus === "failed" ? (
+      <InspectorMissing title="Could not read the Event" sheet={mobile} onClose={close}>
+        The Channel did not answer. The Event is still there; open it again in a moment.
+      </InspectorMissing>
+    ) : (
+      selectedEvent && (
+        <InspectorFrame label={`${EVENT_TYPE_LABEL[selectedEvent.type]}, in the inspector`} onClose={mobile ? close : undefined}>
+          <EventDetail
+            key={selectedEvent.id}
+            event={selectedEvent}
+            verdicts={verdictsByEvent.get(selectedEvent.id) ?? []}
+            woken={woken}
+            taskByNumber={taskByNumber}
+            threshold={threshold}
+            verdictsLive={can.verdicts}
+            verdictsLoaded={selectedLoaded}
+            onClose={close}
+          />
+        </InspectorFrame>
+      )
+    );
 
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 flex-col gap-4 px-[var(--gutter)] pt-5 pb-3">
+        <div className="flex shrink-0 flex-col gap-4 px-[var(--gutter)] pt-[var(--page-top)] pb-3">
           <PageHead
             title="Activity"
-            facts={bare ? [] : [
-              `${events.length} Events`,
-              group === "turn" && turnCount > 0 ? `${turnCount} model ${turnCount === 1 ? "turn" : "turns"}` : `${live} ${live === 1 ? "Agent" : "Agents"} live`,
-              interrupts.length > 0 && `${interrupts.length} ${interrupts.length === 1 ? "Interrupt" : "Interrupts"}`,
-            ]}
+            facts={
+              bare
+                ? []
+                : [
+                    `${events.length} Events`,
+                    group === "turn" && turnCount > 0
+                      ? `${turnCount} model ${turnCount === 1 ? "turn" : "turns"}`
+                      : `${live} ${live === 1 ? "Agent" : "Agents"} live`,
+                    interrupts.length > 0 && `${interrupts.length} ${interrupts.length === 1 ? "Interrupt" : "Interrupts"}`,
+                  ]
+            }
           />
+          <HistoryGaps gaps={snapshot?.unavailable} className="-mt-2 py-0" />
           {/* A Channel with no Events has nothing to group or filter. */}
           <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-2.5", bare && "hidden")}>
-            <div role="group" aria-label="Group" className="flex gap-1.5">
-              <Chip on={group === "flat"} onClick={() => setGroup("flat")}>
-                Flat
-              </Chip>
-              <Chip on={group === "turn"} onClick={() => setGroup("turn")}>
-                By turn
-              </Chip>
-              <Chip on={group === "agent"} onClick={() => setGroup("agent")}>
-                By Agent
-              </Chip>
-            </div>
+            <Segmented
+              label="Group"
+              value={group}
+              onChange={setGroup}
+              options={[
+                { value: "flat", label: "Flat" },
+                { value: "turn", label: "By turn" },
+                { value: "agent", label: "By Agent" },
+              ]}
+            />
             <div className="flex flex-wrap items-center gap-1.5">
               <FilterSelect
                 label="Person"
@@ -321,7 +332,10 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                 value={filters.capture}
                 onChange={set("capture")}
                 allLabel="Any Capture"
-                options={[...CAPTURES.map((c) => ({ value: c, label: CAPTURE_LABEL[c] })), { value: "none", label: "None: the Dashboard or GitHub", short: "No Capture" }]}
+                options={[
+                  ...CAPTURES.map((c) => ({ value: c, label: CAPTURE_LABEL[c] })),
+                  { value: "none", label: "None: the Dashboard or GitHub", short: "No Capture" },
+                ]}
               />
               {can.verdicts && (
                 <FilterSelect
@@ -377,7 +391,12 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
           >
             {older && (
               <div className="py-2">
-                <button type="button" onClick={showOlder} disabled={loadingOlder} className="text-small text-ink hover:underline disabled:text-ink-3 disabled:no-underline">
+                <button
+                  type="button"
+                  onClick={showOlder}
+                  disabled={loadingOlder}
+                  className="text-small text-ink hover:underline disabled:text-ink-3 disabled:no-underline"
+                >
                   {loadingOlder ? "Reading older Events" : "Show older Events"}
                 </button>
               </div>
@@ -389,7 +408,8 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                   action={<Button onClick={() => setFilters(EMPTY_FILTERS)}>Clear the filters</Button>}
                   className="mt-2"
                 >
-                  {activeCount(filters) === 1 ? "One filter is" : `${activeCount(filters)} filters are`} on, and no Event on the Channel passes {activeCount(filters) === 1 ? "it" : "them all"}.
+                  {activeCount(filters) === 1 ? "One filter is" : `${activeCount(filters)} filters are`} on, and no Event on the Channel passes{" "}
+                  {activeCount(filters) === 1 ? "it" : "them all"}.
                 </EmptyState>
               ) : (
                 <EmptyState
@@ -404,24 +424,20 @@ export function ActivityView({ selected, byTurn = false, turn }: { selected?: st
                   Every Update, Directive, claim and Verdict on the Channel lands here as a row, newest at the bottom.
                 </EmptyState>
               )
+            ) : group === "agent" ? (
+              sections.map(([key, its]) => (
+                <section key={key} aria-label={sectionName(key, agentById)}>
+                  <h2 className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
+                    <span className="font-semibold text-ink">
+                      {key.includes("/") ? <HolderLabel holder={{ kind: "agent", agentId: key as AgentId }} /> : sectionName(key, agentById)}
+                    </span>
+                    {its.length} {its.length === 1 ? "row" : "rows"}
+                  </h2>
+                  <ol>{its.map(row)}</ol>
+                </section>
+              ))
             ) : (
-              <>
-                {group === "agent" ? (
-                  sections.map(([key, its]) => (
-                    <section key={key} aria-label={sectionName(key, agentById)}>
-                      <h2 className="flex flex-wrap items-baseline gap-x-2 border-b border-rule-2 px-3 pt-4 pb-2 text-small text-ink-3">
-                        <span className="font-semibold text-ink">
-                          {key.includes("/") ? <HolderLabel holder={{ kind: "agent", agentId: key as AgentId }} /> : sectionName(key, agentById)}
-                        </span>
-                        {its.length} {its.length === 1 ? "row" : "rows"}
-                      </h2>
-                      <ol>{its.map(row)}</ol>
-                    </section>
-                  ))
-                ) : (
-                  <ol>{items.map(row)}</ol>
-                )}
-              </>
+              <ol>{items.map(row)}</ol>
             )}
             {/* Room under the last row, so the "new Events" button never covers it. */}
             <div className={unread > 0 ? "h-14" : "h-4"} />

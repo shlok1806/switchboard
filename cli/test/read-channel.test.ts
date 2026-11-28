@@ -42,7 +42,11 @@ describe("read_channel", () => {
         return {};
       },
     } as unknown as ChannelClient;
-    const tools = new SwitchboardTools(client, async () => ({ id: AGENT, token: "t" }), { dir: "/w", repo: "o/r" });
+    const tools = new SwitchboardTools(client, async () => ({ id: AGENT, token: "t" }), {
+      dir: "/w",
+      repo: "o/r",
+      url: "https://sb.example",
+    });
 
     const { text, isError } = await tools.readChannel(5);
     expect(isError).toBe(false);

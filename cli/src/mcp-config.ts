@@ -10,9 +10,11 @@ import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentId } from "../../shared/src/index";
+import { HEADLESS_ENV } from "./artifacts";
 import { REPO_ENV } from "./channel-choice";
 import { configDir } from "./config";
-import { AGENT_FILE_ENV, MCP_SERVER_NAME, NEXT_TURN_FILE_ENV, REPO_DIR_ENV } from "./mcp-server";
+import { LIBRARIAN_ENV } from "./librarian";
+import { AGENT_FILE_ENV, MCP_SERVER_NAME, NEXT_TURN_FILE_ENV, REPO_DIR_ENV, SKILL_WRITES_ENV } from "./mcp-server";
 
 /** A stdio MCP server, the way every agent CLI describes one. */
 export interface McpServerSpec {
@@ -62,7 +64,12 @@ export function writeClaudeMcpConfig(tools: SessionTools): string {
  * wrapper writes to the session's private directory with the Agent ID; nothing
  * given to the agent CLI on its command line holds a credential.
  */
-export function prepareSessionTools(cwd: string, repo: string, env: NodeJS.ProcessEnv = process.env): SessionTools {
+export function prepareSessionTools(
+  cwd: string,
+  repo: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { skillWrites: boolean; librarian?: boolean } = { skillWrites: false },
+): SessionTools {
   const dir = mkdtempSync(join(tmpdir(), "switchboard-session-"));
   const agentFile = join(dir, "agent");
   const nextTurnFile = join(dir, "next-turn");
@@ -79,6 +86,13 @@ export function prepareSessionTools(cwd: string, repo: string, env: NodeJS.Proce
         [REPO_DIR_ENV]: cwd,
         [REPO_ENV]: repo,
         SWITCHBOARD_CONFIG_DIR: configDir(env),
+        // The skill tools that publish and write, only where the CLI asks before each call (ADR 0039).
+        ...(options.skillWrites ? { [SKILL_WRITES_ENV]: "1" } : {}),
+        // The librarian's tools only (ADR 0045).
+        ...(options.librarian === true ? { [LIBRARIAN_ENV]: "1" } : {}),
+        // An Agent on a Host has no screen anyone sees, so its tools never open a browser (ADR 0053).
+        // Its CLI, and so its MCP server, never gets SWITCHBOARD_HOST itself.
+        ...(env.SWITCHBOARD_HOST ? { [HEADLESS_ENV]: "1" } : {}),
       },
     },
     dir,

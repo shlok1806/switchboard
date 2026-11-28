@@ -80,7 +80,28 @@ export const SWITCHBOARD_TOOLS = [
   // ADR 0024: what the Channel knows of an Agent, and its screen, redacted by its wrapper.
   "agent_summary",
   "agent_terminal",
+  // ADR 0039: shared skills. The two that write run only when the Agent's own Person
+  // asked in the session, and each call needs that Person's approval in the CLI's prompt.
+  "skills_list",
+  "skill_read",
+  "skill_publish",
+  "skill_install",
+  // ADR 0042: the Brief, a few short pages on what the product is and where it stands.
+  "brief_read",
+  "brief_write",
+  // ADR 0045: GitHub as it is now, read-only, through the Channel. Only the librarian's server lists it.
+  "github_read",
+  // ADR 0053: HTML pages shared on the Channel and shown on the Dashboard in a sandbox.
+  "artifacts_list",
+  "artifact_publish",
+  "artifact_read",
 ] as const;
+
+/** The skill tools that publish or write files: never approved for the session in advance (ADR 0039). */
+export const SKILL_WRITE_TOOLS = [
+  "skill_publish",
+  "skill_install",
+] as const satisfies readonly (typeof SWITCHBOARD_TOOLS)[number][];
 
 export type SwitchboardTool = (typeof SWITCHBOARD_TOOLS)[number];
 

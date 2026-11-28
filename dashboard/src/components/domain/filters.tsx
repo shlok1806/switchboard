@@ -1,6 +1,6 @@
 import type { ChannelEvent, Verdict, VerdictOption } from "@shared/index";
-import { actorPerson } from "@/lib/format";
 import { ChevronDown } from "lucide-react";
+import { actorPerson } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export interface FeedFilters {
@@ -56,12 +56,7 @@ export function FilterSelect({
         on ? "border-ink text-ink" : "border-rule text-ink-2 hover:border-ink-3 hover:text-ink",
       )}
     >
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label={`Filter by ${label}`}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      >
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={`Filter by ${label}`} className="absolute inset-0 cursor-pointer opacity-0">
         <option value="">{allLabel}</option>
         {options.map((o) => (
           <option key={o.value} value={o.value}>

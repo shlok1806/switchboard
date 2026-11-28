@@ -101,7 +101,9 @@ export class FakeHost {
     const socket = response.webSocket;
     if (!socket) throw new Error(`No WebSocket: ${response.status} ${await response.text()}`);
     socket.accept();
-    socket.addEventListener("message", (message) => this.frames.push(JSON.parse(message.data as string)));
+    socket.addEventListener("message", (message) => {
+      this.frames.push(JSON.parse(message.data as string));
+    });
     this.socket = socket;
     open.push(socket);
   }

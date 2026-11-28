@@ -149,13 +149,23 @@ class FakeWrapper {
     return this.send({ type: "proxy", agent, event });
   }
 
-  async events(): Promise<ChannelEvent[]> {
-    const response = await call("/api/events", { headers: await this.headers() });
-    return (await response.json<HistoryResponse>()).events;
+  /** The Events the Channel broadcast on this wrapper's sockets, in order, each time it did. */
+  heard(): ChannelEvent[] {
+    return this.stream.flatMap((m) => (m.type === "event" ? [m.event] : []));
   }
 
+  /**
+   * The Proxy Events the Channel recorded, as everyone's stream carried them: it stores
+   * none of them (ADR 0037). Every Event an ack names was broadcast before the ack.
+   */
   async proxyEvents(): Promise<ChannelEvent[]> {
-    return (await this.events()).filter((e) => e.capture === "proxy");
+    return this.heard().filter((e) => e.capture === "proxy");
+  }
+
+  /** The Proxy Events in the Channel's stored history. */
+  async storedProxyEvents(): Promise<ChannelEvent[]> {
+    const response = await call("/api/events", { headers: await this.headers() });
+    return (await response.json<HistoryResponse>()).events.filter((e) => e.capture === "proxy");
   }
 
   /** Waits for the stream to tell this socket that `agent` is now in `mode`. */
@@ -246,11 +256,17 @@ describe("recording Proxy Events", () => {
     const shlok = wrapper("shlok");
     const agent = await shlok.register(SESSION);
     const event = digest();
-    expect(await shlok.proxy(agent.id, event)).toEqual({ type: "proxy.ack", id: event.id });
-    expect(await shlok.proxy(agent.id, event)).toEqual({ type: "proxy.ack", id: event.id });
+    const first = await shlok.proxy(agent.id, event);
+    const again = await shlok.proxy(agent.id, event);
+    expect(first).toMatchObject({ type: "proxy.ack", id: event.id });
 
     const recorded = await shlok.proxyEvents();
     expect(recorded).toHaveLength(1);
+    // Each ack hands the wrapper the Event as recorded, for its machine's local store (ADR 0037).
+    expect(first.type === "proxy.ack" && first.event).toEqual(recorded[0]);
+    expect(again.type === "proxy.ack" && again.event).toEqual(recorded[0]);
+    // Which is where it stays: the Channel stores none of them.
+    expect(await shlok.storedProxyEvents()).toEqual([]);
     expect(recorded[0]).toMatchObject({
       id: event.id,
       type: "proxy.digest",
@@ -268,7 +284,7 @@ describe("recording Proxy Events", () => {
 
     await shlok.setMode(agent.id, "raw");
     const allowed = raw();
-    expect(await shlok.proxy(agent.id, allowed)).toEqual({ type: "proxy.ack", id: allowed.id });
+    expect(await shlok.proxy(agent.id, allowed)).toMatchObject({ type: "proxy.ack", id: allowed.id });
 
     // Back to digest: raw content stops at once, even from a wrapper that has not heard yet.
     await shlok.setMode(agent.id, "digest");
@@ -338,7 +354,7 @@ describe("the Task a Proxy Event is about (#88)", () => {
     const shlok = wrapper("shlok");
     const agent = (await shlok.register(SESSION, { proxyMode: "raw" })).id;
     const taskOf = async (event: ProxyEvent) => {
-      expect(await shlok.proxy(agent, event)).toEqual({ type: "proxy.ack", id: event.id });
+      expect(await shlok.proxy(agent, event)).toMatchObject({ type: "proxy.ack", id: event.id });
       return (await shlok.proxyEvents()).find((e) => e.id === event.id)?.task ?? null;
     };
 
@@ -383,15 +399,20 @@ describe("raw Proxy content and Agents (ADR 0005)", () => {
     await shlok.proxy(agent.id, rawEvent);
     const digestEvent = digest();
     await shlok.proxy(agent.id, digestEvent);
-    await call("/api/updates", {
+    const posted = await call("/api/updates", {
       method: "POST",
       headers: await shlok.headers(),
       body: JSON.stringify({ text: "Renamed getJson" }),
     });
+    const update = (await posted.json<{ event: ChannelEvent }>()).event;
 
-    // Everything the Channel holds, as the Relay or the read_channel tool reads it.
-    const all = (await (await call("/api/events?tail=100", { headers: await maya.headers() })).json<HistoryResponse>())
-      .events;
+    // Everything the Channel recorded, as its stream carries it to the Relay's readers.
+    const deadline = Date.now() + 2000;
+    while (!shlok.heard().some((e) => e.id === update.id)) {
+      if (Date.now() > deadline) throw new Error("Never heard the Update");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const all = shlok.heard();
     expect(all.some((e) => e.type === "proxy.raw")).toBe(true);
 
     const deliverable = agentDeliverables(all);

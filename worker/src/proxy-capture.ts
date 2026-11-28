@@ -57,6 +57,8 @@ export interface ProxyCaptureHost {
       payload: EventPayloads[K];
     },
   ): ChannelEvent | null;
+  /** The Event the Channel recorded under `id` before, for a message sent again, or null. */
+  recorded(id: string): ChannelEvent | null;
 }
 
 const EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -170,17 +172,24 @@ export class ProxyCapture {
     // The model turn is about the Task the Agent works on as it arrives.
     const task = this.host.currentTask(agent as AgentId);
     const about = task === null ? {} : { task };
-    if (event.type === "proxy.raw") {
-      this.host.appendOnce(event.id, { type: "proxy.raw", actor, capture: "proxy", ...about, payload: event.payload });
-    } else {
-      this.host.appendOnce(event.id, {
-        type: "proxy.digest",
-        actor,
-        capture: "proxy",
-        ...about,
-        payload: event.payload,
-      });
-    }
-    return { type: "proxy.ack", id: event.id };
+    const stored =
+      event.type === "proxy.raw"
+        ? this.host.appendOnce(event.id, {
+            type: "proxy.raw",
+            actor,
+            capture: "proxy",
+            ...about,
+            payload: event.payload,
+          })
+        : this.host.appendOnce(event.id, {
+            type: "proxy.digest",
+            actor,
+            capture: "proxy",
+            ...about,
+            payload: event.payload,
+          });
+    // As recorded, so the wrapper keeps it in its machine's local store (ADR 0037).
+    const kept = stored ?? this.host.recorded(event.id);
+    return { type: "proxy.ack", id: event.id, ...(kept === null ? {} : { event: kept }) };
   }
 }

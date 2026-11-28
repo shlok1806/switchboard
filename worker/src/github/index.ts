@@ -2,7 +2,8 @@
 // repo when the App is configured, or whatever a test installed. Without either,
 // Task sync and sign-in are off, and say so.
 
-import { appFor, type GitHubSignIn } from "./app";
+import { appFor, type GitHubApp, type GitHubSignIn } from "./app";
+import type { RestGitHub } from "./rest";
 import type { GitHub } from "./types";
 
 export type { DevicePoll, GitHubAppCredentials, GitHubSignIn } from "./app";
@@ -32,6 +33,7 @@ export { readWebhook, sign, verifySignature, WEBHOOK_EVENTS } from "./webhook";
 export const APP_NOT_CONFIGURED = "GitHub App not configured. See docs/github-app-setup.md.";
 
 let installed: GitHub | null = null;
+let installedApp: GitHubApp | null = null;
 let installedSignIn: GitHubSignIn | null = null;
 
 /**
@@ -40,6 +42,14 @@ let installedSignIn: GitHubSignIn | null = null;
  */
 export function installGitHub(gitHub: GitHub | null): void {
   installed = gitHub;
+}
+
+/**
+ * Replaces the GitHub App the connector's github tool reads through (ADR 0041), for
+ * tests that point a real App client at a stand-in for GitHub's HTTP API.
+ */
+export function installGitHubApp(app: GitHubApp | null): void {
+  installedApp = app;
 }
 
 /** Replaces GitHub sign-in (the web and device flows), for tests. */
@@ -61,6 +71,15 @@ declare global {
 export function gitHubFor(env: Env, repo: string): GitHub | null {
   if (installed !== null) return installed.repo.toLowerCase() === repo.toLowerCase() ? installed : null;
   return appFor(env)?.repo(repo) ?? null;
+}
+
+/**
+ * The repo client the connector's github tool reads `repo` through (ADR 0041): always the
+ * GitHub App's REST and GraphQL APIs, never a stand-in at the GitHub interface. Null
+ * while the App is not configured.
+ */
+export function readerFor(env: Env, repo: string): RestGitHub | null {
+  return (installedApp ?? appFor(env))?.repo(repo) ?? null;
 }
 
 /** GitHub sign-in, or null while the App is not configured. */

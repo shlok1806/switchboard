@@ -163,6 +163,11 @@ export interface SpawnAgentRequest {
    * Brief, as information. Any Agent on the Channel.
    */
   from?: AgentId;
+  /**
+   * The Channel's librarian (ADR 0045): always in the `dontAsk` mode, with no brief and no
+   * `from`, and asked for by a Person, never a lead.
+   */
+  librarian?: true;
 }
 
 /**
@@ -200,6 +205,8 @@ export interface HostSpawnMessage {
   lead?: AgentId;
   /** The Agent it continues (ADR 0024): the wrapper starts with `--from`. */
   from?: AgentId;
+  /** The Channel's librarian (ADR 0045): the wrapper starts with `--librarian`. */
+  librarian?: true;
 }
 
 /**

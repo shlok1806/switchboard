@@ -44,7 +44,7 @@ describe("planCodexSession", () => {
 });
 
 describe("Codex's session overrides", () => {
-  it("installs every hook with the same command, and the MCP server, as TOML", () => {
+  it("installs every hook with the same command, and the MCP server, as TOML, asking before each skill write", () => {
     const hooks = codexHookOverrides("'/node' '/hook.js'");
     expect(hooks.filter((a) => a === "-c")).toHaveLength(7);
     expect(hooks).toContain(`hooks.SessionStart=[{hooks=[{type="command",command="'/node' '/hook.js'",timeout=10}]}]`);
@@ -60,6 +60,10 @@ describe("Codex's session overrides", () => {
       'mcp_servers.switchboard.env={"A"="x\\"y"}',
       "-c",
       'mcp_servers.switchboard.default_tools_approval_mode="approve"',
+      "-c",
+      'mcp_servers.switchboard.tools.skill_publish.approval_mode="prompt"',
+      "-c",
+      'mcp_servers.switchboard.tools.skill_install.approval_mode="prompt"',
     ]);
   });
 });

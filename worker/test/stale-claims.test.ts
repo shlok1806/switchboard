@@ -158,6 +158,19 @@ describe("a Claim held by a Gone Agent", () => {
     });
   });
 
+  it("stops being Stale when its Task is done, since nothing is left to take over", async () => {
+    const number = github.open({ title: "Finished elsewhere" }).number;
+    const shlok = await agent("shlok");
+    await post(claimPath(number), shlok);
+    await end(shlok);
+    expect((await task(number)).claim?.stale).toBe(true);
+
+    await deliver(github.close(number));
+    const done = await task(number);
+    expect(done.status).toBe("done");
+    expect(done.claim).toMatchObject({ holder: byAgent(shlok.agent), stale: false });
+  });
+
   it("is marked Stale when the Agent goes silent, and stays held indefinitely without a Takeover", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const number = github.open({ title: "Claims" }).number;

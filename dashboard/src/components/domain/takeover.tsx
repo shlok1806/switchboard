@@ -1,6 +1,6 @@
+import type { Holder, Task } from "@shared/index";
 import { useState } from "react";
 import { toast } from "sonner";
-import type { Holder, Task } from "@shared/index";
 import { Button } from "@/components/atoms/Button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCapabilities, useChannel, useMe, useStore } from "@/data/store";
@@ -38,9 +38,7 @@ export function TakeoverAction({
   const from = task.claim.holder;
   const options: Holder[] = [
     { kind: "person", person: me },
-    ...agents
-      .filter((a) => a.person === me && a.presence !== "gone")
-      .map((a): Holder => ({ kind: "agent", agentId: a.id })),
+    ...agents.filter((a) => a.person === me && a.presence !== "gone").map((a): Holder => ({ kind: "agent", agentId: a.id })),
   ];
   const labelFor = (h: Holder) => (h.kind === "person" ? `Me (${h.person})` : holderName(h));
 
@@ -85,15 +83,12 @@ export function TakeoverAction({
               <label
                 key={i}
                 className={cn(
-                  "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md px-3 text-body transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-focus",
-                  pick === i ? "bg-paper-3 text-ink" : "bg-inset hover:bg-inset-2",
+                  "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md px-3 text-row transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-focus",
+                  pick === i ? "bg-paper-3 text-ink" : "bg-paper-2 hover:bg-paper-3",
                 )}
               >
                 <input type="radio" name="takeover-to" checked={pick === i} onChange={() => setPick(i)} className="sr-only" />
-                <span
-                  aria-hidden
-                  className={cn("grid size-4 place-items-center rounded-full border", pick === i ? "border-ink" : "border-line-strong")}
-                >
+                <span aria-hidden className={cn("grid size-4 place-items-center rounded-full border", pick === i ? "border-ink" : "border-rule-2")}>
                   {pick === i && <span className="size-2 rounded-full bg-ink" />}
                 </span>
                 <span className="tabular-nums">{labelFor(h)}</span>

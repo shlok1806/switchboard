@@ -31,12 +31,24 @@ export interface SessionSettings {
 
 /**
  * Merges settings. Hooks add up: every part's hooks for a hook name all run.
- * `env` adds up by variable. Any other key takes the value of the last part that sets it.
+ * `env` adds up by variable, and each `permissions` rule list adds up. Any other key
+ * takes the value of the last part that sets it.
  */
 export function mergeSettings(...parts: SessionSettings[]): SessionSettings {
   const merged: SessionSettings = {};
   for (const part of parts) {
     for (const [key, value] of Object.entries(part)) {
+      if (key === "permissions") {
+        // Rule lists add up, so the Person's own rules and the wrapper's all hold.
+        const before = (merged.permissions ?? {}) as Record<string, unknown>;
+        const next: Record<string, unknown> = { ...before };
+        for (const [name, rules] of Object.entries((value ?? {}) as Record<string, unknown>)) {
+          next[name] =
+            Array.isArray(rules) && Array.isArray(before[name]) ? [...(before[name] as unknown[]), ...rules] : rules;
+        }
+        merged.permissions = next;
+        continue;
+      }
       if (key === "env") {
         // Environment variables add up too; a later part wins for the same name.
         merged.env = { ...(merged.env as Record<string, string> | undefined), ...(value as Record<string, string>) };

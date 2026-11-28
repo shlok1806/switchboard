@@ -17,9 +17,11 @@ import type {
   DeliveryMessage,
   EventOf,
   HistoryResponse,
+  HookCaptureReply,
   HookEvent,
   InterruptMessage,
   InterruptResult,
+  ProxyCaptureReply,
   ProxyEvent,
   RelayResponse,
   Task,
@@ -121,6 +123,8 @@ class FakeAgent {
   /** How its wrapper answers the next Interrupts. */
   answer: InterruptAnswer = true;
   private socket: WebSocket | null = null;
+  /** The Hook and Proxy Events the Channel acknowledged on this socket, as it recorded them, by ID. */
+  private readonly acked = new Map<string, ChannelEvent>();
 
   private constructor(
     readonly person: string,
@@ -160,7 +164,7 @@ class FakeAgent {
     hookIds += 1;
     const id = `00000000-0000-4000-8000-${String(hookIds).padStart(12, "0")}`;
     this.send({ type: "hook", agent: this.id, events: [{ id, type: "turn.end", payload: { turn: 0 } }] });
-    await waitFor(async () => ((await events()).some((e) => e.id === id) ? true : undefined));
+    await this.recorded([id]);
   }
 
   private async connect(): Promise<void> {
@@ -174,6 +178,17 @@ class FakeAgent {
     socket.accept();
     socket.addEventListener("message", (message) => {
       const frame = JSON.parse(message.data as string) as { type: string };
+      if (frame.type === "hook.ack") {
+        for (const event of (frame as Extract<HookCaptureReply, { type: "hook.ack" }>).events ?? []) {
+          this.acked.set(event.id, event);
+        }
+        return;
+      }
+      if (frame.type === "proxy.ack") {
+        const { event } = frame as Extract<ProxyCaptureReply, { type: "proxy.ack" }>;
+        if (event !== undefined) this.acked.set(event.id, event);
+        return;
+      }
       if (frame.type === "interrupt") {
         const interrupt = frame as InterruptMessage;
         if (interrupt.agent !== this.id) return;
@@ -205,9 +220,14 @@ class FakeAgent {
       return { id, type: "file.edit", payload: { path, additions: 1, deletions: 0 } };
     });
     this.send({ type: "hook", agent: this.id, events: hooks });
-    await waitFor(async () => {
-      const ids = new Set((await events()).map((e) => e.id));
-      return hooks.every((h) => ids.has(h.id)) ? true : undefined;
+    await this.recorded(hooks.map((h) => h.id));
+  }
+
+  /** Waits until the Channel has acknowledged these Events, as the wrapper does, and returns them as recorded. */
+  async recorded(ids: readonly string[]): Promise<ChannelEvent[]> {
+    return waitFor(async () => {
+      const found = ids.flatMap((id) => this.acked.get(id) ?? []);
+      return found.length === ids.length ? found : undefined;
     });
   }
 
@@ -732,7 +752,7 @@ describe("Queue delivery", () => {
     // Bob.s wrapper sends it over the WebSocket it opened with that Agent.s token.
     const bobSocket = await FakeAgent.of("bob", bob);
     bobSocket.send({ type: "proxy", agent: bob, event: raw });
-    await waitFor(async () => ((await events()).some((e) => e.id === raw.id) ? true : undefined));
+    const [stored] = await bobSocket.recorded([raw.id]);
     // A later Event proves the Relay has caught up.
     const response = await post("/api/updates", "bob", { text: "done" }, bob);
     const update = (await response.json<{ event: ChannelEvent }>()).event;
@@ -744,7 +764,6 @@ describe("Queue delivery", () => {
     expect((await alice.heartbeat()).deliveries).toBeUndefined();
 
     // And the compiler refuses to build a Delivery from an Event that skipped the guard.
-    const stored = (await events()).find((e) => e.id === raw.id);
     if (!stored) throw new Error("raw Event missing");
     const verdict: Pick<Verdict, "option" | "delivered" | "overlap"> & { id: string } = {
       id: "v",

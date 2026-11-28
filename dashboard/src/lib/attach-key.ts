@@ -8,14 +8,7 @@ export interface AttachKey {
   /** The public key, SPKI, base64: sent with every input frame. */
   spki: string;
   fingerprint: string;
-  sign(
-    repo: string,
-    agent: string,
-    nonce: string,
-    seq: number,
-    op: TerminalInputOp | undefined,
-    text: string,
-  ): Promise<string>;
+  sign(repo: string, agent: string, nonce: string, seq: number, op: TerminalInputOp | undefined, text: string): Promise<string>;
   /** Signs a change to who may use a Host (ADR 0028), for the Host to check against its attach.json. */
   signAllow(repo: string, host: string, at: number, seq: number, allow: readonly string[], allowChannel: boolean): Promise<string>;
 }

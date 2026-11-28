@@ -3,15 +3,16 @@
  * one state and its Claims, grouped by Person, you first. A group line says who, where and
  * what time it is for them; on a phone a line stacks into three.
  */
-import { useMemo } from "react";
+
 import type { Agent, Task } from "@shared/index";
-import { State, useAgentStates } from "@/components/domain/state";
+import { modelLabel } from "@shared/index";
+import { useMemo } from "react";
+import { Orb, State, useAgentStates } from "@/components/domain/state";
 import { useChannel } from "@/data/store";
 import { claimsByAgent } from "@/lib/canvas-layout";
 import { CLI_LABEL, elapsed, hostName, localTime, zoneCity } from "@/lib/format";
 import { href } from "@/lib/router";
-import { byState, type AgentState } from "@/lib/state";
-import { modelLabel } from "@shared/index";
+import { type AgentState, byState } from "@/lib/state";
 
 export interface Line {
   agent: Agent;
@@ -136,9 +137,12 @@ export function StackedRow({
         <span className="text-ink-3 tabular-nums">{elapsed(since(a))}</span>
       </span>
       <span className="flex w-full items-start justify-between gap-3">
-        <span className="min-w-0">
-          <span className="block text-row font-semibold [overflow-wrap:anywhere] text-ink">{shortName(a)}</span>
-          <Secondary agent={a} model={model} />
+        <span className="flex min-w-0 items-start gap-2">
+          <Orb state={state} reserve />
+          <span className="min-w-0">
+            <span className="block text-row font-semibold [overflow-wrap:anywhere] text-ink">{shortName(a)}</span>
+            <Secondary agent={a} model={model} />
+          </span>
         </span>
         {percent !== undefined && <span className="shrink-0 text-row text-ink tabular-nums">{percent}%</span>}
       </span>

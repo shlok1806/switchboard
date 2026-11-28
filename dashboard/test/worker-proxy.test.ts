@@ -8,8 +8,8 @@ import { createServer as createHttpServer, type IncomingHttpHeaders, request, ty
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type ViteDevServer } from "vite";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { workerProxy } from "../worker-proxy";
 
 let worker: Server;
@@ -41,7 +41,9 @@ beforeAll(async () => {
     server: { host: "127.0.0.1", port: 0, proxy: workerProxy(workerOrigin) },
   });
   await dev.listen();
-  devOrigin = `http://127.0.0.1:${(dev.httpServer?.address() as AddressInfo).port}`;
+  const server = dev.httpServer;
+  if (!server) throw new Error("Vite's dev server did not start an HTTP server");
+  devOrigin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
 afterAll(async () => {

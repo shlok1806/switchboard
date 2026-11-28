@@ -3,10 +3,10 @@
 // continues and those that continue it, and Hand off opens the one Start an Agent sheet filled
 // in for a successor, which starts with `from` set.
 
+import type { Agent, AgentId, ChannelSnapshot, Host, HostsResponse } from "@shared/index";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentId, ChannelSnapshot, Host, HostsResponse } from "@shared/index";
 import { StartAgentButton, StartAgentSheet } from "@/components/domain/start-agent";
 import type { ChannelSource, SpawnResult } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";

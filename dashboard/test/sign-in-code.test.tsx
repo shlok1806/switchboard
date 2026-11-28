@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 // "Sign in with a code": the device flow from the sign-in screen, clicked through as a Person would.
 
+import type { DeviceCodeResponse } from "@shared/index";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeviceCodeResponse } from "@shared/index";
 import { SignInScreen } from "@/components/domain/join";
 import type { DevicePollResult, DeviceSignIn } from "@/lib/session";
 

@@ -8,18 +8,26 @@
 //   switchboard whoami
 //   switchboard host install|uninstall|run|status|list   (ADR 0015, ADR 0028)
 //   switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--from <agent>] [...] [brief]
+//   switchboard librarian [--host <name>|<person>/<name>] [--cwd <folder>] [--model <model>]   (ADR 0045)
 //   switchboard stop|pause|resume <agent>   (ADR 0028)
 //   switchboard role grant <agent> lead | revoke <agent>   (ADR 0018)
 //   switchboard attach allow|revoke|list|prompts   (ADR 0021)
+//   switchboard help onboarding   (ADR 0038)
+//   switchboard skills list|show|publish|install   (ADR 0039)
+//   switchboard artifacts list|show|publish|open|pull|delete   (ADR 0053)
+//   switchboard dataset sync|stats   (ADR 0054)
 //   switchboard mcp    (internal: the MCP server `run claude` gives the session)
 
 import { parseArgs } from "node:util";
+import { ARTIFACTS_USAGE, artifactsCommand } from "./artifacts-command";
 import { ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
 import { ADAPTERS } from "./clis/index";
 import { configPath, readConfig } from "./config";
+import { DATASET_USAGE, datasetCommand } from "./dataset/command";
 import {
   HOST_USAGE,
   hostCommand,
+  librarianCommand,
   pauseCommand,
   ROLE_USAGE,
   resumeCommand,
@@ -29,8 +37,10 @@ import {
 } from "./host/commands";
 import { LoginError, login as signIn } from "./login";
 import { runMcpServer } from "./mcp-server";
+import { dashboardUrl, onboardingGuide } from "./onboarding";
 import { renameAgent } from "./rename";
 import { runCli } from "./run";
+import { SKILLS_USAGE, skillsCommand } from "./skills-command";
 import { ATTACH_USAGE, attachCommand } from "./terminal/attach-keys";
 
 const USAGE = `Usage:
@@ -41,13 +51,18 @@ const USAGE = `Usage:
   switchboard run gemini [--repo <owner>/<repo>] [--nickname <name>] [--account-label <label>] [--from <agent>] [--proxy raw|digest|off] [--no-mask] [...arguments for Gemini CLI]
   switchboard rename <agent> <nickname>|--clear [--repo <owner>/<repo>]
   switchboard whoami
+  switchboard help onboarding
   switchboard spawn [--host <name>|<person>/<name>] [--cwd <folder>] [--nickname <name>] [--model <model>] [--permission-mode <mode>] [--from <agent>] [--repo <owner>/<repo>] [brief...]
+  switchboard librarian [--host <name>|<person>/<name>] [--cwd <folder>] [--model <model>] [--repo <owner>/<repo>]
   switchboard stop <agent> [--repo <owner>/<repo>]
   switchboard pause <agent> [--repo <owner>/<repo>]
   switchboard resume <agent> [--repo <owner>/<repo>]
 ${HOST_USAGE.replace("Usage:\n", "")}
 ${ROLE_USAGE.replace("Usage:\n", "")}
 ${ATTACH_USAGE.replace("Usage:\n", "")}
+${SKILLS_USAGE.replace("Usage:\n", "")}
+${ARTIFACTS_USAGE.replace("Usage:\n", "")}
+${DATASET_USAGE.replace("Usage:\n", "")}
 
 \`login\` signs you in with GitHub (a code to enter at github.com), once: the session
 works for every Channel on that host whose repo you have write access to. The
@@ -94,6 +109,9 @@ prompt, and --from to hand it another Agent's work; \`stop\` stops one. Both wor
 --allow <login> (repeat it) and --allow-channel let other People start, stop, pause and
 resume Agents on that Host: they name it \`<your login>/<name>\`, and the Agents run as you,
 in your folders, in your permission mode limit. Without them only you can (ADR 0028).
+\`librarian\` starts the Channel's librarian on one of your Hosts, in --cwd (a clone of the
+repo under the Host's folders; else this folder): an Agent that keeps the Brief current
+and can write nothing but Brief pages. A Channel has one (ADR 0045).
 \`pause\` ends an Agent's process on its Host and keeps its session, Agent ID and Claims;
 \`resume\` relaunches it with the same conversation.
 
@@ -106,7 +124,24 @@ into your Agents' terminals from the Dashboard (ADR 0021): the Dashboard shows t
 fingerprint when you choose Take over. --person names whose key it is (you, by default);
 --agent limits it to one Agent. Your wrappers check every keystroke against this list,
 so the Channel cannot type for anyone. \`attach prompts off\` stops keys allowed for
-someone else from answering a permission prompt.`;
+someone else from answering a permission prompt.
+
+\`artifacts\` shares single HTML pages on the Channel (ADR 0053): a report, a chart or a
+small tool. \`publish\` sends a file as the next version of the artifact named after it
+(--name names it) and opens it on the Dashboard unless --no-open; a page that looks like it
+holds a secret is refused before it leaves this machine. \`open\` opens one on the
+Dashboard; \`pull\` saves its page to .switchboard/artifacts/<name>.html in this repo (else
+this folder, or --to), to edit and publish again. \`delete\` removes one you first published,
+every version of it, after asking (--yes skips the question). Your Agents publish and read
+them too, but only you delete one.
+
+\`dataset sync\` copies your own sessions (Claude Code's and Codex's files on this machine,
+with their subagents and workflow runs) into ~/.switchboard/dataset, redacted, with each
+linked to how it turned out: its repo, commits, pull requests and whether they merged, its
+Switchboard Tasks and its Greenroom runs (ADR 0054). Nothing is uploaded. The first sync
+writes sources.json, the accounts whose sessions are kept; after it, every wrapped session
+syncs in the background when a turn or the session ends. --relink links every session's
+outcomes again; --offline skips gh and the Channel. \`dataset stats\` counts what it holds.`;
 
 async function login(args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -195,6 +230,8 @@ async function main(argv: string[]): Promise<number> {
       return hostCommand(rest);
     case "spawn":
       return spawnCommand(rest);
+    case "librarian":
+      return librarianCommand(rest);
     case "stop":
       return stopCommand(rest);
     case "pause":
@@ -205,6 +242,12 @@ async function main(argv: string[]): Promise<number> {
       return roleCommand(rest);
     case "attach":
       return attachCommand(rest);
+    case "skills":
+      return skillsCommand(rest);
+    case "artifacts":
+      return artifactsCommand(rest);
+    case "dataset":
+      return datasetCommand(rest);
     case "mcp":
       return runMcpServer();
     case "run": {
@@ -216,8 +259,11 @@ async function main(argv: string[]): Promise<number> {
       }
       return runCli(adapter, args);
     }
-    case undefined:
     case "help":
+      if (rest[0] === "onboarding") return helpOnboarding();
+      console.log(USAGE);
+      return 0;
+    case undefined:
     case "--help":
     case "-h":
       console.log(USAGE);
@@ -226,6 +272,23 @@ async function main(argv: string[]): Promise<number> {
       console.error(`Unknown command: ${command}\n\n${USAGE}`);
       return 2;
   }
+}
+
+/** `switchboard help onboarding`: the first-run guide again, for this directory's Channel when signed in (ADR 0038). */
+async function helpOnboarding(): Promise<number> {
+  const config = await readConfig();
+  if (config === null) {
+    process.stdout.write(onboardingGuide({}));
+    return 0;
+  }
+  let repo: string = config.repo;
+  try {
+    repo = (await chooseChannel(config, { env: process.env, cwd: process.cwd() })).repo;
+  } catch (error) {
+    if (!(error instanceof ChannelChoiceError)) throw error;
+  }
+  process.stdout.write(onboardingGuide({ person: config.person, repo, dashboard: dashboardUrl(config.url, repo) }));
+  return 0;
 }
 
 main(process.argv.slice(2)).then(

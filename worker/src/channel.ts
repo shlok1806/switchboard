@@ -14,6 +14,9 @@ import type {
   AgentRole,
   AgentSummary,
   ApprovalDenyMessage,
+  ArtifactSummary,
+  BriefPage,
+  BriefPageSummary,
   Capture,
   ChannelEvent,
   DeliveryMessage,
@@ -22,6 +25,8 @@ import type {
   DirectiveMessage,
   EventPayloads,
   EventType,
+  HistoryGap,
+  HistoryRequestMessage,
   Holder,
   HookCaptureReply,
   Host,
@@ -35,19 +40,25 @@ import type {
   InterruptAttached,
   InterruptMessage,
   InterruptResult,
+  LibrarianFeedResponse,
   MemoryNote,
   MemoryQuery,
+  MoveLibrarianCursorRequest,
   PendingApproval,
   Person,
   PersonName,
   PostNoteRequest,
   ProxyCaptureReply,
   ProxyMode,
+  QuietClaim,
   RegisterAgentRequest,
   RegisterHostRequest,
   ReportedPresence,
   ReportedUsage,
   SetHostAllowRequest,
+  Skill,
+  SkillEntry,
+  SkillSummary,
   SpawnAgentRequest,
   StreamMessage,
   Task,
@@ -61,19 +72,29 @@ import type {
   TouchedFile,
   TranscriptRequestMessage,
   TranscriptResponse,
+  WriteBriefRequest,
 } from "../../shared/src/index";
 import {
   agentIdFor,
+  cleanHistoryPage,
   cleanTerminalText,
   cleanTranscriptPage,
+  DEFAULT_ARTIFACT_PUBLISHES_PER_DAY,
+  DEFAULT_BRIEF_WRITES_PER_DAY,
   DEFAULT_GONE_AFTER_SECONDS,
   DEFAULT_HOST_AGENTS_LIVE_CAP,
   DEFAULT_LEAD_AGENTS_LIVE_CAP,
   DEFAULT_MEMORY_NOTES_PER_DAY,
+  describeActivity,
+  HISTORY_WAIT_MS,
   hostIdFor,
+  isLocalEvent,
   LIVE_PING,
   LIVE_PONG,
   MAX_SPAWN_FAILURE_LENGTH,
+  mergePages,
+  offlineReason,
+  SUMMARY_MAX_ACTIVITY,
   SUMMARY_MAX_FILES,
   SUMMARY_MAX_NOTES,
   SUMMARY_MAX_UPDATES,
@@ -82,17 +103,24 @@ import {
 import { Access, type AdmitResult, MEMBERSHIP_TTL_MS } from "./access";
 import { AgentRoster, createAgentsTable, type RosterResult } from "./agents";
 import { Alarms } from "./alarms";
+import { ARTIFACTS_SCHEMA, type ArtifactResult, Artifacts } from "./artifacts";
+import { askChannel, type ChannelAnswer, type ChannelQuestion, DEFAULT_QUIET_CLAIM_HOURS } from "./ask";
 import type { Credential } from "./auth";
 import { Branches, type CodeEventResult } from "./branches";
+import { BRIEF_SCHEMA, Brief, type BriefResult, migrateBrief } from "./brief";
 import { type Caller, type ClaimRefusal, type ClaimResult, Claims } from "./claims";
 import { DEFAULT_ATTACH_WAIT_MS, DIRECTIVES_SCHEMA, type DirectiveResult, Directives } from "./directives";
 import { type CodeChange, type GitHub, gitHubFor, type WebhookChange } from "./github/index";
 import { HOOK_CAPTURE_SCHEMA, HookCapture } from "./hook-capture";
 import { type ControlResult, DEFAULT_SPAWN_WAIT_MS, Hosts, type SpawnResult } from "./hosts";
+import { LangfuseProject, type StoredLangfuse } from "./langfuse";
+import { LIBRARIAN_SCHEMA, librarianFeed, moveLibrarianCursor } from "./librarian";
+import { type GrantResult, McpGrants } from "./mcp/grants";
 import { MEMORY_SCHEMA, Memory, type MemoryReadResult, type NoteResult } from "./memory";
 import { ProxyCapture } from "./proxy-capture";
 import { jevFor } from "./relay/jev";
 import { interruptIntervalMs, interruptThreshold, RELAY_SCHEMA, Relay } from "./relay/relay";
+import { migrateSkills, SKILLS_SCHEMA, type SkillResult, Skills, type UploadedChunk } from "./skills";
 import { StaleClaims } from "./stale-claims";
 import { StatusComments } from "./status-comment";
 import { type NewTask, type TaskResult, Tasks, workingTasks } from "./tasks";
@@ -136,8 +164,10 @@ export interface NewEvent<K extends EventType> {
  * Creates the `events` table, which is append-only: this object only ever INSERTs
  * into it, apart from the one-time backfill of the actor columns below.
  *
- * The table holds the Channel's whole history, so every query on a hot path must
- * reach its rows through an index; Durable Objects bill each row a query reads. The
+ * The table holds the Channel's history apart from Local Events, which their machines
+ * keep (ADR 0037; rows from before it stay and are read with the rest), so every
+ * query on a hot path must reach its rows through an index; Durable Objects bill
+ * each row a query reads. The
  * partial indexes cover the few Event types that are looked up later: pushes and
  * merges (the Relay's recent code) and Updates (the status comment, Takeovers).
  * `actor_kind` and `actor_id` copy the actor's kind and Agent ID or Person name out
@@ -199,6 +229,8 @@ export const HISTORY_INDEXES = [
   },
   { name: "events_by_task", on: "(task, seq)", where: "task IS NOT NULL AND type <> 'verdict'" },
   { name: "events_wakes", on: "(seq)", where: "type = 'wake'" },
+  // What People and Agents said, newest first, for the read-only connector (ADR 0040).
+  { name: "events_said", on: "(seq)", where: "type IN ('update', 'directive')" },
 ] as const;
 
 export type HistoryIndex = (typeof HISTORY_INDEXES)[number]["name"];
@@ -319,6 +351,30 @@ interface WrapperRead<T> {
 
 export type IndexPending = { pending: HistoryIndex };
 
+/** A page of history: the Channel's stored Events merged with the machines' Local Events, and what it could not read (ADR 0037). */
+export interface HistoryPage {
+  events: ChannelEvent[];
+  unavailable: HistoryGap[];
+}
+
+/** What a history read asks of a machine. */
+type HistoryAsk = Pick<HistoryRequestMessage, "agent" | "task" | "before" | "limit">;
+
+/** A history read asked of a wrapper's or Host's socket, waiting for its page. */
+interface HistoryRead {
+  /** The socket's tags: only that socket answers. */
+  person: PersonName;
+  tag: string;
+  asked: HistoryAsk;
+  answer: (events: ChannelEvent[] | null) => void;
+}
+
+/** A socket that keeps Local Events, and what to ask it. */
+interface HistoryHolder {
+  ws: WebSocket;
+  asked: HistoryAsk;
+}
+
 /** The answer to a scoped history read whose index covers too many Events to build. */
 export type IndexTooLarge = { tooLarge: HistoryIndex };
 
@@ -393,12 +449,35 @@ export class Channel extends DurableObject<Env> {
   private readonly status: StatusComments;
   /** The notes Agents write for each other (ADR 0019). */
   private readonly memory: Memory;
+  private readonly skills: Skills;
+  /** The Brief's pages (ADR 0042). */
+  private readonly brief: Brief;
+  /** The HTML pages shared on the Channel (ADR 0053). */
+  private readonly artifacts: Artifacts;
+  /** The read-only connector's sign-ins (ADR 0040). */
+  private readonly mcpGrants: McpGrants;
+  /** The repo's own Langfuse project, its secret key sealed (ADR 0044). */
+  private readonly langfuse: LangfuseProject;
+  /** A Claim with no Update for this long is Quiet (ADR 0040). */
+  private readonly quietAfterMs: number;
   /** How long a transcript read waits for the wrapper's page: TRANSCRIPT_WAIT_MS, or shorter in tests. */
   private readonly transcriptWaitMs: number;
   /** Transcript reads waiting for their wrapper's page, by request ID. In memory: a read lasts one request. */
   private readonly transcriptReads = new Map<string, WrapperRead<Omit<TranscriptResponse, "agent">>>();
   /** Screen reads waiting for their wrapper's text (ADR 0024), the same way. */
   private readonly terminalReads = new Map<string, WrapperRead<Omit<TerminalReadResponse, "agent">>>();
+  /** History reads waiting for a machine's page (ADR 0037), the same way. */
+  private readonly historyReads = new Map<string, HistoryRead>();
+  /** How long a history read waits: HISTORY_WAIT_MS, or shorter in tests. */
+  private readonly historyWaitMs: number;
+  /** The last `seq` this object gave, read from the stored Events at its first Event (ADR 0037). */
+  private lastSeq: number | null = null;
+  /**
+   * The newest Local Events, which the Channel does not store (ADR 0037), by ID: so an
+   * Event sent again after a reconnect is recorded once and acknowledged as it was, and
+   * a recent one is still read by ID. In memory, for as long as this object lives.
+   */
+  private readonly recentLocal = new Map<string, ChannelEvent>();
   /** The history indexes built so far (`buildHistoryIndexes`), and the UTC day they were last tried. */
   private historyIndexes: HistoryIndexes;
   private historyIndexesDay = utcDay();
@@ -420,6 +499,29 @@ export class Channel extends DurableObject<Env> {
     ctx.storage.sql.exec(RELAY_SCHEMA);
     ctx.storage.sql.exec(DIRECTIVES_SCHEMA);
     ctx.storage.sql.exec(MEMORY_SCHEMA);
+    ctx.storage.sql.exec(SKILLS_SCHEMA);
+    this.skills = new Skills(ctx.storage);
+    void ctx.blockConcurrencyWhile(() => migrateSkills(ctx.storage));
+    ctx.storage.sql.exec(BRIEF_SCHEMA);
+    migrateBrief(ctx.storage.sql);
+    ctx.storage.sql.exec(LIBRARIAN_SCHEMA);
+    const briefWrites = Number(env.BRIEF_WRITES_PER_DAY);
+    this.brief = new Brief(
+      ctx.storage.sql,
+      Number.isInteger(briefWrites) && briefWrites >= 0 ? briefWrites : DEFAULT_BRIEF_WRITES_PER_DAY,
+    );
+    ctx.storage.sql.exec(ARTIFACTS_SCHEMA);
+    const artifactPublishes = Number(env.ARTIFACT_PUBLISHES_PER_DAY);
+    this.artifacts = new Artifacts(
+      ctx.storage,
+      Number.isInteger(artifactPublishes) && artifactPublishes >= 0
+        ? artifactPublishes
+        : DEFAULT_ARTIFACT_PUBLISHES_PER_DAY,
+    );
+    this.mcpGrants = new McpGrants(ctx.storage.sql);
+    this.langfuse = new LangfuseProject(ctx.storage.sql);
+    const quietHours = Number(env.QUIET_CLAIM_HOURS);
+    this.quietAfterMs = (quietHours > 0 ? quietHours : DEFAULT_QUIET_CLAIM_HOURS) * 60 * 60 * 1000;
     const notesPerDay = Number(env.MEMORY_NOTES_PER_DAY);
     this.memory = new Memory(
       ctx.storage.sql,
@@ -462,11 +564,13 @@ export class Channel extends DurableObject<Env> {
       touchAgent: (person, id) => this.agents.touch(person, id),
       currentTask: (id) => this.currentTask(id),
       appendOnce: (id, event) => this.insert(id, event),
+      recorded: (id) => this.eventsById([id])[0] ?? null,
     });
     this.proxy = new ProxyCapture({
       touchAgent: (person, id) => this.agents.touch(person, id),
       currentTask: (id) => this.currentTask(id),
       appendOnce: (id, event) => this.insert(id, event),
+      recorded: (id) => this.eventsById([id])[0] ?? null,
     });
     this.status = new StatusComments({ sql: ctx.storage.sql, tasks: this.tasks, agents: this.agents });
     this.claims = new Claims({
@@ -527,6 +631,8 @@ export class Channel extends DurableObject<Env> {
     this.wakes = new Wakes({ sql: ctx.storage.sql, append: (event) => this.append(event) });
     const transcriptWait = Number(env.TRANSCRIPT_WAIT_SECONDS);
     this.transcriptWaitMs = transcriptWait > 0 ? transcriptWait * 1000 : TRANSCRIPT_WAIT_MS;
+    const historyWait = Number(env.HISTORY_WAIT_SECONDS);
+    this.historyWaitMs = historyWait > 0 ? historyWait * 1000 : HISTORY_WAIT_MS;
     const wait = Number(env.HOST_SPAWN_WAIT_SECONDS);
     this.hosts = new Hosts({
       sql: ctx.storage.sql,
@@ -731,6 +837,11 @@ export class Channel extends DurableObject<Env> {
       }
     }
     this.join(person);
+    // A machine's Host the Channel does not know answers for nothing (ADR 0037).
+    if (request.historyHost !== undefined && this.hosts.find(person, request.historyHost) === null) {
+      const { historyHost: _, ...rest } = request;
+      request = rest;
+    }
     const result = this.withNextTurn(await this.agents.register(person, request));
     if (!result.ok) return result;
     const agent =
@@ -741,7 +852,7 @@ export class Channel extends DurableObject<Env> {
     if (request.host !== undefined && request.spawn !== undefined) {
       this.hosts.spawned(person, request.host, request.spawn, agent);
     }
-    return { ...result, agent, token: await this.access.issueAgentToken(agent.id, person) };
+    return { ...result, agent, token: await this.access.issueAgentToken(agent.id, person, agent.librarian === true) };
   }
 
   /**
@@ -768,9 +879,22 @@ export class Channel extends DurableObject<Env> {
    * that continue it. Read from indexed rows, for any Person or Agent, Gone or not;
    * reading records nothing. Null when there is no such Agent.
    */
-  agentSummary(id: AgentId): AgentSummary | null {
+  async agentSummary(id: AgentId): Promise<AgentSummary | null> {
     const agent = this.agents.find(id);
     if (agent === null) return null;
+    // Its latest activity and the files it edited last, from the machine that keeps them (ADR 0037).
+    const local = await this.withLocalEvents([], { agent: id, before: Number.MAX_SAFE_INTEGER, limit: 100 });
+    const reached = local.unavailable.length === 0;
+    const activity = local.events
+      .toReversed()
+      .flatMap((event) => {
+        const item = describeActivity(event);
+        return item === null ? [] : [item];
+      })
+      .slice(0, SUMMARY_MAX_ACTIVITY);
+    const lastEdited = local.events
+      .toReversed()
+      .flatMap((event) => (event.type === "file.edit" ? [event.payload.path] : []));
     const tasks = this.tasks
       .held(id)
       .filter((task) => task.status !== "done")
@@ -789,10 +913,10 @@ export class Channel extends DurableObject<Env> {
         text: (JSON.parse(row.payload) as { text: string }).text,
         ...(row.task === null ? {} : { task: row.task as TaskNumber }),
       }));
-    const files = this.hooks
-      .touchedFiles(id)
-      .slice(0, SUMMARY_MAX_FILES)
-      .map((file) => file.path);
+    const files = [...new Set([...lastEdited, ...this.hooks.touchedFiles(id).map((file) => file.path)])].slice(
+      0,
+      SUMMARY_MAX_FILES,
+    );
     // Its own notes, and the open questions and dead ends anyone wrote on its Tasks.
     const notes = new Map<number, MemoryNote>();
     const add = (result: MemoryReadResult) => {
@@ -810,6 +934,7 @@ export class Channel extends DurableObject<Env> {
       files,
       notes: [...notes.values()].sort((a, b) => b.seq - a.seq).slice(0, SUMMARY_MAX_NOTES),
       successors: this.agents.successorsOf(id),
+      ...(reached ? { activity } : { historyUnavailable: local.unavailable[0]?.reason ?? offlineReason(id) }),
     };
   }
 
@@ -1226,7 +1351,226 @@ export class Channel extends DurableObject<Env> {
     return answered;
   }
 
+  /** Each shared skill's latest version (ADR 0039). */
+  listSkills(): SkillSummary[] {
+    return this.skills.list();
+  }
+
+  /** One version of a shared skill with its manifest, the latest when `version` is left out. */
+  readSkill(name: string, version?: number): SkillResult<{ skill: Skill; versions: number[] }> {
+    return this.skills.read(name, version);
+  }
+
+  /** Publishes the next version of a skill for `caller`, a Person or one of their Agents. */
+  publishSkill(
+    caller: Caller,
+    name: string,
+    files: SkillEntry[],
+  ): Promise<SkillResult<{ skill: SkillSummary; published: boolean }>> {
+    return this.skills.publish(caller, name, files);
+  }
+
+  /** Stores chunks of skill files, keeping each file once its bytes match its digest (ADR 0050). */
+  uploadSkillFiles(chunks: UploadedChunk[]): Promise<SkillResult<{ complete: string[] }>> {
+    return this.skills.upload(chunks);
+  }
+
+  /** Chunks of the files published skills hold. */
+  readSkillFiles(
+    chunks: { digest: string; index: number }[],
+  ): SkillResult<{ digest: string; index: number; data: Uint8Array }[]> {
+    return this.skills.readChunks(chunks);
+  }
+
+  /** Each artifact's latest version, the latest published first (ADR 0053). */
+  listArtifacts(): ArtifactSummary[] {
+    return this.artifacts.list();
+  }
+
+  /** One version of an artifact, the latest when `version` is left out, and every version kept. */
+  readArtifact(name: string, version?: number): ArtifactResult<{ artifact: ArtifactSummary; versions: number[] }> {
+    return this.artifacts.read(name, version);
+  }
+
+  /** One version of an artifact with its page. */
+  artifactPage(name: string, version?: number): ArtifactResult<{ artifact: ArtifactSummary; html: string }> {
+    return this.artifacts.page(name, version);
+  }
+
+  /** Publishes the next version of an artifact for `caller`, a Person or one of their Agents. */
+  async publishArtifact(
+    caller: Caller,
+    name: string,
+    page: { html: string; title: string },
+  ): Promise<ArtifactResult<{ artifact: ArtifactSummary; published: boolean }>> {
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    if (caller.agent === undefined) return this.artifacts.publish({ person: caller.person }, name, page);
+    const nickname = this.agents.find(caller.agent)?.nickname;
+    return this.artifacts.publish(
+      { person: caller.person, agent: caller.agent, ...(nickname === undefined ? {} : { nickname }) },
+      name,
+      page,
+    );
+  }
+
+  /** Deletes an artifact with every kept version, for its owner as a Person (ADR 0053). */
+  deleteArtifact(person: PersonName, name: string): ArtifactResult<{ deleted: string; versions: number }> {
+    return this.artifacts.delete(person, name);
+  }
+
+  /** Every page of the Brief, current versions, for any Person or Agent on the Channel (ADR 0042). */
+  briefPages(): BriefPage[] {
+    return this.brief.pages();
+  }
+
+  /** One page of the Brief, current or one of its kept earlier versions. */
+  readBriefPage(page: string, version?: number): BriefResult<{ page: BriefPage; versions: number[] }> {
+    return this.brief.read(page, version);
+  }
+
+  /** Replaces a page of the Brief. Only an Agent writes one, for its Person (ADR 0042). */
+  writeBriefPage(
+    caller: Caller,
+    page: string,
+    write: WriteBriefRequest,
+  ): BriefResult<{ page: BriefPage; written: boolean }> | ClaimRefusal {
+    if (caller.agent === undefined) {
+      return {
+        ok: false,
+        status: 403,
+        reason: "Only Agents write the Brief, through their own MCP. A Person asks their Agent to.",
+      };
+    }
+    const who = this.claims.resolve(caller);
+    if (!who.ok) return who;
+    const nickname = this.agents.find(caller.agent)?.nickname;
+    return this.brief.write(
+      { agent: caller.agent, person: caller.person, ...(nickname === undefined ? {} : { nickname }) },
+      page,
+      write,
+      caller.librarian === true,
+    );
+  }
+
+  /**
+   * The Librarian Feed (ADR 0045): what changed after the Librarian Cursor that may
+   * change a Brief page, the Quiet Claims now, and the Brief's budget today. Only reads.
+   */
+  librarianFeed(): LibrarianFeedResponse {
+    return librarianFeed({
+      sql: this.ctx.storage.sql,
+      toEvent: rowToEvent,
+      quiet: () => {
+        const answer = this.askChannel({ since: new Date().toISOString() });
+        return answer.tasks.flatMap((task): QuietClaim[] => {
+          const since = answer.quiet[task.number];
+          const holder = task.claim?.holder;
+          if (since === undefined || holder === undefined) return [];
+          return [
+            {
+              task: task.number,
+              title: task.title,
+              holder: holder.kind === "agent" ? holder.agentId : holder.person,
+              since,
+            },
+          ];
+        });
+      },
+      briefPages: () => this.brief.count(),
+      briefBudget: () => this.brief.budget(),
+    });
+  }
+
+  /** Moves the Librarian Cursor: the librarian's token only (ADR 0045). */
+  moveLibrarianCursor(
+    caller: Caller,
+    request: MoveLibrarianCursorRequest,
+  ): { ok: true; cursor: number } | { ok: false; status: number; reason: string } {
+    if (caller.agent === undefined || caller.librarian !== true) {
+      return { ok: false, status: 403, reason: "Only the Channel's librarian moves its cursor." };
+    }
+    return moveLibrarianCursor(this.ctx.storage.sql, caller.agent, request.through, request.quiet);
+  }
+
+  /**
+   * The Connector's `brief` tool (ADR 0042): one page and, for the overview or a page
+   * there is none of, the list of pages. Bounded by the Brief's page cap, and no write.
+   */
+  askBrief(page: string): { page: BriefPage | null; pages?: BriefPageSummary[] } {
+    return this.brief.ask(page);
+  }
+
+  /** Whether `person` is the Channel's owner, an admin of its repo, asked of GitHub now (ADR 0044). */
+  isOwner(person: PersonName, dev: boolean): Promise<{ ok: true; owner: boolean } | { ok: false; reason: string }> {
+    return this.access.isOwner(person, dev);
+  }
+
+  /**
+   * The Channel's Langfuse project with its secret key still sealed, for the Worker
+   * alone: the settings route shows only `connection(...)` of it, and the Connector's
+   * costs tool opens the key for its calls to Langfuse (ADR 0044). One row read.
+   */
+  langfuseProject(): StoredLangfuse | null {
+    return this.langfuse.get();
+  }
+
+  /** Connects the Channel's Langfuse project, or replaces it. The Worker checked the owner and the keys. */
+  setLangfuseProject(stored: StoredLangfuse): void {
+    this.langfuse.set(stored);
+  }
+
+  /** Removes the Channel's Langfuse project. True when there was one. */
+  removeLangfuseProject(): boolean {
+    return this.langfuse.remove();
+  }
+
   /** The Channel's notes, for any Person or Agent on it (ADR 0019). */
+  /**
+   * The `channel` tool of the read-only connector (ADR 0040): what is in progress,
+   * what is stuck, what was said since `since`, narrowed by `about`. Bounded reads
+   * through indexes, and no write.
+   */
+  askChannel(question: ChannelQuestion): ChannelAnswer {
+    const sql = this.ctx.storage.sql;
+    return askChannel(
+      {
+        sql,
+        claimedTasks: (limit) => this.tasks.claimed(limit),
+        task: (number) => this.tasks.read(number),
+        agent: (id) => this.agents.find(id),
+        liveAgents: (limit) => this.agents.live(limit),
+        isPerson: (name) => sql.exec("SELECT name FROM persons WHERE name = ?", name).toArray().length > 0,
+        notes: (query) => this.memory.read(query),
+        indexed: (name) => this.historyIndexes.built.has(name),
+        toEvent: rowToEvent,
+        quietAfterMs: this.quietAfterMs,
+      },
+      question,
+    );
+  }
+
+  /**
+   * Admits a call to the read-only connector (ADR 0040): its access token's grant must
+   * still be live (one read by key), and its Person a Member, as for every Channel call.
+   */
+  admitConnector(repo: string, person: PersonName, grant: string, dev: boolean): Promise<AdmitResult> {
+    if (!this.mcpGrants.live(grant)) {
+      return Promise.resolve({ ok: false, status: 401, reason: "This sign-in ended. Connect the app again." });
+    }
+    return this.admit(repo, { kind: "session", person }, dev);
+  }
+
+  /** Starts the grant of a connector sign-in whose code was redeemed (ADR 0040). */
+  startMcpGrant(id: string, person: PersonName, client: string, expiresAt: number): GrantResult {
+    return this.mcpGrants.start(id, person, client, expiresAt);
+  }
+
+  /** Rotates a connector sign-in's grant for a refresh (ADR 0040). */
+  rotateMcpGrant(id: string, generation: number, client: string, expiresAt: number): GrantResult {
+    return this.mcpGrants.rotate(id, generation, client, expiresAt);
+  }
+
   readMemory(query: MemoryQuery): MemoryReadResult {
     return this.memory.read(query);
   }
@@ -1239,24 +1583,27 @@ export class Channel extends DurableObject<Env> {
       .map(rowToEvent);
   }
 
-  /** The latest `count` Events with `seq` below `before`, oldest first. */
-  latestEvents(count: number, before = Number.MAX_SAFE_INTEGER): ChannelEvent[] {
-    return this.ctx.storage.sql
+  /**
+   * The latest `count` Events with `seq` below `before`, oldest first: the stored ones and
+   * the Local Events every reachable machine keeps (ADR 0037), with the Hosts it could not reach.
+   */
+  async latestEvents(count: number, before = Number.MAX_SAFE_INTEGER): Promise<HistoryPage> {
+    const stored = this.ctx.storage.sql
       .exec<EventRow>("SELECT * FROM events WHERE seq < ? ORDER BY seq DESC LIMIT ?", before, count)
       .toArray()
-      .reverse()
       .map(rowToEvent);
+    return this.withLocalEvents(stored, { before, limit: count });
   }
 
   /**
    * The latest `count` Events about Agent `agent` with `seq` below `before`, oldest
    * first: what it did, the Directives to it and its renames by others.
    */
-  latestEventsOfAgent(
+  async latestEventsOfAgent(
     agent: AgentId,
     count: number,
     before = Number.MAX_SAFE_INTEGER,
-  ): ChannelEvent[] | IndexPending | IndexTooLarge {
+  ): Promise<HistoryPage | IndexPending | IndexTooLarge> {
     const pending = this.pendingIndex("events_by_agent", "events_directives_to", "events_about_agent");
     if (pending) return pending;
     const sql = this.ctx.storage.sql;
@@ -1284,13 +1631,8 @@ export class Channel extends DurableObject<Env> {
         count,
       ),
     ];
-    // An Agent that renamed itself is in two of the reads.
-    const bySeq = new Map(rows.map((row) => [row.seq, row]));
-    return [...bySeq.values()]
-      .sort((a, b) => b.seq - a.seq)
-      .slice(0, count)
-      .reverse()
-      .map(rowToEvent);
+    // An Agent that renamed itself is in two of the reads: merging keeps each Event once.
+    return this.withLocalEvents(rows.map(rowToEvent), { agent, before, limit: count });
   }
 
   /**
@@ -1298,14 +1640,14 @@ export class Channel extends DurableObject<Env> {
    * Verdicts are left out, as from the index: there are many per Event, and the
    * Dashboard reads them with the Events they judge.
    */
-  latestEventsOfTask(
+  async latestEventsOfTask(
     task: TaskNumber,
     count: number,
     before = Number.MAX_SAFE_INTEGER,
-  ): ChannelEvent[] | IndexPending | IndexTooLarge {
+  ): Promise<HistoryPage | IndexPending | IndexTooLarge> {
     const pending = this.pendingIndex("events_by_task");
     if (pending) return pending;
-    return this.ctx.storage.sql
+    const stored = this.ctx.storage.sql
       .exec<EventRow>(
         `SELECT * FROM events INDEXED BY events_by_task
          WHERE task = ? AND type <> 'verdict' AND seq < ? ORDER BY seq DESC LIMIT ?`,
@@ -1314,8 +1656,134 @@ export class Channel extends DurableObject<Env> {
         count,
       )
       .toArray()
-      .reverse()
       .map(rowToEvent);
+    const page = await this.withLocalEvents(stored, { task, before, limit: count });
+    // As from the index: a Task's history leaves its Verdicts out.
+    return { ...page, events: page.events.filter((event) => event.type !== "verdict") };
+  }
+
+  /**
+   * `stored`, merged with the Local Events the machines that keep them answer with for
+   * `asked` (ADR 0037), cut to its limit, and what could not be read. Machines are asked
+   * at once, each waited for at most the history wait.
+   */
+  private async withLocalEvents(stored: ChannelEvent[], asked: HistoryAsk): Promise<HistoryPage> {
+    const { holders, unavailable } = this.historyHolders(asked);
+    const pages = await Promise.all(
+      holders.map(async (holder) => {
+        const events = await this.askHistory(holder);
+        return { holder, events };
+      }),
+    );
+    for (const { holder, events } of pages) {
+      if (events !== null) continue;
+      const [person, tag] = this.ctx.getTags(holder.ws);
+      const who = tag?.startsWith(HOST_TAG) ? tag.slice(HOST_TAG.length) : (holder.asked.agent ?? person ?? "");
+      unavailable.push({
+        ...(tag?.startsWith(HOST_TAG) ? { host: who as HostId } : {}),
+        agents: holder.asked.agent === undefined ? [] : [holder.asked.agent],
+        reason: `history unavailable: ${who} did not answer in time`,
+      });
+    }
+    return {
+      events: mergePages([stored, ...pages.map((page) => page.events ?? [])], asked.limit),
+      unavailable,
+    };
+  }
+
+  /**
+   * Which sockets to ask for `asked`, and which history is out of reach (ADR 0037). For one
+   * Agent: its wrapper while attached, else its Host. For the feed or a Task: every attached
+   * Host, and every attached wrapper whose machine has no attached Host.
+   */
+  private historyHolders(asked: HistoryAsk): { holders: HistoryHolder[]; unavailable: HistoryGap[] } {
+    const holders: HistoryHolder[] = [];
+    const unavailable: HistoryGap[] = [];
+    if (asked.agent !== undefined) {
+      const agent = this.agents.find(asked.agent);
+      if (agent === null) return { holders, unavailable };
+      const wrapper = this.wrapperSocket(agent.id, true);
+      const host = agent.historyHost === undefined ? null : this.hostSocket(agent.historyHost, true);
+      if (wrapper !== null) holders.push({ ws: wrapper, asked });
+      else if (host !== null) holders.push({ ws: host, asked });
+      else {
+        unavailable.push({
+          ...(agent.historyHost === undefined ? {} : { host: agent.historyHost }),
+          agents: [agent.id],
+          reason:
+            agent.historyHost !== undefined
+              ? this.unreachable(agent.historyHost)
+              : this.wrapperSocket(agent.id) !== null
+                ? oldSwitchboard(agent.id)
+                : offlineReason(agent.id),
+        });
+      }
+      return { holders, unavailable };
+    }
+    const hosts = new Set<HostId>();
+    for (const host of this.hosts.list()) {
+      const ws = this.hostSocket(host.id, true);
+      if (ws !== null) {
+        hosts.add(host.id);
+        holders.push({ ws, asked });
+      } else {
+        unavailable.push({ host: host.id, agents: [], reason: this.unreachable(host.id) });
+      }
+    }
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws.readyState !== WebSocket.READY_STATE_OPEN) continue;
+      const attached = ws.deserializeAttachment() as WrapperAttachment | null;
+      if (attached?.agent === undefined || attached.history !== true) continue;
+      if (this.wrapperSocket(attached.agent, true) !== ws) continue;
+      const agent = this.agents.find(attached.agent);
+      if (agent === null || (agent.historyHost !== undefined && hosts.has(agent.historyHost))) continue;
+      holders.push({ ws, asked: { ...asked, agent: agent.id } });
+    }
+    return { holders, unavailable };
+  }
+
+  /** Why Host `id`'s Local Events cannot be read: it is away, or it runs a switchboard that keeps none. */
+  private unreachable(id: HostId): string {
+    return this.hostSocket(id) === null ? offlineReason(id) : oldSwitchboard(id);
+  }
+
+  /** Asks one socket for a page of the Local Events it keeps: its page, or null when it does not answer in time. */
+  private askHistory(holder: HistoryHolder): Promise<ChannelEvent[] | null> {
+    const [person, tag] = this.ctx.getTags(holder.ws);
+    if (person === undefined || tag === undefined) return Promise.resolve(null);
+    const id = crypto.randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.historyReads.delete(id);
+        resolve(null);
+      }, this.historyWaitMs);
+      this.historyReads.set(id, {
+        person,
+        tag,
+        asked: holder.asked,
+        answer: (events) => {
+          clearTimeout(timer);
+          this.historyReads.delete(id);
+          resolve(events);
+        },
+      });
+      const request: HistoryRequestMessage = { type: "history.request", id, ...holder.asked };
+      if (!send(holder.ws, request)) this.historyReads.get(id)?.answer(null);
+    });
+  }
+
+  /** `history.page` from a wrapper's or a Host's socket: the answer to a read asked of that socket. */
+  private historyAnswered(ws: WebSocket, body: Record<string, unknown>): void {
+    const read = typeof body.id === "string" ? this.historyReads.get(body.id) : undefined;
+    if (read === undefined) return;
+    const [person, tag] = this.ctx.getTags(ws);
+    if (person !== read.person || tag !== read.tag) return;
+    if (typeof body.error === "string") {
+      read.answer(null);
+      return;
+    }
+    // Only its own Person's Agents' Local Events, inside what was asked.
+    read.answer(cleanHistoryPage(body.events, person, read.asked));
   }
 
   /** The first named index not built, after trying once more if a new day's budget has begun. */
@@ -1334,10 +1802,13 @@ export class Channel extends DurableObject<Env> {
   /** The Events with these IDs, oldest first; IDs the Channel does not know are left out. */
   eventsById(ids: readonly string[]): ChannelEvent[] {
     if (ids.length === 0) return [];
-    return this.ctx.storage.sql
+    const stored = this.ctx.storage.sql
       .exec<EventRow>(`SELECT * FROM events WHERE id IN (${ids.map(() => "?").join(", ")}) ORDER BY seq`, ...ids)
       .toArray()
       .map(rowToEvent);
+    // A recent Local Event is still known here; older ones are only on their machine.
+    const recent = ids.flatMap((id) => this.recentLocal.get(id) ?? []);
+    return recent.length === 0 ? stored : mergePages([stored, recent], Number.MAX_SAFE_INTEGER);
   }
 
   /** The first `count` Wakes with `seq` above `after`, oldest first. */
@@ -1380,7 +1851,10 @@ export class Channel extends DurableObject<Env> {
       }
       const { 0: client, 1: server } = new WebSocketPair();
       this.ctx.acceptWebSocket(server, [name, hostTag(hostIdFor(name, host))]);
-      server.serializeAttachment({ at: Date.now() } satisfies HostAttachment);
+      server.serializeAttachment({
+        at: Date.now(),
+        ...(url.searchParams.get("history") === "1" ? { history: true } : {}),
+      } satisfies HostAttachment);
       this.hosts.attach(name, host);
       await this.watchMembers();
       return new Response(null, { status: 101, webSocket: client });
@@ -1437,12 +1911,17 @@ export class Channel extends DurableObject<Env> {
       type !== "terminal.input" &&
       type !== "terminal.screen" &&
       type !== "terminal.refused" &&
-      type !== "terminal.attached"
+      type !== "terminal.attached" &&
+      type !== "history.page"
     ) {
       return;
     }
     const [person, tag] = this.ctx.getTags(ws);
     if (person === undefined) return;
+    if (type === "history.page") {
+      this.historyAnswered(ws, frame as Record<string, unknown>);
+      return;
+    }
     if (type === "host.spawn.failed") {
       // Only a Host's own socket answers for its spawns.
       const host = tag?.startsWith(HOST_TAG) ? tag.slice(HOST_TAG.length + person.length + 1) : null;
@@ -1515,7 +1994,12 @@ export class Channel extends DurableObject<Env> {
       if (typeof agent !== "string" || agent !== socketAgent) return;
       if (type === "interrupt.attach") {
         // Kept on the socket itself, so it survives hibernation and goes when the socket does.
-        const attached: WrapperAttachment = { agent: agent as AgentId, at: Date.now() };
+        // A wrapper that keeps its Agent's Local Events says so (ADR 0037).
+        const attached: WrapperAttachment = {
+          agent: agent as AgentId,
+          at: Date.now(),
+          ...(body.history === true ? { history: true } : {}),
+        };
         ws.serializeAttachment(attached);
         // Tells the wrapper its Agent's Interrupts and Directives come here from now on.
         send(ws, { type: "interrupt.attached", agent: agent as AgentId });
@@ -1625,7 +2109,9 @@ export class Channel extends DurableObject<Env> {
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     try {
-      ws.close(code, reason);
+      // The close is answered, or the client's connection never ends (ADR 0052). A code the
+      // client may not send back (1005 "no code", 1006, 1015) is answered with 1000.
+      ws.close(answerableCode(code), reason);
     } catch {
       // Already closed.
     }
@@ -1753,15 +2239,36 @@ export class Channel extends DurableObject<Env> {
     return this.hosts.control({ person }, id, action);
   }
 
-  /** Host `id`'s newest open socket, or null when it is Offline. */
-  private hostSocket(id: HostId): WebSocket | null {
+  /** Host `id`'s newest open socket, or null when it is Offline; with `history`, only one that answers history reads. */
+  private hostSocket(id: HostId, history = false): WebSocket | null {
     let newest: { ws: WebSocket; at: number } | null = null;
     for (const ws of this.ctx.getWebSockets(hostTag(id))) {
       if (ws.readyState !== WebSocket.READY_STATE_OPEN) continue;
-      const at = (ws.deserializeAttachment() as HostAttachment | null)?.at ?? 0;
+      const attached = ws.deserializeAttachment() as HostAttachment | null;
+      const at = attached?.at ?? 0;
       if (newest === null || at > newest.at) newest = { ws, at };
     }
-    return newest?.ws ?? null;
+    if (newest === null) return null;
+    if (history && (newest.ws.deserializeAttachment() as HostAttachment | null)?.history !== true) return null;
+    return newest.ws;
+  }
+
+  /**
+   * The socket that most recently said it is Agent `id`'s wrapper, or null; with
+   * `history`, only when that wrapper answers history reads (ADR 0037).
+   */
+  private wrapperSocket(id: AgentId, history = false): WebSocket | null {
+    const person = id.split("/")[0];
+    if (person === undefined) return null;
+    let target: { ws: WebSocket; attached: WrapperAttachment } | null = null;
+    for (const ws of this.ctx.getWebSockets(person)) {
+      if (ws.readyState !== WebSocket.READY_STATE_OPEN) continue;
+      const attached = ws.deserializeAttachment() as WrapperAttachment | null;
+      if (attached?.agent !== id) continue;
+      if (target === null || attached.at > target.attached.at) target = { ws, attached };
+    }
+    if (target === null || (history && target.attached.history !== true)) return null;
+    return target.ws;
   }
 
   /** `person`'s sockets that carry the stream: theirs and their wrappers', not their Hosts'. */
@@ -1775,29 +2282,79 @@ export class Channel extends DurableObject<Env> {
     return stored;
   }
 
-  /** Records an Event under `id` and broadcasts it, or returns null when the Channel already has that ID. */
+  /**
+   * Records an Event under `id` and broadcasts it, or returns null when the Channel
+   * already has that ID. A Local Event is given its place and broadcast but not stored:
+   * its machine keeps it (ADR 0037).
+   */
   private insert<K extends EventType>(id: string, event: NewEvent<K>): ChannelEvent | null {
-    const row = this.ctx.storage.sql
-      .exec<EventRow>(
-        `INSERT INTO events (id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING RETURNING *`,
-        id,
-        new Date().toISOString(),
-        event.type,
-        JSON.stringify(event.actor),
-        event.capture,
-        event.task ?? null,
-        event.turn ?? null,
-        JSON.stringify(event.payload),
-        ...actorColumns(event.actor),
-      )
-      .toArray()[0];
-    if (!row) return null;
-    const stored = rowToEvent(row);
-    this.broadcast({ type: "event", event: stored });
+    const at = new Date().toISOString();
+    let recorded: ChannelEvent;
+    if (isLocalEvent(event)) {
+      if (this.recentLocal.has(id) || this.eventsById([id]).length > 0) return null;
+      recorded = JSON.parse(
+        JSON.stringify({
+          id,
+          seq: this.nextSeq(),
+          at,
+          type: event.type,
+          actor: event.actor,
+          capture: event.capture,
+          ...(event.task === undefined ? {} : { task: event.task }),
+          ...(event.turn === undefined ? {} : { turn: event.turn }),
+          payload: event.payload,
+        }),
+      ) as ChannelEvent;
+      this.recentLocal.set(id, recorded);
+      for (const oldest of this.recentLocal.keys()) {
+        if (this.recentLocal.size <= RECENT_LOCAL_EVENTS) break;
+        this.recentLocal.delete(oldest);
+      }
+    } else {
+      const row = this.ctx.storage.sql
+        .exec<EventRow>(
+          `INSERT INTO events (seq, id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING RETURNING *`,
+          this.peekSeq(),
+          id,
+          at,
+          event.type,
+          JSON.stringify(event.actor),
+          event.capture,
+          event.task ?? null,
+          event.turn ?? null,
+          JSON.stringify(event.payload),
+          ...actorColumns(event.actor),
+        )
+        .toArray()[0];
+      if (!row) return null;
+      this.lastSeq = row.seq;
+      recorded = rowToEvent(row);
+    }
+    this.broadcast({ type: "event", event: recorded });
     // The Relay decides who hears about it, after this request.
-    this.relay.consider(stored);
-    return stored;
+    this.relay.consider(recorded);
+    return recorded;
+  }
+
+  /** The next `seq`, taken: see `peekSeq`. */
+  private nextSeq(): number {
+    const seq = this.peekSeq();
+    this.lastSeq = seq;
+    return seq;
+  }
+
+  /**
+   * The `seq` the next Event gets: the time in microseconds, or one more than the last
+   * `seq` given, whichever is larger (ADR 0037). It only grows and needs no stored
+   * counter, and leaves room between stored Events for the Local Events made between them.
+   */
+  private peekSeq(): number {
+    if (this.lastSeq === null) {
+      this.lastSeq =
+        this.ctx.storage.sql.exec<{ seq: number | null }>("SELECT MAX(seq) AS seq FROM events").one().seq ?? 0;
+    }
+    return Math.max(this.lastSeq + 1, Date.now() * 1000);
   }
 
   private broadcast(message: StreamMessage): void {
@@ -1805,6 +2362,14 @@ export class Channel extends DurableObject<Env> {
       if (!this.ctx.getTags(ws)[1]?.startsWith(HOST_TAG)) send(ws, message);
     }
   }
+}
+
+/** How many Local Events the Channel remembers by ID (`recentLocal`). */
+const RECENT_LOCAL_EVENTS = 5000;
+
+/** Why a machine that is attached keeps no history to read: its switchboard is from before ADR 0037. */
+function oldSwitchboard(holder: string): string {
+  return `history unavailable: ${holder} runs a switchboard from before local history; update it to read its history`;
 }
 
 /** The tag on a WebSocket opened with an Agent's token. */
@@ -1821,15 +2386,17 @@ function hostTag(id: HostId): string {
   return `${HOST_TAG}${id}`;
 }
 
-/** What a Host's socket carries: when it attached, so the newest one gets the Host's requests. */
+/** What a Host's socket carries: when it attached, so the newest one gets the Host's requests, and whether it answers history reads (ADR 0037). */
 interface HostAttachment {
   at: number;
+  history?: true;
 }
 
-/** What a wrapper's socket carries: the Agent whose Interrupts it types, and since when. */
+/** What a wrapper's socket carries: the Agent whose Interrupts it types, since when, and whether it answers history reads. */
 interface WrapperAttachment {
   agent: AgentId;
   at: number;
+  history?: true;
 }
 
 const WRAPPER_DOWNGRADES: ReadonlySet<string> = new Set(["person-typing", "dialog-open", "session-not-ready"]);
@@ -1866,6 +2433,7 @@ function send(
     | ApprovalDenyMessage
     | TranscriptRequestMessage
     | TerminalReadRequestMessage
+    | HistoryRequestMessage
     | HostSpawnMessage
     | HostSpawnedMessage
     | HostStopMessage
@@ -1884,4 +2452,15 @@ function send(
     // The socket is closing; its close handler cleans up.
     return false;
   }
+}
+
+/**
+ * The code to answer a client's close with: its own, unless no endpoint may send it (RFC
+ * 6455 7.4): 1005 and 1006 stand for a close without a code or without a frame, and 1004
+ * and 1015 are reserved. Answering with one of those throws, the close is never answered,
+ * and the client's connection stays open until the client process ends (ADR 0052).
+ */
+export function answerableCode(code: number): number {
+  const sendable = (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999);
+  return sendable ? code : 1000;
 }
