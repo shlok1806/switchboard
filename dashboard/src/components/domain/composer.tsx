@@ -3,18 +3,19 @@
  * Directive is labelled as from you and is the only message an Agent treats as instruction;
  * the label over the field says which of the two this is and who hears it.
  */
-import { useState, type FormEvent } from "react";
-import { toast } from "sonner";
+
 import type { AgentId } from "@shared/index";
+import { type FormEvent, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
-import { Chip } from "@/components/atoms/Chip";
+import { Segmented } from "@/components/atoms/Segmented";
 import { ownedName, shortName } from "@/components/domain/fleet";
 import { useCapabilities, useChannel, useStore } from "@/data/store";
 
 type Mode = "update" | "directive";
 
 const FIELD =
-  "h-[30px] min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-[16px]";
+  "h-[30px] min-w-0 rounded-[var(--r)] border border-rule-2 bg-paper px-2.5 text-row text-ink placeholder:text-ink-3 hover:bg-paper-2 max-sm:text-read";
 
 export function Composer({ task }: { task?: number }) {
   const store = useStore();
@@ -46,18 +47,22 @@ export function Composer({ task }: { task?: number }) {
   return (
     <form onSubmit={submit} className="flex flex-col gap-2">
       {can.directives && (
-        <div role="group" aria-label="Say it as" className="flex gap-1.5">
-          <Chip on={mode === "update"} onClick={() => setMode("update")}>
-            Update
-          </Chip>
-          <Chip on={mode === "directive"} onClick={() => setMode("directive")}>
-            Directive
-          </Chip>
-        </div>
+        <Segmented
+          label="Say it as"
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: "update", label: "Update" },
+            { value: "directive", label: "Directive" },
+          ]}
+          className="self-start"
+        />
       )}
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1 text-small text-ink-3">
-          {directive ? "Directive: labelled as from you, read at the start of its next turn" : "Update: everyone reads it, and Agents hear it when the Relay says so"}
+          {directive
+            ? "Directive: labelled as from you, read at the start of its next turn"
+            : "Update: everyone reads it, and Agents hear it when the Relay says so"}
           <input
             // Activity's empty state focuses the Channel's composer by this ID.
             id={task === undefined ? "composer-text" : undefined}

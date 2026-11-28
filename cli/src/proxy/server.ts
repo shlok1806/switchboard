@@ -20,6 +20,7 @@ import type { AddressInfo, Socket } from "node:net";
 import { PassThrough, type Transform } from "node:stream";
 import * as zlib from "node:zlib";
 import { RAW_PROXY_CAP_BYTES } from "../../../shared/src/index";
+import { exhaustedCode, exhaustionMessage } from "../channel-net";
 import { anthropicMessages } from "./anthropic";
 import { type ApiFormat, type EventParser, type RequestedModel, record, safeParse } from "./api";
 import { CappedBody, type TurnInput } from "./turn";
@@ -242,7 +243,7 @@ export class ProxyServer {
       });
     });
     upstreamReq.on("error", (error) => {
-      this.options.log(`proxy: ${req.method} ${path} failed upstream: ${error.message}`);
+      this.options.log(`proxy: ${req.method} ${path} failed upstream: ${plainly(error)}`);
       if (!res.headersSent) {
         res.writeHead(502, { "content-type": "application/json" });
         res.end(
@@ -419,7 +420,7 @@ export class ProxyServer {
       upstreamRes.pipe(socket);
     });
     upstreamReq.on("error", (error) => {
-      this.options.log(`proxy: WebSocket ${path} failed upstream: ${error.message}`);
+      this.options.log(`proxy: WebSocket ${path} failed upstream: ${plainly(error)}`);
       if (socket.writable) socket.end("HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
     });
     upstreamReq.end();
@@ -527,4 +528,10 @@ export class ProxyServer {
       return undefined;
     }
   }
+}
+
+/** An upstream error as a Person should read it: a machine out of ports or descriptors is named as such (ADR 0052). */
+function plainly(error: Error): string {
+  const code = exhaustedCode(error);
+  return code === null ? error.message : `${error.message}: ${exhaustionMessage(code)}`;
 }

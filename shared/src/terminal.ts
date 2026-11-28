@@ -211,8 +211,9 @@ export function cleanTerminalText(raw: Record<string, unknown>): Omit<TerminalRe
 }
 
 export function toBase64(bytes: Uint8Array): string {
+  // A slice at a time: a skill's chunk is a megabyte (ADR 0050), too many arguments for one call.
   let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(s);
 }
 

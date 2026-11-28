@@ -4,7 +4,7 @@
  * made it ask, and anything that changed the delivery on the way.
  */
 import type { AgentId, Verdict, VerdictOption } from "@shared/index";
-import { DOWNGRADE_LABEL, VERDICT_LABEL, prob } from "@/lib/format";
+import { DOWNGRADE_LABEL, prob, VERDICT_LABEL } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { HolderLabel } from "./task";
 
@@ -22,12 +22,20 @@ const FILL: Record<VerdictOption, string> = {
 export function VerdictBar({ verdict, threshold, className }: { verdict: Verdict; threshold: number; className?: string }) {
   const p = verdict.probabilities;
   if (!p) {
-    return <p className={cn("text-small text-ink-3", className)}>{verdict.source === "fallback" ? "Jev did not answer, so it was Queued." : "No overlap, so Jev was not asked."}</p>;
+    return (
+      <p className={cn("text-small text-ink-3", className)}>
+        {verdict.source === "fallback" ? "Jev did not answer, so it was Queued." : "No overlap, so Jev was not asked."}
+      </p>
+    );
   }
   const top = ORDER.reduce((a, b) => (p[b] > p[a] ? b : a));
   return (
     <div className={cn("flex min-w-0 flex-col gap-1", className)}>
-      <div className="relative h-1 w-full bg-rule" role="img" aria-label={`${ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(", ")}. An Interrupt needs ${prob(threshold)}.`}>
+      <div
+        className="relative h-1 w-full bg-rule"
+        role="img"
+        aria-label={`${ORDER.map((o) => `${VERDICT_LABEL[o]} ${prob(p[o])}`).join(", ")}. An Interrupt needs ${prob(threshold)}.`}
+      >
         <div className="flex h-full w-full gap-px">
           {ORDER.map((o) => (
             <span key={o} className={cn("h-full", FILL[o])} style={{ width: `${p[o] * 100}%` }} />

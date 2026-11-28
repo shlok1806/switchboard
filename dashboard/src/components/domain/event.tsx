@@ -3,19 +3,20 @@
  * says what it was, who and when, where it came from and which Task it is on; the body is
  * the Event by type; then what the Relay did with it for each Agent.
  */
-import { useMemo } from "react";
+
 import type { AgentId, ChannelEvent, Task, ToolCall, Verdict } from "@shared/index";
+import { useMemo } from "react";
+import { SheetClose } from "@/components/shell/inspector";
+import { Section } from "@/components/shell/section";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ui/reasoning";
 import { useEventsById } from "@/data/history";
-import { EVENT_TYPE_LABEL, TASK_FIELD_LABEL, ago, captureOrOrigin, clock, compact, holderName, summarize, unrelayedReason } from "@/lib/format";
+import { ago, captureOrOrigin, clock, compact, EVENT_TYPE_LABEL, holderName, summarize, TASK_FIELD_LABEL, unrelayedReason } from "@/lib/format";
 import { href } from "@/lib/router";
 import { FileDiff } from "./diff";
 import { Who } from "./log";
 import { IssueLink } from "./pending";
 import { HolderLabel } from "./task";
 import { VerdictTable } from "./verdict";
-import { SheetClose } from "@/components/shell/inspector";
-import { Section } from "@/components/shell/section";
 
 /** Code set as design.md's command block: mono 13 on paper-2, 6x10, wraps anywhere. */
 const BLOCK = "rounded-[var(--r)] bg-paper-2 px-2.5 py-1.5 text-small [overflow-wrap:anywhere] whitespace-pre-wrap text-ink";
@@ -57,8 +58,7 @@ function WakeBody({ event }: { event: Extract<ChannelEvent, { type: "wake" }> })
   return (
     <div className="flex flex-col gap-2">
       <p className="text-row text-ink">
-        The Agent was idle, so its wrapper typed what was waiting for its next turn as one prompt, which started a turn. Its Person did not write
-        that prompt.
+        The Agent was idle, so its wrapper typed what was waiting for its next turn as one prompt, which started a turn. Its Person did not write that prompt.
       </p>
       {delivered.length > 0 && (
         <ul>
@@ -263,12 +263,12 @@ export function EventDetail({
     <>
       <header className="flex flex-col gap-1.5">
         <div className="flex items-start gap-2">
-          <h2 className="min-w-0 flex-1 text-title font-semibold text-ink">{EVENT_TYPE_LABEL[event.type]}</h2>
+          <h2 className="min-w-0 flex-1 font-display text-section font-medium text-ink">{EVENT_TYPE_LABEL[event.type]}</h2>
           <SheetClose onClose={onClose} />
         </div>
         <p className="text-small text-ink-3">
           <Who event={event} /> ·{" "}
-          <time dateTime={event.at} className="tabular-nums">
+          <time dateTime={event.at}>
             {clock(event.at)}, {ago(event.at)}
           </time>{" "}
           · {event.capture ? `${origin} Capture` : origin}
@@ -295,7 +295,8 @@ export function EventDetail({
           <VerdictTable verdicts={verdicts} threshold={threshold} woken={woken} />
         ) : (
           <p className="text-small text-ink-3">
-            Arrives with the Relay (<IssueLink capability="verdicts" />).
+            Arrives with the Relay (<IssueLink capability="verdicts" />
+            ).
           </p>
         )}
       </Section>

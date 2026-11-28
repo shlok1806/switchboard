@@ -101,6 +101,9 @@ const MODEL_WORDS: Record<string, string> = {
   mini: "Mini",
   nano: "Nano",
   max: "Max",
+  sol: "Sol",
+  terra: "Terra",
+  astra: "Astra",
 };
 
 /**
@@ -124,8 +127,8 @@ export function modelLabel(id: string): string {
   if (older?.[1] && older[3]) {
     return `${CLAUDE_FAMILIES[older[3].toLowerCase()]} ${older[2] === undefined ? older[1] : `${older[1]}.${older[2]}`}`;
   }
-  // gpt-5, gpt-5-codex, gpt-5.1-codex-mini
-  const gpt = /^gpt-(\d+(?:\.\d+)?)((?:-(?:codex|mini|nano|pro|max))*)$/i.exec(model);
+  // gpt-5, gpt-5-codex, gpt-5.1-codex-mini, gpt-6.1-sol
+  const gpt = /^gpt-(\d+(?:\.\d+)?)((?:-(?:codex|mini|nano|pro|max|sol|terra|astra))*)$/i.exec(model);
   if (gpt?.[1] !== undefined) return [`GPT-${gpt[1]}`, ...words(gpt[2] ?? "")].join(" ");
   // gemini-3-pro-preview, gemini-2.5-flash-lite
   const gemini =
@@ -205,6 +208,11 @@ export interface RegisterAgentRequest {
   /** Working directory of the session. */
   cwd: string;
   /**
+   * The session is the Channel's librarian (ADR 0045): its token may write Brief pages and
+   * nothing else. Once a librarian, always one: leaving it out later keeps it.
+   */
+  librarian?: true;
+  /**
    * Sets the Nickname. Omit to keep the current one; null clears it. A Nickname
    * another Agent holds is not set, and the answer says so in `nicknameRefused`
    * (ADR 0009); the Agent registers anyway.
@@ -235,6 +243,12 @@ export interface RegisterAgentRequest {
   host?: string;
   /** The spawn request this session answers: the `agent.spawn` Event's ID, from the Host. */
   spawn?: string;
+  /**
+   * The name of the caller's Host installed on this machine for this Channel, which
+   * answers for the Agent's Local Events once its wrapper is gone (ADR 0037). Omitted
+   * when the machine has none; a Host that runs the session answers anyway.
+   */
+  historyHost?: string;
   /**
    * The Agent whose work this session carries on (`switchboard run --from`, ADR 0024).
    * Kept the first time only; an Agent the Channel does not know is refused.

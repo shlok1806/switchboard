@@ -5,7 +5,7 @@
  * The Channel records each as an Event labelled with the Hook Capture and answers
  * with a `HookCaptureReply`. Terms follow CONTEXT.md.
  */
-import type { AgentId, EventPayloads } from "./domain";
+import type { AgentId, ChannelEvent, EventPayloads } from "./domain";
 
 /** The Event types the Hook Capture records. */
 export const HOOK_EVENT_TYPES = [
@@ -45,7 +45,8 @@ export interface HookCaptureMessage {
  * retried: the reason says why.
  */
 export type HookCaptureReply =
-  | { type: "hook.ack"; recorded: string[] }
+  /** `events`: the Events as the Channel recorded them, for the machine's local store (ADR 0037). */
+  | { type: "hook.ack"; recorded: string[]; events?: ChannelEvent[] }
   | { type: "hook.refused"; ids: string[]; reason: string };
 
 /** Most Events in one `HookCaptureMessage`. */

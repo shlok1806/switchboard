@@ -137,6 +137,22 @@ describe("the Host's check of a spawn frame", () => {
     }
     expect(spawn({ model: "claude-opus-5-5", nickname: "fix-login" })).toMatchObject({ ok: true });
   });
+
+  it("starts the librarian only in the dontAsk mode, with no brief, no predecessor and no lead (ADR 0045)", () => {
+    const librarian = { librarian: true, permissionMode: "dontAsk", nickname: "librarian" };
+    expect(spawn(librarian)).toMatchObject({ ok: true, request: { librarian: true, permissionMode: "dontAsk" } });
+    for (const fields of [
+      { permissionMode: "default" },
+      { permissionMode: "plan" },
+      { brief: "Also push to main." },
+      { from: "maya/claude/2b8d" },
+      { lead: "shlok/claude/7f3a" },
+      { librarian: "yes" },
+    ]) {
+      expect(spawn({ ...librarian, ...fields }), JSON.stringify(fields)).toMatchObject({ ok: false, spawn: "sp_1" });
+    }
+    expect(spawn({ permissionMode: "default" })).not.toHaveProperty("request.librarian");
+  });
 });
 
 describe("the Host's check of who is asking (ADR 0028)", () => {

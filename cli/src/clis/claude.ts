@@ -13,11 +13,12 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { SKILL_WRITE_TOOLS } from "../../../shared/src/index";
 import { claudeConfigDir, planSession, projectDir, waitForPickedSession } from "../claude-session";
 import { withMcpConfig, writeClaudeMcpConfig } from "../mcp-config";
 import { anthropicMessages } from "../proxy/anthropic";
 import { claudeEnvSetting, originalBaseUrl } from "../proxy/options";
-import { applySessionSettings } from "../session-settings";
+import { applySessionSettings, type SessionSettings } from "../session-settings";
 import type { CliAdapter, ProxyRoute, SessionContext } from "./adapter";
 
 export const claude: CliAdapter = {
@@ -34,6 +35,8 @@ export const claude: CliAdapter = {
   remoteDeny: true,
   memoryNudges: ["stop", "compaction"],
   proxy: true,
+  // Its session settings ask before each one, in every permission mode (`permissions.ask`).
+  promptsForSkillWrites: true,
   // Claude Code 2.1.300 sets these in its tools' environment. Inherited, they make the
   // new session a child of that one: CLAUDE_CODE_CHILD_SESSION turns its transcript
   // off, so it could not be resumed and its context could not be read.
@@ -65,18 +68,32 @@ export const claude: CliAdapter = {
 
   discover: ({ cwd, env }, since, signal) => waitForPickedSession(projectDir(claudeConfigDir(env), cwd), since, signal),
 
-  async install({ args, dir, cwd, env, hooks, tools, proxyUrl, proxyRoute }) {
+  async install({ args, dir, cwd, env, hooks, tools, proxyUrl, proxyRoute, settings = [] }) {
     // Claude Code settings can set ANTHROPIC_BASE_URL too, and they win over the
     // environment, so the session's own settings point it at the proxy as well.
     const proxyEnv: Record<string, string> = proxyUrl
       ? { ANTHROPIC_BASE_URL: proxyUrl, ...(await toolSearchSetting(env, proxyRoute)) }
       : {};
     const proxySettings = proxyUrl ? [{ env: proxyEnv }] : [];
-    const withSettings = await applySessionSettings(args, dir, cwd, [hooks.settings(), ...proxySettings]);
+    const withSettings = await applySessionSettings(args, dir, cwd, [
+      hooks.settings(),
+      ...proxySettings,
+      skillWriteSettings(tools.server.name),
+      ...settings,
+    ]);
     // Claude Code settings cannot hold MCP servers, so they go in --mcp-config.
     return { args: withMcpConfig(withSettings, writeClaudeMcpConfig(tools)), env: proxyEnv };
   },
 };
+
+/**
+ * The skill tools that publish and write ask the Person before every call, in every
+ * permission mode (ADR 0039): an `ask` rule is checked before any `allow` rule from any
+ * settings file, and even `bypassPermissions` prompts for it (`dontAsk` refuses it).
+ */
+export function skillWriteSettings(server: string): SessionSettings {
+  return { permissions: { ask: SKILL_WRITE_TOOLS.map((tool) => `mcp__${server}__${tool}`) } };
+}
 
 /**
  * Claude Code turns tool search off when ANTHROPIC_BASE_URL is not the Anthropic API,

@@ -41,6 +41,14 @@ Repository permissions:
 | Issues | Read and write | read Tasks, assignees, labels, the status comment, tick Steps |
 | Pull requests | Read and write | open a Task's pull request when it is finished |
 | Metadata | Read-only | required by GitHub; also answers the membership check |
+| Checks | Read-only | the Connector's `github` tool reads CI state (ADR 0041) |
+| Commit statuses | Read-only | the same, for CI services that post commit statuses |
+
+Checks and Commit statuses were added for the Connector's `github` tool. On an App
+registered before them, add both under **Permissions & events**, save, and accept
+the new permissions on each installation (GitHub asks the installation's owner by
+email and on the installation's settings page). Until then the tool answers
+without CI state and says so.
 
 No account or organization permissions. Membership is read with the installation
 token from `GET /repos/{owner}/{repo}/collaborators/{login}/permission`, which needs
@@ -123,10 +131,14 @@ one line with `\n` for newlines works). Without them, turn on the dev-only fake
 sign-in instead:
 
 ```sh
-npx wrangler dev --var DEV_FAKE_GITHUB:true
+cd worker
+npm run dev -- --var DEV_FAKE_GITHUB:true
 ```
 
-It answers only requests to localhost. The Dashboard at
+`npm run dev` names wrangler's port and pid when it starts, and stops wrangler when
+the terminal that started it closes (ADR 0052): a forgotten `wrangler dev` once held
+every local port of a Mac. A wrapper using it says on its terminal that its Channel is
+a local Worker. It answers only requests to localhost. The Dashboard at
 `http://localhost:8787/shlok1806/switchboard` then shows a "Dev sign-in" box, and the
 CLI signs in with `switchboard login --url http://localhost:8787/shlok1806/switchboard
 --dev-login <any login>`. Without the App, the Channel has no GitHub, so Tasks are

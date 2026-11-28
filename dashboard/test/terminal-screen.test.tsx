@@ -1,6 +1,6 @@
+import type { AgentId, TerminalScreenFrame } from "@shared/index";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { AgentId, TerminalScreenFrame } from "@shared/index";
 import { Screen } from "@/components/domain/terminal";
 
 const frame = (lines: string[], prompt: boolean): TerminalScreenFrame => ({
@@ -20,7 +20,9 @@ const frame = (lines: string[], prompt: boolean): TerminalScreenFrame => ({
 /** Each screen row's tone, in order: dim, signal or plain. */
 function tones(f: TerminalScreenFrame) {
   const html = renderToStaticMarkup(<Screen frame={f} />);
-  return [...html.matchAll(/<span class="block min-h-\[1\.55em\]([^"]*)">/g)].map(([, c]) => (c!.includes("term-signal") ? "signal" : c!.includes("term-dim") ? "dim" : "plain"));
+  return [...html.matchAll(/<span class="block min-h-\[1\.55em\]([^"]*)">/g)].map(([, c]) =>
+    c!.includes("term-signal") ? "signal" : c!.includes("term-dim") ? "dim" : "plain",
+  );
 }
 
 describe("the terminal screen", () => {

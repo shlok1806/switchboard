@@ -69,6 +69,7 @@ describe("nextSeq", () => {
   it("follows the clock, so a reloaded page starts above what it sent before", () => {
     const before = nextSeq(2_000);
     expect(nextSeq(Date.now())).toBeGreaterThan(before);
-    expect(nextSeq(Date.now() + 1)).toBeGreaterThanOrEqual((Date.now() + 1) * 1000);
+    const later = Date.now() + 1;
+    expect(nextSeq(later)).toBeGreaterThanOrEqual(later * 1000);
   });
 });

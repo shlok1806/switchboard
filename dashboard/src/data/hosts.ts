@@ -15,7 +15,7 @@ const reading = new WeakMap<ChannelStore, { read: Promise<HostsResponse | null>;
 function useHostsSeen(): string {
   const { events, agents } = useChannel();
   const lastHostEvent = useMemo(() => {
-    for (let i = events.length - 1; i >= 0; i--) if (events[i]!.type === "host.online" || events[i]!.type === "host.offline") return events[i]!.id;
+    for (let i = events.length - 1; i >= 0; i--) if (events[i].type === "host.online" || events[i].type === "host.offline") return events[i].id;
     return "";
   }, [events]);
   const onHosts = agents
@@ -46,9 +46,10 @@ export function useHostsSupported(): boolean | null {
   const store = useStore();
   const seen = useHostsSeen();
   const [known, setKnown] = useState<boolean | null>(() => supported.get(store) ?? null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the answer never changes once known; `seen` only lets the first read share.
+  // the answer never changes once known; `seen` only lets the first read share.
   useEffect(() => {
-    if (supported.has(store)) return setKnown(supported.get(store)!);
+    const answer = supported.get(store);
+    if (answer !== undefined) return setKnown(answer);
     let live = true;
     // A failed read is not an answer: the next button or view that mounts asks again.
     readHosts(store, seen).then(
@@ -74,7 +75,7 @@ export function useHosts(again?: unknown): { hosts?: HostsResponse | null; probl
   const store = useStore();
   const seen = useHostsSeen();
   const [state, setState] = useState<{ hosts?: HostsResponse | null; problem?: string }>({});
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the Host event, the Agents on Hosts and `again` are what make a read stale.
+  // the Host event, the Agents on Hosts and `again` are what make a read stale.
   useEffect(() => {
     let live = true;
     readHosts(store, seen).then(

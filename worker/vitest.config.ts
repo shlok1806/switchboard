@@ -38,10 +38,19 @@ const vars = {
   HOST_SPAWN_WAIT_SECONDS: "2",
   // Short, so a transcript read its wrapper never answers fails quickly.
   TRANSCRIPT_WAIT_SECONDS: "1",
+  // Short, so a history read a machine never answers comes back quickly.
+  HISTORY_WAIT_SECONDS: "1",
   // Short, so a Directive held for a wrapper that never attaches falls back to Queue quickly.
   DIRECTIVE_ATTACH_WAIT_SECONDS: "1",
   // Small, so a test reaches the daily cap on notes with a few of them.
   MEMORY_NOTES_PER_DAY: "5",
+  // Small, so a test reaches the daily cap on Brief writes past a typical day's (test/brief.test.ts).
+  BRIEF_WRITES_PER_DAY: "40",
+  // Small, so a test reaches the daily cap on artifact publishes (test/artifacts.test.ts).
+  ARTIFACT_PUBLISHES_PER_DAY: "8",
+  QUIET_CLAIM_HOURS: "4",
+  // One app's callback the tests register besides the known ones (test/ask-channel.test.ts).
+  MCP_EXTRA_REDIRECT_URIS: "https://inspector.test/callback",
   GITHUB_API_URL: "",
   GITHUB_WEB_URL: "",
   JEV_API_URL: "",

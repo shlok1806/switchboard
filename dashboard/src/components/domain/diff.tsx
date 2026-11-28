@@ -8,11 +8,7 @@ function pair(del: string, add: string): [CodePiece[], CodePiece[]] {
   let e = 0;
   while (e < del.length - s && e < add.length - s && del[del.length - 1 - e] === add[add.length - 1 - e]) e++;
   const split = (t: string, change: "add" | "del"): CodePiece[] =>
-    [
-      { text: t.slice(0, s) },
-      { text: t.slice(s, t.length - e), change },
-      { text: t.slice(t.length - e) },
-    ].filter((p) => p.text.length > 0);
+    [{ text: t.slice(0, s) }, { text: t.slice(s, t.length - e), change }, { text: t.slice(t.length - e) }].filter((p) => p.text.length > 0);
   return [split(del, "del"), split(add, "add")];
 }
 
@@ -32,8 +28,8 @@ export function toRows(file: FileChange): DiffRow[] {
         const adds = lines.slice(j, k);
         if (dels.length === adds.length) {
           const pairs = dels.map((d, n) => pair(d.text, adds[n].text));
-          dels.forEach((d, n) => rows.push({ old: d.oldNo, cur: null, type: "del", pieces: pairs[n][0] }));
-          adds.forEach((a, n) => rows.push({ old: null, cur: a.newNo, type: "add", pieces: pairs[n][1] }));
+          for (const [n, d] of dels.entries()) rows.push({ old: d.oldNo, cur: null, type: "del", pieces: pairs[n][0] });
+          for (const [n, a] of adds.entries()) rows.push({ old: null, cur: a.newNo, type: "add", pieces: pairs[n][1] });
           i = k - 1;
           continue;
         }

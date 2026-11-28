@@ -19,7 +19,14 @@ const fetched = vi.fn(async () => new Response(JSON.stringify({ configured: true
 const assign = vi.fn();
 
 beforeEach(() => {
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   vi.stubGlobal("fetch", fetched);
   Element.prototype.scrollIntoView = () => {};
   Object.defineProperty(window, "location", { configurable: true, value: { ...window.location, assign, hash: "", search: "", pathname: "/shlok1806/app" } });

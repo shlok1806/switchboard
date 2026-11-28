@@ -8,7 +8,7 @@
     "switchboard": "dist/switchboard.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/switchboard.js && esbuild src/hooks/hook-command.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/switchboard-hook.js",
@@ -24,11 +24,13 @@
     "@lydell/node-pty": "^1.2.0-beta.15",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "@xterm/headless": "^6.0.0",
+    "ws": "^8.22.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@types/node": "^26.6.3",
+    "@types/ws": "^8.18.2",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"

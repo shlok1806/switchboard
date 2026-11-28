@@ -1,16 +1,9 @@
-import { useEffect, useState } from "react";
-import { Network } from "lucide-react";
-import { toast } from "sonner";
 import type { Agent } from "@shared/index";
+import { Network } from "lucide-react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/atoms/Button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useStore } from "@/data/store";
 
 /** An Agent its Person made a lead (ADR 0018). */
@@ -69,9 +62,8 @@ export function LeadDialog({ agent, open, onOpenChange }: { agent: Agent; open: 
         <DialogHeader>
           <DialogTitle>Make {name} a lead?</DialogTitle>
           <DialogDescription>
-            It may start Claude Code Agents on your Hosts, in their folders and permission modes, and stop and send
-            Directives to the Agents it starts. Its Directives carry instruction weight for them; your own word still
-            wins. Every step it takes is on the Channel, and you can revoke this at any time.
+            It may start Claude Code Agents on your Hosts, in their folders and permission modes, and stop and send Directives to the Agents it starts. Its
+            Directives carry instruction weight for them; your own word still wins. Every step it takes is on the Channel, and you can revoke this at any time.
           </DialogDescription>
         </DialogHeader>
         {error && (

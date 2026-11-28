@@ -68,6 +68,7 @@ type AgentRow = {
   context: string | null;
   approval: string | null;
   host: string | null;
+  history_host: string | null;
   role: string | null;
   parent: string | null;
   continues: string | null;
@@ -77,6 +78,7 @@ type AgentRow = {
   can_receive_interrupts: number;
   last_seen_at: number;
   started_at: string;
+  librarian: string | null;
 };
 
 export const GONE_RETENTION_MS = 7 * 86_400_000;
@@ -97,6 +99,7 @@ export const AGENTS_SCHEMA = `
     context TEXT,
     approval TEXT,
     host TEXT,
+    history_host TEXT,
     role TEXT,
     parent TEXT,
     continues TEXT,
@@ -116,6 +119,7 @@ export function createAgentsTable(sql: SqlStorage): void {
   // ADR 0009: the Account Label. ADR 0010: the model and its effort. ADR 0011: usage.
   // ADR 0012: context. ADR 0013: the pending approval. ADR 0015: the Host that runs it.
   // ADR 0018: its role, and the lead that started it. ADR 0024: the Agent it continues.
+  // ADR 0037: the Host that answers for its Local Events. ADR 0045: the librarian.
   for (const column of [
     "account",
     "model",
@@ -127,6 +131,8 @@ export function createAgentsTable(sql: SqlStorage): void {
     "role",
     "parent",
     "continues",
+    "history_host",
+    "librarian",
   ]) {
     try {
       sql.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
@@ -241,9 +247,11 @@ function rowToAgent(row: AgentRow): Agent {
     ...(row.approval == null ? {} : { approval: JSON.parse(row.approval) as PendingApproval }),
     presence: row.presence as Presence,
     ...(row.host == null ? {} : { host: row.host as HostId }),
+    ...(row.history_host == null ? {} : { historyHost: row.history_host as HostId }),
     ...(row.role != null && isAgentRole(row.role) ? { role: row.role } : {}),
     ...(row.parent == null ? {} : { parent: row.parent as AgentId }),
     ...(row.continues == null ? {} : { continues: row.continues as AgentId }),
+    ...(row.librarian == null ? {} : { librarian: true as const }),
     proxyMode: row.proxy_mode === "raw" ? "raw" : "digest",
     secretMasking: row.secret_masking === 1,
     canReceiveInterrupts: row.can_receive_interrupts === 1,
@@ -400,12 +408,17 @@ export class AgentRoster {
     return oldest === undefined ? null : Math.max(Date.now() + 6 * 3_600_000, oldest.at + GONE_RETENTION_MS);
   }
 
-  /** The Agents that are not Gone, most recently seen first. */
-  live(): Agent[] {
+  /**
+   * The Agents that are not Gone, most recently seen first; at most `limit` of them when
+   * given. A limit picks by the stored last-seen time, which memory may run ahead of by
+   * up to `flushMs`, then orders what it picked as memory knows it.
+   */
+  live(limit = -1): Agent[] {
     return this.byLastSeen(
       this.host.sql
         .exec<AgentRow>(
-          "SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone' ORDER BY last_seen_at DESC, id",
+          "SELECT * FROM agents INDEXED BY agents_live WHERE presence != 'gone' ORDER BY last_seen_at DESC, id LIMIT ?",
+          limit,
         )
         .toArray(),
     );
@@ -433,6 +446,24 @@ export class AgentRoster {
       };
     }
 
+    // One librarian at a time (ADR 0045), and an Agent that was one stays one.
+    const librarian = existing?.librarian != null || request.librarian === true;
+    if (librarian) {
+      const other = this.host.sql
+        .exec<{ id: string }>(
+          "SELECT id FROM agents INDEXED BY agents_live WHERE presence != 'gone' AND librarian IS NOT NULL AND id != ? LIMIT 1",
+          id,
+        )
+        .toArray()[0];
+      if (other !== undefined) {
+        return {
+          ok: false,
+          status: 409,
+          reason: `${other.id} is this Channel's librarian already. Stop it before starting another.`,
+        };
+      }
+    }
+
     // A Nickname another Agent holds is not set, and does not stop the session (ADR 0009).
     const self: Renamer = { actor: { kind: "agent", agentId: id }, capture: null };
     let nicknameRefused: string | undefined;
@@ -455,12 +486,16 @@ export class AgentRoster {
     const interrupts = request.interrupts === true ? 1 : 0;
     // Which Host runs the session now: a session resumed in a terminal has none.
     const host = request.host === undefined ? null : hostIdFor(person, request.host);
+    // Which Host answers for its Local Events (ADR 0037): the one that runs it, else the machine's.
+    const historyHost =
+      host ??
+      (request.historyHost === undefined ? (existing?.history_host ?? null) : hostIdFor(person, request.historyHost));
     if (existing) {
       const proxyMode = request.proxyMode ?? existing.proxy_mode;
       this.host.sql.exec(
         `UPDATE agents SET nickname = ?, nickname_key = ?, account = ?, model = ?, effort = ?, usage = ?,
-             proxy_mode = ?, secret_masking = ?, can_receive_interrupts = ?, host = ?, presence = 'live',
-             last_seen_at = ?
+             proxy_mode = ?, secret_masking = ?, can_receive_interrupts = ?, host = ?, history_host = ?,
+             librarian = ?, presence = 'live', last_seen_at = ?
          WHERE id = ?`,
         nickname,
         nicknameKey(nickname),
@@ -472,14 +507,17 @@ export class AgentRoster {
         secretMasking,
         interrupts,
         host,
+        historyHost,
+        librarian ? "1" : null,
         now,
         id,
       );
     } else {
       this.host.sql.exec(
         `INSERT INTO agents (id, person, cli, session_id, nickname, nickname_key, account, model, effort, usage, host,
-                             presence, proxy_mode, secret_masking, can_receive_interrupts, last_seen_at, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
+                             history_host, librarian, presence, proxy_mode, secret_masking, can_receive_interrupts,
+                             last_seen_at, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)`,
         id,
         person,
         request.cli,
@@ -491,6 +529,8 @@ export class AgentRoster {
         effort,
         usage,
         host,
+        historyHost,
+        librarian ? "1" : null,
         request.proxyMode ?? DEFAULT_PROXY_MODE,
         secretMasking,
         interrupts,
@@ -898,6 +938,11 @@ export class AgentRoster {
   /**
    * Checks that `person` may act for Agent `id`, and counts it as heard from: an Agent
    * whose hooks report work is not silent. It does not change Presence.
+   *
+   * The sign of life is written only when the row has not heard from the Agent for two
+   * heartbeat intervals (and ten times within the silence an Agent is Gone after), not
+   * at every Hook or Proxy message: the row and its two indexes cost three rows written
+   * each time, and a wrapper that heartbeats keeps the row fresh anyway (ADR 0037).
    */
   touch(person: PersonName, id: AgentId): { ok: true; agent: Agent } | Refusal {
     const found = this.owned(person, id);

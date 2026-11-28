@@ -2,7 +2,7 @@
 // laptop might send, and what may leave it.
 
 import { describe, expect, it } from "vitest";
-import { maskSecrets } from "../src/proxy/mask";
+import { maskSecrets } from "../../shared/src/mask";
 
 const ANTHROPIC = "sk-ant-api03-Q2x9vR7kLmN4pT8wZ1yB6cD3fG5hJ0aE-xYzAbCdEfGh";
 const OPENAI = "sk-Tq8Zx3Lm9Vn2Bc7Kd4Hf1Js6Pw0Rt5Yg";

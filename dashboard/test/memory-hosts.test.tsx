@@ -4,10 +4,10 @@
 // machine that starts Agents, yours first, says which are Live and what runs on each; on a
 // phone, the Hosts and Agents inspectors open as a sheet from the row.
 
+import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, Host, HostsResponse, MemoryNote, MemoryQuery, MemoryResponse, StreamMessage } from "@shared/index";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, Host, HostsResponse, MemoryNote, MemoryQuery, MemoryResponse, StreamMessage } from "@shared/index";
 import type { ChannelSource } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 import { AgentsView } from "@/views/AgentsView";
@@ -91,8 +91,24 @@ describe("the Memory view", () => {
     const events = [
       { id: "e1", seq: 1, at: at(1), type: "command", actor: { kind: "agent", agentId: scout.id }, capture: "hook", payload: { command: "npm test" } },
       { id: "e2", seq: 2, at: at(2), type: "command", actor: { kind: "agent", agentId: other }, capture: "hook", payload: { command: "make lint" } },
-      { id: "e3", seq: 3, at: at(3), type: "memory.note", actor: { kind: "agent", agentId: scout.id }, capture: null, payload: { text: "Users API pages by 50.", tags: ["fact"] } },
-      { id: "e4", seq: 4, at: at(4), type: "file.edit", actor: { kind: "agent", agentId: scout.id }, capture: "hook", payload: { path: "web/src/users.tsx", additions: 3, deletions: 0 } },
+      {
+        id: "e3",
+        seq: 3,
+        at: at(3),
+        type: "memory.note",
+        actor: { kind: "agent", agentId: scout.id },
+        capture: null,
+        payload: { text: "Users API pages by 50.", tags: ["fact"] },
+      },
+      {
+        id: "e4",
+        seq: 4,
+        at: at(4),
+        type: "file.edit",
+        actor: { kind: "agent", agentId: scout.id },
+        capture: "hook",
+        payload: { path: "web/src/users.tsx", additions: 3, deletions: 0 },
+      },
     ] as unknown as ChannelEvent[];
     const memory = async (): Promise<MemoryResponse> => ({ notes: [note(3, "Users API pages by 50.")] });
     const snapshot = async () =>
@@ -113,7 +129,9 @@ describe("the Memory view", () => {
     );
     const inspector = await screen.findByRole("complementary", { name: "Note, in the inspector" });
     const around = within(inspector).getByRole("region", { name: "Around it" });
-    const rows = within(around).getAllByRole("listitem").map((li) => li.textContent ?? "");
+    const rows = within(around)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent ?? "");
     expect(rows).toHaveLength(3);
     expect(rows[0]).toContain("npm test");
     expect(rows[1]).toMatch(/^This note/);
@@ -124,15 +142,47 @@ describe("the Memory view", () => {
 
   it("reads what came before a note older than the Events loaded", async () => {
     const at = (m: number) => `2026-10-15T09:${String(m).padStart(2, "0")}:00.000Z`;
-    const old = { id: "e3", seq: 3, at: at(3), type: "memory.note", actor: { kind: "agent", agentId: scout.id }, capture: null, payload: { text: "Users API pages by 50.", tags: ["fact"] } };
-    const before = { id: "e1", seq: 1, at: at(1), type: "command", actor: { kind: "agent", agentId: scout.id }, capture: "hook", payload: { command: "npm test" } };
+    const old = {
+      id: "e3",
+      seq: 3,
+      at: at(3),
+      type: "memory.note",
+      actor: { kind: "agent", agentId: scout.id },
+      capture: null,
+      payload: { text: "Users API pages by 50.", tags: ["fact"] },
+    };
+    const before = {
+      id: "e1",
+      seq: 1,
+      at: at(1),
+      type: "command",
+      actor: { kind: "agent", agentId: scout.id },
+      capture: "hook",
+      payload: { command: "npm test" },
+    };
     // Only a much later Event is loaded.
-    const loaded = { id: "e90", seq: 90, at: at(50), type: "command", actor: { kind: "agent", agentId: scout.id }, capture: "hook", payload: { command: "git push" } };
+    const loaded = {
+      id: "e90",
+      seq: 90,
+      at: at(50),
+      type: "command",
+      actor: { kind: "agent", agentId: scout.id },
+      capture: "hook",
+      payload: { command: "git push" },
+    };
     const asked: { scope: unknown; before?: number }[] = [];
     const src = {
       memory: async (): Promise<MemoryResponse> => ({ notes: [note(3, "Users API pages by 50.")] }),
       snapshot: async () =>
-        ({ channel: { repo: "shlok1806/app" }, persons: [], agents: [scout], tasks: [], events: [loaded], verdicts: [], cursor: 0 }) as unknown as ChannelSnapshot,
+        ({
+          channel: { repo: "shlok1806/app" },
+          persons: [],
+          agents: [scout],
+          tasks: [],
+          events: [loaded],
+          verdicts: [],
+          cursor: 0,
+        }) as unknown as ChannelSnapshot,
       eventsById: async () => [old as unknown as ChannelEvent],
       wakesAfter: async () => [],
       scopedEvents: async (scope: unknown, until?: number) => {
@@ -145,7 +195,9 @@ describe("the Memory view", () => {
     const around = within(inspector).getByRole("region", { name: "Around it" });
     await within(around).findByText(/npm test/);
     expect(asked).toEqual([{ scope: { agent: scout.id }, before: 3 }]);
-    const rows = within(around).getAllByRole("listitem").map((li) => li.textContent ?? "");
+    const rows = within(around)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent ?? "");
     expect(rows[0]).toContain("npm test");
     expect(rows[1]).toMatch(/^This note/);
     // What came after it is not loaded, and the later Event that is loaded is not shown as if it were.

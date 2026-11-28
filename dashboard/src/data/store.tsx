@@ -1,15 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
-import type {
-  AccountUsage,
-  Agent,
-  AgentId,
-  ChannelEvent,
-  ChannelSnapshot,
-  StreamMessage,
-  Task,
-  TaskNumber,
-  Verdict,
-} from "@shared/index";
+import type { AccountUsage, Agent, AgentId, ChannelEvent, ChannelSnapshot, StreamMessage, Task, TaskNumber, Verdict } from "@shared/index";
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ChannelSource, ConnectionState } from "./source";
 
 export interface ChannelState {
@@ -238,11 +228,7 @@ export class ChannelStore {
 
 /** The roster: Agents not Gone, and Gone ones still holding a Task not done (a Stale Claim). */
 function visibleAgents(agents: Agent[], tasks: Task[]): Agent[] {
-  const holders = new Set(
-    tasks.flatMap((task) =>
-      task.status !== "done" && task.claim?.holder.kind === "agent" ? [task.claim.holder.agentId] : [],
-    ),
-  );
+  const holders = new Set(tasks.flatMap((task) => (task.status !== "done" && task.claim?.holder.kind === "agent" ? [task.claim.holder.agentId] : [])));
   return agents.filter((agent) => agent.presence !== "gone" || holders.has(agent.id));
 }
 

@@ -13,7 +13,17 @@ export type Route =
   | { view: "agent"; id: string; focus?: "directive" }
   | { view: "canvas"; agent?: string }
   | { view: "memory"; note?: string }
+  /** The Brief (ADR 0042), at one of its pages: the overview when none is named. */
+  | { view: "brief"; page?: string }
+  /** The skills Persons share (ADR 0039), one open in the inspector at a version. */
+  | { view: "skills"; name?: string; version?: number }
+  /** The artifacts shared on the Channel (ADR 0053): the folder of them. */
+  | { view: "artifacts" }
+  /** One artifact's page in the Dashboard's small browser, at a version: the latest when none is named. */
+  | { view: "artifact"; name: string; version?: number }
   | { view: "hosts"; host?: string }
+  /** The Channel's settings: its Langfuse project, which only its owner changes (ADR 0044). */
+  | { view: "settings" }
   /** An address that is no page of the Dashboard: the error page says so. */
   | { view: "missing"; path: string };
 
@@ -43,8 +53,20 @@ export function parse(hash: string): Route {
       return { view: "feed", event: a };
     case "memory":
       return a ? { view: "memory", note: a } : { view: "memory" };
+    case "brief":
+      return a ? { view: "brief", page: a } : { view: "brief" };
+    case "skills":
+      if (!a) return { view: "skills" };
+      if (b === undefined) return { view: "skills", name: a };
+      return /^[1-9]\d*$/.test(b) ? { view: "skills", name: a, version: Number(b) } : { view: "missing", path };
+    case "artifacts":
+      if (!a) return { view: "artifacts" };
+      if (b === undefined) return { view: "artifact", name: a };
+      return /^[1-9]\d*$/.test(b) ? { view: "artifact", name: a, version: Number(b) } : { view: "missing", path };
     case "hosts":
       return { view: "hosts", host: a };
+    case "settings":
+      return a ? { view: "missing", path } : { view: "settings" };
     case "now":
     case "":
       return { view: "now" };
@@ -76,8 +98,19 @@ export function href(route: Route): string {
       return route.agent ? `#/canvas/${encodeURIComponent(route.agent)}` : "#/canvas";
     case "memory":
       return route.note ? `#/memory/${encodeURIComponent(route.note)}` : "#/memory";
+    case "brief":
+      return route.page ? `#/brief/${encodeURIComponent(route.page)}` : "#/brief";
+    case "skills":
+      if (!route.name) return "#/skills";
+      return `#/skills/${encodeURIComponent(route.name)}${route.version === undefined ? "" : `/${route.version}`}`;
+    case "artifacts":
+      return "#/artifacts";
+    case "artifact":
+      return `#/artifacts/${encodeURIComponent(route.name)}${route.version === undefined ? "" : `/${route.version}`}`;
     case "hosts":
       return route.host ? `#/hosts/${encodeURIComponent(route.host)}` : "#/hosts";
+    case "settings":
+      return "#/settings";
     case "missing":
       return `#${route.path}`;
   }

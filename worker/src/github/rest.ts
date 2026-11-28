@@ -219,6 +219,14 @@ export class RestGitHub implements GitHub {
     };
   }
 
+  /**
+   * One call as the App's installation, answered as GitHub answered it, for a caller
+   * that reads the status and headers itself: the connector's github tool (ADR 0041).
+   */
+  call(pathOrUrl: string, init: RequestInit = {}): Promise<Response> {
+    return this.request(pathOrUrl, init);
+  }
+
   private async write(method: string, path: string, body: unknown): Promise<void> {
     await this.check(await this.request(path, { method, body: JSON.stringify(body) }));
   }

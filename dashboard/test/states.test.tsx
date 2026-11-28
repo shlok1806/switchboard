@@ -4,18 +4,25 @@
 // says so in each view with the one thing to do next, a Channel that cannot be reached says why
 // with Try again, and an address the Dashboard has no page for says that instead of showing Now.
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Task } from "@shared/index";
-import { ViewErrorBoundary } from "@/components/shell/states";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
+import { ViewErrorBoundary } from "@/components/shell/states";
 import { MockChannelSource, type MockState } from "@/data/mock/mockSource";
 import { ChannelProvider, ChannelStore } from "@/data/store";
 
-const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "memory", "hosts"] as const;
+const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "brief", "memory", "skills", "artifacts", "hosts"] as const;
 
 beforeEach(() => {
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
 });
 afterEach(() => {
   cleanup();
@@ -56,7 +63,10 @@ describe("a Channel with nothing on it", () => {
     ["canvas", /No Agents on the canvas yet/, /Copy switchboard run claude/],
     ["tasks", /No Tasks yet/, /New Task/],
     ["feed", /No Events yet/, /Post an Update/],
+    ["brief", /No Brief yet/, /How the Brief works/],
     ["memory", /No notes yet/, /How notes work/],
+    ["skills", /No skills shared yet/, /Copy switchboard skills publish/],
+    ["artifacts", /No artifacts shared yet/, /Open HTML file/],
     ["hosts", /No Hosts yet/, /Copy switchboard host install/],
   ];
   it.each(cases)("%s says so, with one thing to do next", async (view, title, action) => {
@@ -160,6 +170,8 @@ describe("a read that fails while the Channel is up", () => {
   it.each([
     ["#/hosts", "Could not read the Hosts", "hosts"],
     ["#/memory", "Could not read the notes", "memory"],
+    ["#/skills", "Could not read the skills", "skills"],
+    ["#/artifacts", "Could not read the artifacts", "artifacts"],
   ] as const)("%s says why, and Try again reads again", async (hash, title, read) => {
     const source = await open("read-error", hash);
     const reads = vi.spyOn(source, read);

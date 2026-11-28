@@ -14,9 +14,9 @@
 
 import { randomUUID } from "node:crypto";
 import { MAX_APPROVAL_DETAIL_LENGTH, MAX_APPROVAL_REASON_LENGTH, type PendingApproval } from "../../shared/src/index";
+import { maskSecrets } from "../../shared/src/mask";
 import type { HeldHook } from "./hooks/capture";
 import type { ClaudeHookInput } from "./hooks/summarize";
-import { maskSecrets } from "./proxy/mask";
 
 /** How soon a report that could not reach the Channel is tried again. */
 const RETRY_MS = 5000;

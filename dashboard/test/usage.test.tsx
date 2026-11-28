@@ -18,9 +18,7 @@ describe("a meter", () => {
   });
 
   it("says when its window resets and how long until then", () => {
-    const html = renderToStaticMarkup(
-      <Meter label="Session" limit={{ percent: 80, resetsAt: "2026-10-07T06:59:00Z" }} now={NOW} timeZone="America/Chicago" />,
-    );
+    const html = renderToStaticMarkup(<Meter label="Session" limit={{ percent: 80, resetsAt: "2026-10-07T06:59:00Z" }} now={NOW} timeZone="America/Chicago" />);
     expect(html).toContain("resets 1:59am, in 42 min");
     expect(resetText({ resetsAt: "2026-10-08T21:59:00Z" }, NOW, "America/Chicago")).toBe("resets Thu 4:59pm, in 1 d 15 h");
     expect(resetText({ resets: "Oct 9 at noon" }, NOW)).toBe("resets Oct 9 at noon");

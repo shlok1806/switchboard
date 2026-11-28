@@ -5,7 +5,7 @@
 // snapshot again, there may be Events between the two, so the scope's latest page is
 // read again too.
 
-import type { AgentId, ChannelEvent } from "@shared/index";
+import type { AgentId, ChannelEvent, HistoryGap } from "@shared/index";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { HistoryScope } from "./source";
 import { useChannel, useStore } from "./store";
@@ -15,6 +15,8 @@ export interface ScopedHistory {
   events: ChannelEvent[];
   /** The Channel has older Events in this scope. */
   more: boolean;
+  /** The Local Events it could not read, because their machine is away (ADR 0037). */
+  unavailable: HistoryGap[];
   loading: boolean;
   loadOlder: () => void;
 }
@@ -23,6 +25,7 @@ interface Pages {
   key: string;
   events: ChannelEvent[];
   olderBefore?: number;
+  unavailable?: HistoryGap[];
   loading: boolean;
 }
 
@@ -34,7 +37,7 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
   const [pages, setPages] = useState<Pages>({ key, events: [], loading: true });
 
   // Stable for one scope, so the effects do not run again on every render.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` names the scope.
+  // `key` names the scope.
   const stableScope = useMemo(() => scope, [key]);
 
   const read = useCallback(
@@ -49,6 +52,8 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
                 key,
                 events: before === undefined ? page.events : [...page.events, ...p.events],
                 olderBefore: page.olderBefore,
+                // What the first page could not read is what the view is missing now.
+                unavailable: before === undefined ? page.unavailable : p.unavailable,
                 loading: false,
               }
             : p,
@@ -64,7 +69,7 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
   );
 
   // The first page is what the view is about, so a failed read is tried again, a few times, backing off.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new snapshot (`loads`) reads it again.
+  // A new snapshot (`loads`) reads it again.
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -91,6 +96,7 @@ export function useScopedHistory(scope: HistoryScope, matches: (event: ChannelEv
   return {
     events: merged,
     more: current && pages.olderBefore !== undefined,
+    unavailable: (current && pages.unavailable) || [],
     loading: !current || pages.loading,
     loadOlder: () => {
       if (current && !pages.loading && pages.olderBefore !== undefined) void read(pages.olderBefore);

@@ -5,10 +5,10 @@
 // flashing a loading page, then shows every recent Event with the log at the newest, and an
 // Agent's History reads its latest page again, so the gap's Events are there too.
 
+import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, StreamMessage } from "@shared/index";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentId, ChannelEvent, ChannelSnapshot, StreamMessage } from "@shared/index";
 import { TopBar } from "@/components/shell/nav";
 import type { ChannelSource, ConnectionState } from "@/data/source";
 import { ChannelProvider, ChannelStore } from "@/data/store";
@@ -101,7 +101,14 @@ beforeEach(() => {
   scopedReads = 0;
   const saved = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => saved.set(k, v) });
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
 });
 
 afterEach(() => {

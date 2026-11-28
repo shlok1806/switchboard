@@ -2,12 +2,14 @@
  * The one state vocabulary (ADR 0023, design.md): shape says why, fill says whose, and the
  * signal colour means only that a Person is needed. Every view draws a state with these.
  */
-import { useMemo } from "react";
+
 import type { Agent } from "@shared/index";
+import { useMemo } from "react";
+import { ThinkingOrb } from "thinking-orbs";
 import { useChannel, useMe } from "@/data/store";
 import { claimsByAgent } from "@/lib/canvas-layout";
 import { needsYouCount } from "@/lib/queue";
-import { needsPerson, stateOf, stateWord, type AgentState, type GlyphState } from "@/lib/state";
+import { type AgentState, type GlyphState, needsPerson, orbOf, stateOf, stateWord } from "@/lib/state";
 import { cn } from "@/lib/utils";
 
 /** The state's glyph: 12px, decorative (the word beside it carries the meaning). */
@@ -75,6 +77,19 @@ export function State({
   );
 }
 
+/**
+ * The Agent's thinking orb (ADR 0047), beside its glyph and word and never instead of them,
+ * so it is decorative. 20px in a line, 64px on the Agent's own page. The orb draws in ink and
+ * follows the Dashboard's theme (lib/theme marks the root dark or light); under reduced motion
+ * it holds one still frame, and offscreen it stops drawing. A state with no orb draws
+ * nothing, or, with `reserve`, keeps the orb's room so the names in a list stay in line.
+ */
+export function Orb({ state, size = 20, reserve = false, className }: { state: AgentState; size?: 20 | 64; reserve?: boolean; className?: string }) {
+  const orb = orbOf(state);
+  if (!orb) return reserve ? <span aria-hidden className={cn("inline-block shrink-0", size === 64 ? "size-16" : "size-5", className)} /> : null;
+  return <ThinkingOrb state={orb} size={size} aria-hidden data-orb={orb} className={cn("shrink-0", className)} />;
+}
+
 /** Every Agent's state, keyed by its ID, from one selector. */
 export function useAgentStates(): Map<string, AgentState> {
   const { agents, tasks } = useChannel();
@@ -85,7 +100,7 @@ export function useAgentStates(): Map<string, AgentState> {
   }, [agents, tasks, me]);
 }
 
-/** How many lines need you, from the one count the Now queue gives (lib/queue). */
+/** How many items need you, from the one count the Now queue gives (lib/queue). */
 export function useNeedsYou(): number {
   const { agents, tasks } = useChannel();
   const me = useMe();

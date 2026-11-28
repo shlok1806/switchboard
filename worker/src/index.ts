@@ -6,7 +6,13 @@
 //   /auth/...                       sign-in with GitHub (auth-api.ts)
 //   /r/<owner>/<repo>/api/hosts...  Hosts, and starting and stopping Agents (hosts-api.ts)
 //   /r/<owner>/<repo>/api/memory    the notes Agents write for each other (memory-api.ts)
+//   /r/<owner>/<repo>/api/skills    skills shared on the Channel (skills-api.ts, ADR 0039)
+//   /r/<owner>/<repo>/api/artifacts HTML pages shared on the Channel, shown sandboxed (artifacts-api.ts, ADR 0053)
+//   /r/<owner>/<repo>/api/brief     the Brief's pages, which Agents write (brief-api.ts, ADR 0042)
+//   /r/<owner>/<repo>/api/settings  the Channel's settings, its Langfuse project (settings-api.ts, ADR 0044)
 //   POST /api/github/webhook        GitHub's deliveries, routed by their repository
+//   /r/<owner>/<repo>/mcp           the read-only MCP connector of that Channel (mcp/server.ts, ADR 0040)
+//   /oauth/..., /.well-known/oauth-* its OAuth sign-in (mcp/oauth.ts)
 //
 // Everything under /r/ needs a credential: a Person session or an Agent token
 // (auth.ts). The Channel admits it: a live token, and a Person with write access
@@ -26,16 +32,24 @@ import type {
 } from "../../shared/src/index";
 import { MAX_ADDRESSEES, MAX_EVENT_IDS, MAX_HISTORY_LIMIT, MAX_UPDATE_LENGTH } from "../../shared/src/index";
 import { type AgentRoute, handleAgentRoute, matchAgentRoute } from "./agents-api";
+import { handleArtifactRoute, matchArtifactRoute } from "./artifacts-api";
 import { channelRepo, devMode, readCredential } from "./auth";
 import { handleAuthRoute, isAuthRoute } from "./auth-api";
 import { handleBranchRoute, matchBranchRoute } from "./branches-api";
+import { handleBriefRoute, matchBriefRoute } from "./brief-api";
 import type { Caller } from "./claims";
 import { handleClaimRoute, isAgentId, matchClaimRoute } from "./claims-api";
 import { DIRECTIVE_ROUTE, handleDirectiveRoute } from "./directives-api";
 import { agentMayCall, HOST_AGENT_REFUSED, handleHostRoute, matchHostRoute } from "./hosts-api";
 import { fail, json, readJson } from "./http";
+import { handleLibrarianRoute, LIBRARIAN_REFUSED, librarianMayCall, matchLibrarianRoute } from "./librarian-api";
+import { handleOAuthRoute, isOAuthRoute } from "./mcp/oauth";
+import { MCP_PATH } from "./mcp/paths";
+import { handleMcp } from "./mcp/server";
 import { GET_MEMORY_ROUTE, handleMemoryRoute, POST_MEMORY_ROUTE } from "./memory-api";
 import { relaySettings } from "./relay/relay";
+import { handleSettingsRoute, matchSettingsRoute } from "./settings-api";
+import { handleSkillRoute, matchSkillRoute } from "./skills-api";
 import { handleTakeoverRoute, matchTakeoverRoute } from "./takeover-api";
 import { handleTaskRoute, handleWebhook, isTaskRoute, WEBHOOK_ROUTE } from "./tasks-api";
 
@@ -101,14 +115,20 @@ async function handleHistory(url: URL, channel: ChannelStub): Promise<Response> 
     const task = intParam(url, "task", 0);
     if (task === null) return fail(400, '"task" must be a Task number.');
     if (agent !== null && task > 0) return fail(400, "Ask for an Agent's or a Task's Events, not both.");
-    const events =
+    // Merged with the Local Events the machines keep (ADR 0037).
+    const page =
       agent !== null
         ? await channel.latestEventsOfAgent(agent as AgentId, tail, before)
         : task > 0
           ? await channel.latestEventsOfTask(task as TaskNumber, tail, before)
           : await channel.latestEvents(tail, before);
-    if (!Array.isArray(events)) return indexMissing(events);
-    return json<HistoryResponse>({ events, cursor: events.at(-1)?.seq ?? 0 });
+    if (!("events" in page)) return indexMissing(page);
+    const { events, unavailable } = page;
+    return json<HistoryResponse>({
+      events,
+      cursor: events.at(-1)?.seq ?? 0,
+      ...(unavailable.length === 0 ? {} : { unavailable }),
+    });
   }
   const after = intParam(url, "after", 0);
   const limit = intParam(url, "limit", MAX_HISTORY_LIMIT);
@@ -156,6 +176,8 @@ async function handleStream(request: Request, url: URL, channel: ChannelStub, ca
   target.searchParams.set("person", caller.person);
   if (caller.agent !== undefined) target.searchParams.set("agent", caller.agent);
   if (host !== null) target.searchParams.set("host", host);
+  // A Host that answers history reads (ADR 0037).
+  if (host !== null && url.searchParams.get("history") === "1") target.searchParams.set("history", "1");
   if (after !== null) target.searchParams.set("after", after);
   return channel.fetch(target, { headers: { Upgrade: "websocket" } });
 }
@@ -200,6 +222,15 @@ const AGENT_ROUTE_KINDS: ReadonlySet<AgentRoute["kind"]> = new Set([
   "approval",
 ]);
 
+/** What a librarian's wrapper reports on its own session (ADR 0045): not the librarian's writing. */
+const LIBRARIAN_WRAPPER_REPORTS: ReadonlySet<AgentRoute["kind"]> = new Set([
+  "heartbeat",
+  "end",
+  "nickname",
+  "model",
+  "approval",
+]);
+
 const AGENT_REFUSED =
   "An Agent token cannot do this. Agents read the Channel, post their own Events, and claim, release and finish " +
   "Tasks for themselves (and a lead acts on its own subtree); Takeovers, roles and everything else a Person " +
@@ -215,8 +246,19 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const branchRoute = matchBranchRoute(request.method, path);
   const takeoverTask = matchTakeoverRoute(request.method, path);
   const hostRoute = matchHostRoute(request.method, path);
+  const skillRoute = matchSkillRoute(request.method, path);
+  const briefRoute = matchBriefRoute(request.method, path);
+  const artifactRoute = matchArtifactRoute(request.method, path);
+  const librarianRoute = matchLibrarianRoute(request.method, path);
+  // A Person's only, so an Agent token is refused below as for any route not on its list.
+  const settingsRoute = matchSettingsRoute(request.method, path);
   if (
     !ROUTES.has(route) &&
+    skillRoute === null &&
+    briefRoute === null &&
+    artifactRoute === null &&
+    librarianRoute === null &&
+    settingsRoute === null &&
     !taskRoute &&
     hostRoute === null &&
     agentRoute === null &&
@@ -235,6 +277,7 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   const caller: Caller = {
     person: admitted.person,
     ...(admitted.agent === undefined ? {} : { agent: admitted.agent }),
+    ...(admitted.librarian === true ? { librarian: true } : {}),
   };
 
   if (caller.agent !== undefined) {
@@ -245,6 +288,14 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
       (taskRoute && request.method === "GET") ||
       claimRoute !== null ||
       branchRoute !== null ||
+      // An Agent reads skills and publishes its Person's, when its Person asks (ADR 0039).
+      skillRoute !== null ||
+      // An Agent reads the Brief and writes its pages (ADR 0042).
+      briefRoute !== null ||
+      // An Agent reads artifacts and publishes its Person's (ADR 0053).
+      artifactRoute !== null ||
+      // An Agent reads GitHub and the Librarian Feed; only the librarian moves its cursor (ADR 0045).
+      librarianRoute !== null ||
       (agentRoute !== null && AGENT_ROUTE_KINDS.has(agentRoute.kind));
     if (!allowed) return fail(403, AGENT_REFUSED);
     if (
@@ -259,6 +310,19 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
     ) {
       return fail(403, `This token belongs to Agent ${caller.agent}. An Agent acts for itself only.`);
     }
+    // The librarian writes Brief pages and nothing else (ADR 0045); its wrapper still reports on its session.
+    if (
+      caller.librarian === true &&
+      !librarianMayCall(request.method, {
+        brief: briefRoute !== null,
+        librarian: librarianRoute !== null,
+        wrapperReport: agentRoute !== null && LIBRARIAN_WRAPPER_REPORTS.has(agentRoute.kind),
+        stream: route === "GET /api/stream",
+        toolCall: claimRoute?.kind === "tool-call",
+      })
+    ) {
+      return fail(403, LIBRARIAN_REFUSED);
+    }
   }
 
   if (taskRoute) return handleTaskRoute(request, inner, channel, caller);
@@ -267,6 +331,13 @@ async function handleChannel(request: Request, url: URL, env: Env, repo: string,
   if (claimRoute !== null) return handleClaimRoute(claimRoute, request, channel, caller);
   if (branchRoute !== null) return handleBranchRoute(branchRoute, request, channel, caller);
   if (takeoverTask !== null) return handleTakeoverRoute(takeoverTask, request, channel, caller);
+  if (skillRoute !== null) return handleSkillRoute(skillRoute, request, inner, channel, caller);
+  if (briefRoute !== null) return handleBriefRoute(briefRoute, request, inner, channel, caller);
+  if (artifactRoute !== null) return handleArtifactRoute(artifactRoute, request, inner, channel, caller);
+  if (librarianRoute !== null) return handleLibrarianRoute(librarianRoute, request, inner, env, repo, channel, caller);
+  if (settingsRoute !== null) {
+    return handleSettingsRoute(settingsRoute, request, channel, caller, { env, repo, dev: devMode(env, url) });
+  }
 
   switch (route) {
     case "POST /api/join":
@@ -305,6 +376,20 @@ export default {
       return handleWebhook(request, env, (repo) => channelOf(env, repo));
     }
     if (isAuthRoute(url.pathname)) return handleAuthRoute(request, url, env, (repo) => channelOf(env, repo));
+    if (isOAuthRoute(url.pathname)) return handleOAuthRoute(request, url, env, (repo) => channelOf(env, repo));
+
+    const mcp = MCP_PATH.exec(url.pathname);
+    if (mcp?.[1] !== undefined) {
+      let named: string;
+      try {
+        named = decodeURIComponent(mcp[1]);
+      } catch {
+        return fail(404, "Not found.");
+      }
+      const repo = channelRepo(env, named);
+      if (repo === null) return fail(404, `There is no Channel for ${named} here.`);
+      return handleMcp(request, url, env, repo, channelOf(env, repo));
+    }
 
     const api = CHANNEL_PATH.exec(url.pathname);
     if (api?.[1] !== undefined && api[2] !== undefined) {

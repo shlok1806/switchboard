@@ -28,15 +28,27 @@ import type {
   Task,
   TaskResponse,
 } from "../../shared/src/index";
-import { agentPath, MAX_ACCOUNT_HISTORY, nicknamePath, SUMMARY_MAX_FILES, summaryPath } from "../../shared/src/index";
+import {
+  agentPath,
+  BRIEF_HISTORY,
+  MAX_ACCOUNT_HISTORY,
+  MAX_BRIEF_PAGES,
+  nicknamePath,
+  SUMMARY_MAX_FILES,
+  summaryPath,
+} from "../../shared/src/index";
 import type { AgentRoster } from "../src/agents";
 import { Channel } from "../src/channel";
-import { installGitHub } from "../src/github/index";
+import { installGitHub, installGitHubApp } from "../src/github/index";
+import { sealSecretKey } from "../src/langfuse";
+import { signAccess } from "../src/mcp/tokens";
 import { installJev } from "../src/relay/jev";
 import { lastUpdate } from "../src/status-comment";
-import { bearer, channelStub, forgetTokens, remember, streamQuery, url } from "./client";
+import { BASE, bearer, channelStub, forgetTokens, REPO, remember, SESSION_SECRET, streamQuery, url } from "./client";
 import { FakeGitHub } from "./fake-github";
+import { FakeGitHubApi } from "./fake-github-api";
 import { FakeJev } from "./fake-jev";
+import { FakeLangfuse, LANGFUSE_HOST, PROJECT, PUBLIC_KEY, SECRET_KEY } from "./fake-langfuse";
 
 /**
  * The history the Channel is given before anything is measured: Events from Agents
@@ -206,9 +218,11 @@ async function seed(live: AgentId[]): Promise<void> {
       task: number | null,
       payload: unknown,
     ) => {
+      // An older Channel's history, from before `seq` became the time (ADR 0037): seq 1 to EVENTS.
       sql.exec(
-        `INSERT INTO events (id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO events (seq, id, at, type, actor, capture, task, turn, payload, actor_kind, actor_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        row + 1,
         `seed-${row}`,
         new Date(Date.now() - (EVENTS - row) * 1000).toISOString(),
         type,
@@ -309,6 +323,7 @@ beforeEach(async () => {
   for (const agent of live) await heartbeat(agent, "live");
   measured = live[0] as AgentId;
   await seed(live);
+  await listenForVerdicts();
   await meterChannel();
 });
 
@@ -360,14 +375,25 @@ function unmetered<T>(read: (sql: SqlStorage) => T): Promise<T> {
   });
 }
 
-/** Whether the Relay has recorded its Verdicts about Event `id`. */
-function verdictsAbout(id: string): Promise<boolean> {
-  return unmetered((sql) =>
-    sql
-      .exec<{ payload: string }>("SELECT payload FROM events WHERE type = 'verdict' ORDER BY seq DESC LIMIT 10")
-      .toArray()
-      .some((row) => JSON.stringify(row.payload).includes(id)),
-  );
+/** The Events whose Verdicts the Relay broadcast, heard on a Dashboard's stream. */
+const verdictsHeard = new Set<string>();
+
+/** Opens a Dashboard's stream, which hears every Verdict the Relay gives, stored or not (ADR 0037). */
+async function listenForVerdicts(): Promise<void> {
+  verdictsHeard.clear();
+  const response = await call(`/api/stream?${await streamQuery("shlok")}`, { headers: { Upgrade: "websocket" } });
+  const socket = response.webSocket;
+  if (!socket) throw new Error("No WebSocket in the upgrade response");
+  socket.accept();
+  socket.addEventListener("message", (message) => {
+    const frame = JSON.parse(String(message.data)) as { type: string; event?: ChannelEvent };
+    if (frame.type === "event" && frame.event?.type === "verdict") verdictsHeard.add(frame.event.payload.event);
+  });
+}
+
+/** Whether the Relay has given a Verdict about Event `id`; reads nothing. */
+async function verdictsAbout(id: string): Promise<boolean> {
+  return verdictsHeard.has(id);
 }
 
 it("a Hook Event reads a bounded number of rows", async () => {
@@ -525,6 +551,204 @@ it("Events by ID and the Wakes after an Event read only what they return", async
     expect(events.every((e) => e.type === "wake")).toBe(true);
   });
   expect(wakes).toBeLessThan(25);
+});
+
+/** The rows one `channel` call of the read-only connector may read (ADR 0040). */
+const ASK_BUDGET = 400;
+
+it("the connector's channel tool reads a bounded number of rows, plain or narrowed", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  // A signed-in app's grant, which each call checks is still live.
+  await runInDurableObject(channelStub(), (channel: Channel) => {
+    channel.startMcpGrant("rows-read-grant", "shlok", "rows-read-client", Date.now() + 86_400_000);
+  });
+  const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-grant", endpoint);
+  const ask = async (args: Record<string, string>) => {
+    const response = await call(`/r/${REPO}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "channel", arguments: args },
+      }),
+    });
+    const { result } = (await response.json()) as { result: { content: { text: string }[]; isError: boolean } };
+    expect(result.isError, JSON.stringify(args)).toBe(false);
+    return result.content[0]?.text ?? "";
+  };
+  // A Channel's Tasks are mostly open Issues nobody holds: far more than the seed's.
+  await runInDurableObject(channelStub(), (channel) => {
+    const tasks = (channel as unknown as { tasks: { write(task: Task): void } }).tasks;
+    for (let n = TASKS + 1; n <= TASKS + 2000; n++) tasks.write(task(n));
+  });
+  // Membership is checked, and cached, by a first call, as by any caller's.
+  await ask({});
+  const cases: [Record<string, string>, string][] = [
+    [{}, "Update"],
+    [{ since: "30d" }, "Update"],
+    [{ about: "#40" }, "Task #40"],
+    [{ about: measured }, measured],
+    [{ about: "shlok" }, "the Person shlok"],
+    [{ about: "progress" }, "progress"],
+  ];
+  for (const [args, mentions] of cases) {
+    const read = await rowsRead(async () => expect(await ask(args)).toContain(mentions));
+    expect(read, JSON.stringify(args)).toBeLessThan(ASK_BUDGET);
+  }
+});
+
+it("the connector's github tool reads only what admitting the call reads: GitHub answers it", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  const api = new FakeGitHubApi();
+  api.listen();
+  installGitHubApp(await api.app());
+  api.files.set("docs/adr/0040-ask-the-channel.md", "# Ask the Channel\n");
+  api.issues.push({ number: 1, title: "Task 1", author: "shlok", createdAt: new Date().toISOString() });
+  try {
+    await runInDurableObject(channelStub(), (channel: Channel) => {
+      channel.startMcpGrant("rows-read-github", "shlok", "rows-read-client", Date.now() + 86_400_000);
+    });
+    const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-github", endpoint);
+    const send = async (message: Record<string, unknown>) => {
+      const response = await call(`/r/${REPO}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+      });
+      return (await response.json()) as { result: { isError?: boolean } };
+    };
+    const ask = async (args: Record<string, string>) => {
+      const { result } = await send({ method: "tools/call", params: { name: "github", arguments: args } });
+      expect(result.isError, JSON.stringify(args)).toBe(false);
+    };
+    // Membership is checked, and cached, by a first call, as by any caller's.
+    await ask({});
+    // What every call reads to be let in: its grant and its Person's Membership, by key.
+    const admitting = await rowsRead(() => send({ method: "ping" }));
+    expect(admitting).toBeLessThan(10);
+    const questions: Record<string, string>[] = [
+      {},
+      { about: "#1" },
+      { about: "docs/adr" },
+      { about: "ask the channel" },
+    ];
+    for (const args of questions) {
+      expect(await rowsRead(() => ask(args)), JSON.stringify(args)).toBe(admitting);
+    }
+  } finally {
+    installGitHubApp(null);
+    vi.restoreAllMocks();
+  }
+});
+
+it("the connector's brief tool reads one row per page for the overview, and one for an area (ADR 0042)", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  // A full Brief, every page with its kept earlier versions.
+  await runInDurableObject(channelStub(), (channel: Channel, state) => {
+    channel.startMcpGrant("rows-read-brief", "shlok", "rows-read-client", Date.now() + 86_400_000);
+    const author = JSON.stringify({ agent: measured, person: "shlok" });
+    const at = new Date().toISOString();
+    const pages = ["overview", "stuck", ...Array.from({ length: MAX_BRIEF_PAGES - 2 }, (_, n) => `area-${n}`)];
+    for (const page of pages) {
+      const text = `# ${page}\n\n${"Where it stands, with #12 and ADR 0040. ".repeat(150)}`;
+      const earlier = Array.from({ length: BRIEF_HISTORY }, (_, n) => ({
+        page,
+        title: page,
+        version: BRIEF_HISTORY - n,
+        text,
+        author: JSON.parse(author),
+        updatedAt: at,
+      }));
+      state.storage.sql.exec(
+        "INSERT INTO brief_pages (page, title, version, text, author, updated_at, earlier) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        page,
+        page,
+        BRIEF_HISTORY + 1,
+        text,
+        author,
+        at,
+        JSON.stringify(earlier),
+      );
+    }
+  });
+  const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-brief", endpoint);
+  const send = async (message: Record<string, unknown>) => {
+    const response = await call(`/r/${REPO}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+    });
+    return (await response.json()) as { result: { isError?: boolean; content?: { text: string }[] } };
+  };
+  const ask = async (args: Record<string, string>) => {
+    const { result } = await send({ method: "tools/call", params: { name: "brief", arguments: args } });
+    expect(result.isError, JSON.stringify(args)).toBe(false);
+    return result.content?.[0]?.text ?? "";
+  };
+  // Membership is checked, and cached, by a first call, as by any caller's.
+  await ask({});
+  const admitting = await rowsRead(() => send({ method: "ping" }));
+  expect(await rowsRead(async () => expect(await ask({})).toContain('"area-21"'))).toBe(admitting + MAX_BRIEF_PAGES);
+  expect(await rowsRead(async () => expect(await ask({ area: "area-3" })).toContain("## area-3"))).toBe(admitting + 1);
+  // The Dashboard's read of every page reads each page's row once.
+  const dashboard = await rowsRead(async () => {
+    const response = await call("/api/brief", { headers: { Authorization: await bearer("shlok") } });
+    expect(response.status).toBe(200);
+  });
+  expect(dashboard).toBeLessThan(MAX_BRIEF_PAGES + 10);
+});
+
+it("the connector's costs tool reads the Channel's one Langfuse row besides what admits the call (ADR 0044)", async () => {
+  const endpoint = `${BASE}/r/${REPO}/mcp`;
+  const langfuse = new FakeLangfuse();
+  langfuse.listen();
+  langfuse.observations.push({
+    type: "GENERATION",
+    traceName: "verifier turn",
+    model: "claude-opus-4-1",
+    environment: "production",
+    startTime: new Date(Date.now() - 86_400_000).toISOString(),
+    latencyMs: 3_000,
+    cost: 0.5,
+  });
+  try {
+    const secretSealed = await sealSecretKey(SESSION_SECRET, REPO, SECRET_KEY);
+    await runInDurableObject(channelStub(), (channel: Channel) => {
+      channel.startMcpGrant("rows-read-costs", "shlok", "rows-read-client", Date.now() + 86_400_000);
+      channel.setLangfuseProject({
+        host: LANGFUSE_HOST,
+        publicKey: PUBLIC_KEY,
+        secretSealed,
+        project: PROJECT,
+        connectedBy: "shlok",
+        connectedAt: new Date().toISOString(),
+      });
+    });
+    const token = await signAccess(SESSION_SECRET, "shlok", REPO, "rows-read-costs", endpoint);
+    const send = async (message: Record<string, unknown>) => {
+      const response = await call(`/r/${REPO}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+      });
+      return (await response.json()) as { result: { isError?: boolean; content?: { text: string }[] } };
+    };
+    const ask = async (args: Record<string, string>) => {
+      const { result } = await send({ method: "tools/call", params: { name: "costs", arguments: args } });
+      expect(result.isError, JSON.stringify(args)).toBe(false);
+      expect(result.content?.[0]?.text).toContain("$0.50");
+    };
+    // Membership is checked, and cached, by a first call, as by any caller's.
+    await ask({});
+    const admitting = await rowsRead(() => send({ method: "ping" }));
+    for (const args of [{}, { by: "trace" }, { by: "day", period: "7d" }] as Record<string, string>[]) {
+      expect(await rowsRead(() => ask(args)), JSON.stringify(args)).toBe(admitting + 1);
+    }
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 /** What starting the Channel's Durable Object again reads, as after an eviction or a deploy. */
@@ -716,8 +940,11 @@ it("a member re-check that finds the same answer asks GitHub, and writes no memb
 
 /** What `work` cost, with the Relay's Verdicts about the Event it returns the ID of, and how many Events it stored. */
 async function relayed(work: () => Promise<string>): Promise<Rows & { events: number }> {
+  // `seq` is a time (ADR 0037), so count the Events stored after the last one.
   const last = () => unmetered((sql) => sql.exec<{ seq: number }>("SELECT max(seq) AS seq FROM events").one().seq);
   const before = await last();
+  const since = () =>
+    unmetered((sql) => sql.exec<{ n: number }>("SELECT count(*) AS n FROM events WHERE seq > ?", before).one().n);
   let id = "";
   const cost = await rows(
     async () => {
@@ -725,10 +952,10 @@ async function relayed(work: () => Promise<string>): Promise<Rows & { events: nu
     },
     () => verdictsAbout(id),
   );
-  return { ...cost, events: (await last()) - before };
+  return { ...cost, events: await since() };
 }
 
-it("an Event that overlaps no other Agent writes itself and one verdict row, however many Agents it Drops", async () => {
+it("an Update that overlaps no other Agent writes itself and one verdict row, however many Agents it Drops, and a file edit neither", async () => {
   const edit = () =>
     relayed(async () => {
       const event = hook("file.edit", { path: `src/solo-${nextId}.ts`, additions: 1, deletions: 0 });
@@ -750,12 +977,14 @@ it("an Event that overlaps no other Agent writes itself and one verdict row, how
     await heartbeat(await register(`${prefix}0000-0000-4000-8000-000000000000`), "live");
   const four = { edit: await edit(), update: await update() };
 
-  for (const kind of ["edit", "update"] as const) {
-    // The source Event, and one verdict Event naming the 4 Agents it Dropped by rule.
-    expect(four[kind].events, kind).toBe(2);
-    // Each with its own index rows, as many as with 2 other Agents: nothing is written per Agent.
-    expect(four[kind].writtenTo.events, kind).toBe(two[kind].writtenTo.events);
-  }
+  // A file edit and its rule Drops are Local Events, kept on the Agent's machine (ADR 0037).
+  expect(two.edit.events).toBe(0);
+  expect(four.edit.events).toBe(0);
+  expect(four.edit.writtenTo.events ?? 0).toBe(0);
+  // The Update, and one verdict Event naming the 4 Agents it Dropped by rule.
+  expect(four.update.events).toBe(2);
+  // Each with its own index rows, as many as with 2 other Agents: nothing is written per Agent.
+  expect(four.update.writtenTo.events).toBe(two.update.writtenTo.events);
   const dropped = await unmetered((sql) =>
     sql
       .exec<{ payload: string }>("SELECT payload FROM events WHERE type = 'verdict' ORDER BY seq DESC LIMIT 1")
@@ -846,7 +1075,7 @@ it("retention keeps Claims, recent Agents and referenced hand-offs, and leaves p
     sql.exec("UPDATE agents SET role = 'lead' WHERE id = ?", lead);
     sql.exec("INSERT INTO touched_files VALUES (?, 'old.ts', 1, 'now', 'now', 1)", removed);
     expect(channel.touchedFiles(removed)).toHaveLength(1);
-    sql.exec("INSERT INTO agent_tokens VALUES ('expired', ?, 'shlok', 0)", removed);
+    sql.exec("INSERT INTO agent_tokens (hash, agent, person, issued_at) VALUES ('expired', ?, 'shlok', 0)", removed);
     sql.exec("DELETE FROM alarm_deadlines");
     sql.exec("INSERT INTO alarm_deadlines VALUES ('retention', 0)");
   });
@@ -1041,15 +1270,20 @@ async function streamFrom(after: number): Promise<{ read: number; sent: StreamMe
 }
 
 it("a stream far behind is told to reload instead of replaying, and one a little behind replays what it missed", async () => {
-  const newest = await unmetered((sql) => sql.exec<{ seq: number }>("SELECT max(seq) AS seq FROM events").one().seq);
+  // `seq` is a time (ADR 0037): the cursor 50 Events back is the seq of the 51st newest.
+  const latest = await unmetered((sql) =>
+    sql
+      .exec<{ seq: number }>("SELECT seq FROM events ORDER BY seq DESC LIMIT 51")
+      .toArray()
+      .map((row) => row.seq)
+      .reverse(),
+  );
   const far = await streamFrom(0);
   expect(far.read).toBeLessThan(BUDGET);
   expect(far.sent).toEqual([{ type: "reload" }]);
-  const near = await streamFrom(newest - 50);
+  const near = await streamFrom(latest[0] as number);
   expect(near.read).toBeLessThan(50 + BUDGET);
-  expect(near.sent.map((m) => (m.type === "event" ? m.event.seq : m.type))).toEqual(
-    Array.from({ length: 50 }, (_, i) => newest - 49 + i),
-  );
+  expect(near.sent.map((m) => (m.type === "event" ? m.event.seq : m.type))).toEqual(latest.slice(1));
 });
 
 it("a Nickname is checked for a clash without reading every named Agent, and a clash is still refused", async () => {

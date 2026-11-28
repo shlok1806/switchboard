@@ -30,3 +30,7 @@ We rejected a new Event type for rule Drops: every reader that skips `verdict` E
 - The Dashboard's 1,000 Events hold more of what People read.
 - `EventPayloads["verdict"]` is `VerdictRecord`, `Verdict | RuleDrops`. Code that reads a Verdict Event's payload as one Agent's Verdict checks for `agents` first, or uses `verdictsOf`.
 - A Channel's history holds both shapes from the day this ships.
+
+## With ADR 0037, 2026-11-28
+
+ADR 0037 shipped first: a `file.edit` and the Relay's rule Drops about it are Local Events, kept on the Agent's machine and not stored on the Channel. The two decisions fit together. All of a Local Event's rule Drops are one Local Event too, marked `local` like a single rule Drop was, so a `file.edit` stores nothing on the Channel however many Agents it Drops. A stored Event such as an Update stores itself and one rule Drops Event. `rows-read.test.ts` holds the Channel to both. ADR 0037 also removed the `AUTOINCREMENT` counter, so the row counts above are from before it.

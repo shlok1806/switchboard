@@ -20,9 +20,12 @@ import type {
   DirectiveAck,
   DirectiveInterruptMessage,
   DirectiveTypedResult,
+  HistoryPageMessage,
+  HistoryRequestMessage,
   InterruptAttach,
   InterruptMessage,
   InterruptResult,
+  LibrarianFeedResponse,
   MemoryResponse,
   SetApprovalRequest,
   SetModelRequest,
@@ -48,6 +51,8 @@ import {
   HEARTBEAT_INTERVAL_MS,
   handoffBrief,
   interruptNotice,
+  isLocalEvent,
+  LIBRARIAN_PATH,
   modelPath,
   STANDING_RULE,
   summaryName,
@@ -58,16 +63,22 @@ import { accountLabel } from "./account-label";
 import { AgentLink, type AgentSession } from "./agent-link";
 import { ApprovalReporter, DenyGate } from "./approvals";
 import { type ChannelChoice, ChannelChoiceError, chooseChannel, describeChoice } from "./channel-choice";
-import { ChannelClient, ChannelError, targetOf } from "./channel-client";
+import { ChannelClient, ChannelError, type ChannelMessage, targetOf } from "./channel-client";
 import { claudeConfigDir, projectDir, withSessionId } from "./claude-session";
 import type { CliAdapter, ProxyRoute, SessionPlan } from "./clis/adapter";
 import { configDir, readConfig } from "./config";
+import { DatasetTrigger } from "./dataset/command";
 import { HookCapture } from "./hooks/capture";
+import { readSettings } from "./host/files";
 import { DEFAULT_QUIET_MS, DEFAULT_WAIT_MS, InterruptTyper } from "./interrupts";
+import { streamPingMs } from "./keepalive";
+import { LibrarianWaker, librarianArgs, librarianSettings } from "./librarian";
+import { openLocalStore } from "./local-store";
 import { prepareSessionTools, type SessionTools } from "./mcp-config";
 import { MemoryInbox, MemoryNudges } from "./memory";
 import { configuredModel, ModelWatch } from "./model-watch";
 import { NextTurn, type NextTurnItems } from "./next-turn";
+import { dashboardUrl, onboard, shouldOnboard } from "./onboarding";
 import { IdleWatch } from "./presence";
 import { ProxyCapture } from "./proxy/capture";
 import { DEFAULT_PROXY_SETTING, type ProxyFlags, takeProxyFlags } from "./proxy/options";
@@ -93,6 +104,11 @@ const END_TIMEOUT_MS = 3000;
 const USAGE_END_WAIT_MS = 10_000;
 /** The environment variable that turns usage readings off (ADR 0011): `off`. */
 const USAGE_ENV = "SWITCHBOARD_USAGE";
+/** The librarian's waits (ADR 0045): the settle after a meaningful Event, the poll, the idle cursor move, a retry. */
+const LIBRARIAN_SETTLE_MS = 60_000;
+const LIBRARIAN_POLL_MS = 15 * 60_000;
+const LIBRARIAN_IDLE_MOVE_MS = 30 * 60_000;
+const LIBRARIAN_RETRY_MS = 30_000;
 /** How long the wrapper waits for the first SessionStart hook before it says the hooks are not running. */
 const HOOK_TRUST_WAIT_MS = 8000;
 
@@ -145,6 +161,17 @@ export function takeRepo(args: string[]): { repo?: string; rest: string[] } {
   return value === undefined ? { rest } : { repo: value, rest };
 }
 
+/** Takes the wrapper's own `--librarian` (ADR 0045) out of the agent CLI's arguments. */
+export function takeLibrarian(args: string[]): { librarian: boolean; rest: string[] } {
+  const end = args.indexOf("--");
+  const before = end === -1 ? args : args.slice(0, end);
+  const after = end === -1 ? [] : args.slice(end);
+  return {
+    librarian: before.includes("--librarian"),
+    rest: [...before.filter((arg) => arg !== "--librarian"), ...after],
+  };
+}
+
 /** Takes the wrapper's own `--from`, the Agent this session continues (ADR 0024), out of the agent CLI's arguments. */
 export function takeFrom(args: string[]): { from?: string; rest: string[] } {
   const { value, rest } = takeOption(args, "from");
@@ -171,6 +198,16 @@ async function predecessorOf(
   return { summary: await client.request<AgentSummary>(summaryPath(predecessor.id)), continuing };
 }
 
+/**
+ * The name of the Host installed on this machine for the Channel of `repo` (ADR 0015), which
+ * answers for its Agents' Local Events once their wrappers are gone (ADR 0037), or undefined.
+ */
+export function hostFor(repo: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const settings = readSettings(env);
+  if (settings === null) return undefined;
+  return (channelKey(settings.repo) ?? settings.repo) === repo ? settings.name : undefined;
+}
+
 export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<number> {
   const env = process.env;
   const config = await readConfig();
@@ -193,9 +230,19 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const { accountLabel: accountFlag, rest: afterAccount } = takeAccountLabel(afterNickname);
   const { repo: repoFlag, rest: afterRepo } = takeRepo(afterAccount);
   const { from: fromFlag, rest: afterFrom } = takeFrom(afterRepo);
+  // The Channel's librarian (ADR 0045): Claude Code with its permissions, its tools and its brief.
+  const { librarian, rest: afterLibrarian } = takeLibrarian(afterFrom);
+  if (librarian && adapter.cli !== "claude-code") {
+    console.error("switchboard: --librarian runs only with claude.");
+    return 2;
+  }
+  if (librarian && fromFlag !== undefined) {
+    console.error("switchboard: --librarian continues no other Agent; leave out --from.");
+    return 2;
+  }
   let proxyFlags: ProxyFlags;
   try {
-    proxyFlags = takeProxyFlags(afterFrom);
+    proxyFlags = takeProxyFlags(afterLibrarian);
   } catch (error) {
     console.error(`switchboard: ${(error as Error).message}`);
     return 2;
@@ -206,7 +253,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     console.error(`switchboard: the Proxy Capture does not support ${adapter.label} yet; use --proxy off.`);
     return 2;
   }
-  const rest = proxyFlags.rest;
+  let rest = proxyFlags.rest;
+  if (librarian) {
+    const checked = librarianArgs(rest);
+    if (!checked.ok) {
+      console.error(`switchboard: ${checked.reason}`);
+      return 2;
+    }
+    rest = checked.args;
+  }
   const cwd = process.cwd();
   const ctx = { cwd, env };
   let plan: SessionPlan;
@@ -228,6 +283,13 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   }
   const { repo } = choice;
   log(`using ${describeChoice(choice)} at ${config.url}`);
+  if (isLocalChannel(config.url)) {
+    // A local Worker is a developer's `wrangler dev`: say so where the Person looks (ADR 0052).
+    console.error(
+      `switchboard: this session's Channel is a local Worker at ${config.url}, not the shared one. ` +
+        "If it stops answering, the session goes on and Switchboard tries it less and less often.",
+    );
+  }
   if (choice.reason !== "default" || choice.note !== undefined) {
     console.error(dim(`switchboard: using ${describeChoice(choice)}`));
   }
@@ -247,6 +309,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // Registering trades the Person's session for the Agent's token; the client then
   // acts with the token, and the stream reconnects with it (ADR 0007).
   const client = new ChannelClient(targetOf(config, repo));
+  // The machine's store of its Agents' Local Events (ADR 0037), and the Host installed here for this Channel.
+  const storeRepo = channelKey(repo) ?? repo;
+  const store = plan.kind === "none" ? null : openLocalStore(log, env);
+  const machineHost = hostFor(storeRepo, env);
   // The Channel checks the Person's Membership itself. A refusal is said in its own
   // words, since signing in again would not change it; when the Channel cannot be
   // reached the session starts anyway and keeps trying.
@@ -262,6 +328,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
     log(`could not reach the Channel for ${repo}: ${error.message}`);
   }
+
   // `--from` (ADR 0024): the session carries on another Agent's work, and starts with
   // what the Channel knows of it. One that cannot be read stops here, before the CLI runs.
   let predecessor: AgentSummary | null = null;
@@ -336,6 +403,9 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     ...(env.SWITCHBOARD_HOST ? { host: env.SWITCHBOARD_HOST } : {}),
     ...(env.SWITCHBOARD_HOST && env.SWITCHBOARD_SPAWN ? { spawn: env.SWITCHBOARD_SPAWN } : {}),
     ...(predecessor === null ? {} : { continues: predecessor.agent.id }),
+    ...(librarian ? { librarian: true as const } : {}),
+    // This machine's Host for the Channel answers for the Agent's Local Events once the wrapper is gone (ADR 0037).
+    ...(machineHost === undefined ? {} : { historyHost: machineHost }),
   });
 
   // The Channel stream stays open for the whole session. It carries the Hook
@@ -389,7 +459,12 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   // Tells the Channel this socket is the Agent's wrapper, so its Interrupts and Directives come here.
   const attach = () => {
     if (agentId === null) return;
-    const frame: InterruptAttach = { type: "interrupt.attach", agent: agentId };
+    // With a local store, it answers the Channel's reads of its Agent's history too (ADR 0037).
+    const frame: InterruptAttach = {
+      type: "interrupt.attach",
+      agent: agentId,
+      ...(store === null ? {} : { history: true }),
+    };
     stream.send(JSON.stringify(frame));
   };
   // The live terminal (ADR 0021): the screen goes to watchers, redacted, while anyone watches;
@@ -643,29 +718,75 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     }
   };
   // Wakes the Agent while it is idle for what deserves it, instead of waiting for its next turn.
-  const waker = adapter.wakes
-    ? new Waker({
+  // The librarian is woken by the Librarian Feed alone (ADR 0045), never by the Relay.
+  const waker =
+    adapter.wakes && !librarian
+      ? new Waker({
+          type: (produce) => typer.wake(produce),
+          pending: () => hooksRunning && nextTurn.wakeWorthy,
+          take: () => nextTurn.takeForWake(),
+          woke: (batch) => {
+            if (agentId === null) return;
+            const frame: WakeMessage = {
+              type: "wake",
+              agent: agentId,
+              deliveries: batch.deliveries,
+              directives: batch.directives,
+            };
+            if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear of the Wake: not connected");
+          },
+          capped: () => {
+            if (agentId === null) return;
+            const frame: WakeCappedMessage = { type: "wake.capped", agent: agentId };
+            if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear the Wakes stopped: not connected");
+          },
+          log,
+        })
+      : null;
+  // Reads the Librarian Feed and types what changed at the idle prompt (ADR 0045).
+  const librarianWaker = librarian
+    ? new LibrarianWaker({
+        read: () => client.request<LibrarianFeedResponse>(LIBRARIAN_PATH),
+        move: async (request) => {
+          await client.request(LIBRARIAN_PATH, { method: "PUT", body: JSON.stringify(request) });
+        },
         type: (produce) => typer.wake(produce),
-        pending: () => hooksRunning && nextTurn.wakeWorthy,
-        take: () => nextTurn.takeForWake(),
-        woke: (batch) => {
-          if (agentId === null) return;
-          const frame: WakeMessage = {
-            type: "wake",
-            agent: agentId,
-            deliveries: batch.deliveries,
-            directives: batch.directives,
-          };
-          if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear of the Wake: not connected");
-        },
-        capped: () => {
-          if (agentId === null) return;
-          const frame: WakeCappedMessage = { type: "wake.capped", agent: agentId };
-          if (!stream.send(JSON.stringify(frame))) log("the Channel did not hear the Wakes stopped: not connected");
-        },
         log,
+        settleMs: seconds(env.SWITCHBOARD_LIBRARIAN_SETTLE_SECONDS, LIBRARIAN_SETTLE_MS),
+        pollMs: seconds(env.SWITCHBOARD_LIBRARIAN_POLL_SECONDS, LIBRARIAN_POLL_MS),
+        idleMoveMs: LIBRARIAN_IDLE_MOVE_MS,
+        retryMs: seconds(env.SWITCHBOARD_LIBRARIAN_RETRY_SECONDS, LIBRARIAN_RETRY_MS),
       })
     : null;
+  // What its Agent did, as the Channel recorded it, kept on this machine (ADR 0037).
+  const keepLocally = (message: ChannelMessage) => {
+    if (store === null) return;
+    try {
+      if (message.type === "hook.ack") store.put(storeRepo, message.events ?? []);
+      else if (message.type === "proxy.ack" && message.event !== undefined) store.put(storeRepo, [message.event]);
+      else if (message.type === "event" && message.event.type === "verdict" && isLocalEvent(message.event)) {
+        // The Relay's rule Drops about its Agent's Local Events stay with them.
+        const about = (message.event.payload as { event?: string }).event;
+        if (about !== undefined && store.has(storeRepo, about)) store.put(storeRepo, [message.event]);
+      }
+    } catch (error) {
+      log(`could not keep Local Events: ${(error as Error).message}`);
+    }
+  };
+  const answerHistory = (request: HistoryRequestMessage) => {
+    let frame: HistoryPageMessage;
+    try {
+      // Only ever its own Agent's history.
+      frame = {
+        type: "history.page",
+        id: request.id,
+        events: store?.page(storeRepo, { ...request, agent: agentId ?? undefined }) ?? [],
+      };
+    } catch (error) {
+      frame = { type: "history.page", id: request.id, error: (error as Error).message.slice(0, 300) };
+    }
+    stream.send(JSON.stringify(frame));
+  };
   const addForNextTurn = (items: NextTurnItems) => {
     const kept = nextTurn.add(items);
     // A Person's Directive is their word: the Agent may be woken again. A lead's is not (ADR 0018).
@@ -679,8 +800,13 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   const stream = client.follow(
     (message) => {
       if (message.type === "hook.ack" || message.type === "hook.refused") hooks?.reply(message);
-      if (message.type === "event") memory.event(message.event);
+      if (message.type === "event") {
+        memory.event(message.event);
+        librarianWaker?.event(message.event);
+      }
       if (message.type === "proxy.ack" || message.type === "proxy.refused") proxy?.reply(message);
+      keepLocally(message);
+      if (message.type === "history.request" && message.agent === agentId) answerHistory(message);
       if (message.type === "agent") {
         proxy?.agentChanged(message.agent);
         link?.agentChanged(message.agent);
@@ -744,6 +870,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
       if (connected) attach();
       else keyboard.disconnected();
     },
+    { pingMs: streamPingMs(env), log },
   );
 
   // The model each turn asks for, reported to the Channel once it holds (ADR 0010).
@@ -772,6 +899,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     stream.close();
     await hooks?.close();
     await proxy?.close();
+    store?.close();
     await disposeInstall?.();
     if (hookDir) await rm(hookDir, { recursive: true, force: true });
   };
@@ -860,14 +988,16 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   };
   // Asks the model for memory notes when a turn changed files, and before compaction
   // (ADR 0019), where the CLI's hooks were checked to carry each ask (ADR 0024).
-  const nudges = adapter.memoryNudges.includes("stop")
-    ? new MemoryNudges({
-        context: async () => (contextReader === null ? undefined : (await readContext(contextReader)).context),
-        env,
-        log,
-        compaction: adapter.memoryNudges.includes("compaction"),
-      })
-    : null;
+  // The librarian writes no files and no notes (ADR 0045): nothing to nudge.
+  const nudges =
+    adapter.memoryNudges.includes("stop") && !librarian
+      ? new MemoryNudges({
+          context: async () => (contextReader === null ? undefined : (await readContext(contextReader)).context),
+          env,
+          log,
+          compaction: adapter.memoryNudges.includes("compaction"),
+        })
+      : null;
   const onRegistered = (agent: Agent, token: string | undefined) => {
     agentId = agent.id;
     hooks?.setAgent(agent.id);
@@ -878,6 +1008,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     approvals.registered();
     attach();
     void memory.registered(agent.id);
+    librarianWaker?.start();
   };
   const linkTo = (sessionId: string, resumed: boolean) => {
     if (link !== null || !settleContinuation(sessionId)) return;
@@ -891,6 +1022,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   let sawSessionStart = false;
   let endDetail: string | undefined;
+  let sawSessionEnd = false;
+  const dataset = new DatasetTrigger(env);
   if (plan.kind !== "none") {
     try {
       // Private to the Person: it holds the socket and the session's config files.
@@ -921,6 +1054,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
           }
           // The CLI's own reason the session ended, for the session's one `session.end` (#54).
           if (input.hook_event_name === "SessionEnd") {
+            sawSessionEnd = true;
             endDetail = (typeof input.reason === "string" ? input.reason : "other").slice(0, 40);
           }
           if (!hooksRunning) {
@@ -928,12 +1062,21 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             log("the CLI's hooks are running");
           }
           typer.hook(input);
+          // The session started: the librarian's first pass need not wait for its retry.
+          if (input.hook_event_name === "SessionStart") librarianWaker?.ready();
           // The hook knows where the session's transcript is.
           if (typeof input.transcript_path === "string" && input.transcript_path !== "") {
             usage?.tally.follow(input.transcript_path);
             contextReader?.follow(input.transcript_path);
           }
-          if (input.hook_event_name === "Stop") usage?.schedule.turnEnded();
+          // The Dataset copies this session in the background (ADR 0054); it never waits on it.
+          if (input.hook_event_name === "Stop") void dataset.kick("turn");
+          if (input.hook_event_name === "SessionEnd") void dataset.kick("end");
+          if (input.hook_event_name === "Stop") {
+            usage?.schedule.turnEnded();
+            // The turn the Feed was typed for ended: the cursor moves past what it was told.
+            void librarianWaker?.turnEnded();
+          }
           // A turn ended: what arrived meanwhile may wake the Agent now.
           waker?.poke();
         },
@@ -952,7 +1095,10 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
             }),
       });
       // Switchboard's MCP tools for this session only (the Tool Capture).
-      tools = prepareSessionTools(cwd, repo, env);
+      tools = prepareSessionTools(cwd, repo, env, {
+        skillWrites: adapter.promptsForSkillWrites && !librarian,
+        librarian,
+      });
       const installed = await adapter.install({
         ...ctx,
         args: plan.args,
@@ -960,6 +1106,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
         hooks,
         tools,
         ...(proxy && proxyRoute ? { proxyUrl: proxy.url, proxyRoute } : {}),
+        ...(librarian ? { settings: [librarianSettings(tools.server.name)] } : {}),
       });
       args = installed.args;
       Object.assign(childEnv, installed.env);
@@ -1008,6 +1155,15 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
 
   const stdin = process.stdin;
   const stdout = process.stdout;
+  // A Person's first session on this machine starts with the guide, before the agent CLI
+  // draws its screen (ADR 0038). Nothing waits for a key: the CLI starts at once after it.
+  if (plan.kind !== "none" && shouldOnboard(config.person, { stdin: !!stdin.isTTY, stdout: !!stdout.isTTY }, env)) {
+    onboard(
+      { person: config.person, repo, dashboard: dashboardUrl(config.url, repo) },
+      (text) => stdout.write(text),
+      env,
+    );
+  }
   const cliPty = pty.spawn(bin, args, {
     name: env.TERM || "xterm-256color",
     cols: stdout.columns || 80,
@@ -1026,6 +1182,8 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
     screen?.write(data, () => screenStream.changed());
     watch.activity();
     typer.output(data);
+    // The CLI's prompt takes a paste now: the librarian's first pass need not wait for its retry.
+    if (data.includes("\x1b[?2004h")) librarianWaker?.ready();
   });
 
   let remindedAt = 0;
@@ -1107,6 +1265,7 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   paste.dispose();
   screen?.dispose();
   waker?.stop();
+  librarianWaker?.stop();
   discovering.abort();
   watch.stop();
   stdin.off("data", onInput);
@@ -1125,6 +1284,18 @@ export async function runCli(adapter: CliAdapter, rawArgs: string[]): Promise<nu
   await (link as AgentLink | null)?.end(END_TIMEOUT_MS, endDetail);
   await stopHooks();
   sessionTools?.dispose();
+  // A CLI with no SessionEnd hook (or none that ran) still has its session copied.
+  if (!sawSessionEnd) await dataset.kick("end");
   log(`exited ${exitCode}`);
   return refusedContinuation === undefined ? exitCode : 2;
+}
+
+/** Whether `url` names this machine: a Channel there is a local `wrangler dev`, not the shared Worker. */
+export function isLocalChannel(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "[::1]" || /^127\./.test(hostname);
+  } catch {
+    return false;
+  }
 }

@@ -105,9 +105,8 @@ export function mockTerminal(agent: AgentId, me: string, onFrame: (frame: Termin
     hold(fingerprint);
     typed = true;
     // A bracketed paste is one piece of text: its line breaks do not submit it.
-    const text = frame.text.replace(/\x1b\[200~([\s\S]*?)\x1b\[201~/g, (_m, pasted: string) =>
-      pasted.replace(/\r/g, " "),
-    );
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC starts the paste markers this matches.
+    const text = frame.text.replace(/\x1b\[200~([\s\S]*?)\x1b\[201~/g, (_m, pasted: string) => pasted.replace(/\r/g, " "));
     for (const ch of text) {
       if (ch === "\r") {
         if (input.trim() !== "") history.push(`> ${input}`, "", "  Understood.", "");

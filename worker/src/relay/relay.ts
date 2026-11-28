@@ -53,6 +53,7 @@ import {
   DEFAULT_INTERRUPT_INTERVAL_SECONDS,
   DEFAULT_INTERRUPT_THRESHOLD,
   INTERRUPT_ANSWER_MS,
+  isLocalEvent,
   truncate,
   UNRELAYED_EVENT_TYPES,
 } from "../../../shared/src/index";
@@ -470,6 +471,8 @@ export class Relay {
         option: "drop",
         delivered: "drop",
         source: "rule",
+        // Rule Drops about a Local Event stay with it, on its Agent's machine (ADR 0037).
+        ...(isLocalEvent(event) ? { local: true as const } : {}),
       },
     });
   }
@@ -482,6 +485,8 @@ export class Relay {
       ...decision,
       overlap: plan.overlap,
       ...(plan.addressed === null ? {} : { addressed: plan.addressed }),
+      // A rule Drop about a Local Event stays with it, on its Agent's machine (ADR 0037).
+      ...(decision.source === "rule" && isLocalEvent(event) ? { local: true as const } : {}),
     };
     this.host.append(id, {
       type: "verdict",

@@ -23,10 +23,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "screenshots");
 
-const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "memory", "hosts"];
+const VIEWS = ["now", "agents", "tasks", "canvas", "feed", "brief", "memory", "skills", "artifacts", "hosts"];
 // Pages that show one thing: ready, loading, and an error page. With nothing on the Channel
 // they have nothing to name, which is the error page too.
-const PAGES = { agent: "agents/shlok%2Fclaude%2F7f3a", task: "tasks/12" };
+const PAGES = { agent: "agents/shlok%2Fclaude%2F7f3a", task: "tasks/12", artifact: "artifacts/bundle-size" };
 const STATES = ["ready", "loading", "empty", "error"];
 const DESK = [1440, 900];
 const PHONE = [390, 844];
@@ -53,6 +53,8 @@ const only = process.env.SHOTS_ONLY?.split(",");
 function expected(page, state) {
   if (state === "ready") return null;
   if (page in PAGES && state === "empty") return "error";
+  // A Channel with no Langfuse project shows the form to connect one: a drawn page.
+  if (page === "settings" && state === "empty") return null;
   return state;
 }
 
@@ -64,7 +66,23 @@ function cases() {
   }
   list.push({ page: "missing", hash: "no-such-page", state: "ready", want: "error" });
   // The views with a read of their own, failing while the Channel is up.
-  for (const view of ["hosts", "memory"]) list.push({ page: view, hash: view, state: "read-error", want: "error" });
+  for (const view of ["hosts", "brief", "memory", "skills", "artifacts"]) list.push({ page: view, hash: view, state: "read-error", want: "error" });
+  // A skill open in the inspector, at an older version, with every file in full.
+  list.push({ page: "skill", hash: "skills/release-notes/1", state: "ready" });
+  // A skill with fonts and an image, each binary file shown by its size and SHA-256 (ADR 0050).
+  list.push({ page: "skill-binary", hash: "skills/type-specimen", state: "ready" });
+  // An artifact at an older version, and a small tool that runs its own script in the sandbox (ADR 0053).
+  list.push({ page: "artifact-older", hash: "artifacts/bundle-size/1", state: "ready" });
+  list.push({ page: "artifact-tool", hash: "artifacts/receipt-splitter", state: "ready" });
+  // The Agent page's thinking orb in each state that has one (ADR 0047): `agent` above is the
+  // Agent that needs you (listening); these are an idle one (breathing) and a running one (working).
+  list.push({ page: "agent-idle", hash: "agents/shlok%2Fcodex%2Fc91e", state: "ready" });
+  list.push({ page: "agent-running", hash: "agents/maya%2Fclaude%2F2b8d", state: "ready" });
+  // An area's page of the Brief, with its age and author.
+  list.push({ page: "brief-area", hash: "brief/api-client", state: "ready" });
+  // The Channel's settings (ADR 0044), reached from the account menu rather than a key.
+  for (const state of STATES) list.push({ page: "settings", hash: "settings", state });
+  list.push({ page: "settings", hash: "settings", state: "read-error", want: "error" });
   return list.filter((c) => !only || only.includes(c.page));
 }
 
@@ -217,7 +235,16 @@ async function main() {
   // what gets killed, so no helper is left to write into the profile.
   const chrome = spawn(
     chromePath(),
-    ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-sandbox", `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`, "about:blank"],
+    [
+      "--headless=new",
+      "--disable-gpu",
+      "--hide-scrollbars",
+      "--no-first-run",
+      "--no-sandbox",
+      `--remote-debugging-port=${debugPort}`,
+      `--user-data-dir=${profile}`,
+      "about:blank",
+    ],
     { stdio: "ignore", detached: true },
   );
   // How Chrome ended, once it has: startup stops waiting for a browser that is gone.

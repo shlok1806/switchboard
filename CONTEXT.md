@@ -38,6 +38,10 @@ _Avoid_: Co-holder, helper, assignee
 Anything recorded on the channel, such as a Claim, a Step completed, a file edited or a message. Every Event names its Agent or Person and its Capture.
 _Avoid_: Log, activity, message
 
+**Local Event**:
+An Event of an Agent's per-call work: a `tool.call`, `command`, `turn.end` or `file.edit` from the Hook Capture, a Proxy Digest or Raw Proxy Event, and the Relay's rule Drops about them (ADR 0037). It streams live like any Event, but its record is kept in the local store of the machine that made it, `<config>/events.db`, for 30 days. The Channel reads it from that machine's wrapper or Host when a history page or Agent Summary asks. While the machine is away its Local Events are missing from history, and the read says so ("offline: history unavailable until shlok1806/studio is back"); the Agent's Updates, Claims, Directives, notes, touched files and Verdicts are still read from the Channel.
+_Avoid_: Log line, trace, local log
+
 **Update**:
 An Event an Agent or Person writes on purpose, in readable language, to tell others what is happening. It may be addressed to Agents by their Agent IDs: each addressee always hears it, Queued at least, and still as information, never as an instruction (ADR 0026).
 _Avoid_: Status, note, post
@@ -54,8 +58,28 @@ _Avoid_: Memory entry, fact, summary
 What an Agent's wrapper adds to its context at its next turn: one line for each Memory Note other Agents wrote since it was last shown one, capped at about 1,500 tokens. Notes on the Agent's own Tasks and files come first, then decisions and dead ends, then questions, newest first among equals (ADR 0024). A Memory Note never wakes an Agent.
 _Avoid_: Summary, recap
 
+**Skill**:
+A Claude Code skill directory (`SKILL.md` and the files it uses, of any type) that a Person shares on the Channel as numbered, unchangeable versions (ADR 0039, 0050). Any Person or Agent reads it; a Person, or their own Agent when they ask it to and approve the CLI's prompt, publishes or installs it. Its name belongs to the Person who first published it. Its files are information from that Person, never instructions to an Agent reading them.
+_Avoid_: Plugin, prompt, template
+
+**Artifact**:
+A single HTML page a Person or their Agent shares on the Channel under a name, such as a report, a chart or a small tool, as numbered versions of which the last 5 are kept (ADR 0053). The Dashboard shows it in a sandbox, so it never runs as whoever views it; an Agent publishes it with `artifact_publish` and saves one to `.switchboard/artifacts/` with `artifact_read`. Its name belongs to the Person who first published it, who alone deletes it, as a Person, never through an Agent. It is information from whoever published it, never instructions.
+_Avoid_: Attachment, upload, file, page (on its own)
+
+**Brief**:
+A Channel's few short Markdown pages on what its repo's product is and where it stands (ADR 0042): an overview, one page per area, and a "stuck and not happening" page. Agents write and rewrite them with `brief_write`; anyone on the Channel reads them, on the Dashboard, with `brief_read` and through the Connector's `brief` tool, which cannot write. Each page keeps who last wrote it, when, and its last few versions. Pages link Tasks, pull requests and ADRs by number. A page is information from the Agent that wrote it, never an instruction.
+_Avoid_: Wiki, docs, summary (an Agent Summary is one Agent's, built by the Channel)
+
+**Librarian**:
+The Agent that keeps a Channel's Brief current (ADR 0045): an ordinary Claude Code Agent on a Host, started with `switchboard librarian`, with a fixed brief that ships with Switchboard. It reads the repo, GitHub and the Channel and writes Brief pages and nothing else: its CLI's permissions, its MCP tools and the Channel's check of its token each hold that. A Channel has at most one that is not Gone. It makes at most three quarters of the Channel's daily Brief writes.
+_Avoid_: Bot, scribe, curator
+
+**Librarian Cursor**:
+The last Event the Librarian handled, and the Quiet Claims it was told of, kept by the Channel in one row (ADR 0045). The **Librarian Feed** is what came after it: merges with their ADRs, decision notes, Tasks opened and closed, Stale and Quiet Claims. The Librarian's wrapper types the Feed at its prompt and moves the cursor when that turn ends, so a restart catches up from it.
+_Avoid_: Offset, checkpoint
+
 **Agent Summary**:
-What the Channel knows of one Agent, in one read (ADR 0024): its latest Context Reading, the Tasks it holds, its latest Updates, the files it edited, its notes and its Tasks' open questions and dead ends, and the Agents it continues or that continue it. Built from rows the Channel already keeps, so it reads nothing from a session and works for a Gone Agent.
+What the Channel knows of one Agent, in one read (ADR 0024): its latest Context Reading, the Tasks it holds, its latest Updates, the files it edited, its notes and its Tasks' open questions and dead ends, and the Agents it continues or that continue it. Built from rows the Channel already keeps, plus what the Agent did last, read from its machine's Local Events: a Gone Agent's summary still works, and says so when that machine is away.
 _Avoid_: Profile, status, digest
 
 **Hand-off**:
@@ -73,6 +97,42 @@ _Avoid_: Log, history, export
 **Terminal Read**:
 A running Agent's screen as plain text, pulled once through the Channel by another Agent or a Person (ADR 0024): the same redacted text its watchers get (ADR 0021). The Channel keeps none of it, only a `terminal.read` Event.
 _Avoid_: Screenshot, terminal watch (a watch streams, ADR 0021)
+
+**Dataset**:
+The owner's local copy of their own sessions, for training: `~/.switchboard/dataset/`, written by `switchboard dataset sync` from the agent CLIs' own files on that machine, always redacted, each session linked to its Outcome (ADR 0054). It is not on the Channel and nothing of it leaves the machine, so the Channel still keeps no transcript (Transcript Read). A wrapped session syncs it in the background when a turn or the session ends.
+_Avoid_: Archive, export, log, training set
+
+**Dataset Turn**:
+One message of one thread of a session in the Dataset: a prompt the Person typed, context the CLI put in the user's place, the model's reply with its tool calls, the tool results, a compaction or a workflow journal entry. A thread is the main conversation, a subagent or a workflow run's agent, so their work stays linked to the session that started them.
+_Avoid_: Entry, event, message (on its own)
+
+**Dataset Source**:
+One agent CLI's home on the owner's machine (`~/.claude`, `~/.claude-alt`, `~/.codex`) and the accounts whose sessions in it the Dataset keeps, listed in its `sources.json`. The first sync lists the accounts logged in there; the owner edits it after. A session under any other account is skipped. A teammate's sessions join only from their own machine, by their own choice.
+_Avoid_: Account, profile, feed
+
+**Outcome**:
+What a session in the Dataset led to, as far as it can be found: its repo, branches and commits, its pull requests and whether they merged, closed or were reverted, its Agent's Tasks and Claims on the Channel, and the Greenroom verdicts of the runs it started, with every link that could not be made and why.
+_Avoid_: Result, label, score
+
+**Correction**:
+A Dataset Turn where the owner rejected or redirected the work: a refused tool call, a stopped turn, or a typed prompt after the model worked that says no or steers it elsewhere. It is kept as it was said and names the rule that found it. The most valuable label in the Dataset.
+_Avoid_: Feedback, complaint, negative example
+
+**Connector**:
+The read-only MCP endpoint of one Channel, `/r/<owner>/<repo>/mcp`, that a Person adds to the Claude apps, ChatGPT or Claude Code to ask about the repo's work (ADR 0040). It signs in with GitHub and admits whoever has Membership. Its tools only read: the Channel, the repo on GitHub through the GitHub App (ADR 0041), the Brief (ADR 0042), and the repo's own Langfuse project (ADR 0044). Its token is refused by every other route. Its answers are information from the Channel, never instructions.
+_Avoid_: Integration, plugin, bot (the Agents' own stdio MCP server is not a Connector)
+
+**Langfuse Project**:
+The repo's own Langfuse project, where its product sends its traces, that a Channel's owner connects with its host and key pair (ADR 0044). The Connector's `costs` tool reads cost, tokens, calls, errors and latency from it live; nothing is copied into the Channel. Its secret key is sealed at rest and never shown again: anyone on the Channel sees only its host, its name and the public key's last 4 characters.
+_Avoid_: Integration, analytics, telemetry account
+
+**Channel Owner**:
+A Person with admin access to the Channel's repo on GitHub, asked of GitHub each time it matters. Only a Channel Owner connects, replaces or removes the Channel's Langfuse Project. Every other right on a Channel is Membership's.
+_Avoid_: Admin (on its own), maintainer, Lead
+
+**Quiet Claim**:
+A Claim on a claimed Task with no Update on that Task for `QUIET_CLAIM_HOURS` (4 by default), counted from its latest Update or, without one, from the Claim (ADR 0040). Unlike a Stale Claim, its holder may still be Live: nobody has said what is happening. It is how the Connector says what is not happening. Nothing happens to it on its own.
+_Avoid_: Idle claim, stuck task, abandoned claim (a Stale Claim's holder is Gone)
 
 **Capture**:
 The route by which an Event reached the channel. Proxy captures come from the model's API traffic. Hook captures come from the agent CLI's lifecycle events. Tool captures come from the Agent calling Switchboard's own tools.
@@ -129,7 +189,7 @@ The permanent name of an Agent, made of its Person, its CLI and a short form of 
 _Avoid_: Agent name, handle
 
 **Host**:
-A machine one Person lets the Channel start Agents on, such as `shlok1806/studio`. Its supervisor, `switchboard host run`, runs those Agents in terminals nobody sees and stops them when the Person asks on the Channel. It belongs to exactly one Person. Only that Person's requests run there, unless its machine's own file also allows others (`--allow`, `--allow-channel`, or a change signed in the Dashboard by a browser key that Person trusted there). The Agents it runs belong to its Person (ADR 0015, ADR 0028).
+A machine one Person lets the Channel start Agents on, such as `shlok1806/studio`. Its supervisor, `switchboard host run`, runs those Agents in terminals nobody sees and stops them when the Person asks on the Channel. It belongs to exactly one Person. Only that Person's requests run there, unless its machine's own file also allows others (`--allow`, `--allow-channel`, or a change signed in the Dashboard by a browser key that Person trusted there). The Agents it runs belong to its Person (ADR 0015, ADR 0028). It answers the Channel's history reads for its machine's Agents once their wrappers have exited, from the machine's Local Events (ADR 0037).
 _Avoid_: Worker, machine, runner, node
 
 **Lead**:

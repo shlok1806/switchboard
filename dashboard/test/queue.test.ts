@@ -1,7 +1,8 @@
 // The Now view's queue: what waits on a Person, in the order a Person answers it, and
 // which of it is yours.
-import { describe, expect, it } from "vitest";
+
 import type { Agent, AgentId, ChannelEvent, Task } from "@shared/index";
+import { describe, expect, it } from "vitest";
 import { isMine, needsQueue, needsYouCount } from "@/lib/queue";
 
 function agent(id: string, extra: Partial<Agent> = {}): Agent {
@@ -19,7 +20,12 @@ const goneWithPrompt = agent("shlok/claude/d", { presence: "gone", approval: ask
 const myCodex = agent("shlok/codex/e");
 
 const stale = task(17, { claim: { task: 17, holder: { kind: "agent", agentId: "maya/gemini/x" as AgentId }, claimedAt: "", stale: true } });
-const myReview = task(19, { status: "review", pr: 22, updatedAt: "2026-10-15T09:10:00.000Z", claim: { task: 19, holder: { kind: "agent", agentId: myCodex.id }, claimedAt: "", stale: false } });
+const myReview = task(19, {
+  status: "review",
+  pr: 22,
+  updatedAt: "2026-10-15T09:10:00.000Z",
+  claim: { task: 19, holder: { kind: "agent", agentId: myCodex.id }, claimedAt: "", stale: false },
+});
 const theirReview = task(21, { status: "review", pr: 23, claim: { task: 21, holder: { kind: "person", person: "maya" }, claimedAt: "", stale: false } });
 const plain = task(12, { claim: { task: 12, holder: { kind: "agent", agentId: mineLate.id }, claimedAt: "", stale: false } });
 
