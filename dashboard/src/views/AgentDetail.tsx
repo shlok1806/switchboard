@@ -89,16 +89,23 @@ function PastAgent({ id }: { id: AgentId }) {
         No Agent on this Channel has that ID.
       </ErrorPage>
     );
+  // Laid out as an Agent's own page, with only what is left of it: its ID and its History.
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
-      <div>
-        <h1 className="text-xl text-ink">{id}</h1>
-        <p className="text-row text-ink-3">This Agent is no longer in the roster. Its recorded Events remain below.</p>
-        <a href={href({ view: "agents" })} className={buttonVariants({ variant: "primary" })}>
-          Back to Agents
-        </a>
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-7 px-[var(--gutter)] pt-[var(--page-top)] pb-10">
+        <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex min-w-0 flex-[1_1_420px] flex-col gap-1">
+            <h1 className="font-display text-head font-medium [overflow-wrap:anywhere] text-ink max-sm:text-head-phone">{id}</h1>
+            <p className="text-small text-ink-3">No longer in the roster. Its recorded Events remain below.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <a href={href({ view: "agents" })} className={buttonVariants({ variant: "primary" })}>
+              Back to Agents
+            </a>
+          </div>
+        </header>
+        <History scoped={scoped} />
       </div>
-      <History scoped={scoped} />
     </div>
   );
 }

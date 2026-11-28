@@ -203,9 +203,10 @@ export default function CodeBlock({
 
   const added = diff.filter((r) => r.type === "add").length;
   const removed = diff.filter((r) => r.type === "del").length;
-  // The gutter fits the widest line number: 20px holds one digit, and each more digit widens it.
+  // The gutter fits the widest line number, right-aligned with room on both sides: one digit in
+  // 20px, and each more digit widens it, so the numbers share one edge and never touch a bar.
   const widest = isDiff ? Math.max(0, ...diff.map((r) => (r.type === "del" ? r.old : r.cur) ?? 0)) : lines.length;
-  const gutter = { "--gutter": `max(20px, calc(${String(widest).length}ch + 10px))` } as CSSProperties;
+  const gutter = { "--gutter": `max(20px, calc(${String(widest).length}ch + 16px))` } as CSSProperties;
 
   return (
     <div className={`${className} overflow-hidden rounded-md bg-paper-2`}>
@@ -294,7 +295,9 @@ export default function CodeBlock({
                     ${add ? "bg-paper-2" : del ? "bg-paper-2" : ""}`}
                 >
                   {(add || del) && <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: add ? "var(--ink-2)" : HATCH }} />}
-                  <span className={`select-none text-center text-small tabular-nums ${add ? "text-ink" : del ? "text-ink" : "text-ink-3"}`}>{num ?? ""}</span>
+                  <span className={`select-none pr-1.5 pl-[5px] text-right text-small tabular-nums ${add ? "text-ink" : del ? "text-ink" : "text-ink-3"}`}>
+                    {num ?? ""}
+                  </span>
                   <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">
                     {/* taste-skill-ignore: a code line */}
                     <Pieces pieces={r.pieces} />
@@ -308,7 +311,7 @@ export default function CodeBlock({
             <span className="pointer-events-none absolute inset-y-0 left-[var(--gutter)] w-0.5 bg-paper-2" />
             {lines.map((line, i) => (
               <div key={i} className="grid grid-cols-[var(--gutter)_minmax(0,1fr)] items-start">
-                <span className="select-none text-center text-small tabular-nums text-ink-3">{i + 1}</span>
+                <span className="select-none pr-1.5 pl-[5px] text-right text-small tabular-nums text-ink-3">{i + 1}</span>
                 <code className="pr-3 pl-1 font-mono break-words whitespace-pre-wrap">
                   {/* taste-skill-ignore: a code line */}
                   {highlight(line)}
