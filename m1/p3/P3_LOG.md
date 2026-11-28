@@ -588,3 +588,17 @@
 - 7:33 PM CT: [P3] [P3-#45] pin-watch: started (pid 2112947): checking every new bot/m1-p3-policy-enforcement commit after 88ee93a with agy_guard/d5_filter (D5_EXCEPTIONS R16, pin PENDING)
 - 7:33 PM CT: [P3] [P3-#48] M1-P3-PCFIX-FIX3 run attempt 1 started
 - 7:35 PM CT: [P3] [P3-#48] M1-P3-PCFIX-FIX3 done
+- 7:35 PM CT: [P3] [P3-#48] FIX3 committed 9b4628c ( 4 files changed, 30 insertions(+), 9 deletions(-))
+- 7:35 PM CT: [P3] [P3-#48] tests pcfix41-fix3 (quick) started at HEAD 9b4628c
+- 7:36 PM CT: [P3] [P3-#48] tests pcfix41-fix3: == totals (pcfix41-fix3, quick, HEAD 9b4628c) == 06_worker_test:  Test Files 98 passed | 2 skipped (100) | Tests 1830 passed | 2 skipped (1832)  | strict: PASS  | eval(T=0): cli failures: [] PASS   | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=0 07_cli_typecheck=0 11_dashboard_typecheck=0 
+- 7:36 PM CT: [P3] [P3-#48] D5 exception (R16) pinned D5 exception worker/test/managed-registration.test.ts diff hash ab5a951a764c06ef188c760944d601a60e3bffd6d6a6cc0b5adbd7e000c6e86c at 9b4628c — later changes to that file trip agy_guard
+- 7:36 PM CT: [P3] [P3-#48] PCFIX gate PASS at 9b4628c (pcfix41-fix3): == totals (pcfix41-fix3, quick, HEAD 9b4628c) == 06_worker_test:  Test Files 98 passed | 2 skipped (100) | Tests 1830 passed | 2 skipped (1832)  | eval: PASS 
+- 7:36 PM CT: [P3] [P3-#48] relaunching chain_p3.sh unchanged in Codex mode (EM_CODEX_BIN=bin/codex-sol, TZ=America/Chicago): fresh agy B2 review (items 15–30a) → B3a (DD-2) → B3b; backup state/queue.sqlite3.bak-p3-48-chain-20261127-193634
+- 7:36 PM CT: [P3] Codex cross-review required for 6 agy-implemented commit(s) before further work
+- 7:36 PM CT: [P3] Codex cross-review 1 verdict: REQUEST_CHANGES
+- 7:36 PM CT: [P3] tests xfix1 (quick) started at HEAD 9b4628c
+- 7:36 PM CT: [P3] [P3-#48] chain_p3.sh launched pid 2116211
+- 7:37 PM CT: [P3] tests xfix1: == totals (xfix1, quick, HEAD 9b4628c) == 06_worker_test:  Test Files 98 passed | 2 skipped (100) | Tests 1830 passed | 2 skipped (1832)  | strict: PASS  | eval(T=0): cli failures: [] PASS   | exits: 04_worker_typecheck=0 05_worker_lint=0 06_worker_test=0 07_cli_typecheck=0 11_dashboard_typecheck=0 
+- 7:37 PM CT: [P3] M1-P3-XREVIEW-2 run attempt 1 started
+- 7:38 PM CT: [P3-#48] FIX3 9b4628c (channel.ts recovery no longer activates the lost-completion association; managed-continuation fixture adds the task_sync.syncedAt prerequisite, assertions untouched) pushed; gate pcfix41-fix3 PASS 1830/0 failed/2 skipped, typecheck/lint/cli/dashboard 0; pin-watch ok 9b4628c; R16 pinned (hash ab5a951a…); chain_p3.sh relaunched 7:36 PM CT (pid 2116211) — first step is the chain's Codex cross-review round 2 (M1-P3-XREVIEW-2) of agy-implemented commits, then the agy B2 review.
+- 7:40 PM CT: [P3] M1-P3-XREVIEW-2 done
